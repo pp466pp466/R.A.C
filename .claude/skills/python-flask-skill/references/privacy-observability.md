@@ -1,0 +1,14 @@
+# 個資、保存與可觀測性 (Privacy & Observability)
+
+對應 AGENTS.md 第 11 節。
+
+- 日誌格式：結構化 JSON，輸出至標準輸出。
+  - 可記錄：時間、層級、request_id、user_id（內部整數）、路由路徑（不含查詢字串）、HTTP 方法、狀態碼、延遲、對話 id（內部整數）、intent（列舉值）、模型名稱、嘗試次數、prompt_tokens、completion_tokens、finish_reason、錯誤類型、截斷或雜湊後的 IP。
+  - 絕不記錄：密碼與 password_hash、session cookie、CSRF 與驗證/重設權杖、OAuth code、Authorization 標頭、完整 API Key、使用者 email、使用者訊息全文、reply_text、Gemini 原始輸出、含權杖的完整網址。失敗的模型輸出僅依 [llm-streaming.md](llm-streaming.md) 寫入 llm_call_logs.error_detail。
+- 保存期限：對話與訊息為最後一則訊息後 12 個月（或使用者主動刪除）；auth_tokens 為到期後 7 天；llm_call_logs（不含對話全文）12 個月；失敗原文 14 天；應用程式日誌 30 天；管理稽核紀錄 24 個月；備份 30 天。
+- 備份：託管 SQL Server 啟用自動備份與時間點還原，備份加密並存放於不同帳號或區域；每季進行一次還原演練。
+- 刪除帳號：使用者申請後先進入 deletion_pending（立即停用，7 天寬限期可撤銷），期滿由排程指令刪除 email、名稱、密碼雜湊、user_identities、auth_tokens 與全部對話；llm_call_logs 的 user_id 設為 NULL 匿名化；備份於保存期限屆滿後自然汰除，還原時依 deletion_tombstones（僅存內部 ID 與刪除日期）重新執行刪除。
+- 當事人權利：提供匯出個人對話的功能，JSON 以 utf-8、CSV 以 utf-8-sig 輸出。隱私權政策須告知對話內容會傳送至 Google 的 Gemini 服務。隱私權政策與服務條款為應用程式內的繁體中文頁面（/privacy、/terms）。
+- Gemini 方案與個資：免費方案的資料可能被用於改進產品，使用免費方案期間不得將訂單、金流等敏感個資送入模型；正式對外開放給會員前，須重新評估所用方案的資料使用條款。
+- 排程工作（清除過期資料、執行刪除帳號）以 flask 自訂指令實作，由平台排程器觸發，不使用行程內計時器。
+- 監控與告警：5xx 比率、對話延遲 p95、Gemini 錯誤與 429 比率、每日 token 用量、登入失敗激增、寄信失敗與服務存活皆須有告警，管道為電子郵件或 webhook；不得使用會將例外內容送出本系統的外部錯誤追蹤服務，除非完成個資清洗。

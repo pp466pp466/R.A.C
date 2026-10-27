@@ -1,0 +1,39 @@
+# LLM 串流、客服結構化輸出與對話記憶
+
+對應 AGENTS.md 第 5、6 節。
+
+## 模型選用與調用規範
+
+- 預設核心模型：全系統（包含開放世界文字 RPG 劇情生成、SSE 串流打字機特效、會員制智能客服對話、對話摘要壓縮）一律預設調用 gemini-3.8-flash 模型，以確保最低的首字延遲（TTFT）與高性價比。
+
+## SSE 串流（RPG 適用）
+
+- 後端 SSE 串流端點（RPG 適用）：針對 LLM 文字生成（開放世界 RPG 劇情），應採用 flask.Response 結合 mimetype='text/event-stream' 進行 Server-Sent Events (SSE) 串流推送。
+- SSE 心跳與斷線偵測（RPG 適用）：後端須定期送出心跳以維持連線；前端以任何收到的位元組重設閒置計時器，逾時即中止；後端偵測到客戶端斷線時須停止生成並關閉上游 Gemini 串流。間隔、事件協定與逾時數值依 docs/RPG.md。
+- 前端串流接收：RPG 劇情的 LLM 串流端點改用瀏覽器原生 fetch 搭配 ReadableStream 接收片段文字；其餘一般 API 仍使用離線 axios。
+- 串流逾時與中斷（RPG 串流適用）：前端串流必須設定逾時，並以 AbortController 中止請求。無論成功、失敗或中斷，皆須在 finally 中恢復 UI 狀態（解除按鈕禁用、清除載入動畫）。後端於串流結束時送出明確的結束標記，前端以此判定已完整接收。
+
+## 客服結構化輸出（非串流）
+
+- 結構化輸出 (Structured Outputs)：客服模組進行意圖與實體解析時，必須以非串流請求強制約束 Gemini API 輸出標準 JSON 格式（至少包含 intent, confidence, entities, reply_text, suggested_actions），並使用 Gemini 的 response schema 強制格式；Service 層仍須重新驗證，不信任模型輸出。嚴禁將 JSON 原文以串流方式送達前端。
+- 客服模組因採非串流，前端直接取得完整 reply_text，再由打字機緩衝區逐字渲染。
+- LLM JSON 解析：解析前須去除 Markdown 程式碼區塊標記（如 ```json）；使用 Gemini 結構化輸出模式降低發生率。解析統一由單一 Service 層函式處理，依序做 JSON 解析、schema 驗證與語意驗證。失敗時最多重試 1 次（總共最多 2 次呼叫；暫時性錯誤如 429、5xx、逾時亦同，且僅在已耗時小於 15 秒時重試；內容被安全過濾阻擋時不重試）。仍失敗則回覆繁體中文降級文案，該訊息標記為 fallback 且不計入每日配額；失敗的模型原文截斷至 2000 字，記錄於 llm_call_logs.error_detail，保存 14 天，僅管理員可讀。
+- 非串流請求逾時與中斷（客服適用）：Gemini 單次呼叫逾時 20 秒，後端單次請求總預算（含重試）30 秒；前端 axios 逾時 35 秒（略大於後端總預算），並以 AbortController 於使用者取消、切換對話或離開頁面時中止；無論成功、失敗或中斷，皆須在 finally 中恢復 UI 狀態。前端中止不代表後端中止，後端仍會完成並寫入結果，由 since_seq 同步補齊。
+
+## 打字機特效
+
+- UI 平滑渲染：前端接收到片段文字（或客服的完整 reply_text）後，透過打字機緩衝區 (Typewriter Buffer) 逐字平滑渲染，確保流暢度。
+
+## 對話歷史記憶體與滑動視窗管理 (Memory Management)
+
+- 一輪定義：一輪 = 一則玩家訊息 + 一則 AI 回應。
+- 前端暫存與同步：前端利用 IndexedDB 暫存完整對話與世界線，連線正常時透過背景 Axios 非同步同步至後端永久儲存庫。同步衝突時以後端永久儲存庫為準；前端僅保留尚未同步成功的待送紀錄。
+- 同步細則：聊天訊息為 append-only，前端為每則訊息產生唯一 ID，後端以此去重（冪等）。可變的世界狀態須帶版本號（version），寫入時比對版本，不一致時以後端為準，並通知前端。
+- 客服對話同步補充：
+  - 客服以後端為權威：訊息由後端先寫入資料庫；離線時前端只能閱讀 IndexedDB 快取的歷史並保存待送訊息，產生新回覆需要連線。
+  - 後端為每則訊息指派單調遞增的 seq，顯示順序以 seq 為準，不使用前端時鐘。
+  - 冪等呼叫：以 (conversation_id, client_msg_id) 查到已處理的訊息，直接回傳既有回覆，不得重複呼叫 Gemini。
+  - 前端以 since_seq 增量拉取後端訊息（換裝置、重新整理或前端中止後補齊）。
+  - 客服「當前狀態」(state_json) 包含 member_tier、last_intent、pending_entities、open_issue，並帶 state_version；不放入使用者 email、完整個資或其他對話內容。
+- 滑動視窗限制 (Sliding Window)：單次發送給 Gemini API 的 Context 嚴格限制為「摘要 + 最近 10 輪原文 + 當前世界狀態」。
+- 摘要機制 (Memory Log)：後端 Service 層於同步歷史紀錄時，若對話超出最近 10 輪，即將最舊的一輪併入既有摘要並壓縮，避免 Token 爆量與延遲。摘要以 gemini-3.8-flash 產生，並儲存於後端。客服採補償式摘要：以 summary_upto_seq 標記已摘要的範圍並存於資料庫，回覆寫入後觸發；觸發失敗或 worker 重啟時，由下次請求補做。
