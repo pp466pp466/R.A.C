@@ -1,0 +1,16 @@
+# 全專案固定使用 LF，避免 Windows 的 CRLF 讓 Linux 容器內的腳本無法執行
+* text=auto eol=lf
+
+*.sh text eol=lf
+Dockerfile text eol=lf
+*.py text eol=lf
+
+# 二進位檔案
+*.woff2 binary
+*.woff binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.pdf binary

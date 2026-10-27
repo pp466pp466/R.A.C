@@ -1,0 +1,37 @@
+# 機密：任何 .env 都不得進入版本庫（範本 .env.example 除外）
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# 本機資料庫與暫存
+*.sqlite
+*.sqlite3
+*.db
+instance/
+
+# 日誌
+*.log
+
+# Node（僅可選的前端單元測試工具，不納入版本庫）
+node_modules/
+
+# 編輯器與作業系統
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
+
+# Claude Code 本機設定
+.claude/settings.local.json

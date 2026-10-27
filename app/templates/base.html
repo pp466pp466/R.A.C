@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-Hant-TW" data-bs-theme="dark">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}智能客服{% endblock %}</title>
+  {# 暫無網站圖示；內嵌的空圖示可避免瀏覽器去要 /favicon.ico 而產生 404 #}
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="{{ url_for('static', filename='vendor/bootstrap/bootstrap.min.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='fonts/fonts.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/theme.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/components.css') }}">
+  {% block head_assets %}{% endblock %}
+</head>
+<body>
+  {% block content %}{% endblock %}
+  <script src="{{ url_for('static', filename='vendor/vue/vue.global.prod.js') }}"></script>
+  <script src="{{ url_for('static', filename='vendor/axios/axios.min.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ui/typewriter.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ui/toast-store.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ui/ui-components.js') }}"></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

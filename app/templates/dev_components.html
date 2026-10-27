@@ -1,0 +1,175 @@
+{% extends "base.html" %}
+{% block title %}元件示範（僅開發環境）{% endblock %}
+{% block head_assets %}
+<style>
+  .demo-section { border-top: var(--border-hairline); padding: 1.5rem 0; }
+  .demo-section h2 { font-size: 1.125rem; margin-bottom: 1rem; }
+  .demo-actions { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+  .palette-chip { display: inline-block; width: 1.5rem; height: 1.5rem; border: var(--border-hairline); vertical-align: middle; }
+  .palette-item { display: inline-flex; align-items: center; gap: 0.5rem; margin: 0 1.25rem 0.5rem 0; font-size: 0.875rem; }
+  .demo-log { font-size: 0.8125rem; color: var(--color-text-muted); max-height: 9rem; overflow: auto; padding-left: 1.25rem; }
+  .demo-output { min-height: 6rem; padding: 1rem; background: var(--color-surface); border: var(--border-hairline); }
+  .demo-textarea { width: 100%; min-height: 5rem; padding: 0.5rem 0.75rem; background: transparent; color: var(--color-text); border: var(--border-hairline); font: inherit; }
+</style>
+{% endblock %}
+
+{% block content %}
+{% raw %}
+<div id="app" class="container py-4">
+  <h1 class="h3">元件示範頁</h1>
+  <p class="text-muted-ui">僅在 development 與 testing 環境提供，staging 與 production 沒有這個頁面。用來人工驗收共用的色彩、Modal、Toast 與打字機。</p>
+
+  <section class="demo-section" aria-labelledby="sec-palette">
+    <h2 id="sec-palette">色彩規範</h2>
+    <div id="palette">
+      <span class="palette-item" v-for="c in palette" :key="c.name">
+        <span class="palette-chip" :style="{ background: c.value }"></span>{{ c.name }}<code>{{ c.hex }}</code>
+      </span>
+    </div>
+  </section>
+
+  <section class="demo-section" aria-labelledby="sec-modal">
+    <h2 id="sec-modal">Modal</h2>
+    <div class="demo-actions">
+      <button id="open-modal" type="button" class="ui-btn" @click="modalOpen = true">開啟 Modal</button>
+      <button id="open-locked-modal" type="button" class="ui-btn" @click="lockedOpen = true">開啟「不可關閉」的 Modal</button>
+    </div>
+
+    <ui-modal v-model="modalOpen" title="系統提示" status-code="SYSTEM_PROMPT"
+              @confirm="record('Modal：按下「確認」')" @cancel="record('Modal：按下「取消」')" @close="onClose">
+      <p>這是自製的電影感 Modal。按 Esc、點選遮罩，或按下按鈕都可以關閉。</p>
+      <p class="text-muted-ui">焦點會被限制在對話框內，關閉後會回到「開啟 Modal」按鈕。</p>
+    </ui-modal>
+
+    <ui-modal v-model="lockedOpen" title="需要你的確認" status-code="CONFIRM_REQUIRED" :closable="false" :show-cancel="false"
+              confirm-text="我知道了" @close="onClose">
+      <p>這個 Modal 不可用 Esc 或點遮罩關閉，只能按下按鈕。</p>
+    </ui-modal>
+  </section>
+
+  <section class="demo-section" aria-labelledby="sec-toast">
+    <h2 id="sec-toast">Toast</h2>
+    <div class="demo-actions">
+      <button id="toast-one" type="button" class="ui-btn" @click="toastOne">一則提示</button>
+      <button id="toast-three" type="button" class="ui-btn" @click="toastThree">連續三則</button>
+      <button id="toast-error" type="button" class="ui-btn" @click="toastError">錯誤提示</button>
+      <button id="toast-long" type="button" class="ui-btn" @click="toastLong">很長的文字</button>
+      <button id="toast-html" type="button" class="ui-btn" @click="toastHtml">含 HTML 標記的文字</button>
+      <button id="toast-sticky" type="button" class="ui-btn" @click="toastSticky">不會自動消失</button>
+      <button id="toast-clear" type="button" class="ui-btn" @click="toastClear">全部清除</button>
+    </div>
+    <ui-toast-region></ui-toast-region>
+  </section>
+
+  <section class="demo-section" aria-labelledby="sec-typewriter">
+    <h2 id="sec-typewriter">打字機</h2>
+    <textarea id="typewriter-source" class="demo-textarea" v-model="sample" aria-label="要顯示的文字"></textarea>
+    <div class="demo-actions my-3">
+      <button id="type-full" type="button" class="ui-btn" @click="playFull">一次到達（客服）</button>
+      <button id="type-stream" type="button" class="ui-btn" @click="simulateStream">模擬串流（RPG）</button>
+      <button id="type-flush" type="button" class="ui-btn" @click="flushTyping">略過動畫</button>
+      <button id="type-cancel" type="button" class="ui-btn" @click="cancelTyping">取消</button>
+    </div>
+    <div id="typewriter-output" class="demo-output ui-typewriter" :class="{ 'ui-typewriter--active': typing }">{{ typed }}</div>
+  </section>
+
+  <section class="demo-section" aria-labelledby="sec-log">
+    <h2 id="sec-log">事件紀錄</h2>
+    <ul id="event-log" class="demo-log"><li v-for="(entry, index) in events" :key="index">{{ entry }}</li></ul>
+  </section>
+
+  <section class="demo-section" aria-labelledby="sec-checklist">
+    <h2 id="sec-checklist">人工驗收清單</h2>
+    <ul id="checklist">
+      <li>Modal：遮罩是深黑半透明加模糊；容器有 1px 幽暗邊框；左上角有小字的 [ SYSTEM_PROMPT ]</li>
+      <li>Modal：按 Esc 可關閉，關閉後焦點回到「開啟 Modal」；Tab 與 Shift+Tab 只在對話框內循環</li>
+      <li>Modal：不可關閉的版本按 Esc 與點遮罩都沒有反應</li>
+      <li>Toast：出現在右下角，左側有 2px 琥珀橙線，由下往上淡入</li>
+      <li>Toast：連續三則會依序堆疊、各自消失；含 HTML 標記的文字以原樣顯示</li>
+      <li>打字機：逐字顯示；中文與表情符號不亂碼；「略過動畫」立刻顯示完；串流模擬在結束後很快補完</li>
+      <li>整體：沒有純白文字；字型為本站提供的 Noto Sans TC；開發者工具的網路面板沒有任何外部請求</li>
+    </ul>
+  </section>
+</div>
+{% endraw %}
+{% endblock %}
+
+{% block scripts %}
+{% raw %}
+<script>
+const { createApp, ref } = Vue;
+
+const app = createApp({
+  setup() {
+    const events = ref([]);
+    const record = (message) => events.value.unshift(new Date().toLocaleTimeString('zh-TW') + '　' + message);
+
+    // ---- 色彩 ----
+    const css = getComputedStyle(document.documentElement);
+    const palette = [
+      ['主背景', '--color-bg'], ['卡片／容器', '--color-surface'], ['主要文字', '--color-text'],
+      ['次要文字', '--color-text-muted'], ['焦點／互動', '--color-accent'], ['分隔線', '--color-border']
+    ].map(([name, variable]) => ({ name, value: 'var(' + variable + ')', hex: css.getPropertyValue(variable).trim() }));
+
+    // ---- Modal ----
+    const modalOpen = ref(false);
+    const lockedOpen = ref(false);
+    const onClose = (reason) => record('Modal 關閉，原因：' + reason);
+
+    // ---- Toast ----
+    const toastOne = () => UI.toast('已儲存設定。');
+    const toastThree = () => { UI.toast('第一則提示'); UI.toast('第二則提示'); UI.toast('第三則提示'); };
+    const toastError = () => UI.toast('發生錯誤，請稍後再試。', { type: 'error' });
+    const toastLong = () => UI.toast('這是一則很長的提示文字，用來確認容器寬度有限時能自動換行，不會把版面撐破，也不會被右下角截掉。'.repeat(2));
+    const toastHtml = () => UI.toast('<b>粗體</b><img src=x onerror=alert(1)> 應該以原樣文字顯示');
+    const toastSticky = () => UI.toast('這則提示不會自動消失，請按右側的 × 關閉。', { duration: 0 });
+    const toastClear = () => UI.toasts.clear();
+
+    // ---- 打字機 ----
+    const sample = ref('您好，我是智能客服 😀\n請問有什麼可以協助您的嗎？\n您可以詢問會員等級、登入問題，或留下意見回饋。👨‍👩‍👧');
+    const typed = ref('');
+    const typing = ref(false);
+    let writer = null;
+    let timer = null;
+
+    function stopStreaming() { if (timer !== null) { clearInterval(timer); timer = null; } }
+    function newWriter() {
+      stopStreaming();
+      if (writer) { writer.cancel(); }
+      typed.value = '';
+      typing.value = true;
+      writer = new UI.TypewriterBuffer({
+        onUpdate: (text) => { typed.value = text; },
+        onDone: () => { typing.value = false; record('打字機：完成'); }
+      });
+      return writer;
+    }
+    const playFull = () => { record('打字機：一次到達'); newWriter().play(sample.value); };
+    const simulateStream = () => {
+      record('打字機：模擬串流開始');
+      const w = newWriter();
+      const characters = Array.from(sample.value);
+      let index = 0;
+      timer = setInterval(() => {
+        if (index >= characters.length) { stopStreaming(); w.finish(); return; }
+        const size = 1 + Math.floor(Math.random() * 6);
+        w.push(characters.slice(index, index + size).join(''));
+        index += size;
+      }, 110);
+    };
+    const flushTyping = () => { stopStreaming(); if (writer) { writer.flush(); } };
+    const cancelTyping = () => { stopStreaming(); if (writer) { writer.cancel(); } typing.value = false; record('打字機：已取消'); };
+
+    return {
+      events, record, palette, modalOpen, lockedOpen, onClose,
+      toastOne, toastThree, toastError, toastLong, toastHtml, toastSticky, toastClear,
+      sample, typed, typing, playFull, simulateStream, flushTyping, cancelTyping
+    };
+  }
+});
+
+UI.install(app);
+app.mount('#app');
+</script>
+{% endraw %}
+{% endblock %}

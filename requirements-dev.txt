@@ -1,0 +1,3 @@
+# 開發與測試相依套件
+-r requirements.txt
+pytest==9.1.1

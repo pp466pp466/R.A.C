@@ -1,0 +1,35 @@
+# 映像不得包含機密、版本控制、測試、文件與開發工具
+.env
+.env.*
+**/.env
+**/.env.*
+
+.git
+.gitignore
+.gitattributes
+
+.venv
+venv
+**/__pycache__
+**/*.pyc
+.pytest_cache
+node_modules
+
+tests
+scripts
+docs
+openspec
+.claude
+.agents
+
+# 開發用檔案
+Dockerfile
+.dockerignore
+README.md
+AGENTS.md
+requirements-dev.txt
+pytest.ini
+*.sqlite
+*.sqlite3
+*.db
+*.log

@@ -1,0 +1,210 @@
+@charset "UTF-8";
+/* 共用元件樣式：Modal、Toast、按鈕、打字機。顏色一律使用 theme.css 的變數。 */
+
+/* ---- 按鈕 ---------------------------------------------------------------- */
+.ui-btn {
+  appearance: none;
+  background: transparent;
+  color: var(--color-text-muted);
+  border: var(--border-hairline);
+  padding: 0.5rem 1.125rem;
+  font: inherit;
+  font-size: 0.9375rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.ui-btn:hover,
+.ui-btn:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.ui-btn--primary {
+  color: var(--color-text);
+  border-color: var(--color-text-muted);
+}
+
+/* ---- Modal --------------------------------------------------------------- */
+body.ui-modal-open {
+  overflow: hidden;
+}
+
+.ui-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+  background: var(--color-modal-overlay);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+
+.ui-modal {
+  position: relative;
+  width: 100%;
+  max-width: 32rem;
+  max-height: calc(100vh - 2rem);
+  overflow: auto;
+  padding: 2.25rem 1.5rem 1.25rem;
+  background: var(--color-modal-surface);
+  border: 1px solid var(--color-border);
+  color: var(--color-text);
+  outline: none;
+}
+
+.ui-modal__code {
+  position: absolute;
+  top: 0.625rem;
+  left: 0.875rem;
+  font-size: 0.625rem;
+  letter-spacing: 0.14em;
+  color: var(--color-text-muted);
+  user-select: none;
+}
+
+.ui-modal__title {
+  margin: 0 0 0.75rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  color: var(--color-text);
+}
+
+.ui-modal__body {
+  color: var(--color-text);
+  line-height: 1.7;
+}
+
+.ui-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.75rem;
+  margin-top: 1.5rem;
+}
+
+.ui-fade-enter-active,
+.ui-fade-leave-active {
+  transition: opacity 0.18s ease;
+}
+
+.ui-fade-enter-from,
+.ui-fade-leave-to {
+  opacity: 0;
+}
+
+/* ---- Toast --------------------------------------------------------------- */
+.ui-toast-region {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1100;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  max-width: calc(100vw - 2rem);
+  pointer-events: none;
+}
+
+.ui-toast {
+  pointer-events: auto;
+  display: flex;
+  align-items: flex-start;
+  gap: 0.75rem;
+  min-width: 16rem;
+  max-width: 24rem;
+  padding: 0.75rem 1rem;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-left: 2px solid var(--color-accent);
+  color: var(--color-text);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+
+.ui-toast__message {
+  flex: 1;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.ui-toast__close {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  color: var(--color-text-muted);
+  font-size: 1.125rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.ui-toast__close:hover,
+.ui-toast__close:focus-visible {
+  color: var(--color-accent);
+}
+
+/* 由下往上淡入；多則時其餘提示平順上移 */
+.ui-toast-enter-active,
+.ui-toast-leave-active {
+  transition: opacity 0.25s ease, transform 0.25s ease;
+}
+
+.ui-toast-enter-from {
+  opacity: 0;
+  transform: translateY(12px);
+}
+
+.ui-toast-leave-to {
+  opacity: 0;
+  transform: translateY(-6px);
+}
+
+.ui-toast-leave-active {
+  position: absolute;
+  right: 0;
+}
+
+.ui-toast-move {
+  transition: transform 0.25s ease;
+}
+
+/* ---- 打字機 -------------------------------------------------------------- */
+.ui-typewriter {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.8;
+}
+
+.ui-typewriter--active::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 2px;
+  vertical-align: text-bottom;
+  background: var(--color-accent);
+  animation: ui-caret-blink 1s steps(1) infinite;
+}
+
+@keyframes ui-caret-blink {
+  50% { opacity: 0; }
+}
+
+/* 使用者偏好減少動態效果時，關閉所有轉場與動畫 */
+@media (prefers-reduced-motion: reduce) {
+  .ui-btn,
+  .ui-fade-enter-active,
+  .ui-fade-leave-active,
+  .ui-toast-enter-active,
+  .ui-toast-leave-active,
+  .ui-toast-move {
+    transition: none;
+  }
+
+  .ui-typewriter--active::after {
+    animation: none;
+  }
+}
