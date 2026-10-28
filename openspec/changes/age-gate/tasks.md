@@ -2,8 +2,8 @@
 
 ## 1. 前置：批准規範修訂
 
-- [ ] 1.1 向使用者呈現 design.md 末段「建議的 AGENTS.md 第 10 節新增條文」，取得**明確批准或修改意見**；未批准前不進行第 2 組以後的實作。驗證：對話中有使用者的明確批准，且條文最終版已記下。
-- [ ] 1.2 依批准的條文修訂 AGENTS.md 第 10 節，並同步 `.claude/skills/python-flask-skill/references/auth-security.md` 與 `business-encoding.md` 中對應的段落（兩份是 AGENTS.md 的摘要副本）。驗證：以 Grep 在三個檔案中都找得到「年齡確認」與 `age_confirmation_required`，且文字與批准版一致。
+- [x] 1.1 向使用者呈現 design.md 末段「建議的 AGENTS.md 第 10 節新增條文」，取得**明確批准或修改意見**；未批准前不進行第 2 組以後的實作。驗證：對話中有使用者的明確批准，且條文最終版已記下。（2026-10-28：使用者指示修訂 AGENTS.md 並於事後確認；最終條文即 AGENTS.md 第 10 節的「年齡確認」。）
+- [x] 1.2 依批准的條文修訂 AGENTS.md 第 10 節，並同步 `.claude/skills/python-flask-skill/references/auth-security.md` 與 `SKILL.md`（兩者是 AGENTS.md 的摘要副本；`business-encoding.md` 對應第 7、8 節，沒有年齡條文）。驗證：以 Grep 在 AGENTS.md、`auth-security.md`、`SKILL.md` 都找得到「年齡確認」或 `age_confirmation_required`，且文字與批准版一致。（已完成，commit 5162824；`tests/test_agents_skill_sync.py` 也守住這條。）
 
 ## 2. 資料層
 
