@@ -22,7 +22,7 @@ def app():
         return view
 
     cases = {
-        "validation": ValidationError(fields={"password": "密碼長度須為 10 至 128 字"}),
+        "validation": ValidationError(fields={"password": "密碼長度須為 8 至 128 字"}),
         "validation-plain": ValidationError("請輸入內容。"),
         "unauthenticated": Unauthenticated(),
         "forbidden": Forbidden(),
@@ -67,7 +67,7 @@ def test_each_service_error_maps_to_its_status_with_a_json_body(client, name, st
 
 def test_validation_error_carries_the_field_messages(client):
     error = client.get("/api/_t/validation").get_json()["error"]
-    assert error["fields"] == {"password": "密碼長度須為 10 至 128 字"}
+    assert error["fields"] == {"password": "密碼長度須為 8 至 128 字"}
 
 
 def test_validation_error_without_fields_has_no_fields_key(client):

@@ -760,7 +760,7 @@ flowchart LR
 |---|---|
 | 登入方式 | **Flask 簽章 session cookie**，內容只有 `user_id` 與 `token_version`；不使用 JWT（同源網站，無跨服務需求）。簽章式 cookie 無伺服器端狀態，符合多 worker。登出、改密碼、停權時 `token_version` 加 1 即可撤銷 |
 | Cookie 設定 | `HttpOnly`、`Secure`（正式）、`SameSite=Lax`；正式環境使用 `__Host-` 前綴；存活 7 天 |
-| 密碼雜湊 | **Argon2id**（`argon2-cffi`，參數不低於 OWASP 建議）。密碼長度 10 至 128 字，不強制字元組合；`password_hash` 欄位 255 足夠 |
+| 密碼雜湊 | **Argon2id**（`argon2-cffi`，參數不低於 OWASP 建議）。密碼長度 8 至 128 字，不強制字元組合；`password_hash` 欄位 255 足夠 |
 | 註冊 | 信箱加密碼 → 建立 `pending_verification` 帳號 → 寄驗證信 → 驗證後轉為 `active`。**未驗證信箱不得使用客服對話**（防止濫用 Gemini 額度），可重寄驗證信（有頻率限制） |
 | 驗證與重設連結 | 32 位元組隨機權杖，資料庫只存其 SHA-256 雜湊（`auth_tokens`），單次使用；驗證信 24 小時、重設信 1 小時失效。連結的 GET 只顯示確認頁，由 POST 完成動作，避免信件掃描器預先點擊而消耗權杖 |
 | 忘記密碼 | 不論信箱是否存在，一律回應相同文案，防止帳號列舉；重設成功後 `token_version` 加 1，並寄通知信 |

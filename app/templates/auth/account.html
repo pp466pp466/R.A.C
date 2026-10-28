@@ -70,8 +70,8 @@
         <p v-if="passwordForm.fieldErrors.current_password" id="current_password-error" class="auth-error" role="alert">{{ passwordForm.fieldErrors.current_password }}</p>
       </div>
       <div class="auth-field">
-        <label class="auth-label" for="new_password">新密碼（10 至 128 字）</label>
-        <input id="new_password" name="new_password" type="password" class="auth-input" autocomplete="new-password" minlength="10" maxlength="128" required
+        <label class="auth-label" for="new_password">新密碼（8 至 128 字）</label>
+        <input id="new_password" name="new_password" type="password" class="auth-input" autocomplete="new-password" minlength="8" maxlength="128" required
                v-model="passwordForm.values.new_password" :disabled="passwordForm.state.submitting"
                :aria-invalid="passwordForm.fieldErrors.new_password ? 'true' : 'false'" :aria-describedby="passwordForm.fieldErrors.new_password ? 'new_password-error' : null">
         <p v-if="passwordForm.fieldErrors.new_password" id="new_password-error" class="auth-error" role="alert">{{ passwordForm.fieldErrors.new_password }}</p>

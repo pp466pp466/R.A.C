@@ -395,7 +395,7 @@ def test_a_weak_new_password_is_refused_without_burning_the_token(member_session
     token = sender.last_token()
     with pytest.raises(ValidationError) as exc:
         flow.reset_password(token, "short")
-    assert exc.value.fields["new_password"] == "密碼長度須為 10 至 128 字。"
+    assert exc.value.fields["new_password"] == "密碼長度須為 8 至 128 字。"
     flow.reset_password(token, NEW_PASSWORD)                      # 同一個權杖仍然可用
 
 

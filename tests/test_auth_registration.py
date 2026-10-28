@@ -54,16 +54,27 @@ def test_registration_returns_nothing_so_it_cannot_log_anyone_in(member_session)
 
 # ---- 輸入驗證 -----------------------------------------------------------------
 
-def test_a_nine_character_password_is_rejected_with_a_field_error_and_no_account(member_session):
+def test_a_seven_character_password_is_rejected_with_a_field_error_and_no_account(member_session):
     with pytest.raises(ValidationError) as exc:
-        register(make_auth_service(member_session), password="a" * 9)
-    assert exc.value.fields["password"] == "密碼長度須為 10 至 128 字。"
+        register(make_auth_service(member_session), password="a" * 7)
+    assert exc.value.fields["password"] == "密碼長度須為 8 至 128 字。"
     assert user_count(member_session) == 0
 
 
-def test_a_ten_letter_lowercase_password_is_accepted(member_session):
-    register(make_auth_service(member_session), password="abcdefghij")
+def test_an_eight_letter_lowercase_password_is_accepted(member_session):
+    """AGENTS.md 第 10 節：長度限制 8 至 128 字（2026-10-28 由 10 降為 8），不強制字元組合。"""
+    register(make_auth_service(member_session), password="abcdefgh")
     assert user_count(member_session) == 1
+
+
+def test_the_old_ten_character_minimum_no_longer_applies_but_an_existing_password_still_logs_in(member_session):
+    """下限放寬只影響註冊與改密碼；舊的（10 字以上）密碼與剛註冊的 8、9 字密碼都能登入。"""
+    service = make_auth_service(member_session)
+    register(service, email="old@example.com", password="abcdefghij")
+    register(service, email="eight@example.com", password="12345678")
+    register(service, email="nine@example.com", password="123456789")
+    for email, password in (("old@example.com", "abcdefghij"), ("eight@example.com", "12345678"), ("nine@example.com", "123456789")):
+        assert service.login(email=email, password=password).email == email
 
 
 def test_not_accepting_the_terms_creates_no_account(member_session):

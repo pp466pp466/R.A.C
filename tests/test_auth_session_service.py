@@ -227,7 +227,7 @@ def test_the_new_password_must_follow_the_length_rule_and_differ_from_the_curren
     current = logged_in(member_session, service)
     with pytest.raises(ValidationError) as short:
         service.change_password(current, current_password=GOOD_PASSWORD, new_password="short")
-    assert short.value.fields["new_password"] == "密碼長度須為 10 至 128 字。"
+    assert short.value.fields["new_password"] == "密碼長度須為 8 至 128 字。"
     with pytest.raises(ValidationError) as same:
         service.change_password(current, current_password=GOOD_PASSWORD, new_password=GOOD_PASSWORD)
     assert same.value.fields == {"new_password": "新密碼不可與目前的密碼相同。"}

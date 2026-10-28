@@ -189,6 +189,20 @@ def test_the_register_page_has_a_separate_adult_checkbox_with_its_own_error_slot
     assert "google.fieldErrors.confirm_adult" in html                             # Google 入口缺年齡時的提示位置
 
 
+def test_every_password_field_states_and_enforces_the_8_to_128_range(full_app):
+    """AGENTS.md 第 10 節：8 至 128 字。頁面上的說明文字與瀏覽器的 minlength 都要跟著規則走。"""
+    logged = logged_in(full_app)
+    pages = {
+        "/register": full_app.test_client().get("/register"),
+        "/reset-password": full_app.test_client().get("/reset-password"),
+        "/account": logged.get("/account"),
+    }
+    for path, response in pages.items():
+        html = response.get_data(as_text=True)
+        assert "8 至 128 字" in html and 'minlength="8"' in html and 'maxlength="128"' in html, path
+        assert "10 至 128" not in html and 'minlength="10"' not in html, path
+
+
 def test_the_register_script_sends_both_confirmations_and_checks_both_before_leaving_for_google():
     from app.config import PROJECT_ROOT
 

@@ -88,7 +88,7 @@ node --test "tests/js/**/*.test.js"
 
 - 密碼**不接受命令列參數**（會留在 shell 歷史與行程清單）；密碼與電子郵件都不會出現在輸出或日誌。
 - Windows PowerShell 5.1 以管線傳字串給外部程式時，會在最前面加上 UTF-8 BOM；指令會自動去除它，所以上面的管線寫法可以放心使用（否則密碼會被存成「BOM＋密碼」，之後無法登入）。
-- 建立的帳號角色為 `admin`、狀態為 `active`、信箱視為已驗證；密碼規則與一般註冊相同（10 至 128 字）。
+- 建立的帳號角色為 `admin`、狀態為 `active`、信箱視為已驗證；密碼規則與一般註冊相同（8 至 128 字）。
 - 信箱（含 Gmail 別名的重複判斷）已有帳號時指令會失敗，且不會改動既有帳號。
 - **年齡確認不會代為完成**：部署者建立帳號不等於本人確認年滿 18 歲，所以管理員帳號的 `age_confirmed_at` 為空。管理員**第一次登入後須到 `/account` 自行勾選確認**，否則和其他會員一樣不能使用任何會呼叫 Gemini 的功能（見「撰寫新端點」）。
 
@@ -183,10 +183,11 @@ node --test "tests/js/**/*.test.js"
 
 | 項目 | 結果 |
 |---|---|
-| 自動化測試 | `pytest` 1564 項通過（SQLite 1311 項、真實 SQL Server `project_test` 253 項）；`node --test` 47 項；`openspec validate age-gate --strict` 通過 |
+| 自動化測試 | `pytest` 1571 項通過（SQLite 1317 項、真實 SQL Server `project_test` 254 項）；`node --test` 47 項；`openspec validate age-gate --strict` 通過。其中包含 AGENTS.md 手動修訂後的同步（密碼長度 8 至 128 字，以及第 10 節與 skill 鏡像的整條逐字比對） |
 | 年齡閘門的 HTTP 行為 | 以只在測試應用程式註冊的端點（`tests/support/age_gate.py`）驗證：未確認 → 403 `age_confirmation_required`、補確認後同一端點 200；管理員與 `vip` 都不豁免；信箱未驗證時回 `forbidden` 而不是引導補確認年齡；被拒時日誌只有 `auth.age_gate_denied` 與內部使用者編號 |
 | 並行確認 | 8 個連線同時對同一帳號補確認，恰好 1 個寫入（SQLite 與 SQL Server 都通過），第一次寫入的時間與版本不會被覆蓋 |
 | 容器 | 67 / 67 項通過，映像 271 MB（見「容器建置與驗收」） |
+| 本機開發資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`RESTORE VERIFYONLY` 通過），再 `alembic upgrade head`：`0002` → `0003_users_age_confirmation`。升級後 `alembic current` 為 `0003 (head)`、`/healthz` 與 `/readyz` 回 200、兩個新欄位存在且可為空；當時 `users`、`user_identities`、`auth_tokens` 都是 0 筆，沒有資料需要回填 |
 | migration `0003` | 升級只新增兩個可為空的欄位；降級只刪這兩欄、不影響其他資料表的資料列（SQLite 預設以重建資料表刪欄位，會連帶清掉以串聯刪除參照 `users` 的資料，已改為直接 `DROP COLUMN` 並由測試守住） |
 
 ## 本機測試信箱驗證

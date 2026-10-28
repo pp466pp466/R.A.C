@@ -33,8 +33,8 @@
       </div>
 
       <div class="auth-field">
-        <label class="auth-label" for="password">密碼（10 至 128 字）</label>
-        <input id="password" name="password" type="password" class="auth-input" autocomplete="new-password" minlength="10" maxlength="128" required
+        <label class="auth-label" for="password">密碼（8 至 128 字）</label>
+        <input id="password" name="password" type="password" class="auth-input" autocomplete="new-password" minlength="8" maxlength="128" required
                v-model="form.values.password" :disabled="form.state.submitting"
                :aria-invalid="form.fieldErrors.password ? 'true' : 'false'" :aria-describedby="form.fieldErrors.password ? 'password-error' : null">
         <p v-if="form.fieldErrors.password" id="password-error" class="auth-error" role="alert">{{ form.fieldErrors.password }}</p>

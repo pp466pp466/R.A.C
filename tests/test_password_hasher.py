@@ -14,34 +14,40 @@ FAST = PasswordHasherService(TESTING_PARAMETERS)
 
 # ---- 長度與字元規則 -----------------------------------------------------------
 
-@pytest.mark.parametrize("length", [MIN_PASSWORD_LENGTH, 11, 64, MAX_PASSWORD_LENGTH])
+def test_the_documented_range_is_8_to_128():
+    """AGENTS.md 第 10 節：長度限制 8 至 128 字。"""
+    assert (MIN_PASSWORD_LENGTH, MAX_PASSWORD_LENGTH) == (8, 128)
+
+
+@pytest.mark.parametrize("length", [MIN_PASSWORD_LENGTH, 9, 10, 11, 64, MAX_PASSWORD_LENGTH])
 def test_lengths_inside_the_range_are_accepted(length):
     assert password_problem("a" * length) is None
 
 
-@pytest.mark.parametrize("length", [0, 1, 9, 129, 500])
+@pytest.mark.parametrize("length", [0, 1, 7, 129, 500])
 def test_lengths_outside_the_range_are_rejected_with_the_documented_message(length):
-    assert password_problem("a" * length) == "密碼長度須為 10 至 128 字。"
+    assert password_problem("a" * length) == "密碼長度須為 8 至 128 字。"
 
 
 def test_no_character_composition_is_required():
-    assert password_problem("abcdefghij") is None       # 十個全小寫英文字母
+    assert password_problem("abcdefgh") is None          # 八個全小寫英文字母（下限）
     assert password_problem("這是一個很長的中文密碼喔") is None
-    assert password_problem("          ") is None         # 十個空白也是合法長度（空白是密碼的一部分）
+    assert password_problem("        ") is None           # 八個空白也是合法長度（空白是密碼的一部分）
 
 
 def test_length_is_counted_in_characters_after_normalisation_not_bytes():
-    assert password_problem("密" * 10) is None            # 10 個字元（30 位元組）
-    assert password_problem("😀" * 10) is None
+    assert password_problem("密" * 8) is None             # 8 個字元（24 位元組）
+    assert password_problem("😀" * 8) is None
+    assert password_problem("密" * 7) is not None         # 21 位元組也不夠：算的是字元數
     assert password_problem("密" * 129) is not None
 
 
-@pytest.mark.parametrize("bad", ["abcdefghi\n", "abc\tdefghijk", "abcdefghij\x00", "abcdefghij\ud800"])
+@pytest.mark.parametrize("bad", ["abcdefg\n", "abc\tdefghijk", "abcdefghij\x00", "abcdefghij\ud800"])
 def test_control_characters_and_unencodable_text_are_rejected(bad):
     assert password_problem(bad) == "密碼不可包含控制字元或無法使用的字元。"
 
 
-@pytest.mark.parametrize("not_text", [None, 123456789012, ["a"], {"a": 1}, b"abcdefghij"])
+@pytest.mark.parametrize("not_text", [None, 123456789012, ["a"], {"a": 1}, b"abcdefgh"])
 def test_non_text_is_rejected(not_text):
     assert password_problem(not_text) == "請輸入密碼。"
 

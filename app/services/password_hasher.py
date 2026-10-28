@@ -4,7 +4,9 @@
   testing 環境使用極便宜的參數，否則數百次雜湊會讓測試慢到無法使用；正式程式碼的參數不受影響。
 - 密碼先做 Unicode NFKC 正規化再雜湊與驗證（NIST SP 800-63B 建議）。**此規則一旦有真實使用者就不能改**，
   否則既有雜湊全部失效。
-- 長度 10 至 128 字（正規化後的字元數），不強制字元組合；不接受控制字元與無法編碼的字元。
+- 長度 8 至 128 字（正規化後的字元數），不強制字元組合；不接受控制字元與無法編碼的字元。
+  下限由 10 降為 8（AGENTS.md 第 10 節，2026-10-28 修訂）：只放寬註冊與改密碼的輸入規則，既有的雜湊不受影響，
+  登入也不檢查下限（只擋過長的輸入），所以不需要任何資料搬移。
 - 時間一致：驗證不存在的帳號時也要做一次等價的運算（`burn`），否則回應時間會洩漏帳號是否存在。
 """
 from __future__ import annotations
@@ -15,7 +17,7 @@ from functools import lru_cache
 from argon2 import PasswordHasher
 from argon2.exceptions import InvalidHashError, VerificationError
 
-MIN_PASSWORD_LENGTH = 10
+MIN_PASSWORD_LENGTH = 8
 MAX_PASSWORD_LENGTH = 128
 
 # RFC 9106 低記憶體建議：t=3、m=64 MiB、p=4。C-5 依容器實際記憶體與壓測結果調整時，只改這裡。

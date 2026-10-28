@@ -93,11 +93,11 @@ function serverError(status, error) {
 
 test('field errors from a 400 are returned per field as plain strings', () => {
   const info = Auth.describeError(serverError(400, {
-    code: 'validation_error', message: '輸入的內容不正確，請檢查後再試。', fields: { password: '密碼長度須為 10 至 128 字。', email: 5 }
+    code: 'validation_error', message: '輸入的內容不正確，請檢查後再試。', fields: { password: '密碼長度須為 8 至 128 字。', email: 5 }
   }));
   assert.equal(info.kind, 'server');
   assert.equal(info.status, 400);
-  assert.deepEqual(info.fields, { password: '密碼長度須為 10 至 128 字。', email: '5' });
+  assert.deepEqual(info.fields, { password: '密碼長度須為 8 至 128 字。', email: '5' });
   assert.equal(info.message, '輸入的內容不正確，請檢查後再試。');
 });
 
