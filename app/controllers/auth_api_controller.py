@@ -30,6 +30,7 @@ def register():
         password=body.get("password"),
         display_name=body.get("display_name"),
         accept_terms=body.get("accept_terms"),
+        confirm_adult=body.get("confirm_adult"),
     )
     verification = get_config().email_verification_required
     return jsonify(
@@ -70,6 +71,16 @@ def logout_all():
 def me():
     user = require_login()
     return jsonify(user=get_auth_service().profile(user))
+
+
+@auth_api_bp.post("/confirm-adult")
+def confirm_adult():
+    """已登入的使用者補確認年滿 18 歲。`token_version` 沒有變，所以不需要換發登入 cookie。"""
+    user = require_login()
+    body = read_json_object()
+    service = get_auth_service()
+    updated = service.confirm_adult(user, confirm=body.get("confirm_adult"))
+    return jsonify(user=service.profile(updated))
 
 
 # ---- 信箱驗證與重設密碼（信箱驗證關閉時整組不存在，一律 404）--------------------------
@@ -124,7 +135,9 @@ def google_start():
     if get_identity_provider() is None:
         abort(404)
     body = read_json_object()
-    start = get_google_sign_in_service().begin(accept_terms=body.get("accept_terms"))
+    start = get_google_sign_in_service().begin(
+        accept_terms=body.get("accept_terms"), confirm_adult=body.get("confirm_adult")
+    )
     transaction = {**start.transaction, "x": safe_next(body.get("next"))}     # 登入後的返回位置：此時就先驗證
     response = jsonify(authorization_url=start.authorization_url)
     store_transaction(response, transaction)

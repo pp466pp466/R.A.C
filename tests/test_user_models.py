@@ -53,7 +53,10 @@ def test_value_domains_are_the_documented_ones():
 def test_nullable_columns_are_exactly_the_documented_ones():
     columns = Base.metadata.tables["users"].columns
     nullable = {c.name for c in columns if c.nullable}
-    assert nullable == {"password_hash", "email_verified_at", "locked_until", "terms_version", "terms_accepted_at", "last_login_at"}
+    assert nullable == {
+        "password_hash", "email_verified_at", "locked_until", "terms_version", "terms_accepted_at",
+        "age_confirmed_at", "age_policy_version", "last_login_at",
+    }
     tokens = {c.name for c in Base.metadata.tables["auth_tokens"].columns if c.nullable}
     assert tokens == {"used_at"}
 
@@ -137,6 +140,7 @@ def test_new_user_gets_the_documented_defaults(session):
     assert (user.role, user.member_tier, user.token_version, user.failed_login_count) == ("user", "free", 1, 0)
     assert user.password_hash is None and user.email_verified_at is None and user.locked_until is None
     assert user.terms_version is None and user.last_login_at is None
+    assert user.age_confirmed_at is None and user.age_policy_version is None     # 預設視為尚未確認年滿 18 歲
     assert len(user.public_id) == 36
     assert user.created_at.tzinfo is not None
 

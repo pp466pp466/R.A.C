@@ -16,9 +16,28 @@
     <dd><span class="tier-badge">{{ tierLabel }}</span></dd>
     <dt>信箱驗證</dt>
     <dd>{{ user.email_verified ? '已驗證' : '尚未驗證' }}</dd>
+    <dt>年齡確認</dt>
+    <dd>{{ ageConfirmed ? '已確認年滿 18 歲' : '尚未確認' }}</dd>
     <dt>登入方式</dt>
     <dd>{{ methods }}</dd>
   </dl>
+
+  <section v-if="!ageConfirmed" class="auth-notice" aria-labelledby="age-title" role="status">
+    <h2 id="age-title" class="account-notice-title">請先確認年滿 18 歲</h2>
+    <p>本平台僅供年滿 18 歲者使用。確認之前，無法使用客服等需要 AI 回覆的功能。我們只記錄您確認的時間與政策版本，不蒐集生日、年齡或證件。</p>
+    <form @submit.prevent="confirmAdult" novalidate>
+      <label class="auth-check" for="account_confirm_adult">
+        <input id="account_confirm_adult" name="confirm_adult" type="checkbox" v-model="ageForm.values.confirm_adult" :disabled="ageForm.state.submitting"
+               :aria-invalid="ageForm.fieldErrors.confirm_adult ? 'true' : 'false'">
+        <span>我已年滿 18 歲</span>
+      </label>
+      <p v-if="ageForm.fieldErrors.confirm_adult" class="auth-error" role="alert">{{ ageForm.fieldErrors.confirm_adult }}</p>
+      <p v-if="ageForm.state.formError" class="auth-form-error" role="alert">{{ ageForm.state.formError }}</p>
+      <button type="submit" class="ui-btn ui-btn--primary" :disabled="ageForm.state.submitting" :aria-busy="ageForm.state.submitting ? 'true' : 'false'">
+        {{ ageForm.state.submitting ? '送出中…' : '確認' }}
+      </button>
+    </form>
+  </section>
 
   <div v-if="verificationRequired && !user.email_verified" class="auth-notice" role="status">
     <p>您的信箱尚未驗證，驗證完成前無法使用客服。請到信箱點擊驗證連結；找不到信的話，可以重新寄送。</p>

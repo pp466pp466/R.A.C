@@ -27,6 +27,8 @@ PRODUCTION_AUTH_ENV = [
 ]
 MEMBER_EMAIL = "container.member@example.com"
 MEMBER_PASSWORD = "container-member-password-1"
+ADMIN_EMAIL = "container.admin@example.com"
+ADMIN_PASSWORD = "container-admin-password-1"
 
 results: list[tuple[str, bool, str]] = []
 
@@ -126,6 +128,8 @@ report("csrf cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/,
 report("html pages are not cacheable", headers.get("Cache-Control") == "no-store")
 
 status, body, _ = call("POST", "/api/auth/register", {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True})
+report("register without the age confirmation is refused with a field error", status == 400 and set(body["error"]["fields"]) == {"confirm_adult"}, str(status))
+status, body, _ = call("POST", "/api/auth/register", {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True, "confirm_adult": True})
 report("register succeeds", status == 200 and body.get("ok") is True, str(status))
 status, body, _ = call("POST", "/api/auth/login", {"email": EMAIL, "password": PASSWORD})
 report("login succeeds", status == 200, str(status))
@@ -134,7 +138,11 @@ report("session cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path
        all(part in session_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/", "Expires=")) and "Domain" not in session_cookie)
 status, body, _ = call("GET", "/api/auth/me")
 report("/api/auth/me returns the member", status == 200 and body["user"]["email"] == EMAIL, str(status))
+status, _, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": True}, csrf=False)
+report("confirm-adult without the CSRF header is refused", status == 403, str(status))
 report("/api/auth/me never exposes internals", not ({"id", "token_version", "password_hash"} & set(body["user"])))
+report("a member who confirmed at registration reports age_confirmed, without the time or version",
+       body["user"].get("age_confirmed") is True and not ({"age_confirmed_at", "age_policy_version"} & set(body["user"])))
 status, body, _ = call("GET", "/account")
 report("/account renders for a logged-in member", status == 200 and "account-list" in body)
 status, body, _ = call("POST", "/api/auth/change-password", {"current_password": PASSWORD, "new_password": PASSWORD + "-new"}, csrf=False)
@@ -143,13 +151,27 @@ status, _, _ = call("POST", "/api/auth/logout")
 report("logout succeeds", status == 200)
 status, _, _ = call("GET", "/api/auth/me")
 report("after logout /api/auth/me is 401", status == 401, str(status))
+status, _, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": True})
+report("confirm-adult needs a login", status == 401, str(status))
+
+# create-admin is run in the container beforehand and deliberately does not confirm the age: the admin is an unconfirmed account
+status, body, _ = call("POST", "/api/auth/login", {"email": "%(admin_email)s", "password": "%(admin_password)s"})
+report("the admin created by the command can log in", status == 200 and body["user"]["role"] == "admin", str(status))
+report("the admin starts without an age confirmation", body["user"].get("age_confirmed") is False)
+status, body, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": False})
+report("confirm-adult needs an explicit true", status == 400 and set(body["error"]["fields"]) == {"confirm_adult"}, str(status))
+status, body, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": True})
+report("confirm-adult records the confirmation and returns the fresh profile", status == 200 and body["user"]["age_confirmed"] is True, str(status))
+status, body, _ = call("GET", "/api/auth/me")
+report("the confirmation persists for the logged-in session", status == 200 and body["user"]["age_confirmed"] is True, str(status))
+call("POST", "/api/auth/logout")
 status, _, headers = call("GET", "/account")
 report("an anonymous /account redirects to /login keeping next", status == 302 and headers.get("Location", "").startswith("/login?next="), headers.get("Location", ""))
 status, _, _ = call("GET", "/terms")
 report("/terms and /privacy are public", status == 200 and call("GET", "/privacy")[0] == 200)
 status, body, _ = call("POST", "/api/auth/forgot-password", {"email": EMAIL})
 report("forgot-password is 404 because verification is off in this staging run", status == 404, str(status))
-''' % {"email": MEMBER_EMAIL, "password": MEMBER_PASSWORD}
+''' % {"email": MEMBER_EMAIL, "password": MEMBER_PASSWORD, "admin_email": ADMIN_EMAIL, "admin_password": ADMIN_PASSWORD}
 
 
 LAYER_SCAN = r"""
@@ -293,18 +315,27 @@ def verify_member_flow(image: str) -> None:
         check("[會員流程] 預備環境容器啟動（驗證關閉、SQLite 檔案資料庫）", code == 0, out.strip()[:80])
         time.sleep(4)
         code, out = docker("exec", name, "python", "-m", "alembic", "upgrade", "head", timeout=120)
-        check("[會員流程] 在容器內執行 alembic upgrade head 成功", code == 0 and "0002_users_and_auth_tokens" in out, out.strip()[-160:].replace("\n", " "))
+        check("[會員流程] 在容器內執行 alembic upgrade head 成功，升級到年齡確認的 0003",
+              code == 0 and "0002_users_and_auth_tokens" in out and "0003_users_age_confirmation" in out, out.strip()[-160:].replace("\n", " "))
+
+        # 容器內沒有會呼叫 Gemini 的端點可以直接驗年齡閘門；管理員指令刻意不代為確認年齡，所以用它建立一個「尚未確認」的帳號
+        code, out = docker("exec", "-i", name, "python", "-m", "flask", "--app", "wsgi", "create-admin",
+                           "--email", ADMIN_EMAIL, "--display-name", "container-admin", "--password-stdin",
+                           stdin=ADMIN_PASSWORD + "\n", timeout=120)
+        check("[會員流程] 在容器內以 flask create-admin 建立管理員", code == 0, out.strip()[-160:].replace("\n", " "))
 
         code, out = docker("exec", "-i", name, "python", "-", stdin=AUTH_FLOW, timeout=120)
         flow = [line.split("|", 3) for line in out.splitlines() if line.startswith("RESULT|")]
-        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 14, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 14 else f"{len(flow)} 項")
+        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 24, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 24 else f"{len(flow)} 項")
         for _, label, ok, detail in flow:
             check(f"[會員流程] {label}", ok == "1", detail)
 
         code, logs = docker("logs", name)
-        check("[會員流程] 日誌沒有信箱與密碼", MEMBER_EMAIL not in logs and MEMBER_PASSWORD not in logs and FAKE_SECRET not in logs)
+        check("[會員流程] 日誌沒有信箱與密碼",
+              not any(secret in logs for secret in (MEMBER_EMAIL, MEMBER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET)))
         events = re.findall(r'"event":"([a-z_.]+)"', logs)
         check("[會員流程] 日誌有註冊、登入、登出的安全事件", {"auth.register", "auth.login_success", "auth.logout"} <= set(events), ", ".join(sorted(set(events))))
+        check("[會員流程] 日誌有註冊時與事後補確認年齡的安全事件", {"auth.age_confirmed.register", "auth.age_confirmed.later"} <= set(events), ", ".join(sorted(set(events))))
         code, out = docker("exec", name, "sh", "-c", "test ! -e /app/.env && test ! -e /app/tests && echo clean")
         check("[會員流程] 映像內仍然沒有 .env 與測試", code == 0 and out.strip() == "clean", out.strip()[:120])
     finally:

@@ -52,6 +52,24 @@ def test_failures_are_warnings_and_successes_are_info(log_lines):
     assert levels == ["INFO", "WARNING", "WARNING"]
 
 
+AGE_EVENTS = {
+    security_events.AGE_CONFIRMED_REGISTER: ("auth.age_confirmed.register", "INFO"),
+    security_events.AGE_CONFIRMED_GOOGLE: ("auth.age_confirmed.google", "INFO"),
+    security_events.AGE_CONFIRMED_LATER: ("auth.age_confirmed.later", "INFO"),
+    security_events.AGE_GATE_DENIED: ("auth.age_gate_denied", "INFO"),
+    security_events.GOOGLE_REJECTED_AGE: ("auth.google_rejected.age", "WARNING"),
+}
+
+
+def test_the_age_gate_events_are_registered_with_the_expected_levels(log_lines):
+    """被年齡閘門擋下是正常的拒絕（資訊）；Google 回呼因未確認年齡被拒絕是異常的流程（警告）。"""
+    for constant, (name, level) in AGE_EVENTS.items():
+        assert constant == name and name in EVENT_NAMES
+        log_event(constant, user_id=5)
+        payload = log_lines()[-1]
+        assert (payload["event"], payload["level"], payload["user_id"]) == (name, level, 5)
+
+
 def test_an_unregistered_event_name_is_refused():
     with pytest.raises(ValueError):
         log_event("auth.something_made_up")

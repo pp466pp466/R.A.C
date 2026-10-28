@@ -88,6 +88,8 @@
 | `token_version` | INTEGER | NOT NULL, DEFAULT 1 | 加 1 即撤銷既有 session |
 | `terms_version` | Unicode(40) | NULLABLE | 註冊與 Google 建立帳號時由 Service 必填（記錄同意的服務條款與隱私權政策版本）；由管理員指令建立的帳號沒有「同意」這個動作，故為空 |
 | `terms_accepted_at` | DATETIME2 (UTC) | NULLABLE | 同意時間；同上 |
+| `age_confirmed_at` | DATETIME2 (UTC) | NULLABLE | 確認年滿 18 歲的時間；空值 = 尚未確認，不得使用任何會呼叫 Gemini 的功能（age-gate）。與同意條款分開勾選；不蒐集生日、年齡或證件。由條件式 UPDATE 寫入，第一次確認後不再被覆蓋 |
+| `age_policy_version` | Unicode(40) | NULLABLE | 確認當時的年齡政策版本（`CURRENT_AGE_POLICY_VERSION`）；與 `age_confirmed_at` 同時寫入。管理員指令建立的帳號與升級前已存在的帳號為空，須於帳號設定頁補確認 |
 | `last_login_at` | DATETIME2 (UTC) | NULLABLE | 最後登入時間 |
 | `created_at`、`updated_at` | DATETIME2 (UTC) | NOT NULL | 由 Python 端維護（不使用伺服器端函式，避免兩種資料庫語法差異） |
 | `deleted_at` | DATETIME | NULLABLE | 刪除帳號流程使用；**C-2 尚未建立此欄位**，C-4 以 expand 方式新增 |

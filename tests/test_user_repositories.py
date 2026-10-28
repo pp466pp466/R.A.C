@@ -158,6 +158,20 @@ def test_bump_token_version_returns_the_new_value_each_time(session, users):
     assert user.token_version == 3
 
 
+def test_confirm_adult_writes_once_and_never_overwrites_the_first_record(session, users):
+    user = users.add_user(make_user(1))
+    other = users.add_user(make_user(2))
+    first = utcnow()
+
+    assert users.confirm_adult_if_unset(user, confirmed_at=first, policy_version="v1") is True
+    assert user.age_confirmed_at == first and user.age_policy_version == "v1"
+
+    later = first + timedelta(hours=1)
+    assert users.confirm_adult_if_unset(user, confirmed_at=later, policy_version="v2") is False
+    assert user.age_confirmed_at == first and user.age_policy_version == "v1"        # 原本的時間與版本不變
+    assert other.age_confirmed_at is None and other.age_policy_version is None       # 不影響別人
+
+
 # =============================================================================
 # UserIdentityRepository
 # =============================================================================
@@ -337,3 +351,21 @@ def test_parallel_token_version_bumps_never_lose_an_update(concurrent_engine):
     run_in_threads(concurrent_engine, worker, count=8)
     with Session(concurrent_engine) as s:
         assert s.get(User, user_id).token_version == 9
+
+
+def test_parallel_adult_confirmations_write_exactly_once(concurrent_engine):
+    with Session(concurrent_engine) as s:
+        user = UserRepository(s).add_user(make_user())
+        s.commit()
+        user_id = user.id
+
+    def worker(s: Session, index: int) -> bool:
+        stale = s.get(User, user_id)                 # 每個執行緒都先讀到「尚未確認」
+        return UserRepository(s).confirm_adult_if_unset(stale, confirmed_at=utcnow(), policy_version=f"v{index}")
+
+    results = run_in_threads(concurrent_engine, worker, count=8)
+    assert results.count(True) == 1 and results.count(False) == 7
+    with Session(concurrent_engine) as s:
+        stored = s.get(User, user_id)
+        assert stored.age_confirmed_at is not None
+        assert stored.age_policy_version in {f"v{i}" for i in range(8)}

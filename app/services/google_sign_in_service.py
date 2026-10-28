@@ -11,8 +11,11 @@
   - 信箱已驗證 → 綁定，原有密碼仍可使用；
   - 信箱未驗證（含信箱驗證關閉期間註冊的帳號）→ **清除其密碼憑證**、視為已驗證、`token_version` 加 1
     （撤銷任何以該密碼建立的登入狀態），再綁定。這是防止「預先佔用信箱」的帳號劫持；
-  - 沒有帳號 → 建立新帳號（已驗證、沒有密碼），需要發起時已勾選同意條款。
+  - 沒有帳號 → 建立新帳號（已驗證、沒有密碼），需要發起時已勾選同意條款、並且已（另外）確認年滿 18 歲，
+    成功時同時記錄兩者；先檢查條款、再檢查年齡，各自回報不同的錯誤代碼。
 - 該帳號已綁定另一個 Google 身分、或停用中 → 拒絕，不新增綁定。
+- 已存在的帳號（已綁定、或以信箱合併）登入時不需要這兩項確認，也**不會**被順便標記為已確認年齡：
+  補確認只能在帳號設定頁明確完成。
 所有拒絕都以固定的錯誤代碼表示（Controller 轉成 `/login?error=<代碼>`），不夾帶任何外部提供的文字。
 """
 from __future__ import annotations
@@ -35,7 +38,7 @@ from app.services.google_oidc import (
     GoogleAuthError, GoogleIdentityProvider, GoogleProfile, code_challenge_for, new_code_verifier, new_state_or_nonce,
 )
 from app.services.input_cleaning import clean_single_line
-from app.services.legal import CURRENT_TERMS_VERSION
+from app.services.legal import CURRENT_AGE_POLICY_VERSION, CURRENT_TERMS_VERSION
 from app.services.normalization import canonical_email, is_valid_email, normalize_email
 
 MAX_DISPLAY_NAME_LENGTH = 50
@@ -46,6 +49,7 @@ ERROR_STATE = "google_state"
 ERROR_UNAVAILABLE = "google_unavailable"
 ERROR_REJECTED = "google_rejected"
 ERROR_TERMS = "terms_required"
+ERROR_AGE = "age_required"
 ERROR_DISABLED = "account_disabled"
 
 OUTCOME_LOGIN = "login"
@@ -90,7 +94,8 @@ class GoogleSignInService:
 
     # ---- 發起 ----------------------------------------------------------------
 
-    def begin(self, *, accept_terms: object) -> GoogleStart:
+    def begin(self, *, accept_terms: object, confirm_adult: object) -> GoogleStart:
+        """旗標 `t`（同意條款）與 `a`（確認年滿 18 歲）只有明確為 `True` 才成立，並簽進交易 cookie。"""
         state, nonce, verifier = new_state_or_nonce(), new_state_or_nonce(), new_code_verifier()
         url = self._provider.build_authorization_url(
             state=state, nonce=nonce, code_challenge=code_challenge_for(verifier)
@@ -98,7 +103,9 @@ class GoogleSignInService:
         security_events.log_event(security_events.GOOGLE_STARTED)
         return GoogleStart(
             authorization_url=url,
-            transaction={"s": state, "n": nonce, "v": verifier, "t": accept_terms is True},
+            transaction={
+                "s": state, "n": nonce, "v": verifier, "t": accept_terms is True, "a": confirm_adult is True,
+            },
         )
 
     # ---- 回呼 ----------------------------------------------------------------
@@ -126,7 +133,10 @@ class GoogleSignInService:
             if error.reason == "unavailable":
                 self._refuse(ERROR_UNAVAILABLE, security_events.GOOGLE_REJECTED_UNAVAILABLE)
             self._refuse(ERROR_REJECTED, security_events.GOOGLE_REJECTED_TOKEN)
-        return self._resolve(profile, accepted_terms=bool(transaction.get("t")))
+        # 沒有 `a` 的交易（例如更新前發起的流程）一律視為「未確認年齡」
+        return self._resolve(
+            profile, accepted_terms=transaction.get("t") is True, confirmed_adult=transaction.get("a") is True
+        )
 
     def _check_state(self, state: object, transaction: dict[str, Any] | None) -> None:
         valid = (
@@ -145,7 +155,7 @@ class GoogleSignInService:
 
     # ---- 帳號對應 ------------------------------------------------------------
 
-    def _resolve(self, profile: GoogleProfile, *, accepted_terms: bool) -> GoogleLoginResult:
+    def _resolve(self, profile: GoogleProfile, *, accepted_terms: bool, confirmed_adult: bool) -> GoogleLoginResult:
         now = self._clock()
 
         identity = self._identities.get_by_subject(PROVIDER_GOOGLE, profile.subject)
@@ -165,9 +175,12 @@ class GoogleSignInService:
         if user is None:
             if not accepted_terms:
                 self._refuse(ERROR_TERMS, security_events.GOOGLE_REJECTED_TERMS)
+            if not confirmed_adult:
+                self._refuse(ERROR_AGE, security_events.GOOGLE_REJECTED_AGE)
             user = self._create_account(profile, canonical, now)
             if user is not None:
                 self._bind(user, profile.subject)
+                security_events.log_event(security_events.AGE_CONFIRMED_GOOGLE, user_id=user.id)
                 return self._finish(user, now, OUTCOME_REGISTERED, security_events.GOOGLE_REGISTERED)
             user = self._users.get_by_canonical_email(canonical)      # 並行註冊同一信箱：輸家改走「合併」
             if user is None:
@@ -208,6 +221,8 @@ class GoogleSignInService:
             status=STATUS_ACTIVE,
             terms_version=CURRENT_TERMS_VERSION,
             terms_accepted_at=now,
+            age_confirmed_at=now,
+            age_policy_version=CURRENT_AGE_POLICY_VERSION,
         )
         try:
             self._users.add_user(user)

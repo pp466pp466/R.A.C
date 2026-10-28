@@ -503,7 +503,9 @@ flowchart LR
 
 #### R-15.4　年齡閘門（共用層）　**[已確認：事實]**
 
-Gemini API 附加條款（2026-03-23 生效）規定：「You must be 18 years of age or older to use the APIs」，且不得將服務用於「directed towards or is likely to be accessed by individuals under the age of 18」的網站或應用程式。因此**年齡閘門是整個專案（客服加 RPG）的合規問題**，與是否提供成熟內容無關；現行註冊流程沒有年齡確認。建議以獨立的共用層 change 處理（6.3 節），AGENTS.md 的修訂見 RA-10。
+Gemini API 附加條款（2026-03-23 生效）規定：「You must be 18 years of age or older to use the APIs」，且不得將服務用於「directed towards or is likely to be accessed by individuals under the age of 18」的網站或應用程式。因此**年齡閘門是整個專案（客服加 RPG）的合規問題**，與是否提供成熟內容無關；原本的註冊流程沒有年齡確認，以獨立的共用層 change 處理（6.3 節），AGENTS.md 的修訂見 RA-10。
+
+**實作狀態（2026-10-28）**：共用層 change `age-gate` 已實作並通過驗收，範圍是**自行聲明**——註冊（含 Google 首次註冊）以與同意條款分開的勾選確認年滿 18 歲，記錄 `users.age_confirmed_at` 與 `users.age_policy_version`，不蒐集生日、年齡或證件；升級前的帳號與管理員指令建立的帳號都從「尚未確認」開始，須在帳號設定頁補確認。未確認者可登入與管理帳號，但 `AccessPolicy.require_chat_access` 會擋下所有會呼叫 Gemini 的功能（403 `age_confirmation_required`），管理員與各會員等級都不豁免。這正是上方使用者決定第 ④ 項所假設的做法：若 Google 回覆認為自行聲明不足，另開 change 提高 `CURRENT_AGE_POLICY_VERSION` 並實作重新確認。
 
 #### R-15.5　成年角色閘門　**[建議]**
 
@@ -688,7 +690,7 @@ flowchart LR
 
 | 編號 | 事項 | 來源 |
 |---|---|---|
-| T-1 | **年齡閘門**：共用層 change `age-gate`（2026-10-28 已立案；AGENTS.md 第 10 節的年齡確認條文已套用、任務 1.1 與 1.2 完成，實作尚未開始），註冊時確認年滿 18 歲並記錄時間，影響客服與 RPG；須在任何對外開放前完成，也就是 C-5 之前。**C-3 的每個 AI 端點須先呼叫 `AccessPolicy.require_chat_access`** | R-15.4、RA-10 |
+| T-1 | **年齡閘門**：共用層 change `age-gate`（2026-10-28 已立案並**實作完成**，範圍是自行聲明，見 R-15.4；AGENTS.md 第 10 節的年齡確認條文已套用），註冊時確認年滿 18 歲並記錄時間，影響客服與 RPG；須在任何對外開放前完成，也就是 C-5 之前。**C-3 的每個 AI 端點須先呼叫 `AccessPolicy.require_chat_access`**，並在客服與 RPG 的端點測試中各驗證一次年齡閘門 | R-15.4、RA-10 |
 | T-2 | **LLM 呼叫端做成介面加轉接器**（`GeminiClient` 為其一），模型名稱為設定值，5xx 與逾時可退到備援模型；屬 C-3 範圍。備援策略見 T-9 | RA-7、RU-13、T-9 |
 | T-3 | **`gemini-3.8-flash` 的可用性**：2026-10-28 對它做 5 次極短呼叫（只要求回答一個字），成功 1 次（耗時 25.1 秒），4 次回 503（耗時 1.0、28.7、63.3、87.6 秒）；同日 `gemini-3.7-flash` 回 503，`gemini-2.5-flash` 回 404（已不開放新使用者）。這只是約三分鐘的取樣，503 訊息自稱需求高峰通常是暫時的。同日稍晚再探測一次，5 次**全部**回 503（耗時 1.0 至 6.8 秒）。**C-3 開始前須重新探測**，並注意 AGENTS.md 規定單次呼叫逾時為 20 秒 | R-14.7 |
 | T-4 | **思考 token**：`gemini-3.5-flash` 每回合輸出約 235 token，思考 600 至 1,700 token，單次非串流耗時 9 至 12 秒。需評估思考量的設定，並把思考 token 記入 `llm_call_logs`；3.8 的數值尚未量到。`gemini-3.5-flash-lite` 做結構化 JSON 呼叫時思考 token 為 0，平均 5.3 秒（多數約 1 秒） | R-14.7 |

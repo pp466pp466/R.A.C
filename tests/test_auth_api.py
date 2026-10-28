@@ -13,7 +13,7 @@ NEW_PASSWORD = "a-brand-new-password"
 FORBIDDEN_KEYS = {"id", "token_version", "password_hash", "password", "tv"}
 PROFILE_KEYS = {
     "public_id", "email", "display_name", "member_tier", "role", "status",
-    "email_verified", "has_password", "google_linked",
+    "email_verified", "has_password", "age_confirmed", "google_linked",
 }
 
 
@@ -34,7 +34,10 @@ def db(app) -> Session:
 
 
 def register(client, **overrides):
-    body = {"email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "王小明", "accept_terms": True}
+    body = {
+        "email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "王小明",
+        "accept_terms": True, "confirm_adult": True,
+    }
     body.update(overrides)
     return client.post("/api/auth/register", json=body)
 
@@ -79,12 +82,31 @@ def test_register_ignores_fields_that_would_raise_privileges(app, client):
 
 
 def test_register_reports_field_errors_and_creates_nothing(app, client):
-    response = register(client, email="bad", password="short", display_name="", accept_terms=False)
+    response = register(client, email="bad", password="short", display_name="", accept_terms=False, confirm_adult=False)
     assert response.status_code == 400
     error = response.get_json()["error"]
     assert error["code"] == "validation_error"
-    assert set(error["fields"]) == {"email", "password", "display_name", "accept_terms"}
+    assert set(error["fields"]) == {"email", "password", "display_name", "accept_terms", "confirm_adult"}
     assert users_in(app) == []
+
+
+def test_register_without_the_age_confirmation_creates_nothing_and_names_the_missing_field(app, client):
+    for value in (False, "true", None):
+        response = register(client, confirm_adult=value)
+        assert response.status_code == 400
+        assert set(response.get_json()["error"]["fields"]) == {"confirm_adult"}
+    payload = {"email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True}
+    omitted = client.post("/api/auth/register", json=payload)                  # 完全沒有帶 confirm_adult
+    assert omitted.status_code == 400
+    assert set(omitted.get_json()["error"]["fields"]) == {"confirm_adult"}
+    assert users_in(app) == []
+
+
+def test_register_records_the_age_confirmation_and_keeps_it_out_of_the_response(app, client):
+    response = register(client)
+    assert response.get_json() == {"ok": True, "verification_required": False, "message": "註冊完成，請前往登入。"}
+    (user,) = users_in(app)
+    assert user.age_confirmed_at is not None and user.age_policy_version
 
 
 def test_register_requires_a_json_object_body(client):
@@ -111,7 +133,82 @@ def test_login_returns_the_profile_and_sets_the_login_cookie(client):
     assert user["email"] == "new@example.com" and user["display_name"] == "王小明"
     assert user["member_tier"] == "free" and user["role"] == "user" and user["status"] == "active"
     assert user["email_verified"] is False and user["has_password"] is True and user["google_linked"] is False
+    assert user["age_confirmed"] is True                       # 註冊時已確認
     assert client.get_cookie("session") is not None
+
+
+# =============================================================================
+# 補確認年滿 18 歲
+# =============================================================================
+
+def unconfirmed_member_client(app):
+    """升級前就存在、沒有年齡確認紀錄的帳號（直接寫入資料庫，再以 API 登入）。"""
+    with db(app) as s:
+        add_user(s, 1)
+    client = app.test_client()
+    assert login(client, email="user1@example.com").get_json()["user"]["age_confirmed"] is False
+    return client
+
+
+def test_an_account_without_a_confirmation_sees_age_confirmed_false_in_login_and_me(app):
+    client = unconfirmed_member_client(app)
+    assert client.get("/api/auth/me").get_json()["user"]["age_confirmed"] is False
+
+
+def test_confirm_adult_records_it_and_returns_the_fresh_profile_without_internal_details(app):
+    client = unconfirmed_member_client(app)
+    response = client.post("/api/auth/confirm-adult", json={"confirm_adult": True})
+    assert response.status_code == 200
+    user = response.get_json()["user"]
+    assert set(user) == PROFILE_KEYS and user["age_confirmed"] is True
+    assert "age_confirmed_at" not in user and "age_policy_version" not in user
+    assert client.get("/api/auth/me").get_json()["user"]["age_confirmed"] is True        # 登入狀態沒有失效
+    (stored,) = users_in(app)
+    assert stored.age_confirmed_at is not None and stored.age_policy_version
+
+
+@pytest.mark.parametrize("body", [{}, {"confirm_adult": False}, {"confirm_adult": "true"}, {"confirm_adult": 1}, {"confirm_adult": None}])
+def test_confirm_adult_without_an_explicit_true_is_a_400_and_writes_nothing(app, body):
+    client = unconfirmed_member_client(app)
+    response = client.post("/api/auth/confirm-adult", json=body)
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert error["code"] == "validation_error" and set(error["fields"]) == {"confirm_adult"}
+    (stored,) = users_in(app)
+    assert stored.age_confirmed_at is None and stored.age_policy_version is None
+
+
+def test_confirm_adult_needs_a_login(app, client):
+    response = client.post("/api/auth/confirm-adult", json={"confirm_adult": True})
+    assert response.status_code == 401 and response.get_json()["error"]["code"] == "unauthorized"
+
+
+def test_confirm_adult_twice_succeeds_and_keeps_the_first_record(app):
+    client = unconfirmed_member_client(app)
+    assert client.post("/api/auth/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    (first,) = users_in(app)
+    recorded = (first.age_confirmed_at, first.age_policy_version)
+    assert client.post("/api/auth/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    (again,) = users_in(app)
+    assert (again.age_confirmed_at, again.age_policy_version) == recorded
+
+
+def test_confirm_adult_without_csrf_is_rejected_and_writes_nothing(app):
+    client = unconfirmed_member_client(app)
+    raw = raw_client(app)
+    response = raw.post("/api/auth/confirm-adult", json={"confirm_adult": True}, headers={"Origin": "http://localhost"})
+    assert response.status_code == 403
+    (stored,) = users_in(app)
+    assert stored.age_confirmed_at is None
+
+
+def test_confirm_adult_only_changes_the_callers_own_account(app):
+    with db(app) as s:
+        add_user(s, 2)
+    client = unconfirmed_member_client(app)
+    client.post("/api/auth/confirm-adult", json={"confirm_adult": True})
+    confirmed = {user.email: user.age_confirmed_at is not None for user in users_in(app)}
+    assert confirmed == {"user1@example.com": True, "user2@example.com": False}
 
 
 def test_me_returns_the_same_profile_after_login_and_401_before(client):
@@ -209,7 +306,7 @@ def test_changing_the_password_keeps_the_page_usable_because_the_csrf_token_is_n
     client.get("/")
     token = client.get_cookie("csrf").value
     headers = {"Origin": "http://localhost", "X-CSRF-Token": token}
-    client.post("/api/auth/register", json={"email": "keep@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True}, headers=headers)
+    client.post("/api/auth/register", json={"email": "keep@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, "confirm_adult": True}, headers=headers)
     assert client.post("/api/auth/login", json={"email": "keep@example.com", "password": GOOD_PASSWORD}, headers=headers).status_code == 200
     token = client.get_cookie("csrf").value                   # 登入換發了新權杖（頁面會跟著重新載入）
     headers = {"Origin": "http://localhost", "X-CSRF-Token": token}
@@ -324,8 +421,8 @@ def test_the_whole_flow_is_logged_as_events_without_personal_data(app, client, l
     client.post("/api/auth/logout-all")
     events = [line["event"] for line in log_lines() if "event" in line]
     assert events == [
-        "auth.register", "auth.login_failed.bad_password", "auth.login_success", "auth.password_changed",
-        "auth.logout", "auth.login_success", "auth.logout_all",
+        "auth.register", "auth.age_confirmed.register", "auth.login_failed.bad_password", "auth.login_success",
+        "auth.password_changed", "auth.logout", "auth.login_success", "auth.logout_all",
     ]
     raw = log_lines.raw()
     for secret in ("log.me@example.com", "log-me-password-xyz", "wrong-one-entirely", "another-new-password-1"):

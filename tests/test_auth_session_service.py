@@ -4,7 +4,8 @@ import pytest
 from app.models import User
 from app.models.user import PROVIDER_GOOGLE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, UserIdentity
 from app.services.errors import Unauthenticated, ValidationError
-from tests.support.auth import GOOD_PASSWORD, FakeClock, RecordingMailer, add_user, make_auth_service
+from app.services.legal import CURRENT_AGE_POLICY_VERSION
+from tests.support.auth import GOOD_PASSWORD, START, FakeClock, RecordingMailer, add_user, make_auth_service
 
 NEW_PASSWORD = "a-brand-new-password"
 FORBIDDEN_KEYS = {"id", "token_version", "password_hash", "password"}
@@ -79,7 +80,8 @@ def test_the_profile_has_the_members_own_data_and_nothing_internal(member_sessio
     profile = service.profile(service.resolve_session(user.id, 1))
     assert profile == {
         "public_id": user.public_id, "email": "user1@example.com", "display_name": "使用者1", "member_tier": "plus",
-        "role": "user", "status": "active", "email_verified": False, "has_password": True, "google_linked": False,
+        "role": "user", "status": "active", "email_verified": False, "has_password": True, "age_confirmed": False,
+        "google_linked": False,
     }
     assert not (FORBIDDEN_KEYS & set(profile))
     assert user.password_hash not in str(profile)
@@ -92,6 +94,68 @@ def test_the_profile_reports_a_linked_google_identity_and_a_missing_password(mem
     service = make_auth_service(member_session)
     profile = service.profile(service.resolve_session(user.id, 1))
     assert profile["google_linked"] is True and profile["has_password"] is False
+
+
+# ---- 補確認年滿 18 歲 ---------------------------------------------------------
+
+def test_confirming_adulthood_records_the_time_and_policy_version_and_returns_the_fresh_snapshot(member_session):
+    user = add_user(member_session, 1)
+    service = make_auth_service(member_session, clock=FakeClock())
+    current = service.resolve_session(user.id, 1)
+    assert current.age_confirmed is False
+
+    updated = service.confirm_adult(current, confirm=True)
+
+    assert updated.age_confirmed is True and updated.id == user.id
+    stored = reload(member_session, user)
+    assert stored.age_confirmed_at == START and stored.age_policy_version == CURRENT_AGE_POLICY_VERSION
+
+
+@pytest.mark.parametrize("value", [False, None, "true", 1, "on", 0, [], {}])
+def test_anything_but_an_explicit_true_is_refused_and_writes_nothing(member_session, value):
+    user = add_user(member_session, 1)
+    service = make_auth_service(member_session)
+    with pytest.raises(ValidationError) as exc:
+        service.confirm_adult(service.resolve_session(user.id, 1), confirm=value)
+    assert set(exc.value.fields) == {"confirm_adult"}
+    stored = reload(member_session, user)
+    assert stored.age_confirmed_at is None and stored.age_policy_version is None
+
+
+def test_confirming_again_succeeds_but_keeps_the_original_time_and_version(member_session):
+    user = add_user(member_session, 1)
+    clock = FakeClock()
+    service = make_auth_service(member_session, clock=clock)
+    current = service.resolve_session(user.id, 1)
+    service.confirm_adult(current, confirm=True)
+
+    clock.advance(days=30)
+    again = service.confirm_adult(service.resolve_session(user.id, 1), confirm=True)
+
+    assert again.age_confirmed is True
+    stored = reload(member_session, user)
+    assert stored.age_confirmed_at == START and stored.age_policy_version == CURRENT_AGE_POLICY_VERSION
+
+
+def test_the_event_is_logged_only_for_the_first_confirmation_and_never_carries_personal_data(member_session, log_lines):
+    user = add_user(member_session, 1)
+    service = make_auth_service(member_session)
+    current = service.resolve_session(user.id, 1)
+    service.confirm_adult(current, confirm=True)
+    service.confirm_adult(current, confirm=True)
+    with pytest.raises(ValidationError):
+        service.confirm_adult(current, confirm=False)
+
+    events = [line for line in log_lines() if line.get("event", "").startswith("auth.age_confirmed")]
+    assert [(e["event"], e["user_id"]) for e in events] == [("auth.age_confirmed.later", user.id)]
+    assert "user1@example.com" not in log_lines.raw()
+
+
+def test_confirming_adulthood_touches_nobody_else(member_session):
+    me, other = add_user(member_session, 1), add_user(member_session, 2)
+    service = make_auth_service(member_session)
+    service.confirm_adult(service.resolve_session(me.id, 1), confirm=True)
+    assert reload(member_session, other).age_confirmed_at is None
 
 
 # ---- 變更密碼 -----------------------------------------------------------------

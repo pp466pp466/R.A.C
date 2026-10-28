@@ -13,7 +13,7 @@ from tests.support.auth import FakeClock, add_user
 from tests.support.client import raw_client
 from tests.support.google import SUB, FakeProvider
 
-FIXED_CODES = {"google_state", "google_unavailable", "google_rejected", "terms_required", "account_disabled"}
+FIXED_CODES = {"google_state", "google_unavailable", "google_rejected", "terms_required", "age_required", "account_disabled"}
 
 
 @pytest.fixture()
@@ -38,7 +38,7 @@ def db(app) -> Session:
 
 
 def start(client, **body):
-    return client.post("/api/auth/google/start", json={"accept_terms": True, **body})
+    return client.post("/api/auth/google/start", json={"accept_terms": True, "confirm_adult": True, **body})
 
 
 def transaction_of(app, client) -> dict:
@@ -77,7 +77,7 @@ def test_start_returns_the_authorization_url_and_binds_the_transaction_to_this_b
     body = response.get_json()
     assert set(body) == {"authorization_url"} and body["authorization_url"].startswith("https://accounts.example/auth?")
     tx = transaction_of(app, client)
-    assert set(tx) == {"s", "n", "v", "t", "x"} and tx["t"] is True and tx["x"] == "/account"
+    assert set(tx) == {"s", "n", "v", "t", "a", "x"} and tx["t"] is True and tx["a"] is True and tx["x"] == "/account"
     assert f"state={tx['s']}" in body["authorization_url"]
     assert tx["v"] not in response.get_data(as_text=True)                                  # PKCE 驗證碼不回傳給前端
 
@@ -113,7 +113,8 @@ def test_a_successful_callback_logs_in_redirects_and_deletes_the_transaction(app
     assert response.status_code == 302 and response.headers["Location"] == "/account?tab=security"
     me = client.get("/api/auth/me").get_json()["user"]
     assert me["email"] == "person@example.com" and me["google_linked"] is True and me["has_password"] is False
-    assert client.get_cookie("oauth_tx") is None                                            # 交易 cookie 已刪除
+    assert me["age_confirmed"] is True                                                      # 首次以 Google 註冊時已確認
+    assert client.get_cookie("oauth_tx") is None                                           # 交易 cookie 已刪除
     assert any(h.startswith("oauth_tx=;") for h in response.headers.getlist("Set-Cookie"))
     assert client.get_cookie("csrf").value != csrf_before                                   # 與密碼登入一樣換發 CSRF 權杖
     session_payload = app.session_interface.get_signing_serializer(app).loads(client.get_cookie("session").value)
@@ -134,10 +135,12 @@ def test_an_existing_verified_member_is_linked_and_logged_in(app, provider):
         add_user(s, 1, email_verified_at=app.extensions["clock"]())
     provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
     client = app.test_client()
-    start(client, accept_terms=False)                                                       # 已有帳號：不必勾選條款
+    start(client, accept_terms=False, confirm_adult=False)                                  # 已有帳號：不必勾選條款與年齡
     response = callback(client, transaction_of(app, client)["s"])
     assert response.headers["Location"] == "/account"
-    assert client.get("/api/auth/me").get_json()["user"]["has_password"] is True            # 原有密碼仍在
+    me = client.get("/api/auth/me").get_json()["user"]
+    assert me["has_password"] is True                                                       # 原有密碼仍在
+    assert me["age_confirmed"] is False                                                     # 登入不會順便標記為已確認
 
 
 # =============================================================================
@@ -216,6 +219,23 @@ def test_a_new_member_who_did_not_accept_the_terms_is_sent_back_and_nothing_is_c
         assert s.query(User).count() == 0 and s.query(UserIdentity).count() == 0
 
 
+def test_a_new_member_who_did_not_confirm_adulthood_is_sent_back_and_nothing_is_created(app):
+    client = app.test_client()
+    assert error_of(run_flow(app, client, confirm_adult=False)) == "age_required"
+    assert client.get("/api/auth/me").status_code == 401
+    with db(app) as s:
+        assert s.query(User).count() == 0 and s.query(UserIdentity).count() == 0
+
+
+def test_the_two_confirmations_are_independent_and_the_missing_one_is_named(app):
+    assert error_of(run_flow(app, app.test_client(), confirm_adult=False)) == "age_required"     # 只缺年齡
+    assert error_of(run_flow(app, app.test_client(), accept_terms=False)) == "terms_required"    # 只缺條款
+    for body in ({"confirm_adult": "true"}, {"confirm_adult": 1}):                               # 不是真正的 True 不算
+        assert error_of(run_flow(app, app.test_client(), **body)) == "age_required"
+    with db(app) as s:
+        assert s.query(User).count() == 0
+
+
 def test_a_suspended_member_is_sent_back_and_not_logged_in(app, provider):
     with db(app) as s:
         add_user(s, 1, status=STATUS_SUSPENDED, email_verified_at=app.extensions["clock"]())
@@ -241,8 +261,9 @@ def test_every_error_code_is_from_the_fixed_set(app, provider):
         seen.add(error_of(run_flow(app, app.test_client())))
     provider.error = None
     seen.add(error_of(run_flow(app, app.test_client(), accept_terms=False)))
+    seen.add(error_of(run_flow(app, app.test_client(), confirm_adult=False)))
     seen.add(error_of(callback(app.test_client(), "nope")))
-    assert seen <= FIXED_CODES and len(seen) == 4
+    assert seen <= FIXED_CODES and len(seen) == 5
 
 
 # =============================================================================
@@ -267,7 +288,9 @@ def test_the_flow_is_logged_without_state_subject_code_or_address(app, log_lines
     callback(client, state, code="very-secret-authorization-code")
     callback(client, "forged-state-value")
     events = [line["event"] for line in log_lines() if "event" in line]
-    assert events == ["auth.google_started", "auth.google_registered", "auth.google_rejected.state"]
+    assert events == [
+        "auth.google_started", "auth.age_confirmed.google", "auth.google_registered", "auth.google_rejected.state",
+    ]
     raw = log_lines.raw()
     for secret in (state, "very-secret-authorization-code", "forged-state-value", SUB, "person@example.com"):
         assert secret not in raw

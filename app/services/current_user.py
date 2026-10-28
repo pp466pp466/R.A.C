@@ -22,6 +22,7 @@ class CurrentUser:
     status: str
     email_verified: bool
     has_password: bool
+    age_confirmed: bool
     token_version: int
 
     @classmethod
@@ -36,11 +37,15 @@ class CurrentUser:
             status=user.status,
             email_verified=user.email_verified_at is not None,
             has_password=bool(user.password_hash),
+            age_confirmed=user.age_confirmed_at is not None,
             token_version=user.token_version,
         )
 
     def public_dict(self, *, google_linked: bool | None = None) -> dict[str, Any]:
-        """可以回傳給使用者本人的資料。不含內部編號、密碼雜湊與 token_version。"""
+        """可以回傳給使用者本人的資料。不含內部編號、密碼雜湊與 token_version。
+
+        年齡只回傳「是否已確認」的布林；確認時間與政策版本是內部紀錄，不對外。
+        """
         data: dict[str, Any] = {
             "public_id": self.public_id,
             "email": self.email,
@@ -50,6 +55,7 @@ class CurrentUser:
             "status": self.status,
             "email_verified": self.email_verified,
             "has_password": self.has_password,
+            "age_confirmed": self.age_confirmed,
         }
         if google_linked is not None:
             data["google_linked"] = google_linked

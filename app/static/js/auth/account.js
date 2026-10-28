@@ -10,6 +10,8 @@
       var user = state.user || {};
       var actions = Auth.useForm({});
       var passwordForm = Auth.useForm({ current_password: '', new_password: '' });
+      var ageForm = Auth.useForm({ confirm_adult: false });
+      var ageConfirmed = Vue.ref(!!user.age_confirmed);
       var logoutAllOpen = Vue.ref(false);
       var changePasswordOpen = Vue.ref(false);
 
@@ -46,6 +48,21 @@
         }, { onError: onError });
       }
 
+      // 補確認年滿 18 歲：沒勾選就不送出請求；成功後以 Toast 回報並更新狀態（通知區塊隨之消失）
+      function confirmAdult() {
+        ageForm.clearErrors();
+        if (!ageForm.values.confirm_adult) {
+          ageForm.fieldErrors.confirm_adult = '請先確認您已年滿 18 歲。';
+          return Promise.resolve(false);
+        }
+        return ageForm.run(function () {
+          return axios.post('/api/auth/confirm-adult', { confirm_adult: true }).then(function () {
+            ageConfirmed.value = true;
+            UI.toast('已確認年滿 18 歲。');
+          });
+        }, { onError: onError });
+      }
+
       function resetPasswordForm() {
         passwordForm.clearErrors();
         passwordForm.values.current_password = '';
@@ -68,6 +85,8 @@
         user: user,
         actions: actions,
         passwordForm: passwordForm,
+        ageForm: ageForm,
+        ageConfirmed: ageConfirmed,
         logoutAllOpen: logoutAllOpen,
         changePasswordOpen: changePasswordOpen,
         tierLabel: TIER_LABELS[user.member_tier] || '一般',
@@ -76,6 +95,7 @@
         logout: logout,
         logoutAll: logoutAll,
         resend: resend,
+        confirmAdult: confirmAdult,
         changePassword: changePassword,
         resetPasswordForm: resetPasswordForm
       };

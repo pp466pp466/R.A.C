@@ -40,6 +40,11 @@
       <span>我同意<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>（首次使用 Google 註冊時必須勾選）</span>
     </label>
     <p v-if="google.fieldErrors.accept_terms" class="auth-error" role="alert">{{ google.fieldErrors.accept_terms }}</p>
+    <label class="auth-check" for="google-adult">
+      <input id="google-adult" type="checkbox" v-model="google.values.confirmAdult" :disabled="google.state.submitting">
+      <span>我已年滿 18 歲（首次使用 Google 註冊時必須勾選）</span>
+    </label>
+    <p v-if="google.fieldErrors.confirm_adult" class="auth-error" role="alert">{{ google.fieldErrors.confirm_adult }}</p>
     <p v-if="google.state.formError" class="auth-form-error" role="alert">{{ google.state.formError }}</p>
     <div class="auth-actions">
       <button type="button" class="ui-btn" :disabled="google.state.submitting" :aria-busy="google.state.submitting ? 'true' : 'false'" @click="signInWithGoogle">

@@ -10,7 +10,8 @@ from app.config import load_config
 from app.models import Base
 from app.observability.json_logging import ALLOWED_FIELDS
 from app.services.google_oidc import GoogleProfile
-from tests.support.auth import FakeClock
+from tests.support.age_gate import add_ai_endpoint
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 from tests.support.google import FakeProvider
@@ -38,6 +39,7 @@ def world():
     config = load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV, "BASE_URL": "http://localhost:5000"})
     app = create_app(config, mail_sender=sender, identity_provider=provider, clock=FakeClock())
     Base.metadata.create_all(app.extensions["db_engine"])
+    add_ai_endpoint(app)                                      # 代表會呼叫 Gemini 的端點，用來走年齡閘門
     return app, sender, provider
 
 
@@ -65,7 +67,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     extra = {"headers": {"Authorization": f"Bearer {BEARER}"}}
 
     # 註冊 → 驗證信 → 驗證
-    assert client.post(f"{api}/register", json={"email": MEMBER_EMAIL, "password": PASSWORDS["first"], "display_name": "掃描使用者", "accept_terms": True}, **extra).status_code == 200
+    assert client.post(f"{api}/register", json={"email": MEMBER_EMAIL, "password": PASSWORDS["first"], "display_name": "掃描使用者", "accept_terms": True, "confirm_adult": True}, **extra).status_code == 200
     verify_token = sender.last_token()
     assert client.post(f"{api}/verify-email", json={"token": verify_token}).status_code == 200
 
@@ -87,7 +89,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
 
     # Google 登入（新帳號）
     google = app.test_client()
-    assert google.post(f"{api}/google/start", json={"accept_terms": True}).status_code == 200
+    assert google.post(f"{api}/google/start", json={"accept_terms": True, "confirm_adult": True}).status_code == 200
     remember_cookies(google)
     from app.security.cookies import SignedCookies
     from app.security.oauth_cookie import OAUTH_SALT
@@ -100,6 +102,26 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     remember_cookies(google)
     google.get(f"/auth/google/callback?code={AUTH_CODE}&state=forged-state-for-scan")          # 被拒絕的一次
 
+    # Google 登入（新帳號但沒有確認年滿 18 歲）：被拒絕，導向登入頁
+    provider.profile = GoogleProfile(GOOGLE_SUB + "-b", "scan.google.b@example.com", True, "掃描用 Google 使用者 B")
+    refused = app.test_client()
+    assert refused.post(f"{api}/google/start", json={"accept_terms": True, "confirm_adult": False}).status_code == 200
+    refused_tx = SignedCookies(app.extensions["app_config"], app.extensions["clock"]).loads(
+        OAUTH_SALT, refused.get_cookie("oauth_tx").value, max_age_seconds=600
+    )
+    secrets_seen.update({refused_tx["s"], refused_tx["n"], refused_tx["v"]})
+    assert refused.get(f"/auth/google/callback?code={AUTH_CODE}&state={refused_tx['s']}").headers["Location"] == "/login?error=age_required"
+
+    # 升級前就存在、沒有年齡確認紀錄的帳號：登入後被年齡閘門擋下，補確認之後通過
+    with Session(app.extensions["db_engine"]) as s:
+        add_user(s, 7, email="scan.legacy@example.com", email_canonical="scan.legacy@example.com", email_verified_at=clock())
+    legacy = app.test_client()
+    assert legacy.post(f"{api}/login", json={"email": "scan.legacy@example.com", "password": GOOD_PASSWORD}).status_code == 200
+    remember_cookies(legacy)
+    assert legacy.post("/api/_t/ai", json={}).status_code == 403
+    assert legacy.post(f"{api}/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    assert legacy.post("/api/_t/ai", json={}).status_code == 200
+
     # 一般的頁面請求（帶著 Cookie 與授權標頭）
     client.get("/login?next=/account", **extra)
 
@@ -107,12 +129,21 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     result = app.test_cli_runner().invoke(args=["create-admin", "--email", ADMIN_EMAIL, "--display-name", "掃描管理員", "--password-stdin"], input=f"{PASSWORDS['admin']}\n")
     assert result.exit_code == 0, result.output
 
+    # 年齡閘門：管理員第一次登入後被擋（會呼叫 Gemini 的端點先問政策）、補確認、再通過
+    admin_client = app.test_client()
+    assert admin_client.post(f"{api}/login", json={"email": ADMIN_EMAIL, "password": PASSWORDS["admin"]}).status_code == 200
+    remember_cookies(admin_client)
+    assert admin_client.post("/api/_t/ai", json={}).status_code == 403
+    assert admin_client.post(f"{api}/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    assert admin_client.post("/api/_t/ai", json={}).status_code == 200
+
     # ---- 掃描 ----
     raw = log_lines.raw()
     assert raw.strip(), "測試沒有產生任何日誌，掃描沒有意義"
     samples = {
         MEMBER_EMAIL, GOOGLE_EMAIL, ADMIN_EMAIL, GOOGLE_SUB, AUTH_CODE, BEARER, verify_token, reset_token,
-        "forged-state-for-scan", *PASSWORDS.values(), *secrets_seen,
+        "forged-state-for-scan", "scan.google.b@example.com", "scan.legacy@example.com", GOOGLE_SUB + "-b",
+        GOOD_PASSWORD, *PASSWORDS.values(), *secrets_seen,
     }
     assert len(secrets_seen) >= 4
     for sample in samples:
@@ -128,6 +159,8 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
         "auth.register", "auth.verification_sent", "auth.email_verified", "auth.login_failed.bad_password", "auth.login_success",
         "auth.password_changed", "auth.logout", "auth.password_reset_requested", "auth.password_reset", "auth.logout_all",
         "auth.google_started", "auth.google_registered", "auth.google_rejected.state", "auth.admin_created",
+        "auth.age_confirmed.register", "auth.age_confirmed.google", "auth.age_confirmed.later", "auth.age_gate_denied",
+        "auth.google_rejected.age",
     } <= events
     # 請求日誌的路徑只有路由規則，不含查詢字串（Google 回呼的 code 與 state 在查詢字串裡）
     assert all("?" not in line.get("path", "") for line in lines)

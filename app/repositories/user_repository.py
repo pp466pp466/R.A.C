@@ -100,3 +100,18 @@ class UserRepository(BaseRepository[User]):
         """`token_version` 加 1（使既有的登入狀態失效），回傳新的值。"""
         self._run_update(user, update(User).where(User.id == user.id).values(token_version=User.token_version + 1))
         return self._session.execute(select(User.token_version).where(User.id == user.id)).scalar_one()
+
+    def confirm_adult_if_unset(self, user: User, *, confirmed_at: datetime, policy_version: str) -> bool:
+        """尚未確認年滿 18 歲時，記錄確認時間與政策版本；已確認的帳號完全不改動。回傳是否真的寫入。
+
+        條件式 UPDATE（`age_confirmed_at IS NULL`）：並行的兩次確認只有一次會寫入，第一次寫入的時間與版本
+        不會被覆蓋，所以「已確認的帳號再次確認」不會改變原本的紀錄。
+        """
+        changed = self._run_update(
+            user,
+            update(User)
+            .where(User.id == user.id)
+            .where(User.age_confirmed_at.is_(None))
+            .values(age_confirmed_at=confirmed_at, age_policy_version=policy_version),
+        )
+        return changed == 1

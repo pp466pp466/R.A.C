@@ -12,7 +12,7 @@
 
   var app = Vue.createApp({
     setup: function () {
-      var form = Auth.useForm({ email: '', display_name: '', password: '', accept_terms: false });
+      var form = Auth.useForm({ email: '', display_name: '', password: '', accept_terms: false, confirm_adult: false });
       var google = Auth.useForm({});
       var done = Vue.ref('');
 
@@ -22,7 +22,8 @@
             email: form.values.email,
             display_name: form.values.display_name,
             password: form.values.password,
-            accept_terms: form.values.accept_terms
+            accept_terms: form.values.accept_terms,
+            confirm_adult: form.values.confirm_adult
           }).then(function (response) {
             form.values.password = '';
             done.value = response.data.message;
@@ -30,15 +31,20 @@
         }, { onError: function () { form.values.password = ''; } });
       }
 
-      // Google 註冊與上方的同意勾選連動：沒勾選就不離開本站
+      // Google 註冊與上方的兩個勾選連動（同意條款、年滿 18 歲各自獨立）：任一項沒勾選就不離開本站，缺哪項就提示哪項
       function signUpWithGoogle() {
         google.clearErrors();
         if (!form.values.accept_terms) {
           google.fieldErrors.accept_terms = '請先勾選同意服務條款與隱私權政策。';
+        }
+        if (!form.values.confirm_adult) {
+          google.fieldErrors.confirm_adult = '請先確認您已年滿 18 歲。';
+        }
+        if (!form.values.accept_terms || !form.values.confirm_adult) {
           return Promise.resolve(false);
         }
         return google.run(function () {
-          return axios.post('/api/auth/google/start', { accept_terms: true, next: state.next }).then(function (response) {
+          return axios.post('/api/auth/google/start', { accept_terms: true, confirm_adult: true, next: state.next }).then(function (response) {
             goToProvider(response.data.authorization_url);
           });
         });

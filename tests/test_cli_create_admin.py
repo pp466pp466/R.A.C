@@ -40,6 +40,8 @@ def test_interactive_creation_makes_an_active_verified_admin_with_a_hashed_passw
     assert admin.email == "boss@example.com" and admin.display_name == "系統管理員"
     assert admin.email_verified_at is not None                       # 信箱視為已驗證
     assert admin.terms_version is None and admin.terms_accepted_at is None   # 管理員沒有「同意」這個動作
+    # 年齡也一樣：部署者代為建立帳號不等於本人確認，管理員第一次登入後須自行補確認，否則不能使用 AI 功能
+    assert admin.age_confirmed_at is None and admin.age_policy_version is None
     assert admin.password_hash.startswith("$argon2id$") and SECRET_PASSWORD not in admin.password_hash
     assert admin.public_id in result.output
 

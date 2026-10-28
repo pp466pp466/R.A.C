@@ -7,15 +7,18 @@ from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import MetaData, Table, inspect
+from sqlalchemy import MetaData, Table, func, inspect, select
+from sqlalchemy.orm import Session
 
 import app.config as config_module
 from app.config import PROJECT_ROOT
 from app.db.dialect import create_engine_for
-from app.models import Base
+from app.models import AuthToken, Base, User, UserIdentity
+from app.models.base import utcnow
 from tests.conftest import require_sqlserver_test_url
 
 MEMBER_TABLES = ("users", "user_identities", "auth_tokens")
+AGE_COLUMNS = ("age_confirmed_at", "age_policy_version")
 
 
 def alembic_config(url: str) -> Config:
@@ -56,6 +59,27 @@ def test_baseline_creates_no_business_table_and_0002_adds_only_the_member_tables
     assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES}
     command.downgrade(cfg, "0001_baseline")
     assert set(inspect(engine).get_table_names()) == {"alembic_version"}
+    engine.dispose()
+
+
+def test_0003_adds_only_two_columns_to_users_and_follows_0002(tmp_path):
+    """age-confirmation：只新增欄位（expand），不新增、不刪除任何資料表。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'age.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    assert ScriptDirectory.from_config(cfg).get_revision("0003_users_age_confirmation").down_revision == "0002_users_and_auth_tokens"
+
+    command.upgrade(cfg, "0002_users_and_auth_tokens")
+    before = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert not set(AGE_COLUMNS) & before
+
+    command.upgrade(cfg, "0003_users_age_confirmation")
+    after = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert after - before == set(AGE_COLUMNS) and before <= after
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES}
+
+    command.downgrade(cfg, "0002_users_and_auth_tokens")
+    assert {c["name"] for c in inspect(engine).get_columns("users")} == before
     engine.dispose()
 
 
@@ -111,6 +135,36 @@ def test_migrated_tables_enforce_the_documented_constraints(migrated_database):
         assert (keys[0].get("options") or {}).get("ondelete", "").upper() == "CASCADE", table
     index_names = {i["name"] for i in inspector.get_indexes("auth_tokens")}
     assert "ix_auth_tokens_user_id_purpose_created_at" in index_names
+
+
+def test_age_columns_are_nullable_after_upgrade(migrated_database):
+    """空值 = 尚未確認；升級前已存在的帳號不回填，所以這兩欄必須可為空。"""
+    columns = {c["name"]: c for c in inspect(migrated_database).get_columns("users")}
+    for name in AGE_COLUMNS:
+        assert name in columns and columns[name]["nullable"] is True
+
+
+def test_downgrading_0003_removes_only_the_age_columns_and_keeps_every_row(migrated_database):
+    """SQLite 預設以「重建資料表」刪欄位，會連帶清掉以串聯刪除參照 users 的資料；0003 必須避免。"""
+    engine = migrated_database
+    with Session(engine) as session:
+        user = User(
+            email="a@example.com", email_canonical="a@example.com", display_name="甲", status="active",
+            age_confirmed_at=utcnow(), age_policy_version="v",
+        )
+        session.add(user)
+        session.flush()
+        session.add(UserIdentity(user_id=user.id, provider="google", provider_subject="s1"))
+        session.add(AuthToken(user_id=user.id, purpose="verify_email", token_hash="h" * 64, expires_at=utcnow()))
+        session.commit()
+
+    command.downgrade(alembic_config(engine.url.render_as_string(hide_password=False)), "0002_users_and_auth_tokens")
+
+    assert not set(AGE_COLUMNS) & {c["name"] for c in inspect(engine).get_columns("users")}
+    with engine.connect() as conn:
+        for table in MEMBER_TABLES:
+            reflected = Table(table, MetaData(), autoload_with=engine)
+            assert conn.execute(select(func.count()).select_from(reflected)).scalar_one() == 1, table
 
 
 def test_there_is_exactly_one_migration_head():

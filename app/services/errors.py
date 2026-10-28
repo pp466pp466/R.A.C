@@ -44,6 +44,13 @@ class Forbidden(ServiceError):
     default_message = "沒有權限執行這個操作。"
 
 
+class AgeConfirmationRequired(Forbidden):
+    """尚未確認年滿 18 歲，不得使用會呼叫 Gemini 的功能（403）。前端依 `code` 引導使用者到帳號設定補確認。"""
+
+    code = "age_confirmation_required"
+    default_message = "請先到帳號設定確認您已年滿 18 歲，才能使用這項功能。"
+
+
 class NotFound(ServiceError):
     """資源不存在，或呼叫者無權得知它存在（404）。非擁有者與不存在必須得到完全相同的回應。"""
 

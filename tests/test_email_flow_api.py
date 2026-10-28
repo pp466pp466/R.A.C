@@ -52,7 +52,7 @@ def db(app) -> Session:
 
 
 def register(client, email="new@example.com", **overrides):
-    body = {"email": email, "password": GOOD_PASSWORD, "display_name": "新朋友", "accept_terms": True}
+    body = {"email": email, "password": GOOD_PASSWORD, "display_name": "新朋友", "accept_terms": True, "confirm_adult": True}
     body.update(overrides)
     return client.post("/api/auth/register", json=body)
 
@@ -119,7 +119,7 @@ def test_mail_is_sent_only_after_the_response_has_been_produced(app, sender):
     csrf = client.get_cookie("csrf").value
     response = client.post(
         "/api/auth/register",
-        json={"email": "late@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True},
+        json={"email": "late@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, "confirm_adult": True},
         headers={"Origin": "http://localhost", "X-CSRF-Token": csrf},
         buffered=False,
     )

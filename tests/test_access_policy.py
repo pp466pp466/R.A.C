@@ -10,13 +10,14 @@ from app.models.user import (
 )
 from app.services.access_policy import AccessPolicy
 from app.services.current_user import CurrentUser
-from app.services.errors import Forbidden, NotFound
+from app.services.errors import AgeConfirmationRequired, Forbidden, NotFound
 
 
 def member(**overrides) -> CurrentUser:
     values = dict(
         id=1, public_id="00000000-0000-4000-8000-000000000001", email="a@example.com", display_name="甲",
-        member_tier="free", role=ROLE_USER, status=STATUS_ACTIVE, email_verified=True, has_password=True, token_version=1,
+        member_tier="free", role=ROLE_USER, status=STATUS_ACTIVE, email_verified=True, has_password=True,
+        age_confirmed=True, token_version=1,
     )
     values.update(overrides)
     return CurrentUser(**values)
@@ -44,6 +45,80 @@ def test_a_verified_active_member_can_use_chat_in_both_modes():
 @pytest.mark.parametrize("policy", [ON, OFF])
 def test_only_active_accounts_can_use_chat(policy, status):
     assert policy.can_use_chat(member(status=status)) is False
+
+
+# ---- 年齡閘門 -----------------------------------------------------------------
+
+@pytest.mark.parametrize("policy", [ON, OFF])
+def test_an_unconfirmed_member_cannot_use_chat_even_when_every_other_condition_holds(policy):
+    assert policy.can_use_chat(member(age_confirmed=False)) is False
+
+
+@pytest.mark.parametrize("policy", [ON, OFF])
+@pytest.mark.parametrize("tier", ["free", "vip"])
+@pytest.mark.parametrize("role", [ROLE_USER, ROLE_ADMIN])
+def test_neither_admins_nor_top_tier_members_are_exempt_from_the_age_gate(policy, tier, role):
+    unconfirmed = member(age_confirmed=False, member_tier=tier, role=role)
+    assert policy.can_use_chat(unconfirmed) is False
+    with pytest.raises(AgeConfirmationRequired):
+        policy.require_chat_access(unconfirmed)
+    assert policy.can_use_chat(member(member_tier=tier, role=role)) is True
+
+
+@pytest.mark.parametrize("policy", [ON, OFF])
+@pytest.mark.parametrize("tier", ["free", "vip"])
+@pytest.mark.parametrize("role", [ROLE_USER, ROLE_ADMIN])
+@pytest.mark.parametrize("age_confirmed", [True, False])
+@pytest.mark.parametrize("verified", [True, False])
+@pytest.mark.parametrize("status", USER_STATUSES)
+def test_chat_access_requires_every_condition_and_the_two_methods_agree(policy, tier, role, age_confirmed, verified, status):
+    user = member(member_tier=tier, role=role, age_confirmed=age_confirmed, email_verified=verified, status=status)
+    allowed = status == STATUS_ACTIVE and (verified or policy is OFF) and age_confirmed
+    assert policy.can_use_chat(user) is allowed
+    if allowed:
+        policy.require_chat_access(user)
+    else:
+        with pytest.raises(Forbidden):
+            policy.require_chat_access(user)
+
+
+def test_a_missing_age_confirmation_raises_the_dedicated_error_code():
+    with pytest.raises(AgeConfirmationRequired) as denied:
+        ON.require_chat_access(member(age_confirmed=False))
+    assert isinstance(denied.value, Forbidden)
+    assert denied.value.code == "age_confirmation_required"
+    assert "18" in denied.value.message and "帳號設定" in denied.value.message
+
+
+@pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION])
+def test_the_account_status_is_checked_before_age_so_the_user_is_not_sent_to_confirm_for_nothing(status, log_lines):
+    with pytest.raises(Forbidden) as denied:
+        ON.require_chat_access(member(status=status, age_confirmed=False))
+    assert not isinstance(denied.value, AgeConfirmationRequired) and denied.value.code == "forbidden"
+    assert all(line.get("event") != "auth.age_gate_denied" for line in log_lines())
+
+
+def test_unverified_email_is_checked_before_age_when_verification_is_on(log_lines):
+    with pytest.raises(Forbidden) as denied:
+        ON.require_chat_access(member(email_verified=False, age_confirmed=False))
+    assert not isinstance(denied.value, AgeConfirmationRequired)
+    with pytest.raises(AgeConfirmationRequired):
+        OFF.require_chat_access(member(email_verified=False, age_confirmed=False))        # 驗證關閉時不看信箱
+    assert [line["event"] for line in log_lines() if line.get("event") == "auth.age_gate_denied"] == ["auth.age_gate_denied"]
+
+
+def test_an_age_denial_is_logged_once_with_the_internal_user_id_and_nothing_personal(log_lines):
+    user = member(id=42, age_confirmed=False)
+    with pytest.raises(AgeConfirmationRequired):
+        ON.require_chat_access(user)
+    denials = [line for line in log_lines() if line.get("event") == "auth.age_gate_denied"]
+    assert len(denials) == 1 and denials[0]["user_id"] == 42 and denials[0]["level"] == "INFO"
+    assert user.email not in str(denials[0]) and user.public_id not in str(denials[0])
+
+
+def test_a_confirmed_member_passes_without_any_log_line(log_lines):
+    ON.require_chat_access(member())
+    assert [line for line in log_lines() if line.get("event") == "auth.age_gate_denied"] == []
 
 
 # ---- 是否為管理員 -------------------------------------------------------------

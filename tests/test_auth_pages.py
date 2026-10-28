@@ -145,14 +145,21 @@ def test_an_unsafe_next_never_reaches_the_page_state(app, bad):
 @pytest.mark.parametrize(
     ("code", "fragment"),
     [("google_state", "Google 登入的驗證"), ("google_unavailable", "暫時無法使用"), ("google_rejected", "沒有完成"),
-     ("terms_required", "勾選同意"), ("account_disabled", "已停用")],
+     ("terms_required", "勾選同意"), ("age_required", "請先確認您已年滿 18 歲。"), ("account_disabled", "已停用")],
 )
 def test_known_error_codes_become_chinese_notices(full_app, code, fragment):
     notice = state_of(full_app.test_client().get(f"/login?error={code}"))["notice"]
     assert fragment in notice
 
 
-@pytest.mark.parametrize("attack", ["<script>alert(1)</script>", "google_state%22%3E%3Cimg%20src=x%3E", "nope", ""])
+def test_the_age_notice_is_distinct_from_the_terms_notice(full_app):
+    """年齡與條款是各自獨立的確認：缺哪一項就顯示哪一項的說明。"""
+    notices = {code: state_of(full_app.test_client().get(f"/login?error={code}"))["notice"] for code in ("age_required", "terms_required")}
+    assert notices["age_required"] != notices["terms_required"]
+    assert "條款" not in notices["age_required"] and "18" not in notices["terms_required"]
+
+
+@pytest.mark.parametrize("attack", ["<script>alert(1)</script>", "google_state%22%3E%3Cimg%20src=x%3E", "nope", "age_required%22%3E", "AGE_REQUIRED", ""])
 def test_unknown_error_values_are_ignored_and_never_echoed(app, attack):
     response = app.test_client().get(f"/login?error={attack}")
     assert state_of(response)["notice"] is None
@@ -170,6 +177,61 @@ def test_the_register_page_links_to_the_terms_and_the_privacy_policy(app):
     html = app.test_client().get("/register").get_data(as_text=True)
     assert 'href="/terms"' in html and 'href="/privacy"' in html
     assert 'type="checkbox"' in html and 'autocomplete="new-password"' in html and 'autocomplete="email"' in html
+
+
+def test_the_register_page_has_a_separate_adult_checkbox_with_its_own_error_slot(app):
+    html = app.test_client().get("/register").get_data(as_text=True)
+    assert 'id="accept_terms"' in html and 'id="confirm_adult"' in html          # 兩個各自獨立的勾選
+    assert 'for="confirm_adult"' in html and "我已年滿 18 歲" in html
+    assert 'v-model="form.values.confirm_adult"' in html and "form.fieldErrors.confirm_adult" in html
+    terms_label = html.split('for="accept_terms"', 1)[1].split("</label>", 1)[0]
+    assert "18" not in terms_label                                                 # 年齡不是併在條款那一個勾選裡
+    assert "google.fieldErrors.confirm_adult" in html                             # Google 入口缺年齡時的提示位置
+
+
+def test_the_register_script_sends_both_confirmations_and_checks_both_before_leaving_for_google():
+    from app.config import PROJECT_ROOT
+
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "register.js").read_text(encoding="utf-8")
+    assert "confirm_adult: form.values.confirm_adult" in script
+    assert "accept_terms: true, confirm_adult: true" in script
+    assert "請先確認您已年滿 18 歲。" in script and "請先勾選同意服務條款與隱私權政策。" in script
+
+
+def test_the_login_page_google_entry_has_both_checkboxes_and_the_script_checks_both(full_app):
+    from app.config import PROJECT_ROOT
+
+    html = full_app.test_client().get("/login").get_data(as_text=True)
+    assert 'id="google-terms"' in html and 'id="google-adult"' in html
+    assert 'v-model="google.values.confirmAdult"' in html and "google.fieldErrors.confirm_adult" in html
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "login.js").read_text(encoding="utf-8")
+    assert "google.values.acceptTerms" in script and "google.values.confirmAdult" in script
+    assert "accept_terms: true, confirm_adult: true" in script
+    assert "請先確認您已年滿 18 歲。" in script
+
+
+def test_the_account_page_shows_the_age_row_and_the_confirmation_form_for_both_states(full_app):
+    """頁面外殼同時帶有兩種狀態的內容，由 `ageConfirmed` 決定顯示哪一個；初始值取自伺服器的快照。"""
+    client = logged_in(full_app)
+    page = client.get("/account")
+    html = page.get_data(as_text=True)
+    assert "<dt>年齡確認</dt>" in html and "已確認年滿 18 歲" in html and "尚未確認" in html
+    assert 'v-if="!ageConfirmed"' in html and 'id="account_confirm_adult"' in html
+    assert "不蒐集生日、年齡或證件" in html
+    assert state_of(page)["user"]["age_confirmed"] is False                         # 這位測試使用者沒有確認紀錄
+
+    assert client.post("/api/auth/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    assert state_of(client.get("/account"))["user"]["age_confirmed"] is True
+
+
+def test_the_account_script_skips_the_request_when_the_box_is_unchecked_and_reports_success_with_a_toast():
+    from app.config import PROJECT_ROOT
+
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "account.js").read_text(encoding="utf-8")
+    body = script.split("function confirmAdult()", 1)[1].split("function resetPasswordForm", 1)[0]
+    assert body.index("if (!ageForm.values.confirm_adult)") < body.index("axios.post('/api/auth/confirm-adult'")
+    assert "return Promise.resolve(false)" in body                                    # 沒勾選：不送出請求
+    assert "UI.toast(" in body and "ageConfirmed.value = true" in body
 
 
 @pytest.mark.parametrize("path", ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email"])
@@ -265,7 +327,11 @@ def test_the_account_page_state_holds_the_members_own_profile_only(app):
     state = state_of(client.get("/account"))
     user = state["user"]
     assert (user["email"], user["display_name"], user["member_tier"]) == ("user1@example.com", "使用者1", "plus")
-    assert set(user) == {"public_id", "email", "display_name", "member_tier", "role", "status", "email_verified", "has_password", "google_linked"}
+    assert set(user) == {
+        "public_id", "email", "display_name", "member_tier", "role", "status", "email_verified", "has_password",
+        "age_confirmed", "google_linked",
+    }
+    assert user["age_confirmed"] is False
     assert "password_hash" not in json.dumps(state) and "token_version" not in json.dumps(state)
 
 
@@ -331,3 +397,23 @@ def test_the_privacy_policy_discloses_gemini_and_every_retention_period(app):
 def test_the_terms_describe_the_service_as_ai_only(app):
     html = app.test_client().get("/terms").get_data(as_text=True)
     assert "沒有真人客服" in html and "一組電子郵件只能對應一個帳號" in html
+
+
+def test_the_terms_limit_the_service_to_adults_and_say_what_is_recorded(app):
+    response = app.test_client().get("/terms")
+    html = response.get_data(as_text=True)
+    assert "僅供年滿 18 歲者使用" in html and "另外勾選確認" in html
+    assert "不蒐集生日、年齡或證件" in html and "帳號設定" in html
+    assert "草稿" in html and CURRENT_TERMS_VERSION in html                          # 仍是草稿，版本照舊顯示
+    headings = re.findall(r"<h2>(\d+)\. ", html)
+    assert headings == [str(n) for n in range(1, len(headings) + 1)]                # 新增一節後編號仍連續
+
+
+def test_the_privacy_policy_lists_the_age_record_and_its_retention_without_claiming_to_collect_more(app):
+    html = app.test_client().get("/privacy").get_data(as_text=True)
+    assert "年齡確認紀錄" in html and "不蒐集生日、年齡或證件" in html
+    retention = html.split("<table>", 1)[1].split("</table>", 1)[0]
+    assert "年齡確認紀錄" in retention and "帳號刪除時一併刪除" in retention
+    assert "草稿" in html and CURRENT_TERMS_VERSION in html
+    headings = re.findall(r"<h2>(\d+)\. ", html)
+    assert headings == [str(n) for n in range(1, len(headings) + 1)]

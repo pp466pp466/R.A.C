@@ -47,6 +47,13 @@ GOOGLE_REJECTED_UNAVAILABLE = "auth.google_rejected.unavailable"
 GOOGLE_REJECTED_TERMS = "auth.google_rejected.terms"
 GOOGLE_REJECTED_DISABLED = "auth.google_rejected.disabled"
 GOOGLE_REJECTED_CONFLICT = "auth.google_rejected.conflict"
+GOOGLE_REJECTED_AGE = "auth.google_rejected.age"
+
+# ---- 年齡確認（age-gate）----
+AGE_CONFIRMED_REGISTER = "auth.age_confirmed.register"
+AGE_CONFIRMED_GOOGLE = "auth.age_confirmed.google"
+AGE_CONFIRMED_LATER = "auth.age_confirmed.later"
+AGE_GATE_DENIED = "auth.age_gate_denied"
 
 # ---- 其他安全事件 ----
 CSRF_REJECTED = "security.csrf_rejected"

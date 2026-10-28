@@ -12,7 +12,7 @@ from app.security.oauth_cookie import clear_transaction, read_transaction
 from app.security.redirects import DEFAULT_AFTER_LOGIN, safe_next
 from app.security.session import current_user, login_required_page, login_user
 from app.services.google_sign_in_service import (
-    ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
+    ERROR_AGE, ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
 )
 from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.registry import get_auth_service, get_google_sign_in_service
@@ -25,6 +25,7 @@ LOGIN_ERROR_MESSAGES = {
     ERROR_UNAVAILABLE: "Google 登入暫時無法使用，請稍後再試，或改用信箱與密碼登入。",
     ERROR_REJECTED: "Google 登入沒有完成或被拒絕，請再試一次。",
     ERROR_TERMS: "第一次使用 Google 註冊時，請先勾選同意服務條款與隱私權政策。",
+    ERROR_AGE: "請先確認您已年滿 18 歲。",
     ERROR_DISABLED: "此帳號已停用，無法登入。",
 }
 

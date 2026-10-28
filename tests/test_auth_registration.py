@@ -8,14 +8,16 @@ from app.models.user import STATUS_ACTIVE, STATUS_PENDING_VERIFICATION, STATUS_S
 from app.repositories.errors import DuplicateUserError
 from app.repositories.user_repository import UserRepository
 from app.services.errors import ValidationError
-from app.services.legal import CURRENT_TERMS_VERSION
+from app.services.legal import CURRENT_AGE_POLICY_VERSION, CURRENT_TERMS_VERSION
 from tests.support.auth import GOOD_PASSWORD, START, FakeClock, RecordingMailer, add_user, make_auth_service
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 def register(service, **overrides):
-    values = dict(email="new@example.com", password=GOOD_PASSWORD, display_name="王小明", accept_terms=True)
+    values = dict(
+        email="new@example.com", password=GOOD_PASSWORD, display_name="王小明", accept_terms=True, confirm_adult=True
+    )
     values.update(overrides)
     return service.register(**values)
 
@@ -96,8 +98,11 @@ def test_a_display_name_of_exactly_fifty_characters_is_accepted_and_is_cleaned(m
 
 def test_every_field_error_is_reported_at_once(member_session):
     with pytest.raises(ValidationError) as exc:
-        register(make_auth_service(member_session), email="bad", password="short", display_name="", accept_terms=False)
-    assert set(exc.value.fields) == {"email", "password", "display_name", "accept_terms"}
+        register(
+            make_auth_service(member_session), email="bad", password="short", display_name="",
+            accept_terms=False, confirm_adult=False,
+        )
+    assert set(exc.value.fields) == {"email", "password", "display_name", "accept_terms", "confirm_adult"}
 
 
 # ---- email 正規化與唯一性 -----------------------------------------------------
@@ -280,6 +285,64 @@ def test_the_accepted_terms_version_and_time_are_recorded(member_session):
     assert user.terms_accepted_at == START
 
 
+# ---- 年齡確認（與條款同意各自獨立）---------------------------------------------
+
+@pytest.mark.parametrize("value", [False, None, "true", 1, "on", 0, [], {}])
+def test_not_confirming_adulthood_creates_no_account(member_session, value):
+    with pytest.raises(ValidationError) as exc:
+        register(make_auth_service(member_session), confirm_adult=value)
+    assert set(exc.value.fields) == {"confirm_adult"}
+    assert exc.value.fields["confirm_adult"] == "請先確認您已年滿 18 歲。"
+    assert user_count(member_session) == 0
+
+
+def test_the_two_confirmations_are_reported_independently(member_session):
+    service = make_auth_service(member_session)
+    with pytest.raises(ValidationError) as only_terms:
+        register(service, accept_terms=True, confirm_adult=False)
+    with pytest.raises(ValidationError) as only_age:
+        register(service, accept_terms=False, confirm_adult=True)
+    with pytest.raises(ValidationError) as neither:
+        register(service, accept_terms=False, confirm_adult=False)
+    assert set(only_terms.value.fields) == {"confirm_adult"}
+    assert set(only_age.value.fields) == {"accept_terms"}
+    assert set(neither.value.fields) == {"accept_terms", "confirm_adult"}
+    assert user_count(member_session) == 0
+
+
+def test_the_age_confirmation_time_and_policy_version_are_recorded_with_the_terms(member_session):
+    register(make_auth_service(member_session, clock=FakeClock()))
+    user = by_email(member_session, "new@example.com")
+    assert user.age_confirmed_at == START and user.age_policy_version == CURRENT_AGE_POLICY_VERSION
+    assert user.age_confirmed_at == user.terms_accepted_at
+
+
+def test_registering_an_existing_address_never_touches_its_age_record(member_session):
+    existing = add_user(member_session, 1)                   # 沒有年齡確認紀錄的既有帳號
+    register(make_auth_service(member_session), email="user1@example.com")
+    member_session.refresh(existing)
+    assert existing.age_confirmed_at is None and existing.age_policy_version is None
+
+
+def test_validation_happens_before_the_account_lookup_so_existing_and_new_addresses_look_alike(member_session):
+    """輸入不合法時，已存在與不存在的信箱必須得到完全相同的欄位錯誤，不洩漏帳號是否存在。"""
+    add_user(member_session, 1)
+    service = make_auth_service(member_session)
+    errors = []
+    for email in ("user1@example.com", "nobody@example.com"):
+        with pytest.raises(ValidationError) as exc:
+            register(service, email=email, confirm_adult=False)
+        errors.append((exc.value.code, exc.value.message, exc.value.fields))
+    assert errors[0] == errors[1]
+
+
+def test_a_successful_registration_to_an_existing_address_looks_exactly_like_a_new_one(member_session):
+    add_user(member_session, 1)
+    service = make_auth_service(member_session)
+    assert register(service, email="user1@example.com") == register(service, email="fresh@example.com") is None
+    assert user_count(member_session) == 2
+
+
 # ---- 日誌 ---------------------------------------------------------------------
 
 def test_registration_events_are_logged_without_the_address_or_the_password(member_session, log_lines):
@@ -287,5 +350,5 @@ def test_registration_events_are_logged_without_the_address_or_the_password(memb
     register(service, email="secret.person@example.com", password="very-secret-password-xyz")
     register(service, email="secret.person@example.com", password="another-secret-password")
     events = [line["event"] for line in log_lines() if "event" in line]
-    assert events == ["auth.register", "auth.register_existing"]
+    assert events == ["auth.register", "auth.age_confirmed.register", "auth.register_existing"]
     assert "secret.person" not in log_lines.raw() and "secret-password" not in log_lines.raw()

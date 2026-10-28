@@ -90,6 +90,7 @@ node --test "tests/js/**/*.test.js"
 - Windows PowerShell 5.1 以管線傳字串給外部程式時，會在最前面加上 UTF-8 BOM；指令會自動去除它，所以上面的管線寫法可以放心使用（否則密碼會被存成「BOM＋密碼」，之後無法登入）。
 - 建立的帳號角色為 `admin`、狀態為 `active`、信箱視為已驗證；密碼規則與一般註冊相同（10 至 128 字）。
 - 信箱（含 Gmail 別名的重複判斷）已有帳號時指令會失敗，且不會改動既有帳號。
+- **年齡確認不會代為完成**：部署者建立帳號不等於本人確認年滿 18 歲，所以管理員帳號的 `age_confirmed_at` 為空。管理員**第一次登入後須到 `/account` 自行勾選確認**，否則和其他會員一樣不能使用任何會呼叫 Gemini 的功能（見「撰寫新端點」）。
 
 ## 會員驗證（C-2）
 
@@ -99,23 +100,24 @@ node --test "tests/js/**/*.test.js"
 
 | 端點 | 方法 | 用途 | 需要登入 |
 |---|---|---|---|
-| `/api/auth/register` | POST | 註冊（不論信箱是否已存在，回應完全相同；不自動登入） | 否 |
+| `/api/auth/register` | POST | 註冊（不論信箱是否已存在，回應完全相同；不自動登入）。請求欄位 `email`、`password`、`display_name`、`accept_terms`、`confirm_adult`，後兩者各自獨立、都必須明確為 `true` | 否 |
 | `/api/auth/login` | POST | 登入（失敗一律是同一則通用訊息） | 否 |
 | `/api/auth/logout` | POST | 登出目前裝置 | 否 |
 | `/api/auth/logout-all` | POST | 登出所有裝置（含目前這一台） | 是 |
-| `/api/auth/me` | GET | 目前登入者本人的資料 | 是 |
+| `/api/auth/me` | GET | 目前登入者本人的資料：`public_id`、`email`、`display_name`、`member_tier`、`role`、`status`、`email_verified`、`has_password`、`age_confirmed`（布林，確認時間與政策版本不對外）、`google_linked` | 是 |
+| `/api/auth/confirm-adult` | POST | 補確認年滿 18 歲（請求 `{"confirm_adult": true}`，回應最新的帳號資料；重複確認成功但不改動第一次的紀錄） | 是 |
 | `/api/auth/change-password` | POST | 變更密碼（其他裝置被登出，目前裝置維持登入） | 是 |
 | `/api/auth/verify-email` | POST | 以權杖完成信箱驗證（驗證關閉時 404） | 否 |
 | `/api/auth/resend-verification` | POST | 重寄驗證信（驗證關閉時 404） | 是 |
 | `/api/auth/forgot-password` | POST | 忘記密碼（回應與信箱是否存在無關；驗證關閉時 404） | 否 |
 | `/api/auth/reset-password` | POST | 以權杖設定新密碼（驗證關閉時 404） | 否 |
-| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404） | 否 |
+| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位 `accept_terms`、`confirm_adult`、`next`；第一次以 Google 註冊時兩項確認都需要，既有帳號登入不需要 | 否 |
 
 | 頁面 | 說明 |
 |---|---|
 | `/login`、`/register` | 登入、註冊（已登入者導向 `/account`） |
 | `/forgot-password`、`/reset-password`、`/verify-email` | 信箱驗證開啟時才存在；權杖在網址片段，頁面載入時不會自動完成動作 |
-| `/account` | 帳號設定（需登入）：顯示會員等級標籤、變更密碼、登出、登出所有裝置 |
+| `/account` | 帳號設定（需登入）：顯示會員等級標籤與年齡確認狀態（尚未確認時可在此補確認）、變更密碼、登出、登出所有裝置 |
 | `/terms`、`/privacy` | 服務條款與隱私權政策（**草稿**，待法務覆核） |
 | `/auth/google/callback` | Google 登入的回呼（回傳重新導向，不是 JSON） |
 
@@ -149,6 +151,20 @@ node --test "tests/js/**/*.test.js"
 
 驗收中發現並已修正的問題：Vue 掛載前會短暫顯示原始 `{{ }}` 範本（加上 `v-cloak`）；變更密碼 Modal 裡按 Enter 不會送出（補上隱藏的送出按鈕）。
 
+### 年齡確認的瀏覽器驗收紀錄（age-gate，2026-10-28）
+
+同樣以 Edge 無頭模式（CDP）對暫時的伺服器（SQLite 檔案資料庫、信箱驗證關閉、假的 Google 供應商，資料庫中預先放了兩個沒有年齡確認紀錄的帳號）逐項檢查，**50 / 50 項通過**。假的 Google 供應商只驗證「是否呼叫 `/api/auth/google/start` 並導向授權網址」，真實的 Google 登入仍需手動確認（見下方）。
+
+| 範圍 | 檢查內容 |
+|---|---|
+| 註冊頁的兩個勾選 | 同意條款與年滿 18 歲是兩個獨立的勾選、預設都未勾選，年齡標籤不在條款那一行；只缺年齡、只缺條款、兩者都缺，各自在**自己的勾選框下方**出現對應的錯誤（`role=alert`、`aria-invalid` 只標在缺少的那一項）；失敗後按鈕恢復、沒有建立帳號；兩個勾選都能用 Space 切換、Enter 送出；成功只顯示通用訊息，且請求次數正確 |
+| Google 入口（註冊頁與登入頁） | 兩項都沒勾、只勾條款、只勾年齡：都不離開本站、不呼叫 API，並只提示缺少的那一項；兩項都勾才呼叫 `/api/auth/google/start` 並導向授權網址；`/login?error=age_required` 顯示固定提示，未知代碼不顯示任何外部文字 |
+| 帳號設定頁補確認 | 尚未確認的帳號顯示「年齡確認＝尚未確認」與說明區塊；沒勾選就按「確認」不送出請求並顯示錯誤；勾選框可用鍵盤切換；成功後只送出一次 `POST /api/auth/confirm-adult`、清單改為「已確認」、說明區塊消失、Toast 回報；重新整理後維持已確認；`/api/auth/me` 的 `age_confirmed` 為 `true` 且不含確認時間與政策版本；新註冊的帳號登入後直接是已確認 |
+| 條款與隱私權政策 | 條款載明僅限年滿 18 歲、另外勾選確認、不蒐集生日年齡證件；隱私權政策列出年齡確認紀錄與保存期限；兩頁都仍標示草稿 |
+| 版面（5 頁 × 1280px 與 360px，另加 360px 的未確認帳號頁與註冊頁） | 回應 200 且停留在該頁（已登出才檢查登入、註冊頁，避免被導向 `/account`）；沒有水平捲軸、外部請求、失敗請求與主控台錯誤；360px 下勾選框與確認按鈕都在畫面寬度內 |
+
+驗收中發現並已修正的問題：登入頁 Google 入口的條款錯誤訊息緊貼在下一個（年齡）勾選框上，看起來像是屬於年齡勾選。這是斷言檢查不出來、看截圖才發現的版面問題，已改為錯誤訊息貼在自己的勾選框下方並與下一個元素保持距離。
+
 ### 其他驗收紀錄（2026-10-28）
 
 | 項目 | 結果 |
@@ -162,6 +178,16 @@ node --test "tests/js/**/*.test.js"
 驗證 `create-admin` 時發現並已修正：Windows PowerShell 5.1 以管線傳密碼會夾帶 UTF-8 BOM，導致密碼被存成「BOM＋密碼」而無法登入（見「建立首位管理員」）。
 
 **仍需你目視或手動確認**：真實的 Google 登入完整流程（需要在 Google Cloud Console 登錄重新導向 URI 並把你的帳號加入測試使用者）、真實信箱的驗證信到達與顯示。
+
+### 年齡確認的其他驗收紀錄（age-gate，2026-10-28）
+
+| 項目 | 結果 |
+|---|---|
+| 自動化測試 | `pytest` 1564 項通過（SQLite 1311 項、真實 SQL Server `project_test` 253 項）；`node --test` 47 項；`openspec validate age-gate --strict` 通過 |
+| 年齡閘門的 HTTP 行為 | 以只在測試應用程式註冊的端點（`tests/support/age_gate.py`）驗證：未確認 → 403 `age_confirmation_required`、補確認後同一端點 200；管理員與 `vip` 都不豁免；信箱未驗證時回 `forbidden` 而不是引導補確認年齡；被拒時日誌只有 `auth.age_gate_denied` 與內部使用者編號 |
+| 並行確認 | 8 個連線同時對同一帳號補確認，恰好 1 個寫入（SQLite 與 SQL Server 都通過），第一次寫入的時間與版本不會被覆蓋 |
+| 容器 | 67 / 67 項通過，映像 271 MB（見「容器建置與驗收」） |
+| migration `0003` | 升級只新增兩個可為空的欄位；降級只刪這兩欄、不影響其他資料表的資料列（SQLite 預設以重建資料表刪欄位，會連帶清掉以串聯刪除參照 `users` 的資料，已改為直接 `DROP COLUMN` 並由測試守住） |
 
 ## 本機測試信箱驗證
 
@@ -207,6 +233,7 @@ $env:MAIL_SMTP_SECURITY = "none"; $env:MAIL_FROM = "service@example.com"
 - 非擁有者與資源不存在必須得到**完全相同**的 404：用 `AccessPolicy.require_owner()`（它拋出 `NotFound`），不要回 403。
 - Repository 方法簽名必須帶 `user_id`，查詢一律帶 `user_id` 條件；不提供只憑 ID 取資料的方法給 API 路徑使用。
 - 會員等級（`member_tier`）只影響額度，不可用在權限判斷。
+- **每個會呼叫 Gemini 的端點（客服、RPG……）必須先呼叫 `get_access_policy().require_chat_access(user)`**，再做任何事：它依序檢查帳號狀態、信箱驗證與「已確認年滿 18 歲」，年齡不足時回 403 與代碼 `age_confirmation_required`（前端據此引導到 `/account` 補確認）。管理員與各會員等級都不豁免；端點不要自己判斷年齡。寫法見 `tests/support/age_gate.py`，HTTP 行為由 `tests/test_age_gate_api.py` 驗證。
 
 ```python
 from tests.support.idor import EndpointSpec, check_endpoint
@@ -411,6 +438,8 @@ Docker 在 WSL 內，每次使用前先啟動服務（見下一節）。驗收�
 檢查內容：Docker 可用、映像建置成功、預設使用者不是 root、映像每一層都沒有 `.env`／`.git`／測試／文件、前端資產與字型齊全、Python 版本等於 `.python-version`、`pyodbc` 可載入且有 ODBC Driver 18、缺少必要機密時以非零碼結束且不洩漏機密值、未設定 `APP_ENV` 時拒絕啟動；並以 `testing` 與「正式環境設定（SQLite 記憶體）」各啟動一次，確認 `/healthz` 與 `/readyz` 回 200、首頁與靜態檔可取得、**正式環境沒有 `/dev/components`**、主行程是非 root 的 gunicorn、日誌是 JSON 且不含機密、收到終止訊號後以結束碼 0 正常結束。
 
 **會員流程**（C-2 新增，在容器內以 SQLite 檔案資料庫執行）：`argon2`、`PyJWT`、`cryptography` 可載入；`alembic upgrade head` 成功；模擬入口層（`X-Forwarded-Proto: https`）後經 HTTP 走完註冊、登入、`/api/auth/me`、`/account`、缺少 CSRF 標頭被拒絕、登出、登出後 401、匿名開啟 `/account` 導向登入並保留 `next`；登入與 CSRF 的 cookie 具備 `__Host-` 前綴、`Secure`、`HttpOnly`、`SameSite=Lax`、`Path=/` 且沒有 `Domain`；日誌沒有信箱、密碼與機密，並有註冊、登入、登出的安全事件。production 的設定驗收也同步更新：`SECRET_KEY` 至少 32 字元，且預設要求信箱驗證，因此需要 https 的 `BASE_URL` 與寄信設定。
+
+**年齡確認**（age-gate 新增，2026-10-28 重新建置並驗收，**67 / 67 項通過**，映像 271 MB）：`alembic upgrade head` 升級到 `0003_users_age_confirmation`；缺少 `confirm_adult` 的註冊被拒絕（400，欄位 `confirm_adult`）；註冊時確認的帳號 `/api/auth/me` 回 `age_confirmed: true` 且不含確認時間與政策版本；`/api/auth/confirm-adult` 缺少 CSRF 標頭為 403、未登入為 401、`confirm_adult` 不是明確的 `true` 為 400。容器內沒有會呼叫 Gemini 的端點可直接驗閘門，所以改以 `flask create-admin`（刻意不代為確認年齡）建立一個「尚未確認」的帳號：登入後 `age_confirmed` 為 `false`，補確認後為 `true` 並在同一個登入狀態中維持；日誌有 `auth.age_confirmed.register` 與 `auth.age_confirmed.later`，且沒有信箱、密碼與機密。
 
 不需要 Docker 的靜態檢查（`tests/test_container_files.py`）也包含在一般的 `pytest` 中。
 

@@ -47,6 +47,13 @@
       </label>
       <p v-if="form.fieldErrors.accept_terms" class="auth-error" role="alert">{{ form.fieldErrors.accept_terms }}</p>
 
+      <label class="auth-check" for="confirm_adult">
+        <input id="confirm_adult" name="confirm_adult" type="checkbox" v-model="form.values.confirm_adult" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.confirm_adult ? 'true' : 'false'">
+        <span>我已年滿 18 歲（本平台僅供年滿 18 歲者使用）</span>
+      </label>
+      <p v-if="form.fieldErrors.confirm_adult" class="auth-error" role="alert">{{ form.fieldErrors.confirm_adult }}</p>
+
       <div class="auth-actions">
         <button type="submit" class="ui-btn ui-btn--primary" :disabled="form.state.submitting" :aria-busy="form.state.submitting ? 'true' : 'false'">
           {{ form.state.submitting ? '送出中…' : '註冊' }}
@@ -57,13 +64,14 @@
     <template v-if="googleEnabled">
       <div class="auth-divider"><span>或</span></div>
       <p v-if="google.fieldErrors.accept_terms" class="auth-error" role="alert">{{ google.fieldErrors.accept_terms }}</p>
+      <p v-if="google.fieldErrors.confirm_adult" class="auth-error" role="alert">{{ google.fieldErrors.confirm_adult }}</p>
       <p v-if="google.state.formError" class="auth-form-error" role="alert">{{ google.state.formError }}</p>
       <div class="auth-actions">
         <button type="button" class="ui-btn" :disabled="google.state.submitting" :aria-busy="google.state.submitting ? 'true' : 'false'" @click="signUpWithGoogle">
           {{ google.state.submitting ? '前往 Google…' : '使用 Google 註冊' }}
         </button>
       </div>
-      <p class="auth-hint">使用 Google 註冊同樣需要勾選上方的同意條款。</p>
+      <p class="auth-hint">使用 Google 註冊同樣需要勾選上方的同意條款與年滿 18 歲確認。</p>
     </template>
 
     <div class="auth-links">

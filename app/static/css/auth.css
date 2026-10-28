@@ -116,6 +116,16 @@
   background: var(--color-surface);
 }
 
+.auth-notice .account-notice-title {
+  margin: 0 0 0.5rem;
+  font-size: 1rem;
+  font-weight: 500;
+}
+
+.auth-notice p {
+  margin: 0 0 0.75rem;
+}
+
 .auth-check {
   display: flex;
   align-items: flex-start;
@@ -128,6 +138,11 @@
 .auth-check input {
   margin-top: 0.25rem;
   accent-color: var(--color-accent);
+}
+
+/* 勾選框的錯誤訊息：貼在自己的勾選框下方（與文字對齊），並和下一個元素保持距離，才不會被誤認為屬於下一個勾選框 */
+.auth-check + .auth-error {
+  margin: -0.5rem 0 1rem 1.5rem;
 }
 
 /* ---- 按鈕與連結 ---------------------------------------------------------- */
