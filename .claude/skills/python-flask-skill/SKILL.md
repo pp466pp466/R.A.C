@@ -19,7 +19,7 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 3. 禁止 Bootstrap 原生 JS 與 data-bs-* 互動屬性，僅允許 data-bs-theme="dark"。
 4. 禁止外部彈窗套件；Modal、Toast 與 Sidebar 狀態由 Vue 3 的 v-if / v-show 接管。
 5. 業務與 Repository 層禁止 Raw SQL；唯一例外為 SQLite 的連線初始化事件。
-6. 全系統模型統一為 gemini-3.8-flash。
+6. 全系統預設模型為 gemini-3.8-flash，備援為 gemini-3.5-flash-lite（429、5xx、單次呼叫逾時 20 秒即切換）。
 7. SSE 僅用於 RPG 劇情；客服意圖解析必須非串流輸出 JSON。
 8. 上下文 = 摘要 + 最近 10 輪原文 + 當前世界狀態；一輪 = 玩家訊息 + AI 回應。
 9. 全系統使用繁體中文（zh-TW）。
@@ -35,6 +35,7 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 19. SSE、心跳、串流逾時等條文僅適用 RPG；客服為非串流，逾時以 axios 搭配 AbortController 處理。
 20. 可為空的唯一欄位必須用部分唯一索引（unique_when_not_null），不可直接 unique=True（SQL Server 只允許一個 NULL）。
 21. alembic.ini 與 script.py.mako 必須純 ASCII；含中文的 .ps1 須 UTF-8 with BOM，維運與驗收腳本一律用 Python 撰寫。
+22. 未確認年滿 18 歲的帳號不得使用任何呼叫 Gemini 的功能（AccessPolicy 判斷，403 與 age_confirmation_required）。
 
 ## 3. 參考索引（依任務類型讀取）
 
@@ -57,8 +58,8 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 - [ ] 前端是否沒有任何 CDN、Google Fonts、.vue、Vite、SweetAlert2、Bootstrap 原生 JS、data-bs-*（除 data-bs-theme="dark"）？
 - [ ] 資源引入是否一律使用 `{{ url_for('static', filename='...') }}`？
 - [ ] 是否沒有 Raw SQL（連線初始化事件除外），且 PRAGMA 僅在 `engine.dialect.name == "sqlite"` 時於 connect 事件中執行？
-- [ ] 是否所有 LLM 呼叫都使用 gemini-3.8-flash，且 SSE 只用於 RPG 劇情、客服為非串流 JSON？
-- [ ] 送進 Gemini 的 Context 是否為「摘要 + 最近 10 輪原文 + 當前世界狀態」？
+- [ ] 是否所有 LLM 呼叫都使用模型設定（主要 gemini-3.8-flash、備援 gemini-3.5-flash-lite），且 SSE 只用於 RPG 劇情、客服為非串流 JSON？
+- [ ] 送進 Gemini 的 Context 是否為「摘要 + 最近 10 輪原文 + 當前世界狀態」？會呼叫 Gemini 的端點是否先經 AccessPolicy（含已確認年滿 18 歲），且玩家文字沒有進入 system_instruction？
 - [ ] UI 文字、Prompt、錯誤訊息、註解是否皆為繁體中文？System Prompt 是否明確約束回傳繁體中文？
 - [ ] 所有 open() 是否明確指定 encoding（讀取 utf-8-sig；寫入 JSON/文字 utf-8；Excel CSV utf-8-sig）？HTML 是否含 `<meta charset="UTF-8">` 與 `<html lang="zh-Hant-TW">`？
 - [ ] 是否沒有使用 app.run 作為正式環境、沒有依賴行程內記憶體保存狀態（含限流計數）、沒有把 API Key 或資料庫密碼寫入程式碼／模板／版本庫？

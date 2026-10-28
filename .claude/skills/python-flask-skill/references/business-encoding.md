@@ -9,6 +9,8 @@
 - 無硬性結局 (Endless Open World)：廢除傳統死亡死局，採用「無窮盡開放世界 + 狀態轉移框架 (State Transition Framework)」。
 - 動態階段錨點：透過 milestones_json 驅動階段性事件（如 20 歲宗門大測），觸發後由 LLM 動態延伸新目標，玩家離線時對話 Session 自動存檔。
 - 原始劇本（`scripts.milestones_json`）為唯讀。LLM 動態延伸的目標不得寫回原始劇本，應另存於 session 層，完成後歸檔。
+- NPC 角色卡：NPC 的特質（表層或隱藏）、弧線階段（surface、cracking、revealed）與錨定事實存放於 sessions.entities_json，每回合進入世界狀態；階段由模型提議、Service 驗證轉移，不由模型直接寫入。個性的玩家層修正存放於 user_persona_overrides（跨存檔共用，只存差異），其餘內容（人物、背景、世界觀、地點）一律屬於單一存檔。全站性格原型庫（persona_prototypes）玩家唯讀，由 AI 擬草案、管理員核可後上架，核可上架的原型不得含可回溯到使用者的資料。
+- 內容分級：存檔帶 content_tier 與 sexual_content_level（0 至 3）旗標，預設最保守；sexual_content_level 3（成年角色之間合意的露骨內容）在取得模型供應商的書面許可與法務意見之前，程式上不得開啟。無論分級，一律禁止涉及未成年（含看似未成年的角色）的性內容、性暴力與非自願的性情節，以及以真人名義的性內容；露骨場景中的每個角色須有成年年齡紀錄。
 
 ### 會員制智能客服機器人模組
 
