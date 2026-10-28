@@ -2,7 +2,7 @@
 
 以 LLM 驅動的雙核心平台。開發規範以根目錄的 [AGENTS.md](AGENTS.md) 為唯一權威來源；設計決策見 [docs/report.md](docs/report.md)，變更提案見 `openspec/changes/`。
 
-目前進度：C-1 `platform-foundation`（專案地基）已封存；C-2 `member-auth`（會員驗證）已實作完成，待審查與封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。
+目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）與 `age-gate`（年齡確認閘門）都已封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**已知落差**：AGENTS.md 第 10 節已改為「生日加年齡區間」的年齡確認，程式仍是 `age-gate` 的勾選自行聲明，由後續的 `age-verification-birthdate` 實作（見 `docs/RPG.md` 的 T-10）。
 
 ## 環境需求
 
