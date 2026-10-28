@@ -5,6 +5,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app import create_app
 from app.config import load_config
+from tests.support.config_env import production_like_env
 
 
 class _Base(DeclarativeBase):
@@ -21,13 +22,7 @@ def make_testing_app():
 
 
 def make_production_like_app(env: str = "production"):
-    cfg = load_config(
-        environ={
-            "APP_ENV": env,
-            "SECRET_KEY": "k" * 32,
-            "DATABASE_URL": "sqlite+pysqlite:///:memory:",  # 驗證用；非 sa，不含 TrustServerCertificate
-        }
-    )
+    cfg = load_config(environ=production_like_env(env))
     app = create_app(cfg)
     app.add_url_rule("/_scheme", "scheme", lambda: __import__("flask").request.scheme + "|" + __import__("flask").request.host)
     return app

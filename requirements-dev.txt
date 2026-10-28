@@ -1,3 +1,5 @@
 # 開發與測試相依套件
 -r requirements.txt
 pytest==9.1.1
+# 本機 SMTP 擷取與寄信整合測試（C-2）
+aiosmtpd==1.4.6

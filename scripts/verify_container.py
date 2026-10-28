@@ -20,7 +20,13 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DISTRO = "Ubuntu-2204"
-FAKE_SECRET = "S3cretValue-for-container-test"
+FAKE_SECRET = "S3cretValue-for-container-test-0123456789"   # staging 與 production 的 SECRET_KEY 至少 32 字元
+# production 預設要求信箱驗證：需要寄信設定與 https 的對外網址（寄信目的地是不存在的主機，只為了通過啟動驗證）
+PRODUCTION_AUTH_ENV = [
+    "BASE_URL=https://cs.example.com", "MAIL_SMTP_HOST=127.0.0.1", "MAIL_SMTP_PORT=1", "MAIL_FROM=service@example.com",
+]
+MEMBER_EMAIL = "container.member@example.com"
+MEMBER_PASSWORD = "container-member-password-1"
 
 results: list[tuple[str, bool, str]] = []
 
@@ -57,6 +63,93 @@ def run_python_in_image(image: str, code: str) -> tuple[int, str]:
 
 def run_sh_in_image(image: str, script: str) -> tuple[int, str]:
     return docker("run", "-i", "--rm", "--entrypoint", "sh", image, "-s", stdin=script)
+
+
+# 在容器內執行的會員流程（程式碼必須是 ASCII）。模擬入口層：帶 X-Forwarded-Proto: https 與對外主機，
+# 因此 staging 的 Secure、__Host- 前綴的 cookie 會被發放；Secure cookie 不會被 urllib 在 http 上送回，所以手動管理 cookie。
+AUTH_FLOW = r'''
+import json, urllib.error, urllib.request
+
+BASE = "http://127.0.0.1:8080"
+ORIGIN = "https://cs.example.com"
+EMAIL, PASSWORD = "%(email)s", "%(password)s"
+cookies, attributes = {}, {}
+
+
+class NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+def call(method, path, body=None, csrf=True):
+    data = json.dumps(body).encode() if body is not None else None
+    request = urllib.request.Request(BASE + path, data=data, method=method)
+    request.add_header("X-Forwarded-Proto", "https")
+    request.add_header("X-Forwarded-Host", "cs.example.com")
+    if body is not None:
+        request.add_header("Content-Type", "application/json")
+    if cookies:
+        request.add_header("Cookie", "; ".join(k + "=" + v for k, v in cookies.items()))
+    if method != "GET":
+        request.add_header("Origin", ORIGIN)
+        if csrf:
+            request.add_header("X-CSRF-Token", cookies.get("__Host-csrf", ""))
+    opener = urllib.request.build_opener(NoRedirect)
+    try:
+        response = opener.open(request)
+    except urllib.error.HTTPError as error:
+        response = error
+    text = response.read().decode("utf-8", "replace")
+    for raw in response.headers.get_all("Set-Cookie") or []:
+        name, _, rest = raw.partition("=")
+        value = rest.split(";", 1)[0]
+        attributes[name] = raw
+        if value == "" or "Max-Age=0" in raw:
+            cookies.pop(name, None)
+        else:
+            cookies[name] = value
+    try:
+        return response.status if hasattr(response, "status") else response.code, json.loads(text), response.headers
+    except ValueError:
+        return response.status if hasattr(response, "status") else response.code, text, response.headers
+
+
+def report(name, ok, detail=""):
+    print("RESULT|%%s|%%s|%%s" %% (name, "1" if ok else "0", detail))
+
+
+status, _, headers = call("GET", "/login")
+report("login page is served", status == 200)
+csrf_cookie = attributes.get("__Host-csrf", "")
+report("csrf cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/, no Domain",
+       all(part in csrf_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/")) and "Domain" not in csrf_cookie, csrf_cookie.split(";")[0][:20])
+report("html pages are not cacheable", headers.get("Cache-Control") == "no-store")
+
+status, body, _ = call("POST", "/api/auth/register", {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True})
+report("register succeeds", status == 200 and body.get("ok") is True, str(status))
+status, body, _ = call("POST", "/api/auth/login", {"email": EMAIL, "password": PASSWORD})
+report("login succeeds", status == 200, str(status))
+session_cookie = attributes.get("__Host-session", "")
+report("session cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/, with Expires, no Domain",
+       all(part in session_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/", "Expires=")) and "Domain" not in session_cookie)
+status, body, _ = call("GET", "/api/auth/me")
+report("/api/auth/me returns the member", status == 200 and body["user"]["email"] == EMAIL, str(status))
+report("/api/auth/me never exposes internals", not ({"id", "token_version", "password_hash"} & set(body["user"])))
+status, body, _ = call("GET", "/account")
+report("/account renders for a logged-in member", status == 200 and "account-list" in body)
+status, body, _ = call("POST", "/api/auth/change-password", {"current_password": PASSWORD, "new_password": PASSWORD + "-new"}, csrf=False)
+report("a POST without the CSRF header is refused", status == 403 and body["error"]["code"] == "csrf_failed", str(status))
+status, _, _ = call("POST", "/api/auth/logout")
+report("logout succeeds", status == 200)
+status, _, _ = call("GET", "/api/auth/me")
+report("after logout /api/auth/me is 401", status == 401, str(status))
+status, _, headers = call("GET", "/account")
+report("an anonymous /account redirects to /login keeping next", status == 302 and headers.get("Location", "").startswith("/login?next="), headers.get("Location", ""))
+status, _, _ = call("GET", "/terms")
+report("/terms and /privacy are public", status == 200 and call("GET", "/privacy")[0] == 200)
+status, body, _ = call("POST", "/api/auth/forgot-password", {"email": EMAIL})
+report("forgot-password is 404 because verification is off in this staging run", status == 404, str(status))
+''' % {"email": MEMBER_EMAIL, "password": MEMBER_PASSWORD}
 
 
 LAYER_SCAN = r"""
@@ -131,7 +224,7 @@ def main() -> int:
     # ---- 以接近正式環境的設定實際執行 ---------------------------------------------
     for label, env in (
         ("testing", ["APP_ENV=testing"]),
-        ("production（SQLite 記憶體）", ["APP_ENV=production", f"SECRET_KEY={FAKE_SECRET}", "DATABASE_URL=sqlite+pysqlite:///:memory:"]),
+        ("production（SQLite 記憶體）", ["APP_ENV=production", f"SECRET_KEY={FAKE_SECRET}", "DATABASE_URL=sqlite+pysqlite:///:memory:", *PRODUCTION_AUTH_ENV]),
     ):
         name = f"pf-verify-{uuid.uuid4().hex[:8]}"
         env_args = [item for pair in (("-e", e) for e in env) for item in pair]
@@ -177,9 +270,45 @@ def main() -> int:
         finally:
             docker("rm", "-f", name)
 
+    verify_member_flow(image)
+
     failed = [r for r in results if not r[1]]
     print(f"\n結果：{len(results) - len(failed)} / {len(results)} 項通過")
     return 1 if failed else 0
+
+
+def verify_member_flow(image: str) -> None:
+    """會員驗證：新增的相依套件可載入；在容器內以 SQLite 執行 migration 後，經 HTTP 走完註冊、登入與登出。"""
+    code, out = run_python_in_image(image, "import argon2, jwt, cryptography; print('imports-ok')")
+    check("映像內可載入 argon2、PyJWT 與 cryptography", code == 0 and "imports-ok" in out, out.strip()[:120])
+
+    name = f"pf-auth-{uuid.uuid4().hex[:8]}"
+    env = [
+        "APP_ENV=staging", f"SECRET_KEY={FAKE_SECRET}", "DATABASE_URL=sqlite+pysqlite:////tmp/member.sqlite3",
+        "EMAIL_VERIFICATION_REQUIRED=false", "BASE_URL=https://cs.example.com",
+    ]
+    env_args = [item for pair in (("-e", e) for e in env) for item in pair]
+    code, out = docker("run", "-d", "--name", name, *env_args, image)
+    try:
+        check("[會員流程] 預備環境容器啟動（驗證關閉、SQLite 檔案資料庫）", code == 0, out.strip()[:80])
+        time.sleep(4)
+        code, out = docker("exec", name, "python", "-m", "alembic", "upgrade", "head", timeout=120)
+        check("[會員流程] 在容器內執行 alembic upgrade head 成功", code == 0 and "0002_users_and_auth_tokens" in out, out.strip()[-160:].replace("\n", " "))
+
+        code, out = docker("exec", "-i", name, "python", "-", stdin=AUTH_FLOW, timeout=120)
+        flow = [line.split("|", 3) for line in out.splitlines() if line.startswith("RESULT|")]
+        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 14, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 14 else f"{len(flow)} 項")
+        for _, label, ok, detail in flow:
+            check(f"[會員流程] {label}", ok == "1", detail)
+
+        code, logs = docker("logs", name)
+        check("[會員流程] 日誌沒有信箱與密碼", MEMBER_EMAIL not in logs and MEMBER_PASSWORD not in logs and FAKE_SECRET not in logs)
+        events = re.findall(r'"event":"([a-z_.]+)"', logs)
+        check("[會員流程] 日誌有註冊、登入、登出的安全事件", {"auth.register", "auth.login_success", "auth.logout"} <= set(events), ", ".join(sorted(set(events))))
+        code, out = docker("exec", name, "sh", "-c", "test ! -e /app/.env && test ! -e /app/tests && echo clean")
+        check("[會員流程] 映像內仍然沒有 .env 與測試", code == 0 and out.strip() == "clean", out.strip()[:120])
+    finally:
+        docker("rm", "-f", name)
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@ from alembic import context
 
 from app.config import bootstrap_env_for_tools, load_config
 from app.db.dialect import create_engine_for
-from app.models.base import Base
+from app.models import Base  # 匯入 app.models 會一併載入全部模型，metadata 才完整
 
 config = context.config
 if config.config_file_name is not None:

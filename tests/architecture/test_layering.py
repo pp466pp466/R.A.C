@@ -1,7 +1,7 @@
 """架構檢查：層級依賴方向單向（見 AGENTS.md 第 3 節與 application-layering 規格）。
 
-方向：端點（controllers）→ Service → Repository → 資料模型。
-- 端點不得直接存取資料庫工作階段、Repository、資料模型或 SQLAlchemy；
+方向：端點（controllers）與 HTTP 安全輔助（security）→ Service → Repository → 資料模型。
+- 端點與 HTTP 安全輔助不得直接存取資料庫工作階段、Repository、資料模型或 SQLAlchemy（需要資料時呼叫 Service）；
 - Service 不得依賴端點，也不得依賴 HTTP 請求物件（不得匯入 flask）；
 - Repository 與資料模型不得依賴 Service、端點，也不得匯入 flask；
 - 資料庫基礎（db）與可觀測性（observability）不得依賴 Service、Repository、端點。
@@ -19,6 +19,7 @@ APP_DIR = PROJECT_ROOT / "app"
 # 各層「禁止匯入」的模組前綴
 FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
     "controllers": ("app.repositories", "app.db", "app.models", "sqlalchemy"),
+    "security": ("app.repositories", "app.db", "app.models", "sqlalchemy"),
     "services": ("app.controllers", "flask"),
     "repositories": ("app.services", "app.controllers", "flask"),
     "models": ("app.services", "app.repositories", "app.controllers", "flask"),
@@ -114,6 +115,30 @@ def test_repository_depending_on_a_service_is_flagged():
 def test_imports_inside_functions_are_also_checked():
     source = "def handler():\n    from app.repositories.base import BaseRepository\n"
     assert violations_for("controllers", source, "app.controllers")
+
+
+def test_http_security_helpers_may_not_read_the_database_directly():
+    """application-layering 規格：HTTP 安全輔助直接讀資料庫 → 檢查失敗。"""
+    assert violations_for("security", "from app.models.user import User\n", "app.security")
+    assert violations_for("security", "from app.db.session import get_session\n", "app.security")
+    assert violations_for("security", "from app.repositories.user_repository import UserRepository\n", "app.security")
+    assert violations_for("security", "from sqlalchemy import select\n", "app.security")
+    assert violations_for("security", "def f():\n    from app.models import base\n", "app.security")
+
+
+def test_http_security_helpers_may_use_flask_services_and_config():
+    allowed = (
+        "from flask import session, request\n"
+        "from app.services.errors import Unauthenticated\n"
+        "from app.config import AppConfig\n"
+        "from app.runtime import get_config\n"
+    )
+    assert violations_for("security", allowed, "app.security") == []
+
+
+def test_the_security_package_is_scanned():
+    assert "security" in FORBIDDEN_IMPORTS
+    assert (APP_DIR / "security").is_dir()
 
 
 def test_allowed_dependencies_pass():

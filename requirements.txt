@@ -5,3 +5,7 @@ alembic==1.20.1
 pyodbc==5.3.0
 gunicorn==26.2.0
 python-dotenv==1.2.4
+# 會員驗證（C-2）：密碼雜湊與 Google ID token 簽章驗證
+argon2-cffi==25.1.0
+PyJWT==2.15.1
+cryptography==50.0.2

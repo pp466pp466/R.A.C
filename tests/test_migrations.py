@@ -1,14 +1,21 @@
 """database-access 規格：資料表只能透過版本化 migration 變更。"""
+import re
+
 import pytest
 from alembic import command
+from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
-from sqlalchemy import inspect
+from sqlalchemy import MetaData, Table, inspect
 
 import app.config as config_module
 from app.config import PROJECT_ROOT
 from app.db.dialect import create_engine_for
+from app.models import Base
+from tests.conftest import require_sqlserver_test_url
+
+MEMBER_TABLES = ("users", "user_identities", "auth_tokens")
 
 
 def alembic_config(url: str) -> Config:
@@ -30,12 +37,80 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    # 基線只建立版本機制，不建立任何業務資料表
-    assert set(inspect(engine).get_table_names()) == {"alembic_version"}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
+    assert set(inspect(engine).get_table_names()) == {"alembic_version"}
     engine.dispose()
+
+
+def test_baseline_creates_no_business_table_and_0002_adds_only_the_member_tables(tmp_path):
+    url = f"sqlite+pysqlite:///{tmp_path / 'steps.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+
+    command.upgrade(cfg, "0001_baseline")
+    assert set(inspect(engine).get_table_names()) == {"alembic_version"}
+    command.upgrade(cfg, "0002_users_and_auth_tokens")
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES}
+    command.downgrade(cfg, "0001_baseline")
+    assert set(inspect(engine).get_table_names()) == {"alembic_version"}
+    engine.dispose()
+
+
+def test_migration_scripts_do_not_import_application_code():
+    """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
+    for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
+        text = path.read_text(encoding="utf-8-sig")
+        assert not re.search(r"^\s*(from|import)\s+app(\.|\s)", text, re.M), f"{path.name} 匯入了應用程式程式碼"
+
+
+# ---- 升級後的結構必須與模型一致（SQLite 與 SQL Server）--------------------------
+
+@pytest.fixture(params=["sqlite-file", pytest.param("sqlserver", marks=pytest.mark.sqlserver)])
+def migrated_database(request, tmp_path):
+    if request.param == "sqlite-file":
+        url = f"sqlite+pysqlite:///{tmp_path / 'compare.sqlite3'}"
+    else:
+        url = require_sqlserver_test_url()
+    cfg = alembic_config(url)
+    command.upgrade(cfg, "head")
+    engine = create_engine_for(url)
+    yield engine
+    command.downgrade(cfg, "base")
+    with engine.begin() as conn:
+        Table("alembic_version", MetaData()).drop(conn, checkfirst=True)
+    engine.dispose()
+
+
+def test_migrated_schema_has_no_difference_from_the_models(migrated_database):
+    with migrated_database.connect() as conn:
+        context = MigrationContext.configure(conn, opts={"compare_type": True, "compare_server_default": False})
+        differences = compare_metadata(context, Base.metadata)
+    assert differences == [], f"migration 與模型不一致：{differences}"
+
+
+def test_the_schema_comparison_really_reports_differences(migrated_database):
+    """自我驗證：與「少了三張表的模型」比較時必須回報差異，否則上面的『沒有差異』沒有意義。"""
+    with migrated_database.connect() as conn:
+        context = MigrationContext.configure(conn, opts={"compare_type": True})
+        differences = compare_metadata(context, MetaData())
+    removed = {d[1].name for d in differences if d[0] == "remove_table"}
+    assert set(MEMBER_TABLES) <= removed
+
+
+def test_migrated_tables_enforce_the_documented_constraints(migrated_database):
+    inspector = inspect(migrated_database)
+    for table in MEMBER_TABLES:
+        assert table in inspector.get_table_names()
+    foreign_keys = {t: inspector.get_foreign_keys(t) for t in ("user_identities", "auth_tokens")}
+    for table, keys in foreign_keys.items():
+        assert len(keys) == 1, table
+        assert keys[0]["referred_table"] == "users"
+        assert (keys[0].get("options") or {}).get("ondelete", "").upper() == "CASCADE", table
+    index_names = {i["name"] for i in inspector.get_indexes("auth_tokens")}
+    assert "ix_auth_tokens_user_id_purpose_created_at" in index_names
 
 
 def test_there_is_exactly_one_migration_head():

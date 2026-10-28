@@ -23,6 +23,29 @@ def test_lists_every_required_variable():
         assert required in names, f"{required} 未列在 .env.example"
 
 
+AUTH_VARIABLES = (
+    "SECRET_KEY_FALLBACKS", "EMAIL_VERIFICATION_REQUIRED", "BASE_URL",
+    "MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_SMTP_SECURITY", "MAIL_SMTP_USER", "MAIL_SMTP_PASSWORD", "MAIL_FROM",
+    "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
+)
+
+
+def test_lists_every_member_auth_variable():
+    names = parse_assignments()
+    for name in AUTH_VARIABLES:
+        assert name in names, f"{name} 未列在 .env.example"
+
+
+def test_every_variable_the_config_reads_is_listed():
+    """app/config.py 讀取的每個環境變數名稱，都必須出現在 .env.example（避免新增設定卻忘了列出）。"""
+    source = (PROJECT_ROOT / "app" / "config.py").read_text(encoding="utf-8-sig")
+    read_by_config = set(re.findall(r'(?:_get\(values, |values\.get\(|environ\.get\()"([A-Z][A-Z0-9_]+)"', source))
+    read_by_config -= {"APP_ENV"}  # 由行程環境提供，.env.example 另有說明
+    assert read_by_config, "沒有掃到任何變數，掃描規則需要更新"
+    missing = read_by_config - set(parse_assignments())
+    assert not missing, f".env.example 缺少：{sorted(missing)}"
+
+
 def test_has_no_actual_values():
     for name, value in parse_assignments().items():
         # 只允許空值，或以 <...> 包住的佔位符

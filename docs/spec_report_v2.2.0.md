@@ -73,7 +73,8 @@
 
 | 欄位名稱 | 型態 | 約束 | 說明 |
 |---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 使用者唯一識別碼 |
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 使用者唯一識別碼（內部使用，不對外） |
+| `public_id` | Unicode(36) | UNIQUE, NOT NULL | 對外的 UUID（C-2 實作時補上，沿用共用的欄位慣例） |
 | `email` | Unicode(255) | UNIQUE, NOT NULL | 帳號識別；寫入前正規化為小寫。一組 email 只能對應一個帳號 |
 | `email_canonical` | Unicode(255) | UNIQUE, NOT NULL | 判斷重複用的比對鍵：小寫；`gmail.com`、`googlemail.com` 另去除「.」與「+標籤」。信件仍寄 `email` |
 | `display_name` | Unicode(50) | NOT NULL | 顯示名稱（不要求唯一；取代 v2.1.1 的 `username`） |
@@ -85,34 +86,39 @@
 | `failed_login_count` | INTEGER | NOT NULL, DEFAULT 0 | 連續登入失敗次數 |
 | `locked_until` | DATETIME | NULLABLE | 登入鎖定截止時間 |
 | `token_version` | INTEGER | NOT NULL, DEFAULT 1 | 加 1 即撤銷既有 session |
-| `terms_version` | Unicode(20) | NOT NULL | 註冊時同意的服務條款與隱私權政策版本 |
-| `terms_accepted_at` | DATETIME | NOT NULL | 同意時間 |
-| `last_login_at` | DATETIME | NULLABLE | 最後登入時間 |
-| `created_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | 註冊時間 |
-| `deleted_at` | DATETIME | NULLABLE | 刪除帳號流程使用 |
+| `terms_version` | Unicode(40) | NULLABLE | 註冊與 Google 建立帳號時由 Service 必填（記錄同意的服務條款與隱私權政策版本）；由管理員指令建立的帳號沒有「同意」這個動作，故為空 |
+| `terms_accepted_at` | DATETIME2 (UTC) | NULLABLE | 同意時間；同上 |
+| `last_login_at` | DATETIME2 (UTC) | NULLABLE | 最後登入時間 |
+| `created_at`、`updated_at` | DATETIME2 (UTC) | NOT NULL | 由 Python 端維護（不使用伺服器端函式，避免兩種資料庫語法差異） |
+| `deleted_at` | DATETIME | NULLABLE | 刪除帳號流程使用；**C-2 尚未建立此欄位**，C-4 以 expand 方式新增 |
+
+> 值域（角色、等級、狀態、權杖用途）由 Service 常數與測試守住，**不加資料庫 CHECK 約束**（CHECK 在 SQLite 的 batch migration 與 SQL Server 之間有方言差異）。時間欄位在 SQL Server 為 DATETIME2(6)，保留微秒精度。
 
 #### 2. 外部登入身分表 (`user_identities`)
 
 | 欄位名稱 | 型態 | 約束 | 說明 |
 |---|---|---|---|
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | |
-| `user_id` | INTEGER | FOREIGN KEY (users.id), NOT NULL | |
+| `user_id` | INTEGER | FOREIGN KEY (users.id) ON DELETE CASCADE, NOT NULL | |
 | `provider` | Unicode(20) | NOT NULL | 例如 `google` |
 | `provider_subject` | Unicode(255) | NOT NULL | 供應商端的使用者識別（OIDC `sub`） |
-| `created_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | |
+| `created_at` | DATETIME2 (UTC) | NOT NULL | |
 
-`(provider, provider_subject)` 唯一。
+`(provider, provider_subject)` 唯一（一個 Google 身分只屬於一個帳號）；`(user_id, provider)` 唯一（一個帳號最多綁定一個 Google 身分）。欄位皆 NOT NULL，因此不需要「只涵蓋非 NULL 列」的部分唯一索引。
 
 #### 3. 驗證權杖表 (`auth_tokens`)
 
 | 欄位名稱 | 型態 | 約束 | 說明 |
 |---|---|---|---|
 | `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | |
-| `user_id` | INTEGER | FOREIGN KEY (users.id), NOT NULL | |
+| `user_id` | INTEGER | FOREIGN KEY (users.id) ON DELETE CASCADE, NOT NULL | |
 | `purpose` | Unicode(20) | NOT NULL | `verify_email` 或 `reset_password` |
 | `token_hash` | Unicode(64) | UNIQUE, NOT NULL | 權杖的 SHA-256 雜湊，不存明文 |
-| `expires_at` | DATETIME | NOT NULL | 驗證信 24 小時、重設信 1 小時 |
-| `used_at` | DATETIME | NULLABLE | 單次使用 |
+| `created_at` | DATETIME2 (UTC) | NOT NULL | 發放時間；寄信頻率限制（間隔 60 秒、每小時 5 封）由它計算 |
+| `expires_at` | DATETIME2 (UTC) | NOT NULL | 驗證信 24 小時、重設信 1 小時 |
+| `used_at` | DATETIME2 (UTC) | NULLABLE | 單次使用；使用的判定與標記是同一個條件式 UPDATE（原子） |
+
+索引 `(user_id, purpose, created_at)` 供寄信頻率限制的查詢使用。連結把權杖放在網址片段（`#token=…`），伺服器與入口層的存取日誌都看不到。
 
 #### 4. 客服對話表 (`chat_conversations`)
 
@@ -254,6 +260,7 @@
 | 紀錄013 | 2026-10-27 | 與專案 AGENTS.md（對應 AGENTS_v3）對齊（v2.1.1）：Service 層補充對話摘要壓縮；主題六新增第 4 至 7 點待決定事項。 |
 | 紀錄014 | 2026-10-27 | 納入 explore 決策（v2.2.0，詳見 docs/report.md 與 docs/RPG.md）：<br>• 範圍採方案 A：本期做客服，RPG 延後（D-00）。<br>• `users` 改以 email 為帳號識別（唯一），`username` 改為 `display_name`，`password_hash` 可為 NULL，新增 `user_identities`、`auth_tokens`、`role`、`member_tier`、`status` 等欄位。<br>• 新增客服資料表 `chat_conversations`、`chat_messages`，以及用量與失敗紀錄 `llm_call_logs`。<br>• 客服 Drawer 改稱 Sidebar；AGENTS.md 新增第 10 節（身分驗證與安全）與第 11 節（個資、保存與可觀測性），並補充第 4、5、6、7、9 節。<br>• 部署決策：Docker 映像部署於雲端 PaaS，使用託管 SQL Server；本機開發亦使用 SQL Server。<br>• 管理員後台採 Web 形式（`/admin`）；客服僅 AI，不設真人通道；訂單串接另開 change。 |
 | 紀錄015 | 2026-10-27 | C-1 實作回饋補入 AGENTS.md 與 skill：<br>• 第 4 節：可為空的唯一欄位必須用部分唯一索引（SQL Server 的 UNIQUE 只允許一個 NULL）；`alembic.ini` 與 `script.py.mako` 必須純 ASCII（Alembic 以系統地區編碼讀取）。<br>• 第 8 節：以系統地區編碼讀取的檔案與腳本規則（含中文的 `.ps1` 須 UTF-8 with BOM；維運與驗收腳本一律以 Python 撰寫，`.ps1` 只作純 ASCII 薄包裝），並註明繁體中文規定的純 ASCII 例外。 |
+| 紀錄016 | 2026-10-28 | C-2 `member-auth` 實作完成（設計決定、偏離與實作中發現的問題）：<br>• **設計決定**：登入 cookie 內容只有 `uid` 與 `tv`、固定 7 天；CSRF 用獨立的簽章雙重提交 cookie 加 Origin 檢查（不放進登入 cookie）；信箱驗證與重設連結的權杖放在網址片段；寄信在交易提交且回應送出之後才進行；Google 登入自行組裝 OIDC（只用標準函式庫與 PyJWT，不用 Authlib）；待驗證帳號被重複註冊時不覆蓋原密碼。<br>• **偏離**：Google-only 帳號在帳號頁「重新驗證後設定密碼」延後（信箱驗證開啟時可用忘記密碼設定）；`users` 的 `terms_version`、`terms_accepted_at` 實際為可為空（管理員指令建立的帳號沒有同意動作）；`deleted_at` 延到 C-4 新增；本機 SQL Server 的走查改用 `project_test`。<br>• **實作中發現並修正**：(1) 請求交易在 4xx 時回復，導致登入失敗次數永遠不累積、帳號永遠不鎖定，新增 `keep_changes_on_error`，只用於「失敗的記帳」；(2) 變更密碼後不應換發 CSRF 權杖（頁面不會重新載入）；(3) Windows PowerShell 5.1 以管線傳密碼會夾帶 UTF-8 BOM，`create-admin` 現在會去除；(4) 片段權杖含雜字元時不可只取前半段；(5) Vue 掛載前會短暫顯示 `{{ }}`（`v-cloak`）；(6) 變更密碼 Modal 的 Enter 不會送出（補隱藏的送出按鈕）；(7) 預先佔用信箱的 Google 合併分支需先綁定再改資料。<br>• **環境發現與處理**：本機 `project` 資料庫原本啟用了 SQL Server 帳本（Ledger），資料列的更新與刪除會永久留在歷史表，與「刪除帳號時真的刪除個資」衝突，且建立後無法關閉。已重建：舊的改名保留為 `project_old_ledger`（無資料，可自行刪除），新的 `project` 不啟用帳本並已升級到 `0002`（過程中自動模式擋下了 `DROP DATABASE`，改採改名保留加新建，沒有刪除任何東西）；C-5 需確認 Cloud SQL 是否支援或預設啟用帳本。<br>• **驗收**：`pytest` 1277 項（SQL Server 210 項）、`node --test` 47 項、瀏覽器 84 項、容器 56 項、SQL Server 端到端 17 項、機密掃描 0 筆命中；Google 用戶端憑證經 Google token 端點確認有效。 |
 
 ---
 

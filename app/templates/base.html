@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token() }}">
   <title>{% block title %}智能客服{% endblock %}</title>
   {# 暫無網站圖示；內嵌的空圖示可避免瀏覽器去要 /favicon.ico 而產生 404 #}
   <link rel="icon" href="data:,">

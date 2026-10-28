@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{# 會員頁面的共用版型：置中的卡片、左上角的系統狀態碼。Vue 的範本放在 {% raw %} 區塊內，避免被 Jinja 處理。 #}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/auth.css') }}">
+{% endblock %}
+{% block content %}
+<main class="auth-shell">
+  <div class="auth-card ui-surface{% block card_class %}{% endblock %}">
+    <p class="auth-code" aria-hidden="true">[ {% block status_code %}AUTH{% endblock %} ]</p>
+    <h1 class="auth-title">{% block heading %}{% endblock %}</h1>
+    {% block page_body %}{% endblock %}
+  </div>
+</main>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auth/auth-form.js') }}"></script>
+  {% block page_script %}{% endblock %}
+{% endblock %}

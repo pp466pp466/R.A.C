@@ -3,12 +3,11 @@ import pytest
 
 from app import create_app
 from app.config import load_config
+from tests.support.config_env import production_like_env
 
 
 def client_for(env: str):
-    environ = {"APP_ENV": env}
-    if env != "testing":
-        environ.update({"SECRET_KEY": "k" * 32, "DATABASE_URL": "sqlite+pysqlite:///:memory:"})
+    environ = {"APP_ENV": env} if env == "testing" else production_like_env(env)
     return create_app(load_config(environ=environ, dotenv_path="__none__.env")).test_client()
 
 

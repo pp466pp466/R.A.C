@@ -36,6 +36,7 @@ ALLOWED_FIELDS = (
     "finish_reason",
     "error_type",
     "error_location",
+    "event",  # 認證與安全事件名稱（固定列舉，見 security_events.py）
 )
 
 MAX_TEXT_LENGTH = 300

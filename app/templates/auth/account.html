@@ -1,0 +1,72 @@
+{% extends "auth/auth_base.html" %}
+{% block title %}帳號設定{% endblock %}
+{% block status_code %}ACCOUNT{% endblock %}
+{% block heading %}帳號設定{% endblock %}
+{% block page_body %}
+{% raw %}
+<div id="app" v-cloak>
+  <p v-if="actions.state.formError" class="auth-form-error" role="alert">{{ actions.state.formError }}</p>
+
+  <dl class="account-list">
+    <dt>顯示名稱</dt>
+    <dd>{{ user.display_name }}</dd>
+    <dt>電子郵件</dt>
+    <dd>{{ user.email }}</dd>
+    <dt>會員等級</dt>
+    <dd><span class="tier-badge">{{ tierLabel }}</span></dd>
+    <dt>信箱驗證</dt>
+    <dd>{{ user.email_verified ? '已驗證' : '尚未驗證' }}</dd>
+    <dt>登入方式</dt>
+    <dd>{{ methods }}</dd>
+  </dl>
+
+  <div v-if="verificationRequired && !user.email_verified" class="auth-notice" role="status">
+    <p>您的信箱尚未驗證，驗證完成前無法使用客服。請到信箱點擊驗證連結；找不到信的話，可以重新寄送。</p>
+    <button type="button" class="ui-btn" :disabled="actions.state.submitting" :aria-busy="actions.state.submitting ? 'true' : 'false'" @click="resend">重新寄送驗證信</button>
+  </div>
+
+  <section class="account-section" aria-labelledby="security-title">
+    <h2 id="security-title">安全性</h2>
+    <div class="auth-actions">
+      <button v-if="user.has_password" type="button" class="ui-btn" @click="changePasswordOpen = true">變更密碼</button>
+      <button type="button" class="ui-btn" @click="logoutAllOpen = true">登出所有裝置</button>
+      <button type="button" class="ui-btn" :disabled="actions.state.submitting" @click="logout">登出</button>
+    </div>
+    <p v-if="!user.has_password" class="auth-hint">目前只使用 Google 登入，沒有設定密碼。<span v-if="verificationRequired">如需改用密碼登入，請在登入頁使用「忘記密碼」設定。</span></p>
+  </section>
+
+  <ui-modal v-model="logoutAllOpen" title="登出所有裝置" status-code="CONFIRM_REQUIRED" confirm-text="登出所有裝置" @confirm="logoutAll">
+    <p>這會讓您在所有裝置（包含目前這一台）上的登入全部失效，之後需要重新登入。</p>
+  </ui-modal>
+
+  <ui-modal v-model="changePasswordOpen" title="變更密碼" status-code="PASSWORD_CHANGE" confirm-text="變更密碼"
+            :close-on-confirm="false" @confirm="changePassword" @close="resetPasswordForm">
+    <form @submit.prevent="changePassword" novalidate>
+      <p v-if="passwordForm.state.formError" class="auth-form-error" role="alert">{{ passwordForm.state.formError }}</p>
+      <div class="auth-field">
+        <label class="auth-label" for="current_password">目前的密碼</label>
+        <input id="current_password" name="current_password" type="password" class="auth-input" autocomplete="current-password" required
+               v-model="passwordForm.values.current_password" :disabled="passwordForm.state.submitting"
+               :aria-invalid="passwordForm.fieldErrors.current_password ? 'true' : 'false'" :aria-describedby="passwordForm.fieldErrors.current_password ? 'current_password-error' : null">
+        <p v-if="passwordForm.fieldErrors.current_password" id="current_password-error" class="auth-error" role="alert">{{ passwordForm.fieldErrors.current_password }}</p>
+      </div>
+      <div class="auth-field">
+        <label class="auth-label" for="new_password">新密碼（10 至 128 字）</label>
+        <input id="new_password" name="new_password" type="password" class="auth-input" autocomplete="new-password" minlength="10" maxlength="128" required
+               v-model="passwordForm.values.new_password" :disabled="passwordForm.state.submitting"
+               :aria-invalid="passwordForm.fieldErrors.new_password ? 'true' : 'false'" :aria-describedby="passwordForm.fieldErrors.new_password ? 'new_password-error' : null">
+        <p v-if="passwordForm.fieldErrors.new_password" id="new_password-error" class="auth-error" role="alert">{{ passwordForm.fieldErrors.new_password }}</p>
+      </div>
+      <p class="auth-hint">變更成功後，其他裝置上的登入會被登出。</p>
+      <!-- 表單有兩個欄位又沒有送出按鈕時，瀏覽器不會在按 Enter 時送出；這顆隱藏的按鈕讓 Enter 可以送出 -->
+      <button type="submit" hidden tabindex="-1" aria-hidden="true"></button>
+    </form>
+  </ui-modal>
+
+  <ui-toast-region></ui-toast-region>
+</div>
+{% endraw %}
+{% endblock %}
+{% block page_script %}
+  <script src="{{ url_for('static', filename='js/auth/account.js') }}"></script>
+{% endblock %}

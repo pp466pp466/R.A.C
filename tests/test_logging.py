@@ -20,27 +20,6 @@ LEAKS = ["hunter2", "cookiesecret", "bearer-token-xyz", "S3cretPw", "alice@examp
 
 
 @pytest.fixture()
-def log_lines():
-    """把 JSON 日誌導到記憶體，回傳讀取已解析日誌行的函式。"""
-    stream = io.StringIO()
-    handler = logging.StreamHandler(stream)
-    handler.setFormatter(JsonFormatter())
-    handler.addFilter(RequestContextFilter())
-    root = logging.getLogger()
-    previous_level = root.level
-    root.addHandler(handler)
-    root.setLevel(logging.INFO)
-
-    def read() -> list[dict]:
-        return [json.loads(line) for line in stream.getvalue().splitlines() if line.strip()]
-
-    read.raw = stream.getvalue  # type: ignore[attr-defined]
-    yield read
-    root.removeHandler(handler)
-    root.setLevel(previous_level)
-
-
-@pytest.fixture()
 def app():
     application = create_app(load_config(environ={"APP_ENV": "testing"}))
 

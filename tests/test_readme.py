@@ -123,6 +123,37 @@ def test_readme_container_section_matches_the_actual_files_and_states_the_sql_se
     assert "沒有" in section and "慢請求" in section
 
 
+def test_readme_member_auth_endpoint_tables_list_exactly_the_registered_routes():
+    """README 的端點與頁面表格必須與程式實際註冊的路由完全一致（多寫或漏寫都會失敗）。"""
+    from app import create_app
+    from app.config import load_config
+
+    section = readme_section("會員驗證（C-2）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/[^`]*`(、`/[^`]*`)*", cells[0]):
+            methods = {m.strip() for m in cells[1].split("、")} if cells[1] in ("GET", "POST") else {"GET"}
+            for path in re.findall(r"`(/[^`]*)`", cells[0]):
+                documented.add((path, "POST" if "POST" in methods else "GET"))
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/auth/") or rule.endpoint.startswith("auth_pages."):
+            for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
+                actual.add((rule.rule, method))
+    assert len(actual) >= 20, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+
+
+def test_readme_documents_the_browser_acceptance_and_the_known_limitations():
+    section = readme_section("會員驗證（C-2）")
+    for needle in ("84 / 84", "v-cloak", "殘留風險", "帳本", "keep_changes_on_error", "草稿", "token_version"):
+        assert needle in section, f"README 會員驗證章節缺少：{needle}"
+    assert "keep_changes_on_error" in (PROJECT_ROOT / "app" / "db" / "session.py").read_text(encoding="utf-8")
+
+
 def test_readme_states_that_env_must_never_be_committed():
     section = readme_section("環境變數與機密")
     assert "絕不可提交" in section

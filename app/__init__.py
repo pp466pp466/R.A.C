@@ -5,29 +5,66 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 from flask import Flask
 from werkzeug.middleware.proxy_fix import ProxyFix
 
+from app.cli import register_cli
 from app.config import DEV_TOOL_ENVS, AppConfig, load_config
 from app.controllers.api_controller import api_bp
+from app.controllers.auth_api_controller import auth_api_bp
+from app.controllers.auth_page_controller import auth_pages_bp
 from app.controllers.errors import register_error_handlers
 from app.controllers.health_controller import health_bp
 from app.controllers.page_controller import page_bp
 from app.controllers.site_controller import site_bp
 from app.db.dialect import create_engine_for
 from app.db.session import init_session
+from app.models.base import utcnow
 from app.observability.json_logging import configure_logging
 from app.observability.request_logging import init_request_logging
+from app.runtime import Clock
+from app.security.cookies import SignedCookies, flask_session_settings
+from app.security.cache_headers import init_no_store
+from app.security.csrf import init_csrf
+from app.security.session import init_login_session
+from app.services.google_oidc import GoogleOidcClient
+from app.services.mail_sender import SmtpMailSender
+
+# 請求本文上限（API 一律是小型 JSON；超過回 413）
+MAX_REQUEST_BYTES = 64 * 1024
 
 
-def create_app(config: AppConfig | None = None) -> Flask:
+def create_app(
+    config: AppConfig | None = None,
+    *,
+    mail_sender: Any | None = None,
+    identity_provider: Any | None = None,
+    clock: Clock | None = None,
+) -> Flask:
+    """建立應用程式實例。
+
+    後三個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘）；
+    正式執行時省略即可，由設定建立真實的實作。
+    """
     cfg = config or load_config()
     configure_logging(cfg.log_level)
 
     app = Flask(__name__)
-    app.config.update(SECRET_KEY=cfg.secret_key.reveal(), DEBUG=cfg.debug)
+    app.config.update(SECRET_KEY=cfg.secret_key.reveal(), DEBUG=cfg.debug, MAX_CONTENT_LENGTH=MAX_REQUEST_BYTES)
+    app.config.update(flask_session_settings(cfg))
     app.json.ensure_ascii = False  # Flask 3 起用此屬性；回應中的繁體中文不轉成 \uXXXX
     app.extensions["app_config"] = cfg
+    app.extensions["clock"] = clock or utcnow
+    # 寄信器：測試可注入假的；否則在設定了寄信參數（信箱驗證開啟）時以設定建立真實的 SMTP 寄信器
+    app.extensions["mail_sender"] = mail_sender or (SmtpMailSender(cfg.mail) if cfg.mail else None)
+    # Google 身分供應商：測試可注入假的；否則在設定了 Google 用戶端時以設定建立真實的 OIDC 用戶端
+    app.extensions["identity_provider"] = identity_provider or (
+        GoogleOidcClient(cfg.google, redirect_uri=f"{cfg.base_url}/auth/google/callback") if cfg.google else None
+    )
+    app.extensions["signed_cookies"] = SignedCookies(cfg, app.extensions["clock"])
+    init_login_session(app)
 
     if cfg.trust_proxy:
         # 僅 staging 與 production：信任入口層（HTTPS 終止端）轉送的協定與主機標頭
@@ -37,9 +74,13 @@ def create_app(config: AppConfig | None = None) -> Flask:
     # 記錄到的才是最終狀態碼（例如提交失敗後變成的 500）
     init_request_logging(app)
     init_session(app, create_engine_for(cfg.database_url.reveal()))
+    init_csrf(app)  # 在 init_session 之後：被拒絕的請求仍會走完 after_request，日誌才記得到最終狀態碼
+    init_no_store(app)
 
     app.register_blueprint(page_bp)
+    app.register_blueprint(auth_pages_bp)
     app.register_blueprint(api_bp)
+    app.register_blueprint(auth_api_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(site_bp)
     if cfg.env in DEV_TOOL_ENVS:
@@ -47,4 +88,5 @@ def create_app(config: AppConfig | None = None) -> Flask:
 
         app.register_blueprint(dev_bp)
     register_error_handlers(app)
+    register_cli(app)
     return app

@@ -1,0 +1,80 @@
+{% extends "auth/auth_base.html" %}
+{% block title %}註冊{% endblock %}
+{% block status_code %}AUTH_REGISTER{% endblock %}
+{% block heading %}註冊{% endblock %}
+{% block page_body %}
+{% raw %}
+<div id="app" v-cloak>
+  <div v-if="done">
+    <p class="auth-notice" role="status">{{ done }}</p>
+    <div class="auth-actions">
+      <a class="ui-btn ui-btn--primary" href="/login">前往登入</a>
+    </div>
+  </div>
+
+  <template v-else>
+    <form @submit.prevent="submit" novalidate>
+      <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
+
+      <div class="auth-field">
+        <label class="auth-label" for="email">電子郵件</label>
+        <input id="email" name="email" type="email" class="auth-input" autocomplete="email" inputmode="email" required
+               v-model.trim="form.values.email" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.email ? 'true' : 'false'" :aria-describedby="form.fieldErrors.email ? 'email-error' : null">
+        <p v-if="form.fieldErrors.email" id="email-error" class="auth-error" role="alert">{{ form.fieldErrors.email }}</p>
+      </div>
+
+      <div class="auth-field">
+        <label class="auth-label" for="display_name">顯示名稱</label>
+        <input id="display_name" name="display_name" type="text" class="auth-input" autocomplete="nickname" maxlength="50" required
+               v-model.trim="form.values.display_name" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.display_name ? 'true' : 'false'" :aria-describedby="form.fieldErrors.display_name ? 'display_name-error' : null">
+        <p v-if="form.fieldErrors.display_name" id="display_name-error" class="auth-error" role="alert">{{ form.fieldErrors.display_name }}</p>
+      </div>
+
+      <div class="auth-field">
+        <label class="auth-label" for="password">密碼（10 至 128 字）</label>
+        <input id="password" name="password" type="password" class="auth-input" autocomplete="new-password" minlength="10" maxlength="128" required
+               v-model="form.values.password" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.password ? 'true' : 'false'" :aria-describedby="form.fieldErrors.password ? 'password-error' : null">
+        <p v-if="form.fieldErrors.password" id="password-error" class="auth-error" role="alert">{{ form.fieldErrors.password }}</p>
+      </div>
+
+      <label class="auth-check" for="accept_terms">
+        <input id="accept_terms" name="accept_terms" type="checkbox" v-model="form.values.accept_terms" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.accept_terms ? 'true' : 'false'">
+        <span>我同意<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a></span>
+      </label>
+      <p v-if="form.fieldErrors.accept_terms" class="auth-error" role="alert">{{ form.fieldErrors.accept_terms }}</p>
+
+      <div class="auth-actions">
+        <button type="submit" class="ui-btn ui-btn--primary" :disabled="form.state.submitting" :aria-busy="form.state.submitting ? 'true' : 'false'">
+          {{ form.state.submitting ? '送出中…' : '註冊' }}
+        </button>
+      </div>
+    </form>
+
+    <template v-if="googleEnabled">
+      <div class="auth-divider"><span>或</span></div>
+      <p v-if="google.fieldErrors.accept_terms" class="auth-error" role="alert">{{ google.fieldErrors.accept_terms }}</p>
+      <p v-if="google.state.formError" class="auth-form-error" role="alert">{{ google.state.formError }}</p>
+      <div class="auth-actions">
+        <button type="button" class="ui-btn" :disabled="google.state.submitting" :aria-busy="google.state.submitting ? 'true' : 'false'" @click="signUpWithGoogle">
+          {{ google.state.submitting ? '前往 Google…' : '使用 Google 註冊' }}
+        </button>
+      </div>
+      <p class="auth-hint">使用 Google 註冊同樣需要勾選上方的同意條款。</p>
+    </template>
+
+    <div class="auth-links">
+      <a href="/login">已經有帳號？登入</a>
+    </div>
+  </template>
+
+  <ui-toast-region></ui-toast-region>
+</div>
+{% endraw %}
+{% endblock %}
+{% block page_script %}
+  <script src="{{ url_for('static', filename='js/auth/register.js') }}"></script>
+{% endblock %}
