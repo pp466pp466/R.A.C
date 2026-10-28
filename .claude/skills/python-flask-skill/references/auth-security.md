@@ -3,10 +3,10 @@
 對應 AGENTS.md 第 10 節。
 
 - 登入與 session：採簽章 session cookie（HttpOnly、Secure、SameSite=Lax；正式環境使用 __Host- 前綴，存活 7 天），內容只含 user_id 與 token_version；不使用 JWT。改密碼、登出所有裝置或停權時使 token_version 加 1，以撤銷既有 session。
-- 密碼：以 Argon2id 雜湊，長度限制 10 至 128 字，不強制字元組合。
+- 密碼：以 Argon2id 雜湊，長度限制 8 至 128 字，不強制字元組合。
 - 帳號唯一：一組 email 只能對應一個帳號，email 正規化為小寫後唯一；判斷是否重複時，gmail.com 與 googlemail.com 的信箱另去除「.」與「+標籤」後比對（email_canonical 欄位，同樣唯一），寄信仍使用原始地址。Google 登入與密碼登入共用同一帳號（見合併規則）。帳號刪除後，同一信箱可重新註冊。
 - 註冊與驗證：以信箱加密碼註冊後為 pending_verification，須驗證信箱才可使用客服對話。信箱驗證與重設密碼信件由環境變數 EMAIL_VERIFICATION_REQUIRED 控制：development、testing、staging 可設為 false，此時註冊後直接為 active、email_verified_at 保持空值，忘記密碼功能一併停用（不得以日誌輸出權杖替代寄信）；production 必須為 true 並已設定寄信服務，否則啟動失敗。註冊時須勾選同意服務條款與隱私權政策，並記錄 terms_version 與 terms_accepted_at。驗證與重設密碼的權杖為 32 位元組隨機值，資料庫只存其 SHA-256 雜湊，單次使用；驗證信 24 小時、重設信 1 小時失效。連結的 GET 只顯示確認頁，由 POST 完成動作。
-- 年齡確認：註冊（含 Google 首次註冊）須以與同意條款分開的勾選確認年滿 18 歲，並記錄 age_confirmed_at 與 age_policy_version，不蒐集生日、年齡或證件。尚未確認的帳號可登入與管理帳號，但不得使用任何會呼叫 Gemini 的功能，由 AccessPolicy 判斷並回 403 與代碼 age_confirmation_required；管理員與各會員等級不豁免。既有帳號於帳號設定頁補確認。原因：Gemini API 條款要求使用者年滿 18 歲，且不得用於可能被未滿 18 歲者使用的應用。
+- 年齡確認：註冊（含 Google 首次註冊）須填寫生日，並從下拉式選項選擇年齡區間；兩者皆為使用者自行聲明，不蒐集證件、不核實。伺服器由生日計算年齡：未滿 13 歲者不得註冊（不建立帳號，也不保存其填寫的生日）；與所選年齡區間不一致時，一律回覆通用的「資料有誤」訊息並要求重新註冊，不建立帳號。通過後記錄 birth_date、age_range、age_confirmed_at 與 age_policy_version，並可另記錄當時是否已滿 18 歲的結果（僅供紀錄）；是否已滿 18 歲一律由 birth_date 於當下計算，不以儲存的結果判斷，使用者滿 18 歲後限制自動解除。生日與年齡區間不傳送至 Gemini；管理員後台只提供年齡區間的彙總統計，不顯示個別使用者的生日。13 至 17 歲者可以使用本平台（含 AI 功能），但只能使用安全模式（見第 7 節）並在介面顯示提示；已滿 18 歲者不受此限。尚未完成年齡確認的帳號（例如由管理員指令建立的帳號）可登入與管理帳號，但不得使用任何會呼叫 Gemini 的功能，由 AccessPolicy 判斷並回 403 與代碼 age_confirmation_required；管理員與各會員等級不豁免；這類帳號於帳號設定頁補填。原因與前提：Gemini API 條款要求使用者年滿 18 歲，且不得用於可能被未滿 18 歲者使用的應用，因此「13 至 17 歲者可使用」是以 Google 同意為前提的設計；Google 不同意時，本條須修訂為未滿 18 歲者不得使用。
 - 防帳號列舉：註冊、忘記密碼與登入失敗一律回應相同的通用訊息，不洩漏帳號是否存在。重設密碼成功後 token_version 加 1，並寄通知信。
 - Google 登入：採 Authorization Code 流程搭配 PKCE、state 與 nonce；須驗證 ID token 的 iss、aud、exp、nonce，且要求 email_verified 為真；開發與正式環境使用不同的 OAuth 用戶端。
 - 同信箱帳號合併：以 email_verified 為前提。既有本機帳號的信箱已驗證者，直接綁定 Google 身分；未驗證者，清除其未驗證的密碼憑證後綁定並視為已驗證。以信箱註冊時若該信箱已有 Google 帳號，不建立新帳號。

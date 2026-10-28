@@ -29,7 +29,17 @@ SYNCED_RULES = [
     (6, "RPG 的「當前世界狀態」包含在場 NPC 的角色卡切片", "references/llm-streaming.md"),
     (7, "NPC 角色卡：NPC 的特質（表層或隱藏）、弧線階段", "references/business-encoding.md"),
     (7, "內容分級：存檔帶 content_tier 與 sexual_content_level（0 至 3）旗標", "references/business-encoding.md"),
-    (10, "年齡確認：註冊（含 Google 首次註冊）須以與同意條款分開的勾選確認年滿 18 歲", "references/auth-security.md"),
+    # 2026-10-28 後續修訂：年齡確認改為生日加年齡區間，未滿 13 歲不得註冊，13 至 17 歲只能使用安全模式
+    (7, "未滿 18 歲者一律為安全模式，sexual_content_level 固定為 0", "references/business-encoding.md"),
+    (7, "成年者由玩家主動在 sexual_content_level 1（浪漫、曖昧）與 2（感官但不露骨）之間切換，預設從 0 開始", "references/business-encoding.md"),
+    (7, "系統只提醒玩家可切換分級，不得自動調高", "references/business-encoding.md"),
+    (10, "年齡確認：註冊（含 Google 首次註冊）須填寫生日，並從下拉式選項選擇年齡區間", "references/auth-security.md"),
+    (10, "未滿 13 歲者不得註冊（不建立帳號，也不保存其填寫的生日）", "references/auth-security.md"),
+    (10, "13 至 17 歲者可以使用本平台（含 AI 功能），但只能使用安全模式", "references/auth-security.md"),
+    (10, "管理員後台只提供年齡區間的彙總統計，不顯示個別使用者的生日", "references/auth-security.md"),
+    (11, "連續 12 個月未登入即直接刪除（不經 7 天寬限期", "references/privacy-observability.md"),
+    (11, "清除連續 12 個月未登入的帳號", "references/privacy-observability.md"),
+    (11, "以去識別的統計方式了解用戶群", "references/privacy-observability.md"),
     (10, "玩家撰寫的個性、角色與世界文字同樣視為使用者文字", "references/auth-security.md"),
     (10, "待審的性格原型草案（僅含去識別後的草案內容，不含對話全文）", "references/auth-security.md"),
     (11, "性格原型草案：草案含玩家衍生文字，視為個資", "references/privacy-observability.md"),
@@ -47,6 +57,45 @@ def test_rule_is_in_the_right_agents_section_and_mirrored_verbatim_in_the_skill(
     assert fragment in agents_section(section), f"AGENTS.md 第 {section} 節缺少：{fragment}"
     skill_text = (SKILL_DIR / skill_file).read_text(encoding="utf-8-sig")
     assert fragment in skill_text, f"skill 的 {skill_file} 與 AGENTS.md 不一致，缺少：{fragment}"
+
+
+def test_every_bullet_of_section_10_is_mirrored_verbatim_in_the_auth_security_reference():
+    """第 10 節的 reference 是完整的逐字鏡像（其他章節的 reference 是摘要，不適用）。
+
+    上面的片段比對只能證明「某一段原文還在」；條文改了其他字（例如密碼長度、年齡確認的做法）卻沒同步時，
+    片段比對不會失敗。這裡逐條、整行比對，AGENTS.md 這一節任何一條被改動，鏡像沒跟著改就會失敗。
+    """
+    mirror = (SKILL_DIR / "references" / "auth-security.md").read_text(encoding="utf-8-sig")
+    mirror_lines = {line.rstrip() for line in mirror.split("\n")}
+    bullets = [line.rstrip() for line in agents_section(10).split("\n") if re.match(r"\s*- ", line)]
+    assert len(bullets) >= 12, "沒有讀到預期數量的條文，比對可能是空洞的"
+    stale = [line[:60] for line in bullets if line not in mirror_lines]
+    assert not stale, f"references/auth-security.md 沒有與 AGENTS.md 第 10 節逐字一致：{stale}"
+
+
+@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作"])
+def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
+    """第 11 節的這四條在 reference 裡是逐字鏡像（「絕不記錄」在 reference 是摘要版，另以片段檢查）。"""
+    agents_lines = [line.strip() for line in agents_section(11).split("\n") if line.strip().startswith(key)]
+    assert len(agents_lines) == 1, key
+    mirror = (SKILL_DIR / "references" / "privacy-observability.md").read_text(encoding="utf-8-sig")
+    assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"privacy-observability.md 沒有逐字鏡像：{key}"
+
+
+def test_the_section_7_content_rating_bullet_is_mirrored_verbatim():
+    agents_line = next(line.strip() for line in agents_section(7).split("\n") if line.strip().startswith("- 內容分級："))
+    mirror = (SKILL_DIR / "references" / "business-encoding.md").read_text(encoding="utf-8-sig")
+    assert agents_line in {line.strip() for line in mirror.split("\n")}
+
+
+def test_the_birthday_and_age_range_are_never_logged_and_the_old_checkbox_rule_is_gone_everywhere():
+    mirror = (SKILL_DIR / "references" / "privacy-observability.md").read_text(encoding="utf-8-sig")
+    assert "使用者 email、生日與年齡區間、使用者訊息全文" in agents_section(11)
+    assert "使用者 email、生日與年齡區間、使用者訊息全文" in mirror
+    for stale in ("以與同意條款分開的勾選確認年滿 18 歲", "不蒐集生日、年齡或證件", "既有帳號於帳號設定頁補確認"):
+        assert stale not in AGENTS, f"AGENTS.md 仍有已被取代的年齡規則：{stale}"
+        for path in SKILL_DIR.rglob("*.md"):
+            assert stale not in path.read_text(encoding="utf-8-sig"), f"{path.name} 仍有已被取代的年齡規則：{stale}"
 
 
 def test_skill_core_rules_mention_the_new_rules_and_checklist_items():
