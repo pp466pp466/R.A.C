@@ -55,7 +55,7 @@ ENTITY_ENUMS: dict[str, tuple[str, ...]] = {
 
 # ---- 長度與門檻 ------------------------------------------------------------------------
 
-MAX_REPLY_CHARS = 1000            # 驗證條件；350 至 1000 字是提示詞的「目標」，下限不是驗證條件（見 cs-nlp-contract）
+MAX_REPLY_CHARS = 1000            # 驗證條件；客服只要求精準回答，沒有長度下限（350 至 1000 字屬於 RPG 劇情，見 docs/RPG.md T-13）
 MAX_TOPIC_CHARS = 50
 MAX_SUGGESTED_ACTIONS = 4
 MAX_ACTION_LABEL_CHARS = 12

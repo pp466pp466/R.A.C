@@ -30,3 +30,15 @@ schema: spec-driven
 #     archive:
 #       guidance:
 #         - Summarize the archive outcome before finishing
+
+# 設計文件的維護提醒（docs/README.md 有對照表；技能：.claude/skills/design-docs-sync/SKILL.md）
+rules:
+  tasks:
+    - 若這個 change 影響架構、分層、資料表、migration、端點、設定、流程或前端模組，tasks 的最後一項必須是「更新 docs/ 對應的設計文件（對照表見 docs/README.md），並讓 tests/test_design_docs.py 通過」。
+operations:
+  apply:
+    guidance:
+      - 勾選最後一項任務之前，依 docs/README.md 的對照表更新受影響的設計文件（圖、表、最後更新、對應 change），並執行 tests/test_design_docs.py。
+  archive:
+    guidance:
+      - 封存前確認設計文件已隨這個 change 更新；封存後更新 docs/路線圖-roadmap.md 的狀態與日期，並複查各設計文件標頭的「對應 change」。

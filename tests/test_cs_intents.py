@@ -166,7 +166,7 @@ def test_exactly_one_thousand_characters_pass_and_one_more_fails():
 
 
 @pytest.mark.parametrize("length", [4, 40, 200, 349, 350, 999])
-def test_short_replies_are_valid_because_the_lower_bound_is_a_prompt_goal_not_a_validation_rule(length):
+def test_short_replies_are_valid_because_there_is_no_lower_bound_for_customer_service_replies(length):
     assert parse(reply(reply_text="答" * length))["reply_text"] == "答" * length
 
 

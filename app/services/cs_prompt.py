@@ -30,9 +30,6 @@ from app.services.password_hasher import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGT
 MARKER_LABEL = b"cs-prompt-marker-v1"
 MARKER_LENGTH = 24
 
-# 實質回答的長度目標（使用者決定：350 至 1000 字，讓對話更完整生動）。只是提示詞的「目標」；驗證只守上限。
-REPLY_TARGET_MIN_CHARS = 350
-
 # ---- 模型失敗時顯示的固定文案（逐字符合 cs-nlp-contract 規格）-----------------------------------
 
 DEGRADED_VALIDATION_TEXT = "抱歉，我暫時無法正確處理您的問題，請稍後再試，或換個方式描述。"
@@ -108,17 +105,12 @@ _INSTRUCTION_TEMPLATE = """\
 <<FACTS>>
 不在上面的資訊你就是不知道：不得編造平台沒有的功能、數字、網址、流程或承諾，也不要猜測；不確定時直接說明目前沒有這項資料，並引導使用者在對話中留下意見。
 
-## 回覆長度與品質
-- 針對平台資訊的實質回答（intent 為 general_qa、membership_info、account_help、complaint_feedback），目標是 <<MIN_CHARS>> 至 <<MAX_CHARS>> 字：完整、有條理、語氣親切生動。請依下列結構撰寫，每一部分都要有實際內容：
-  1. 開場：用一兩句話表示理解使用者的處境或問題，不要只回「好的」。
-  2. 直接回答：先把答案講清楚，並引用「平台資料」中的具體事實與數字。
-  3. 詳細說明：把答案展開——分步驟說明操作方式、解釋原因，必要時舉一個貼近使用者情境的例子。
-  4. 注意事項：補充容易被忽略的限制、時效或例外（只能來自「平台資料」）。
-  5. 下一步：邀請使用者接著提問，並說明你還能協助哪些相關的事。
-- 篇幅要來自把「平台資料」中已有的相關事實說清楚、說完整，而不是來自平台沒有的內容或重複的敘述。相關資料真的很少時，就把能說的說完整，並明說目前沒有其他資料；絕不為了湊字數而編造。
-- 問候、結束語、unknown、human_handoff 可以簡短。
+## 回覆原則
+- 精準回答：直接回答使用者問的事，只說與問題有關的事實。簡單的問題一兩句話就夠，需要操作步驟時才分點，通常一小段即可；沒有字數要求，寫短是正確的。
+- 不要為了顯得完整而重複使用者的問題、加客套話或延伸到使用者沒問的事；開場不要每次都用同一句型。
+- 只依「平台資料」回答，不得編造平台沒有的功能、數字、網址或流程；沒有資料就直說，並引導使用者留下意見。
 - reply_text 一律是純文字：不要使用 Markdown、HTML、程式碼區塊、表格或連結標記；需要分點時用「1.」「2.」或換行。
-- reply_text 絕對不可超過 <<MAX_CHARS>> 字。
+- reply_text 絕對不可超過 <<MAX_CHARS>> 字（正常情況下遠少於此）。
 
 ## 輸出格式
 只輸出一個 JSON 物件，不要加任何說明或程式碼區塊標記。欄位固定：
@@ -156,7 +148,6 @@ def build_system_instruction(marker: str) -> str:
     replacements = {
         "<<FACTS>>": "\n".join(f"- {fact}" for fact in _platform_facts()),
         "<<INTENT_LIST>>": _intent_list(),
-        "<<MIN_CHARS>>": str(REPLY_TARGET_MIN_CHARS),
         "<<MAX_CHARS>>": str(MAX_REPLY_CHARS),
         "<<TOPIC_CHARS>>": str(MAX_TOPIC_CHARS),
         "<<TIERS>>": "、".join(ENTITY_ENUMS["membership_tier"]),
