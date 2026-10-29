@@ -39,6 +39,9 @@ SYNCED_RULES = [
     (10, "管理員後台只提供年齡區間的彙總統計，不顯示個別使用者的生日", "references/auth-security.md"),
     (11, "連續 12 個月未登入即直接刪除（不經 7 天寬限期", "references/privacy-observability.md"),
     (11, "清除連續 12 個月未登入的帳號", "references/privacy-observability.md"),
+    # 2026-10-29：閒置帳號清除不納入管理員（age-verification-birthdate 的假設，經使用者確認後寫入規範）
+    (11, "角色為 admin 的帳號不納入，否則唯一的管理員閒置一年就會消失", "references/privacy-observability.md"),
+    (11, "閒置帳號清除不納入管理員", "references/privacy-observability.md"),
     (11, "以去識別的統計方式了解用戶群", "references/privacy-observability.md"),
     (10, "玩家撰寫的個性、角色與世界文字同樣視為使用者文字", "references/auth-security.md"),
     (10, "待審的性格原型草案（僅含去識別後的草案內容，不含對話全文）", "references/auth-security.md"),
