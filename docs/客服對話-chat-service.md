@@ -1,6 +1,6 @@
 # 客服對話流程
 
-> 狀態：已實作（額度、限流、全站用量上限、安全過濾累計暫停由 C-4a `usage-limits` 實作；管理員後台看得到暫停紀錄是 C-4b） ｜ 最後更新：2026-10-30 ｜ 對應 change：cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 5、6、7、10 節
+> 狀態：已實作（額度、限流、全站用量上限、安全過濾累計暫停由 C-4a `usage-limits` 實作；管理員後台看得到暫停紀錄是 C-4b） ｜ 最後更新：2026-10-29 ｜ 對應 change：cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 5、6、7、10 節
 
 本文件說明會員與客服 AI 的對話如何被建立、送出、重送、摘要與同步。模型呼叫本身（重試、備援、斷路、帳本）見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)；瀏覽器端見 [前端結構-frontend.md](前端結構-frontend.md)。
 

@@ -10,7 +10,7 @@
 
 Revision ID: 0006_usage_indexes
 Revises: 0005_chat_core
-Create Date: 2026-10-30
+Create Date: 2026-10-29
 """
 from alembic import op
 

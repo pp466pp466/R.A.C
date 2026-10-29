@@ -1,6 +1,6 @@
 # 路線圖與待決定事項
 
-> 狀態：持續更新 ｜ 最後更新：2026-10-30 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
+> 狀態：持續更新 ｜ 最後更新：2026-10-29 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
 
 本文件說明各個 change 的順序、相依與目前狀態，以及尚未決定的事項。細節與理由在 report.md 與 RPG.md；這裡只維護「現在在哪裡、下一步是什麼」。
 
@@ -13,8 +13,8 @@ flowchart LR
     AG["age-gate<br/>年齡閘門（共用層）"]:::done
     AB["age-verification-birthdate<br/>生日與年齡區間、閒置帳號清除"]:::done
     C3["C-3 cs-chat-core<br/>客服對話核心與模型呼叫層"]:::done
-    C4A["C-4a usage-limits<br/>額度、限流、全站用量上限、安全過濾暫停"]:::active
-    C4B["C-4b admin-console<br/>/admin、停權、調整等級、稽核"]:::plan
+    C4A["C-4a usage-limits<br/>額度、限流、全站用量上限、安全過濾暫停"]:::done
+    C4B["C-4b admin-console<br/>/admin、停權、調整等級、稽核"]:::active
     C4C["C-4c privacy-lifecycle<br/>刪除帳號、匯出、保留期限清理、告警"]:::plan
     C5["C-5 production-launch<br/>部署、入口層、備份演練、營運手冊"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
@@ -37,7 +37,7 @@ flowchart LR
     classDef plan fill:#1c1e23,stroke:#2a2d34,color:#8a8f99
 ```
 
-圖例：深綠＝已封存；琥珀＝實作中；灰＝規劃中。
+圖例：深綠＝已封存；琥珀＝下一個或實作中；灰＝規劃中。
 
 | change | 狀態 | 日期／提交 | 說明 |
 |---|---|---|---|
@@ -46,8 +46,8 @@ flowchart LR
 | age-gate | 已封存 | 2026-10-28 | 年齡閘門：未確認年齡不得使用任何會呼叫模型的功能 |
 | age-verification-birthdate | 已封存 | 2026-10-29 | 以生日加年齡區間取代單一勾選；13 至 17 歲固定安全模式；閒置 12 個月帳號清除 |
 | cs-chat-core（C-3） | 已封存 | 2026-10-29（實作 `3cd6284`；封存時同步 6 個新能力、修改 4 個既有能力） | 客服對話、模型呼叫層、補償式摘要、`/cs` 頁面；新增主規格 `cs-conversations`、`cs-conversation-memory`、`cs-nlp-contract`、`cs-chat-ui`、`llm-provider`、`llm-structured-calls`，並修改 `access-control`、`service-observability`、`app-configuration`、`application-layering` |
-| usage-limits（C-4a） | 實作完成，待封存 | 2026-10-30 提案並實作（pytest 3782、Node 142、瀏覽器驗收 30 項，本機資料庫已升級到 `0006`） | 原 C-4（usage-safety-ops）依使用者決定拆成三個。本 change：每位使用者依等級的每分鐘／每日／對話數限制、全站每日 token 與呼叫次數上限（依 `gemini-3.5-flash-lite` 免費層 15 RPM、25 萬 TPM、500 RPD）、安全過濾累計暫停、額度顯示。**客服對外開放前至少要完成 C-4a**；完成後仍缺 C-4b、C-4c |
-| admin-console（C-4b） | 規劃中 | — | `/admin` 與 `/api/admin/*`：停權與解除、調整會員等級、查看用量與意見回饋、被標記對話、刪除違規內容、`admin_audit_logs`、高風險操作重輸密碼 |
+| usage-limits（C-4a） | 已封存 | 2026-10-29（實作 `86bcbc8`；封存時新增 3 個主規格 `cs-usage-limits`、`global-usage-budget`、`cs-safety-suspension`，補充 `cs-chat-ui`、`app-configuration`、`service-observability`） | 原 C-4（usage-safety-ops）依使用者決定拆成三個。本 change：每位使用者依等級的每分鐘／每日／對話數限制、全站每日 token 與呼叫次數上限（依 `gemini-3.5-flash-lite` 免費層 15 RPM、25 萬 TPM、500 RPD）、安全過濾累計暫停、額度顯示。pytest 3782、Node 142、瀏覽器驗收 30 項，本機資料庫已升級到 `0006`。**客服對外開放前至少要完成 C-4a（已完成）**，仍缺 C-4b、C-4c |
+| admin-console（C-4b） | 規劃中（下一個） | — | `/admin` 與 `/api/admin/*`：停權與解除、調整會員等級、查看用量與意見回饋、被標記對話、刪除違規內容、`admin_audit_logs`、高風險操作重輸密碼 |
 | privacy-lifecycle（C-4c） | 規劃中 | — | 使用者自助刪除帳號（`deletion_pending`、7 天寬限）、匯出個人資料、保留期限清理、監控與告警管道 |
 | production-launch（C-5） | 規劃中 | — | 入口層、HTTPS、備份與還原演練、營運手冊；上線前要重新確認供應商條款與年齡規則 |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |

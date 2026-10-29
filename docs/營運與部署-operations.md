@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（正式部署、入口層與備份演練由 C-5、告警由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（正式部署、入口層與備份演練由 C-5、告警由 C-4c 實作） ｜ 最後更新：2026-10-29 ｜ 對應 change：platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 9、11 節
 
 本文件說明設定如何依環境載入、容器如何建置與執行、migration 的部署步驟、日誌與事件的規則、維運指令，以及測試與驗收的分層。逐項的環境變數說明在 README 的「環境變數與機密」與 `.env.example`。
 
@@ -114,7 +114,7 @@ flowchart BT
     U --> A --> J --> B --> C --> R
 ```
 
-最近一次的數字（2026-10-30，C-4a）：pytest 3782 項、Node 142 項、瀏覽器驗收 C-3 的 64 項加 C-4a 的 30 項；容器驗收 95 項是 C-3 時的結果，C-4a 沒有重跑。細節與已知限制記在 README 的「客服對話（C-3）」與「用量限制（C-4a）」。真實的 Gemini 呼叫只在人工驗收進行，且每次都需要使用者當下同意（免費方案的資料可能被用於改進產品，只用合成文字）。
+最近一次的數字（2026-10-29，C-4a）：pytest 3782 項、Node 142 項、瀏覽器驗收 C-3 的 64 項加 C-4a 的 30 項；容器驗收 95 項是 C-3 時的結果，C-4a 沒有重跑。細節與已知限制記在 README 的「客服對話（C-3）」與「用量限制（C-4a）」。真實的 Gemini 呼叫只在人工驗收進行，且每次都需要使用者當下同意（免費方案的資料可能被用於改進產品，只用合成文字）。
 
 ---
 

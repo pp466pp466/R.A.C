@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits ｜ 資料庫版本：`0006_usage_indexes` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-10-29 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits ｜ 資料庫版本：`0006_usage_indexes` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 

@@ -1,6 +1,6 @@
 # 前端架構
 
-> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 1、2、5、6、7 節
+> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-29 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 1、2、5、6、7 節
 
 本文件說明前端的資產載入、共用元件、會員頁面與客服頁面的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md)。
 
