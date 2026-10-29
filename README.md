@@ -2,7 +2,7 @@
 
 以 LLM 驅動的雙核心平台。開發規範以根目錄的 [AGENTS.md](AGENTS.md) 為唯一權威來源；設計決策見 [docs/report.md](docs/report.md)，變更提案見 `openspec/changes/`。
 
-目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）與 `age-gate`（年齡確認閘門，勾選版）都已封存；`age-verification-birthdate`（年齡確認改為生日加年齡區間、閒置帳號清除）已實作完成，待審查與封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**目前的年齡設定與 Gemini 條款不符**（條款只有 18 歲門檻），僅限個人測試（見「年齡規則與帳號保存期限」）。
+目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）、`age-gate`（年齡確認閘門，勾選版）與 `age-verification-birthdate`（年齡確認改為生日加年齡區間、閒置帳號清除）都已封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**目前的年齡設定與 Gemini 條款不符**（條款只有 18 歲門檻），僅限個人測試（見「年齡規則與帳號保存期限」）。
 
 ## 環境需求
 
