@@ -12,7 +12,7 @@ flowchart LR
     C2["C-2 member-auth<br/>註冊、登入、Google、權限"]:::done
     AG["age-gate<br/>年齡閘門（共用層）"]:::done
     AB["age-verification-birthdate<br/>生日與年齡區間、閒置帳號清除"]:::done
-    C3["C-3 cs-chat-core<br/>客服對話核心與模型呼叫層"]:::impl
+    C3["C-3 cs-chat-core<br/>客服對話核心與模型呼叫層"]:::done
     C4["C-4 usage-safety-ops<br/>額度、限流、保留期限、管理員後台、匯出與刪除帳號"]:::plan
     C5["C-5 production-launch<br/>部署、入口層、備份演練、營運手冊"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
@@ -31,11 +31,10 @@ flowchart LR
     C4 --> RC6
 
     classDef done fill:#1f3d2b,stroke:#4c9a6a,color:#e2e4e9
-    classDef impl fill:#3d3320,stroke:#ff6b35,color:#e2e4e9
     classDef plan fill:#1c1e23,stroke:#2a2d34,color:#8a8f99
 ```
 
-圖例：深綠＝已封存；琥珀框＝已實作、待審查與封存；灰＝規劃中。
+圖例：深綠＝已封存；灰＝規劃中。
 
 | change | 狀態 | 日期／提交 | 說明 |
 |---|---|---|---|
@@ -43,8 +42,8 @@ flowchart LR
 | member-auth（C-2） | 已封存 | 2026-10-28 | 註冊、信箱驗證、登入、Google 登入、CSRF、`AccessPolicy` |
 | age-gate | 已封存 | 2026-10-28 | 年齡閘門：未確認年齡不得使用任何會呼叫模型的功能 |
 | age-verification-birthdate | 已封存 | 2026-10-29 | 以生日加年齡區間取代單一勾選；13 至 17 歲固定安全模式；閒置 12 個月帳號清除 |
-| cs-chat-core（C-3） | **已實作並提交，待封存** | 2026-10-29（`3cd6284`、`20ed2f8`，之後的文件與提示詞更正尚未提交） | 客服對話、模型呼叫層、補償式摘要、`/cs` 頁面；封存時同步 6 個新能力並修改 4 個既有能力 |
-| usage-safety-ops（C-4） | 規劃中 | — | **C-4 之前不得對公開網路開放客服**：目前沒有額度、限流、全站預算與安全過濾累計暫停 |
+| cs-chat-core（C-3） | 已封存 | 2026-10-29（實作 `3cd6284`；封存時同步 6 個新能力、修改 4 個既有能力） | 客服對話、模型呼叫層、補償式摘要、`/cs` 頁面；新增主規格 `cs-conversations`、`cs-conversation-memory`、`cs-nlp-contract`、`cs-chat-ui`、`llm-provider`、`llm-structured-calls`，並修改 `access-control`、`service-observability`、`app-configuration`、`application-layering` |
+| usage-safety-ops（C-4） | 規劃中（下一個） | — | **C-4 之前不得對公開網路開放客服**：目前沒有額度、限流、全站預算與安全過濾累計暫停 |
 | production-launch（C-5） | 規劃中 | — | 入口層、HTTPS、備份與還原演練、營運手冊；上線前要重新確認供應商條款與年齡規則 |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流 |
@@ -53,8 +52,7 @@ flowchart LR
 
 | 事項 | 狀態 | 影響的文件 |
 |---|---|---|
-| 封存 cs-chat-core 並同步主規格 | 等使用者決定 | 本文、各設計文件的「對應 change」 |
-| 撤回長度目標後的客服提示詞尚未以真實 Gemini 驗證 | 需要使用者再同意一次真實呼叫 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、README |
+| 客服提示詞的兩個小偏差：意見回饋說了「改善」（超出「不承諾結果」），「範圍說明」句型在 12 則中重複 4 次 | 撤回長度目標後的第三次真實驗收已通過（意圖 12/12、平均 80 字、無編造）；要不要再微調提示詞待使用者決定，調整後須再同意一次真實呼叫才能驗證 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、README |
 | 客服回覆的繁體中文用語與語氣 | 待使用者目視確認 | — |
 | **RPG 的開場流程**：第一輪前先顯示背景故事，再顯示符合故事的隨機開場文字；劇情的 350 至 1000 字只是期望值（RPG.md T-13） | 已記錄需求，未立案；立案前以 `/openspec-explore` 設計 | [RPG.md](RPG.md)、[前端結構-frontend.md](前端結構-frontend.md) |
 | 正式環境改用 OpenAI API（使用者計畫） | 未開始；屆時新增轉接器與環境變數 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 9 節、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)（年齡規則的前提）、AGENTS.md 第 5、9、11 節、隱私權政策 |

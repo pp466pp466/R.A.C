@@ -138,8 +138,8 @@ flowchart LR
 |---|---|---|
 | application-layering、database-access、app-configuration | `app/__init__.py`、`app/config.py`、`app/db/`、`app/controllers/errors.py` | 本文、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | member-registration、session-authentication、email-token-flows、google-sign-in、csrf-protection、access-control、age-confirmation、account-retention | `app/services/auth_service.py`、`access_policy.py`、`email_flow_service.py`、`google_*`、`app/security/` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
-| cs-conversations、cs-conversation-memory、cs-nlp-contract（封存後進入主規格） | `app/services/chat_service.py`、`cs_*.py`、`summary_service.py`、`app/repositories/chat_repository.py` | [客服對話-chat-service.md](客服對話-chat-service.md) |
-| llm-provider、llm-structured-calls（封存後進入主規格） | `app/llm/`、`app/services/llm_service.py`、`llm_output.py` | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
+| cs-conversations、cs-conversation-memory、cs-nlp-contract | `app/services/chat_service.py`、`cs_*.py`、`summary_service.py`、`app/repositories/chat_repository.py` | [客服對話-chat-service.md](客服對話-chat-service.md) |
+| llm-provider、llm-structured-calls | `app/llm/`、`app/services/llm_service.py`、`llm_output.py` | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui | `app/static/`、`app/templates/` | [前端結構-frontend.md](前端結構-frontend.md) |
 | service-observability、container-runtime | `app/observability/`、`Dockerfile`、`gunicorn.conf.py` | [營運與部署-operations.md](營運與部署-operations.md) |
 
