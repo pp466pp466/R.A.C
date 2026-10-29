@@ -5,6 +5,7 @@ staging 與 production 預設開啟信箱驗證，因此需要寄信設定與對
 from __future__ import annotations
 
 FAKE_SMTP_PASSWORD = "smtp-pw-for-tests-only"
+FAKE_GEMINI_KEY = "gemini-key-for-tests-only"
 
 # 信箱驗證開啟時必要的設定（假值）
 AUTH_ENV = {
@@ -26,6 +27,7 @@ def production_like_env(env: str = "production", **overrides: str) -> dict[str, 
         "APP_ENV": env,
         "SECRET_KEY": "k" * 32,
         "DATABASE_URL": "sqlite+pysqlite:///:memory:",
+        "GEMINI_API_KEY": FAKE_GEMINI_KEY,
         **AUTH_ENV,
     }
     values.update(overrides)

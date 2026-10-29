@@ -5,7 +5,7 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, Session, mapped_column
 
 from app import create_app
 from app.config import load_config
-from tests.support.config_env import production_like_env
+from tests.support.config_env import FAKE_GEMINI_KEY, production_like_env
 
 
 class _Base(DeclarativeBase):
@@ -128,3 +128,70 @@ def test_session_is_available_through_the_engine():
     app = make_testing_app()
     with Session(app.extensions["db_engine"]) as session:
         assert session.scalar(select(1)) == 1
+
+
+# ---- 模型供應商：注入、由金鑰建立、或沒有（llm-provider 規格） ---------------------------------
+
+def make_app_with_provider_route(*, environ=None, **kwargs):
+    from flask import jsonify
+
+    from app.services.registry import get_llm_service
+
+    app = create_app(load_config(environ={"APP_ENV": "testing", **(environ or {})}), **kwargs)
+
+    @app.get("/_llm")
+    def llm_probe():
+        service = get_llm_service()
+        return jsonify(available=service is not None, provider=service._provider.name if service else None)
+
+    return app
+
+
+def test_without_a_key_or_an_injected_provider_the_app_still_starts_and_has_no_provider():
+    app = make_app_with_provider_route()
+    assert app.extensions["llm_provider"] is None
+    assert app.test_client().get("/").status_code == 200
+    assert app.test_client().get("/_llm").get_json() == {"available": False, "provider": None}
+
+
+def test_a_configured_key_builds_the_real_adapter_without_calling_the_network(monkeypatch):
+    import urllib.request
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("建立應用程式時不應連線")
+
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    app = make_app_with_provider_route(environ={"GEMINI_API_KEY": FAKE_GEMINI_KEY})
+    provider = app.extensions["llm_provider"]
+    assert provider.name == "gemini" and FAKE_GEMINI_KEY not in repr(provider)
+    assert app.test_client().get("/_llm").get_json() == {"available": True, "provider": "gemini"}
+
+
+def test_an_injected_provider_wins_over_the_configured_key():
+    from tests.support.llm import FakeLLMProvider
+
+    fake = FakeLLMProvider()
+    app = make_app_with_provider_route(environ={"GEMINI_API_KEY": FAKE_GEMINI_KEY}, llm_provider=fake)
+    assert app.extensions["llm_provider"] is fake
+    assert app.test_client().get("/_llm").get_json() == {"available": True, "provider": "fake"}
+
+
+def test_the_service_gets_the_configured_models_and_limits():
+    from tests.support.llm import FakeLLMProvider
+
+    app = make_app_with_provider_route(
+        environ={"GEMINI_MODEL": "model-a", "GEMINI_FALLBACK_MODEL": "model-b", "LLM_REQUEST_BUDGET_SECONDS": "40"},
+        llm_provider=FakeLLMProvider(),
+    )
+    from app.services.registry import get_llm_service
+
+    seen = {}
+
+    @app.get("/_settings")
+    def settings_probe():
+        settings = get_llm_service()._settings
+        seen.update(primary=settings.primary_model, fallback=settings.fallback_model, budget=settings.request_budget_seconds)
+        return {}
+
+    app.test_client().get("/_settings")
+    assert seen == {"primary": "model-a", "fallback": "model-b", "budget": 40.0}

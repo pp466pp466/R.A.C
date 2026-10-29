@@ -45,3 +45,13 @@ def get_mail_sender() -> Any | None:
 def get_identity_provider() -> Any | None:
     """Google 身分供應商；Google 登入未啟用且沒有注入時為 None。"""
     return current_app.extensions.get("identity_provider")
+
+
+def get_session_factory() -> Any:
+    """資料庫工作階段工廠：延後動作在請求結束後需要「自己的」Session 時使用（請求的 Session 那時已經關閉）。"""
+    return current_app.extensions["db_session_factory"]
+
+
+def get_llm_provider() -> Any | None:
+    """模型供應商；沒有金鑰（本機開發）且沒有注入時為 None，此時需要模型的功能回 503。"""
+    return current_app.extensions.get("llm_provider")

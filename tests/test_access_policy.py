@@ -105,6 +105,32 @@ def test_chat_access_requires_every_condition_and_the_two_methods_agree(policy, 
             policy.require_chat_access(user)
 
 
+@pytest.mark.parametrize("policy", ALL_STATUSES_AND_MODES)
+@pytest.mark.parametrize("age", [None, 12, 13, 18, 45])
+@pytest.mark.parametrize("verified", [True, False])
+@pytest.mark.parametrize("status", USER_STATUSES)
+def test_chat_gate_names_the_same_denial_as_the_exception_and_never_logs(policy, age, verified, status, log_lines):
+    """頁面載入時用 `chat_gate` 得知結果；它與 `require_chat_access` 必須逐一一致，且查詢本身不產生事件。"""
+    user = member(age=age, email_verified=verified, status=status)
+    gate = policy.chat_gate(user)
+    assert [line for line in log_lines() if line.get("event")] == []
+    if gate is None:
+        policy.require_chat_access(user)
+    else:
+        with pytest.raises(Forbidden) as denied:
+            policy.require_chat_access(user)
+        assert denied.value.code == gate
+
+
+def test_chat_gate_returns_the_documented_codes():
+    assert ON.chat_gate(member()) is None
+    assert ON.chat_gate(member(age=None)) == "age_confirmation_required"
+    assert ON.chat_gate(member(age=12)) == "age_restricted"
+    assert ON.chat_gate(member(status=STATUS_SUSPENDED)) == "forbidden"
+    assert ON.chat_gate(member(email_verified=False, age=None)) == "forbidden"       # 信箱未驗證先於年齡，不引導補填
+    assert OFF.chat_gate(member(email_verified=False)) is None
+
+
 def test_a_missing_age_check_raises_the_dedicated_error_code_that_points_to_the_account_page():
     with pytest.raises(AgeConfirmationRequired) as denied:
         ON.require_chat_access(member(age=None))

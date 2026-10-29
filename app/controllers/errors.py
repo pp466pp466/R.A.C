@@ -13,7 +13,8 @@ from werkzeug.exceptions import HTTPException
 from app.observability.errors import describe_exception
 from app.security.errors import HttpSecurityError
 from app.services.errors import (
-    Conflict, Forbidden, NotFound, ServiceError, TooManyRequests, Unauthenticated, ValidationError,
+    Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated, ValidationError,
+    VersionConflict,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +43,7 @@ _SERVICE_ERROR_STATUS: tuple[tuple[type[ServiceError], int], ...] = (
     (NotFound, 404),
     (Conflict, 409),
     (TooManyRequests, 429),
+    (ServiceUnavailable, 503),
 )
 
 
@@ -49,13 +51,18 @@ def _wants_json() -> bool:
     return request.path == "/api" or request.path.startswith("/api/")
 
 
-def respond_with_error(status: int, code: str, message: str, fields: dict[str, str] | None = None):
-    """依路徑回覆 JSON（`/api/` 底下）或錯誤頁。其他模組（例如 CSRF 檢查）也用它，確保錯誤格式一致。"""
+def respond_with_error(
+    status: int, code: str, message: str, fields: dict[str, str] | None = None, extra: dict[str, object] | None = None
+):
+    """依路徑回覆 JSON（`/api/` 底下）或錯誤頁。其他模組（例如 CSRF 檢查）也用它，確保錯誤格式一致。
+
+    `extra` 的內容與 `error` 並列（例如版本衝突時附上最新的 `conversation`），不放進 `error` 裡。
+    """
     if _wants_json():
         body: dict[str, object] = {"code": code, "message": message}
         if fields:
             body["fields"] = fields
-        response = jsonify(error=body)
+        response = jsonify(error=body, **(extra or {}))
         response.status_code = status
         return response
     return render_template("error.html", status=status, message=message), status
@@ -85,7 +92,8 @@ def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(ServiceError)
     def _service_error(exc: ServiceError):
         fields = exc.fields if isinstance(exc, ValidationError) else None
-        return respond_with_error(_status_for(exc), exc.code, exc.message, fields)
+        extra = {"conversation": exc.conversation} if isinstance(exc, VersionConflict) else None
+        return respond_with_error(_status_for(exc), exc.code, exc.message, fields, extra)
 
     @app.errorhandler(Exception)
     def _unexpected_error(exc: Exception):

@@ -96,3 +96,16 @@ def test_verification_scripts_exist_and_the_wrapper_is_ascii_only():
     assert (PROJECT_ROOT / "scripts" / "verify_container.py").is_file()
     wrapper = (PROJECT_ROOT / "scripts" / "verify-container.ps1").read_bytes()
     assert wrapper.isascii(), "Windows PowerShell 5.1 以系統編碼讀無 BOM 的腳本，非 ASCII 字元會亂碼"
+
+def test_the_container_acceptance_covers_the_model_key_and_the_chat_flow():
+    """container-runtime 規格：staging 與 production 沒有金鑰就無法啟動，所以驗收用假金鑰啟動、另驗缺少金鑰、並走完客服的 HTTP 流程。"""
+    script = (PROJECT_ROOT / "scripts" / "verify_container.py").read_text(encoding="utf-8-sig")
+    assert script.count("GEMINI_API_KEY={FAKE_GEMINI_KEY}") >= 2                  # production 與預備環境的流程都帶假金鑰
+    assert "staging 缺少 GEMINI_API_KEY" in script and "FAKE_GEMINI_KEY" in script
+    for needed in ("age_confirmation_required", "version_conflict", "/cs", "request_timeout_ms", "chat:"):
+        assert needed in script, needed
+    namespace = runpy.run_path(str(PROJECT_ROOT / "scripts" / "verify_container.py"))
+    flow = namespace["AUTH_FLOW"]
+    compile(flow, "flow", "exec")
+    assert flow.isascii() and flow.count("chat: ") >= 14                          # 容器內的腳本以 stdin 傳入：必須是 ASCII
+    assert namespace["FAKE_GEMINI_KEY"] not in (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8-sig")

@@ -72,8 +72,40 @@ class Conflict(ServiceError):
     default_message = "目前無法處理，請稍後再試。"
 
 
+class ConversationBusy(Conflict):
+    """同一個對話已有訊息正在處理（409）。同一對話同時只處理一則；處理標記過期（60 秒）後才可被接手。"""
+
+    code = "conversation_busy"
+    default_message = "這個對話正在處理上一則訊息，請稍候再送出。"
+
+
+class MessageIdReused(Conflict):
+    """同一個訊息識別碼帶著不同的內容（409）：識別碼是冪等的依據，不能用在兩段不同的文字上。"""
+
+    code = "message_id_reused"
+    default_message = "這則訊息的識別碼已用於不同的內容，請重新整理後再送出。"
+
+
+class VersionConflict(Conflict):
+    """版本號與後端不一致（409）：以後端為準，並附上最新的對話資訊（`conversation`）讓前端更新。"""
+
+    code = "version_conflict"
+    default_message = "這個對話已在其他裝置被修改，已為您更新到最新的內容。"
+
+    def __init__(self, conversation: dict, message: str | None = None) -> None:
+        super().__init__(message)
+        self.conversation = conversation
+
+
 class TooManyRequests(ServiceError):
     """操作過於頻繁（429）。"""
 
     code = "too_many_requests"
     default_message = "操作太頻繁，請稍後再試。"
+
+
+class ServiceUnavailable(ServiceError):
+    """服務暫時無法使用（503）：例如沒有設定模型供應商（本機開發沒有金鑰）。發生時不得寫入任何資料。"""
+
+    code = "service_unavailable"
+    default_message = "服務暫時無法使用，請稍後再試。"

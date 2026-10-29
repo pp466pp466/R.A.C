@@ -25,6 +25,8 @@ FORBIDDEN_IMPORTS: dict[str, tuple[str, ...]] = {
     "models": ("app.services", "app.repositories", "app.controllers", "flask"),
     "db": ("app.services", "app.repositories", "app.controllers"),
     "observability": ("app.services", "app.repositories", "app.controllers"),
+    # 模型呼叫層：供應商中立的型別與轉接器，不依賴任何業務層（Service 依賴它，不是反過來）
+    "llm": ("app.services", "app.repositories", "app.controllers", "app.models", "flask"),
 }
 
 
@@ -139,6 +141,22 @@ def test_http_security_helpers_may_use_flask_services_and_config():
 def test_the_security_package_is_scanned():
     assert "security" in FORBIDDEN_IMPORTS
     assert (APP_DIR / "security").is_dir()
+
+
+def test_the_llm_package_is_scanned_and_stays_independent_of_the_business_layers():
+    """llm-provider 規格：Service 依賴中立型別，轉接器不依賴任何業務層（避免循環，也讓更換供應商只動這一層）。"""
+    assert "llm" in FORBIDDEN_IMPORTS and (APP_DIR / "llm").is_dir()
+    for source in (
+        "from app.services.errors import ServiceError\n", "from app.repositories.base import BaseRepository\n",
+        "from app.controllers import errors\n", "from app.models.chat import ChatMessage\n", "from flask import current_app\n",
+        "def f():\n    from app.services import registry\n",
+    ):
+        assert violations_for("llm", source, "app.llm"), source
+
+
+def test_the_llm_package_may_use_the_standard_library_and_its_own_types():
+    allowed = "import json\nimport urllib.request\nfrom app.llm.types import LLMRequest\nfrom app.config import LlmSettings\n"
+    assert violations_for("llm", allowed, "app.llm") == []
 
 
 def test_allowed_dependencies_pass():

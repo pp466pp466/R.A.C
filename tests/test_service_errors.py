@@ -6,8 +6,8 @@ from app import create_app
 from app.config import load_config
 from app.controllers.request_helpers import read_json_object
 from app.services.errors import (
-    AgeConfirmationRequired, AgeRestricted, Conflict, Forbidden, NotFound, ServiceError, TooManyRequests, Unauthenticated,
-    ValidationError,
+    AgeConfirmationRequired, AgeRestricted, Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests,
+    Unauthenticated, ValidationError,
 )
 
 TRACE_MARKERS = ("Traceback", 'File "', "app\\", "app/", "sqlalchemy", "SELECT ")
@@ -34,6 +34,7 @@ def app():
         "notfound": NotFound(),
         "conflict": Conflict(),
         "toomany": TooManyRequests(),
+        "unavailable": ServiceUnavailable(),
         "custom": Unauthenticated("信箱或密碼不正確。", code="invalid_credentials"),
         "unknown-subclass": type("Odd", (ServiceError,), {})("特殊錯誤"),
     }
@@ -59,6 +60,7 @@ def client(app):
         ("validation", 400, "validation_error"), ("unauthenticated", 401, "unauthorized"),
         ("forbidden", 403, "forbidden"), ("notfound", 404, "not_found"),
         ("conflict", 409, "conflict"), ("toomany", 429, "too_many_requests"),
+        ("unavailable", 503, "service_unavailable"),
     ],
 )
 def test_each_service_error_maps_to_its_status_with_a_json_body(client, name, status, code):
@@ -99,7 +101,9 @@ def test_not_found_matches_a_genuinely_missing_route_in_status_and_shape(client)
     assert from_policy == from_router
 
 
-@pytest.mark.parametrize("name", ["validation", "unauthenticated", "forbidden", "notfound", "conflict", "toomany"])
+@pytest.mark.parametrize(
+    "name", ["validation", "unauthenticated", "forbidden", "notfound", "conflict", "toomany", "unavailable"]
+)
 def test_error_responses_never_leak_internals(client, name):
     text = client.get(f"/api/_t/{name}").get_data(as_text=True)
     for marker in TRACE_MARKERS:
@@ -113,6 +117,31 @@ def test_pages_get_a_chinese_error_page_instead_of_json(client):
     html = response.get_data(as_text=True)
     assert "找不到您要的內容" in html and 'lang="zh-Hant-TW"' in html
     assert client.get("/_t/forbidden").status_code == 403
+    assert client.get("/_t/unavailable").status_code == 503
+
+
+def test_service_unavailable_says_so_in_chinese_without_blaming_the_user_or_naming_the_cause(client):
+    error = client.get("/api/_t/unavailable").get_json()["error"]
+    assert error == {"code": "service_unavailable", "message": "服務暫時無法使用，請稍後再試。"}
+    assert not any(word in error["message"] for word in ("金鑰", "GEMINI", "API", "供應商"))
+
+
+def test_every_service_error_type_maps_to_a_deliberate_status():
+    """新增業務錯誤時必須同時決定它的 HTTP 狀態；不能默默落到「400」的預設。"""
+    from app.controllers.errors import _status_for
+    from app.services import errors
+
+    defined = [
+        value for value in vars(errors).values()
+        if isinstance(value, type) and issubclass(value, ServiceError) and value is not ServiceError
+    ]
+    expected = {
+        "ValidationError": 400, "Unauthenticated": 401, "Forbidden": 403, "AgeConfirmationRequired": 403, "AgeRestricted": 403,
+        "NotFound": 404, "Conflict": 409, "ConversationBusy": 409, "MessageIdReused": 409, "VersionConflict": 409,
+        "TooManyRequests": 429, "ServiceUnavailable": 503,
+    }
+    made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
+    assert made == expected
 
 
 # ---- API 請求本文 --------------------------------------------------------------

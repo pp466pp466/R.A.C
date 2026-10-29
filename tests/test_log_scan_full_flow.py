@@ -187,3 +187,105 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     # 請求日誌的路徑只有路由規則，不含查詢字串（Google 回呼的 code 與 state 在查詢字串裡）
     assert all("?" not in line.get("path", "") for line in lines)
     json.dumps(lines)                                                                       # 全部可序列化
+
+
+# ---- 客服對話的完整流程 ----------------------------------------------------------------------------
+
+CHAT_SECRETS = {
+    "user": "我的訂單號碼是 SECRET-ORDER-778899，信箱 chat.scan@example.com",
+    "reply": "回覆私密字樣-REPLY-5521",
+    "summary": "摘要私密字樣-SUMMARY-6632",
+    "bad": "壞輸出私密字樣-BAD-7743",
+}
+
+
+class ScriptedTransport:
+    """假的 HTTP 傳輸：依腳本回應，沒有腳本時，對話呼叫回客服 JSON、摘要呼叫回摘要 JSON。"""
+
+    def __init__(self) -> None:
+        self.script: list[tuple[int, dict]] = []
+
+    @staticmethod
+    def ok(text: str) -> tuple[int, dict]:
+        return 200, {
+            "candidates": [{"content": {"parts": [{"text": text}]}, "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 321, "candidatesTokenCount": 123},
+        }
+
+    def post_json(self, url, headers, body, timeout):
+        if self.script:
+            return self.script.pop(0)
+        system = body["system_instruction"]["parts"][0]["text"]
+        if "累積摘要" in system:
+            return self.ok(json.dumps({"summary": CHAT_SECRETS["summary"]}, ensure_ascii=False))
+        return self.ok(json.dumps({
+            "intent": "account_help", "confidence": 0.9, "entities": {"topic": None, "membership_tier": None, "account_issue": "forgot_password", "feedback_type": None},
+            "reply_text": CHAT_SECRETS["reply"], "suggested_actions": [],
+        }, ensure_ascii=False))
+
+
+def test_a_complete_chat_tour_leaves_no_message_reply_summary_model_output_prompt_or_key_in_the_logs(log_lines):
+    from app.llm.gemini import GeminiProvider
+    from app.services.cs_prompt import leak_marker
+    from tests.support.config_env import FAKE_GEMINI_KEY
+    from tests.support.idor import logged_in_client
+
+    transport = ScriptedTransport()
+    config = load_config(environ={"APP_ENV": "testing", "GEMINI_API_KEY": FAKE_GEMINI_KEY})
+    app = create_app(config, clock=FakeClock(), llm_provider=GeminiProvider(FAKE_GEMINI_KEY, transport=transport))
+    Base.metadata.create_all(app.extensions["db_engine"])
+    with Session(app.extensions["db_engine"]) as session:
+        from app.models import User
+
+        user = session.get(User, add_user(session, 1, age=30).id)
+    client = logged_in_client(app, user)
+    base = "/api/cs/conversations"
+
+    def message_id(n):
+        return f"00000000-0000-4000-8000-{n:012d}"
+
+    public_id = client.post(base, json={"client_id": message_id(999)}).get_json()["conversation"]["id"]
+
+    def say(n, text=CHAT_SECRETS["user"]):
+        return client.post(f"{base}/{public_id}/messages", json={"client_msg_id": message_id(n), "content": text})
+
+    for n in range(1, 12):                                                       # 11 輪：第 11 輪之後觸發摘要
+        assert say(n).status_code == 200
+    assert say(1).status_code == 200                                              # 重送（冪等）
+    bad = transport.ok(CHAT_SECRETS["bad"])
+    transport.script = [bad, bad]
+    assert say(12).get_json()["assistant_message"]["msg_status"] == "fallback"   # 驗證失敗兩次
+    transport.script = [(429, {"error": {"message": f"quota {FAKE_GEMINI_KEY}"}})]
+    assert say(13).status_code == 200                                             # 速率限制 → 備援
+    transport.script = [(503, {"error": {"message": CHAT_SECRETS["user"]}}), (503, {"error": {"message": CHAT_SECRETS["user"]}})]
+    assert say(14).get_json()["assistant_message"]["msg_status"] == "fallback"   # 主要與備援都 5xx
+    transport.script = [(200, {"promptFeedback": {"blockReason": "SAFETY"}})]
+    assert say(15).get_json()["assistant_message"]["msg_status"] == "fallback"   # 被安全過濾阻擋
+    echo = (403, {"error": {"message": f"API key {FAKE_GEMINI_KEY} not valid. {CHAT_SECRETS['user']}"}})
+    transport.script = [echo]
+    assert say(16).get_json()["assistant_message"]["msg_status"] == "fallback"   # 設定錯誤
+    client.patch(f"{base}/{public_id}", json={"title": CHAT_SECRETS["user"][:20], "state_version": 1})
+    client.get(f"{base}/{public_id}/messages")
+    client.get("/cs")
+    client.delete(f"{base}/{public_id}")
+
+    raw = log_lines.raw()
+    assert raw.strip()
+    marker = leak_marker(app.extensions["app_config"].secret_key.reveal())
+    samples = {
+        "SECRET-ORDER-778899", "chat.scan@example.com", CHAT_SECRETS["user"], CHAT_SECRETS["reply"], CHAT_SECRETS["summary"],
+        CHAT_SECRETS["bad"], FAKE_GEMINI_KEY, marker, "內部識別碼", "你是「智能客服」", user.email, public_id,
+    }
+    for sample in samples:
+        assert sample and sample not in raw, f"日誌洩漏了：{sample[:14]}…"
+
+    lines = log_lines()
+    for line in lines:
+        assert set(line) <= BASE_KEYS | set(ALLOWED_FIELDS), f"出現不允許的欄位：{set(line) - BASE_KEYS - set(ALLOWED_FIELDS)}"
+    events = {line["event"] for line in lines if "event" in line}
+    assert {"llm.call", "llm.breaker_opened", "cs.reply"} <= events
+    calls = [line for line in lines if line.get("event") == "llm.call"]
+    assert {"ok", "validation_failed", "rate_limited", "server_error", "blocked", "config_error"} <= {c["outcome"] for c in calls}
+    assert {c["kind"] for c in calls} == {"chat", "summary"}
+    assert [c["level"] for c in calls if c["outcome"] == "config_error"] == ["ERROR"]
+    assert all("?" not in line.get("path", "") for line in lines)

@@ -4,7 +4,7 @@ import logging
 import pytest
 
 from app.config import AppConfig, ConfigError, Secret, load_config
-from tests.support.config_env import AUTH_ENV, FAKE_SMTP_PASSWORD
+from tests.support.config_env import AUTH_ENV, FAKE_GEMINI_KEY, FAKE_SMTP_PASSWORD
 
 FAKE_PASSWORD = "S3cretPw-for-tests"
 FAKE_GOOGLE_SECRET = "GOCSPX-fake-secret-for-tests"
@@ -18,7 +18,9 @@ TRUST_URL = GOOD_URL + "&TrustServerCertificate=yes"
 
 def prod_env(**overrides: str | None) -> dict[str, str]:
     """能通過驗證的 production 環境變數；值為 None 的覆寫代表「移除這個變數」。"""
-    env: dict[str, str | None] = {"APP_ENV": "production", "SECRET_KEY": "k" * 32, "DATABASE_URL": GOOD_URL, **AUTH_ENV}
+    env: dict[str, str | None] = {
+        "APP_ENV": "production", "SECRET_KEY": "k" * 32, "DATABASE_URL": GOOD_URL, "GEMINI_API_KEY": FAKE_GEMINI_KEY, **AUTH_ENV,
+    }
     env.update(overrides)
     return {k: v for k, v in env.items() if v is not None}
 
@@ -465,3 +467,109 @@ def test_google_and_base_url_are_read_from_the_dotenv_file_in_development(tmp_pa
     )
     cfg = load_config(environ={"APP_ENV": "development", "SECRET_KEY": "k"}, dotenv_path=dotenv)
     assert cfg.google_enabled and cfg.base_url == "http://localhost:5000"
+
+
+# ---- 模型呼叫設定（cs-chat-core：llm-provider 與 app-configuration 規格）---------
+
+def test_llm_defaults_when_nothing_is_set(tmp_path):
+    llm = load_dev(tmp_path, GEMINI_API_KEY=FAKE_GEMINI_KEY).llm
+    assert (llm.primary_model, llm.fallback_model) == ("gemini-3.8-flash", "gemini-3.5-flash-lite")
+    assert llm.summary_model == llm.primary_model                      # 未指定時與主要模型相同
+    assert (llm.call_timeout_seconds, llm.request_budget_seconds, llm.breaker_seconds) == (20, 30, 60)
+    assert llm.max_output_tokens == 4096 and llm.thinking_budget is None
+    assert llm.enabled and llm.api_key.reveal() == FAKE_GEMINI_KEY
+    assert llm.frontend_timeout_seconds == 35                           # 後端總預算加 5 秒
+
+
+def test_models_can_be_chosen_per_purpose(tmp_path):
+    llm = load_dev(tmp_path, GEMINI_MODEL="m-main.1", GEMINI_FALLBACK_MODEL="m_fb", GEMINI_SUMMARY_MODEL="m-sum").llm
+    assert (llm.primary_model, llm.fallback_model, llm.summary_model) == ("m-main.1", "m_fb", "m-sum")
+    assert load_dev(tmp_path, GEMINI_MODEL="m-main").llm.summary_model == "m-main"   # 摘要預設跟著主要模型
+
+
+@pytest.mark.parametrize("name", ["GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "GEMINI_SUMMARY_MODEL"])
+@pytest.mark.parametrize("bad", ["models/x", "a b", "x?key=1", "ｍｏｄ", "m" * 65])
+def test_an_invalid_model_name_fails_and_names_the_variable_without_its_value(tmp_path, name, bad):
+    with pytest.raises(ConfigError) as exc:
+        load_dev(tmp_path, **{name: bad})
+    assert name in str(exc.value) and bad not in str(exc.value)
+
+
+def test_a_model_name_of_exactly_64_characters_is_accepted(tmp_path):
+    assert load_dev(tmp_path, GEMINI_MODEL="m" * 64).llm.primary_model == "m" * 64
+
+
+@pytest.mark.parametrize(
+    ("overrides", "variable"),
+    [
+        ({"LLM_CALL_TIMEOUT_SECONDS": "40", "LLM_REQUEST_BUDGET_SECONDS": "30"}, "LLM_CALL_TIMEOUT_SECONDS"),   # 單次大於總預算
+        ({"LLM_REQUEST_BUDGET_SECONDS": "55"}, "LLM_REQUEST_BUDGET_SECONDS"),                                    # 必須小於 55
+        ({"LLM_REQUEST_BUDGET_SECONDS": "60"}, "LLM_REQUEST_BUDGET_SECONDS"),
+        ({"LLM_CALL_TIMEOUT_SECONDS": "0"}, "LLM_CALL_TIMEOUT_SECONDS"),
+        ({"LLM_CALL_TIMEOUT_SECONDS": "-3"}, "LLM_CALL_TIMEOUT_SECONDS"),
+        ({"LLM_CALL_TIMEOUT_SECONDS": "abc"}, "LLM_CALL_TIMEOUT_SECONDS"),
+        ({"LLM_REQUEST_BUDGET_SECONDS": "nan"}, "LLM_REQUEST_BUDGET_SECONDS"),
+        ({"LLM_REQUEST_BUDGET_SECONDS": "inf"}, "LLM_REQUEST_BUDGET_SECONDS"),
+        ({"LLM_BREAKER_SECONDS": "0"}, "LLM_BREAKER_SECONDS"),
+        ({"LLM_MAX_OUTPUT_TOKENS": "100"}, "LLM_MAX_OUTPUT_TOKENS"),
+        ({"LLM_MAX_OUTPUT_TOKENS": "32769"}, "LLM_MAX_OUTPUT_TOKENS"),
+        ({"LLM_MAX_OUTPUT_TOKENS": "many"}, "LLM_MAX_OUTPUT_TOKENS"),
+        ({"GEMINI_THINKING_BUDGET": "-1"}, "GEMINI_THINKING_BUDGET"),
+        ({"GEMINI_THINKING_BUDGET": "x"}, "GEMINI_THINKING_BUDGET"),
+    ],
+)
+def test_contradictory_or_invalid_llm_numbers_fail_and_name_the_variable(tmp_path, overrides, variable):
+    with pytest.raises(ConfigError) as exc:
+        load_dev(tmp_path, **overrides)
+    assert variable in str(exc.value)
+
+
+def test_valid_llm_numbers_are_parsed_and_the_frontend_timeout_follows_the_budget(tmp_path):
+    llm = load_dev(
+        tmp_path, LLM_CALL_TIMEOUT_SECONDS="25.5", LLM_REQUEST_BUDGET_SECONDS="40", LLM_BREAKER_SECONDS="90",
+        LLM_MAX_OUTPUT_TOKENS="256", GEMINI_THINKING_BUDGET="0",
+    ).llm
+    assert (llm.call_timeout_seconds, llm.request_budget_seconds, llm.breaker_seconds) == (25.5, 40, 90)
+    assert llm.max_output_tokens == 256 and llm.thinking_budget == 0       # 0 是合法值（關閉思考），不能被當成未設定
+    assert llm.frontend_timeout_seconds == 45
+
+
+def test_a_call_timeout_equal_to_the_budget_is_accepted(tmp_path):
+    assert load_dev(tmp_path, LLM_CALL_TIMEOUT_SECONDS="30").llm.call_timeout_seconds == 30
+
+
+@pytest.mark.parametrize("env_name", ["staging", "production"])
+def test_production_like_without_the_model_key_fails_and_names_only_the_variable(env_name):
+    env = prod_env(APP_ENV=env_name, GEMINI_API_KEY=None)
+    with pytest.raises(ConfigError) as exc:
+        load_config(environ=env)
+    assert "GEMINI_API_KEY" in str(exc.value)
+    assert FAKE_PASSWORD not in str(exc.value) and FAKE_GEMINI_KEY not in str(exc.value)
+
+
+def test_an_empty_model_key_counts_as_missing_in_production():
+    with pytest.raises(ConfigError):
+        load_config(environ=prod_env(GEMINI_API_KEY="   "))
+
+
+def test_development_without_the_key_starts_with_the_feature_off(tmp_path):
+    llm = load_dev(tmp_path).llm
+    assert llm.api_key is None and llm.enabled is False
+
+
+def test_testing_without_the_key_needs_nothing():
+    assert load_config(environ={"APP_ENV": "testing"}).llm.enabled is False
+
+
+def test_the_model_key_never_appears_in_the_config_string_forms(tmp_path):
+    cfg = load_dev(tmp_path, GEMINI_API_KEY=FAKE_GEMINI_KEY)
+    assert FAKE_GEMINI_KEY not in repr(cfg) and FAKE_GEMINI_KEY not in str(cfg) and FAKE_GEMINI_KEY not in repr(cfg.llm)
+
+
+def test_the_model_key_is_read_from_the_dotenv_file_in_development_only(tmp_path):
+    dotenv = tmp_path / ".env"
+    dotenv.write_text(f"DATABASE_URL={GOOD_URL}\nGEMINI_API_KEY={FAKE_GEMINI_KEY}\n", encoding="utf-8")
+    cfg = load_config(environ={"APP_ENV": "development", "SECRET_KEY": "k"}, dotenv_path=dotenv)
+    assert cfg.llm.api_key.reveal() == FAKE_GEMINI_KEY
+    testing = load_config(environ={"APP_ENV": "testing"}, dotenv_path=dotenv)       # testing 不讀 .env
+    assert testing.llm.api_key is None

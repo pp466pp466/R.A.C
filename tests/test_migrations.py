@@ -21,6 +21,7 @@ MEMBER_TABLES = ("users", "user_identities", "auth_tokens")
 AGE_COLUMNS = ("age_confirmed_at", "age_policy_version")
 BIRTHDATE_COLUMNS = ("birth_date", "age_range", "is_adult_at_confirmation")
 TOMBSTONE_TABLE = "deletion_tombstones"
+CHAT_TABLES = ("chat_conversations", "chat_messages", "llm_call_logs")
 
 
 def alembic_config(url: str) -> Config:
@@ -42,7 +43,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -138,6 +139,28 @@ def test_upgrading_0004_keeps_existing_accounts_and_marks_them_as_not_verified(t
     engine.dispose()
 
 
+def test_0005_adds_only_the_three_chat_tables_and_follows_0004(tmp_path):
+    """cs-chat-core：只新增三張資料表（expand），不動既有資料表的任何欄位。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'chat.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0005_chat_core")
+    assert revision.down_revision == "0004_users_birthdate" and len(revision.revision) <= 32     # alembic_version 是 VARCHAR(32)
+
+    command.upgrade(cfg, "0004_users_birthdate")
+    before = {t: {c["name"] for c in inspect(engine).get_columns(t)} for t in (*MEMBER_TABLES, TOMBSTONE_TABLE)}
+    before_tables = set(inspect(engine).get_table_names())
+    assert not set(CHAT_TABLES) & before_tables
+
+    command.upgrade(cfg, "0005_chat_core")
+    assert set(inspect(engine).get_table_names()) - before_tables == set(CHAT_TABLES)
+    assert {t: {c["name"] for c in inspect(engine).get_columns(t)} for t in before} == before
+
+    command.downgrade(cfg, "0004_users_birthdate")
+    assert set(inspect(engine).get_table_names()) == before_tables
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -176,7 +199,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):
@@ -256,6 +279,109 @@ def test_downgrading_0004_removes_only_the_new_columns_and_table_and_keeps_every
     assert TOMBSTONE_TABLE not in inspect(engine).get_table_names()
     with engine.connect() as conn:
         for table in MEMBER_TABLES:
+            reflected = Table(table, MetaData(), autoload_with=engine)
+            assert conn.execute(select(func.count()).select_from(reflected)).scalar_one() == 1, table
+
+
+def _fk_actions(inspector, table):
+    return {tuple(k["constrained_columns"]): (k["referred_table"], (k.get("options") or {}).get("ondelete", "").upper())
+            for k in inspector.get_foreign_keys(table)}
+
+
+def _unique_sets(inspector, table):
+    try:
+        constraints = {tuple(u["column_names"]) for u in inspector.get_unique_constraints(table)}
+    except NotImplementedError:          # SQL Server 的反射不提供唯一約束；它們會以唯一索引的形式出現在 get_indexes
+        constraints = set()
+    return constraints | {tuple(i["column_names"]) for i in inspector.get_indexes(table) if i.get("unique")}
+
+
+def test_chat_tables_have_the_documented_foreign_keys_and_unique_constraints(migrated_database):
+    """刪除對話與使用者要真的把內容刪掉（CASCADE）；帳本匿名化（SET NULL）；帳本的對話編號刻意沒有外鍵（SQL Server 的多路徑限制）。"""
+    inspector = inspect(migrated_database)
+    assert _fk_actions(inspector, "chat_conversations") == {("user_id",): ("users", "CASCADE")}
+    assert _fk_actions(inspector, "chat_messages") == {("conversation_id",): ("chat_conversations", "CASCADE")}
+    assert _fk_actions(inspector, "llm_call_logs") == {("user_id",): ("users", "SET NULL")}
+    ledger = {c["name"]: c for c in inspector.get_columns("llm_call_logs")}
+    assert ledger["user_id"]["nullable"] is True and ledger["conversation_id"]["nullable"] is True
+
+    assert {("user_id", "client_id"), ("public_id",)} <= _unique_sets(inspector, "chat_conversations")
+    assert {("conversation_id", "seq"), ("conversation_id", "client_msg_id")} <= _unique_sets(inspector, "chat_messages")
+    indexes = {i["name"] for t in CHAT_TABLES for i in inspector.get_indexes(t)}
+    assert {"ix_chat_conversations_user_id_updated_at", "ix_chat_messages_intent",
+            "ix_llm_call_logs_user_id_created_at", "ix_llm_call_logs_model_status_created_at"} <= indexes
+
+
+def test_deleting_a_user_cascades_to_conversations_and_messages_and_anonymises_the_ledger(migrated_database):
+    from app.models import ChatConversation, ChatMessage, LlmCallLog
+
+    engine = migrated_database
+    with Session(engine) as session:
+        user = User(email="c@example.com", email_canonical="c@example.com", display_name="丙", status="active")
+        session.add(user)
+        session.flush()
+        conversation = ChatConversation(user_id=user.id, client_id="c" * 36, title="t")
+        session.add(conversation)
+        session.flush()
+        session.add(ChatMessage(conversation_id=conversation.id, client_msg_id="m" * 36, seq=1, role="user", content="你好"))
+        session.add(LlmCallLog(
+            user_id=user.id, conversation_id=conversation.id, kind="chat", provider="gemini", model="m", attempt=1, status="ok",
+        ))
+        session.commit()
+        user_id = user.id
+
+        session.delete(session.get(User, user_id))
+        session.commit()
+
+        assert session.scalar(select(func.count()).select_from(ChatConversation)) == 0
+        assert session.scalar(select(func.count()).select_from(ChatMessage)) == 0
+        ledger = session.scalars(select(LlmCallLog)).one()
+        assert ledger.user_id is None and ledger.kind == "chat"          # 帳本保留、使用者被匿名化
+
+
+def test_the_chat_tables_reject_duplicate_sequence_numbers_and_client_ids(migrated_database):
+    """「同一則訊息只寫一次」與「一則使用者訊息至多一則助理回覆」由資料庫保證。"""
+    from sqlalchemy.exc import IntegrityError
+
+    from app.models import ChatConversation, ChatMessage
+
+    with Session(migrated_database) as session:
+        user = User(email="d@example.com", email_canonical="d@example.com", display_name="丁", status="active")
+        session.add(user)
+        session.flush()
+        conversation = ChatConversation(user_id=user.id, client_id="d" * 36, title="t")
+        session.add(conversation)
+        session.flush()
+        session.add(ChatMessage(conversation_id=conversation.id, client_msg_id="a" * 36, seq=1, role="user", content="x"))
+        session.commit()
+        for duplicate in (
+            ChatMessage(conversation_id=conversation.id, client_msg_id="b" * 36, seq=1, role="assistant", content="同序號"),
+            ChatMessage(conversation_id=conversation.id, client_msg_id="a" * 36, seq=2, role="assistant", content="同識別碼"),
+        ):
+            session.add(duplicate)
+            with pytest.raises(IntegrityError):
+                session.flush()
+            session.rollback()
+        session.add(ChatConversation(user_id=user.id, client_id="d" * 36, title="重送建立"))
+        with pytest.raises(IntegrityError):
+            session.flush()
+        session.rollback()
+
+
+def test_downgrading_0005_removes_only_the_chat_tables_and_keeps_every_member_row(migrated_database):
+    engine = migrated_database
+    with Session(engine) as session:
+        user = User(email="e@example.com", email_canonical="e@example.com", display_name="戊", status="active")
+        session.add(user)
+        session.flush()
+        session.add(UserIdentity(user_id=user.id, provider="google", provider_subject="s3"))
+        session.commit()
+
+    command.downgrade(alembic_config(engine.url.render_as_string(hide_password=False)), "0004_users_birthdate")
+
+    assert not set(CHAT_TABLES) & set(inspect(engine).get_table_names())
+    with engine.connect() as conn:
+        for table in ("users", "user_identities"):
             reflected = Table(table, MetaData(), autoload_with=engine)
             assert conn.execute(select(func.count()).select_from(reflected)).scalar_one() == 1, table
 

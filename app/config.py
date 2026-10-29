@@ -33,7 +33,18 @@ DEV_TOOL_ENVS = ("development", "testing")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 # staging 與 production 的必要機密；後續 change 會擴充此清單
-REQUIRED_SECRETS = ("SECRET_KEY", "DATABASE_URL")
+REQUIRED_SECRETS = ("SECRET_KEY", "DATABASE_URL", "GEMINI_API_KEY")
+
+# ---- 模型呼叫（C-3）：模型名稱與逾時是設定值，不寫死在服務程式裡（AGENTS.md 第 5 節）----
+DEFAULT_PRIMARY_MODEL = "gemini-3.8-flash"
+DEFAULT_FALLBACK_MODEL = "gemini-3.5-flash-lite"
+DEFAULT_CALL_TIMEOUT_SECONDS = 20.0       # 單次模型呼叫；逾時即切換備援
+DEFAULT_REQUEST_BUDGET_SECONDS = 30.0     # 單次請求總預算（含重試與切換備援）
+MAX_REQUEST_BUDGET_SECONDS = 55.0         # 預算必須小於它：gunicorn worker 逾時是 60 秒，要讓降級回覆先送達
+DEFAULT_BREAKER_SECONDS = 60.0            # 主要模型逾時或伺服器錯誤後，暫時跳過它的時間
+DEFAULT_MAX_OUTPUT_TOKENS = 4096          # 含供應商計入的思考 token
+MIN_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS = 256, 32768
+_MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
 TESTING_DATABASE_URL = "sqlite+pysqlite:///:memory:"
 TESTING_SECRET_KEY = "testing-only-not-a-secret"
@@ -100,6 +111,30 @@ class GoogleSettings:
 
 
 @dataclass(frozen=True)
+class LlmSettings:
+    """模型呼叫設定。沒有金鑰時 `api_key` 為空：客服功能不可用（503），但應用程式仍可啟動（staging 與 production 例外）。"""
+
+    api_key: Secret | None = None
+    primary_model: str = DEFAULT_PRIMARY_MODEL
+    fallback_model: str = DEFAULT_FALLBACK_MODEL
+    summary_model: str = DEFAULT_PRIMARY_MODEL    # 未指定時與主要模型相同
+    call_timeout_seconds: float = DEFAULT_CALL_TIMEOUT_SECONDS
+    request_budget_seconds: float = DEFAULT_REQUEST_BUDGET_SECONDS
+    breaker_seconds: float = DEFAULT_BREAKER_SECONDS
+    max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
+    thinking_budget: int | None = None            # 不設定 = 使用供應商的預設
+
+    @property
+    def enabled(self) -> bool:
+        return self.api_key is not None
+
+    @property
+    def frontend_timeout_seconds(self) -> float:
+        """前端請求逾時：後端總預算加 5 秒，使伺服器自己的降級回覆先於前端的逾時送達。"""
+        return self.request_budget_seconds + 5
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """已驗證的應用程式設定。"""
 
@@ -115,6 +150,8 @@ class AppConfig:
     mail: MailSettings | None = None
     google: GoogleSettings | None = None
     secret_key_fallbacks: tuple[Secret, ...] = ()
+    # ---- 客服與模型呼叫（C-3）----
+    llm: LlmSettings = LlmSettings()
 
     @property
     def is_production_like(self) -> bool:
@@ -307,6 +344,70 @@ def _resolve_google(values: Mapping[str, str]) -> GoogleSettings | None:
     return None
 
 
+def _model_name(values: Mapping[str, str], name: str, default: str) -> str:
+    raw = _get(values, name)
+    if not raw:
+        return default
+    if not _MODEL_NAME.fullmatch(raw):
+        raise ConfigError(f"{name} 不是合法的模型名稱（只允許英文字母、數字、點、底線與連字號，最長 64 字）。")
+    return raw
+
+
+def _seconds(values: Mapping[str, str], name: str, default: float) -> float:
+    raw = _get(values, name)
+    if not raw:
+        return default
+    try:
+        number = float(raw)
+    except ValueError:
+        number = 0.0
+    if not 0 < number < float("inf"):        # 0、負數、nan（比較為假）與 inf 都不合法
+        raise ConfigError(f"{name} 必須是大於 0 的數字（秒）。")
+    return number
+
+
+def _resolve_llm(values: Mapping[str, str]) -> LlmSettings:
+    """模型呼叫設定。金鑰為選用（缺漏的處理由呼叫端依環境決定）；其餘各項有預設值，不合法一律啟動失敗。"""
+    key = _get(values, "GEMINI_API_KEY")
+    primary = _model_name(values, "GEMINI_MODEL", DEFAULT_PRIMARY_MODEL)
+    call_timeout = _seconds(values, "LLM_CALL_TIMEOUT_SECONDS", DEFAULT_CALL_TIMEOUT_SECONDS)
+    budget = _seconds(values, "LLM_REQUEST_BUDGET_SECONDS", DEFAULT_REQUEST_BUDGET_SECONDS)
+    if budget >= MAX_REQUEST_BUDGET_SECONDS:
+        raise ConfigError(f"LLM_REQUEST_BUDGET_SECONDS 必須小於 {MAX_REQUEST_BUDGET_SECONDS:g} 秒（worker 逾時為 60 秒）。")
+    if call_timeout > budget:
+        raise ConfigError("LLM_CALL_TIMEOUT_SECONDS 不得大於 LLM_REQUEST_BUDGET_SECONDS。")
+
+    raw_tokens = _get(values, "LLM_MAX_OUTPUT_TOKENS")
+    try:
+        max_tokens = int(raw_tokens) if raw_tokens else DEFAULT_MAX_OUTPUT_TOKENS
+    except ValueError:
+        max_tokens = 0
+    if not MIN_OUTPUT_TOKENS <= max_tokens <= MAX_OUTPUT_TOKENS:
+        raise ConfigError(f"LLM_MAX_OUTPUT_TOKENS 必須是 {MIN_OUTPUT_TOKENS} 至 {MAX_OUTPUT_TOKENS} 的整數。")
+
+    raw_thinking = _get(values, "GEMINI_THINKING_BUDGET")
+    thinking: int | None = None
+    if raw_thinking:
+        try:
+            thinking = int(raw_thinking)
+        except ValueError:
+            thinking = -1
+        if thinking < 0:
+            raise ConfigError("GEMINI_THINKING_BUDGET 必須是 0 或正整數。")
+
+    return LlmSettings(
+        api_key=Secret(key) if key else None,
+        primary_model=primary,
+        fallback_model=_model_name(values, "GEMINI_FALLBACK_MODEL", DEFAULT_FALLBACK_MODEL),
+        summary_model=_model_name(values, "GEMINI_SUMMARY_MODEL", primary),
+        call_timeout_seconds=call_timeout,
+        request_budget_seconds=budget,
+        breaker_seconds=_seconds(values, "LLM_BREAKER_SECONDS", DEFAULT_BREAKER_SECONDS),
+        max_output_tokens=max_tokens,
+        thinking_budget=thinking,
+    )
+
+
 def _resolve_secret_key_fallbacks(values: Mapping[str, str]) -> tuple[Secret, ...]:
     """輪替期間仍可驗證舊金鑰簽發的內容（以逗號分隔）；新簽發的內容一律使用目前的 SECRET_KEY。"""
     raw = values.get("SECRET_KEY_FALLBACKS") or ""
@@ -389,4 +490,5 @@ def load_config(
         mail=mail,
         google=google,
         secret_key_fallbacks=_resolve_secret_key_fallbacks(values),
+        llm=_resolve_llm(values),
     )

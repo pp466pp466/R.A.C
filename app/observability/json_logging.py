@@ -36,7 +36,14 @@ ALLOWED_FIELDS = (
     "finish_reason",
     "error_type",
     "error_location",
-    "event",  # 認證與安全事件名稱（固定列舉，見 security_events.py）
+    "event",  # 認證與安全事件名稱（固定列舉，見 security_events.py）、模型呼叫事件（見 llm_events.py）
+    # 模型呼叫（llm_events.py）：全是分類與數字，函式沒有接收任何文字內容的參數
+    "kind",
+    "provider",
+    "outcome",
+    "thinking_tokens",
+    "reason",
+    "provider_status",
 )
 
 MAX_TEXT_LENGTH = 300

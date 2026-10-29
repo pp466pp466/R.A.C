@@ -22,9 +22,11 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DISTRO = "Ubuntu-2204"
 FAKE_SECRET = "S3cretValue-for-container-test-0123456789"   # staging 與 production 的 SECRET_KEY 至少 32 字元
+FAKE_GEMINI_KEY = "AIzaSy-container-fake-gemini-key-0123456789"   # staging 與 production 必須有金鑰才能啟動；容器內沒有網路出口，這把假的永遠不會被送出
 # production 預設要求信箱驗證：需要寄信設定與 https 的對外網址（寄信目的地是不存在的主機，只為了通過啟動驗證）
 PRODUCTION_AUTH_ENV = [
     "BASE_URL=https://cs.example.com", "MAIL_SMTP_HOST=127.0.0.1", "MAIL_SMTP_PORT=1", "MAIL_FROM=service@example.com",
+    f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
 ]
 MEMBER_EMAIL = "container.member@example.com"
 MEMBER_PASSWORD = "container-member-password-1"
@@ -71,7 +73,7 @@ def run_sh_in_image(image: str, script: str) -> tuple[int, str]:
 # 在容器內執行的會員流程（程式碼必須是 ASCII）。模擬入口層：帶 X-Forwarded-Proto: https 與對外主機，
 # 因此 staging 的 Secure、__Host- 前綴的 cookie 會被發放；Secure cookie 不會被 urllib 在 http 上送回，所以手動管理 cookie。
 AUTH_FLOW = r'''
-import json, urllib.error, urllib.request
+import json, re, urllib.error, urllib.request
 from datetime import datetime, timedelta, timezone
 
 BASE = "http://127.0.0.1:8080"
@@ -177,6 +179,10 @@ report("verify-age needs a login", status == 401, str(status))
 status, body, _ = call("POST", "/api/auth/login", {"email": "%(admin_email)s", "password": "%(admin_password)s"})
 report("the admin created by the command can log in", status == 200 and body["user"]["role"] == "admin", str(status))
 report("the admin starts without any age data", body["user"].get("age_confirmed") is False and body["user"].get("age_group") is None)
+status, body, _ = call("POST", "/api/cs/conversations", {"client_id": "00000000-0000-4000-8000-000000000001"})
+report("chat: an admin without age data cannot create a conversation (403 age_confirmation_required)", status == 403 and body["error"]["code"] == "age_confirmation_required", str(status))
+status, body, _ = call("POST", "/api/cs/conversations/00000000-0000-4000-8000-0000000000aa/messages", {"client_msg_id": "00000000-0000-4000-8000-000000000002", "content": "hi"})
+report("chat: sending a message without age data is 403 before anything else, so no model call is possible", status == 403 and body["error"]["code"] == "age_confirmation_required", str(status))
 status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "13_17"})
 report("verify-age refuses a mismatch", status == 400 and body["error"]["code"] == "age_mismatch", str(status))
 status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(12), "age_range": "under_13"})
@@ -185,9 +191,38 @@ status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(15), 
 report("verify-age records the data and reports a minor", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "minor" and not (AGE_SECRETS & set(body["user"])), str(status))
 status, body, _ = call("GET", "/api/auth/me")
 report("the result persists for the logged-in session", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "minor", str(status))
+
+CID = "00000000-0000-4000-8000-000000000003"
+status, body, headers = call("POST", "/api/cs/conversations", {"client_id": CID})
+report("chat: once the age data is filled a conversation can be created (201, no-store)", status == 201 and headers.get("Cache-Control") == "no-store", str(status))
+conversation = body["conversation"]
+status, body, _ = call("POST", "/api/cs/conversations", {"client_id": CID})
+report("chat: creating again with the same client id returns the same conversation (200)", status == 200 and body["conversation"]["id"] == conversation["id"], str(status))
+status, body, _ = call("GET", "/api/cs/conversations")
+report("chat: the list holds exactly that conversation", status == 200 and [c["id"] for c in body["conversations"]] == [conversation["id"]], str(status))
+path = "/api/cs/conversations/" + conversation["id"]
+status, body, _ = call("PATCH", path, {"title": "renamed", "state_version": conversation["state_version"]})
+report("chat: renaming with the current version succeeds and bumps the version", status == 200 and body["conversation"]["title"] == "renamed" and body["conversation"]["state_version"] == conversation["state_version"] + 1, str(status))
+status, body, _ = call("PATCH", path, {"title": "stale", "state_version": conversation["state_version"]})
+report("chat: a stale version is 409 version_conflict and carries the latest conversation", status == 409 and body["error"]["code"] == "version_conflict" and body["conversation"]["title"] == "renamed", str(status))
+status, body, _ = call("GET", path + "/messages")
+report("chat: the new conversation has no messages", status == 200 and body == {"messages": [], "has_more": False}, str(status))
+status, body, _ = call("GET", "/cs")
+found = re.search(r"id=.initial-state.>(.*?)</script>", body, re.S) if status == 200 else None
+report("chat: /cs renders for a logged-in member", status == 200 and found is not None and "cs-app" in body, str(status))
+state = json.loads(found.group(1)) if found else {}
+report("chat: the initial state has no gate, a 35000 ms timeout and an available provider", state.get("chat_gate") is None and state.get("request_timeout_ms") == 35000 and state.get("service_available") is True, str(state)[:120])
+status, body, _ = call("DELETE", path)
+report("chat: deleting the conversation succeeds", status == 200 and body == {"ok": True}, str(status))
+status, body, _ = call("GET", "/api/cs/conversations")
+report("chat: the list is empty again", status == 200 and body["conversations"] == [], str(status))
 call("POST", "/api/auth/logout")
+status, body, _ = call("GET", "/api/cs/conversations")
+report("chat: an anonymous API call is 401", status == 401, str(status))
 status, _, headers = call("GET", "/account")
 report("an anonymous /account redirects to /login keeping next", status == 302 and headers.get("Location", "").startswith("/login?next="), headers.get("Location", ""))
+status, _, headers = call("GET", "/cs")
+report("chat: an anonymous /cs redirects to /login keeping next=/cs", status == 302 and headers.get("Location", "") == "/login?next=%%2Fcs", headers.get("Location", ""))
 status, _, _ = call("GET", "/terms")
 report("/terms and /privacy are public", status == 200 and call("GET", "/privacy")[0] == 200)
 status, body, _ = call("POST", "/api/auth/forgot-password", {"email": EMAIL})
@@ -266,6 +301,15 @@ def main() -> int:
     check("輸出指出缺少的變數名稱", "DATABASE_URL" in out)
     check("輸出不含任何機密值", FAKE_SECRET not in out)
 
+    # staging 其餘設定齊全、只缺模型金鑰：同樣啟動失敗，輸出只指出變數名稱，不含其他機密
+    code, out = docker(
+        "run", "--rm", "-e", "APP_ENV=staging", "-e", f"SECRET_KEY={FAKE_SECRET}", "-e", "DATABASE_URL=sqlite+pysqlite:///:memory:",
+        "-e", "EMAIL_VERIFICATION_REQUIRED=false", "-e", "BASE_URL=https://cs.example.com", image, timeout=120,
+    )
+    check("staging 缺少 GEMINI_API_KEY：容器以非零結束碼結束", code != 0, f"結束碼 {code}")
+    check("輸出只指出缺少 GEMINI_API_KEY 這個變數名稱，不含其他機密值",
+          "GEMINI_API_KEY" in out and FAKE_SECRET not in out and FAKE_GEMINI_KEY not in out, out.strip()[-160:].replace("\n", " "))
+
     code, out = docker("run", "--rm", image.split(":")[0] if False else image, timeout=120)  # 完全沒有 APP_ENV
     check("未設定 APP_ENV：容器拒絕啟動", code != 0 and "APP_ENV" in out, f"結束碼 {code}")
 
@@ -333,7 +377,7 @@ def verify_member_flow(image: str) -> None:
     name = f"pf-auth-{uuid.uuid4().hex[:8]}"
     env = [
         "APP_ENV=staging", f"SECRET_KEY={FAKE_SECRET}", "DATABASE_URL=sqlite+pysqlite:////tmp/member.sqlite3",
-        "EMAIL_VERIFICATION_REQUIRED=false", "BASE_URL=https://cs.example.com",
+        "EMAIL_VERIFICATION_REQUIRED=false", "BASE_URL=https://cs.example.com", f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
     ]
     env_args = [item for pair in (("-e", e) for e in env) for item in pair]
     code, out = docker("run", "-d", "--name", name, *env_args, image)
@@ -352,13 +396,13 @@ def verify_member_flow(image: str) -> None:
 
         code, out = docker("exec", "-i", name, "python", "-", stdin=AUTH_FLOW, timeout=120)
         flow = [line.split("|", 3) for line in out.splitlines() if line.startswith("RESULT|")]
-        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 27, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 27 else f"{len(flow)} 項")
+        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 41, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 41 else f"{len(flow)} 項")
         for _, label, ok, detail in flow:
             check(f"[會員流程] {label}", ok == "1", detail)
 
         code, logs = docker("logs", name)
-        check("[會員流程] 日誌沒有信箱與密碼",
-              not any(secret in logs for secret in (MEMBER_EMAIL, MEMBER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET)))
+        check("[會員流程] 日誌沒有信箱、密碼與金鑰",
+              not any(secret in logs for secret in (MEMBER_EMAIL, MEMBER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET, FAKE_GEMINI_KEY)))
         events = re.findall(r'"event":"([a-z_.]+)"', logs)
         check("[會員流程] 日誌有註冊、登入、登出的安全事件", {"auth.register", "auth.login_success", "auth.logout"} <= set(events), ", ".join(sorted(set(events))))
         check("[會員流程] 日誌有註冊、補填年齡，以及不一致與未滿 13 歲被拒絕的安全事件",

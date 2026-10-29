@@ -89,24 +89,33 @@ class AccessPolicy:
 
         年齡閘門不看角色與會員等級：管理員與各等級都一樣要先完成。
         """
+        return self.chat_gate(user) is None
+
+    def chat_gate(self, user: CurrentUser) -> str | None:
+        """閘門的結果，不拋例外也不記錄事件：`None` = 可使用，否則是拒絕的代碼。
+
+        頁面載入時就要知道結果（列表端點不過閘門），所以另外提供這個純查詢；`require_chat_access` 以它判斷，
+        兩者因此不會分歧。先檢查帳號狀態與信箱驗證，再檢查年齡：前兩者不允許時，補填年齡也沒有幫助，不該引導使用者去補。
+        """
         if not self._account_usable(user):
-            return False
+            return Forbidden.code
         age = self._age(user)
-        return age is not None and age >= self._age_policy.min_use_age
+        if age is None:
+            return AgeConfirmationRequired.code
+        if age < self._age_policy.min_use_age:
+            return AgeRestricted.code
+        return None
 
     def require_chat_access(self, user: CurrentUser) -> None:
         """每個會呼叫 Gemini 的端點在做任何事之前先呼叫這裡；不允許時拋出錯誤。
 
-        先檢查帳號狀態與信箱驗證，再檢查年齡：前兩者不允許時，補填年齡也沒有幫助，不該引導使用者去補。
         年齡的兩種拒絕不同：尚未完成確認 → `AgeConfirmationRequired`（前端引導到帳號設定補填）；
         年齡低於最低使用年齡 → `AgeRestricted`（補填也沒有用，所以不引導）。兩者都記錄一筆資訊層級的事件。
         """
-        if not self._account_usable(user):
+        denied = self.chat_gate(user)
+        if denied is None:
+            return
+        if denied == Forbidden.code:
             raise Forbidden()
-        age = self._age(user)
-        if age is None:
-            security_events.log_event(security_events.AGE_GATE_DENIED, user_id=user.id)
-            raise AgeConfirmationRequired()
-        if age < self._age_policy.min_use_age:
-            security_events.log_event(security_events.AGE_GATE_DENIED, user_id=user.id)
-            raise AgeRestricted()
+        security_events.log_event(security_events.AGE_GATE_DENIED, user_id=user.id)
+        raise AgeConfirmationRequired() if denied == AgeConfirmationRequired.code else AgeRestricted()

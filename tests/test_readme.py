@@ -147,6 +147,37 @@ def test_readme_member_auth_endpoint_tables_list_exactly_the_registered_routes()
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 
+def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():
+    """客服的端點與頁面表格必須與實際註冊的路由完全一致；同一路徑的不同方法各佔一列。"""
+    from app import create_app
+    from app.config import load_config
+
+    section = readme_section("客服對話（C-3）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/[^`]*`(、`/[^`]*`)*", cells[0]):
+            methods = {m.strip() for m in cells[1].split("、")} if re.fullmatch(r"[A-Z]+(、[A-Z]+)*", cells[1]) else {"GET"}
+            for path in re.findall(r"`(/[^`]*)`", cells[0]):
+                documented.update((path, method) for method in methods)
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/cs/") or rule.endpoint.startswith("cs_pages."):
+            actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
+    assert len(actual) == 7, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+
+
+def test_readme_cs_section_states_the_limits_the_models_and_the_numbers_that_matter():
+    section = readme_section("客服對話（C-3）")
+    for phrase in ("C-4 之前不得對公開網路開放", "gemini-3.5-flash-lite", "35000", "no-store", "意圖、實體、信心、摘要與狀態都不離開伺服器"):
+        assert phrase in section, phrase
+    for code in ("conversation_busy", "message_id_reused", "version_conflict", "service_unavailable", "age_confirmation_required"):
+        assert code in section, code
+
+
 def test_readme_documents_the_browser_acceptance_and_the_known_limitations():
     section = readme_section("會員驗證（C-2）")
     for needle in ("84 / 84", "v-cloak", "殘留風險", "帳本", "keep_changes_on_error", "草稿", "token_version"):

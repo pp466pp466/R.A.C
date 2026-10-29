@@ -127,55 +127,61 @@
 
 #### 4. 客服對話表 (`chat_conversations`)
 
+> 實作於 migration `0005_chat_core`（cs-chat-core）。與早期建議不同處：**沒有 `deleted_at`**——使用者刪除對話即永久刪除，帳號刪除靠 `users` 的串聯刪除整串移除；新增 `client_id` 讓「建立對話」可安全重送。
+
 | 欄位名稱 | 型態 | 約束 | 說明 |
 |---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | 內部使用 |
-| `public_id` | Unicode(36) | UNIQUE, NOT NULL | 對外 UUID |
-| `user_id` | INTEGER | FOREIGN KEY (users.id), INDEX | 擁有者 |
-| `title` | Unicode(100) | NOT NULL | 對話標題 |
-| `summary` | UnicodeText | NULLABLE | 累積摘要（超出最近 10 輪的壓縮結果） |
-| `summary_upto_seq` | INTEGER | NOT NULL, DEFAULT 0 | 摘要已涵蓋到的訊息序號 |
-| `state_json` | JSON | NULLABLE | 當前狀態：`member_tier`、`last_intent`、`pending_entities`、`open_issue` |
-| `state_version` | INTEGER | NOT NULL, DEFAULT 1 | 狀態版本號 |
-| `processing_since` | DATETIME | NULLABLE | 處理中標記，逾 60 秒視為過期 |
-| `deleted_at` | DATETIME | NULLABLE | 軟刪除 |
-| `created_at`、`updated_at` | TIMESTAMP | | |
+| `id` | INTEGER | PRIMARY KEY | 內部使用，不外露 |
+| `public_id` | Unicode(36) | UNIQUE, NOT NULL | 對外 UUID；授權不依賴它的不可猜測性 |
+| `user_id` | INTEGER | FOREIGN KEY (users.id) **ON DELETE CASCADE**, NOT NULL | 擁有者；與 `client_id` 組成唯一約束，並與 `updated_at` 組成索引 |
+| `client_id` | Unicode(36) | NOT NULL, `(user_id, client_id)` UNIQUE | 前端為新對話產生的 UUID，逾時重送時回傳同一個對話 |
+| `title` | Unicode(100) | NOT NULL | 預設「新對話」；第一則訊息附加時取其前 30 字，改名後不再被覆寫 |
+| `summary` | UnicodeText | NULLABLE | 累積摘要（超出最近 10 輪的壓縮結果，上限 800 字） |
+| `summary_upto_seq` | INTEGER | NOT NULL, DEFAULT 0 | 摘要已涵蓋到的訊息序號（補償式摘要的標記），寫入以它為條件 |
+| `state_json` | JSON | NOT NULL | 當前狀態：`member_tier`、`last_intent`、`pending_entities`、`open_issue`；只含列舉值組成的字串 |
+| `state_version` | INTEGER | NOT NULL, DEFAULT 1 | 狀態與標題的版本號，寫入時比對 |
+| `processing_since` | DATETIME2 (UTC) | NULLABLE | 處理中標記，逾 60 秒視為過期；清除時以「我設定的值」為條件 |
+| `created_at`、`updated_at` | DATETIME2 (UTC) | NOT NULL | `updated_at` 同時是「最後活動時間」 |
 
 #### 5. 客服訊息表 (`chat_messages`)
 
 | 欄位名稱 | 型態 | 約束 | 說明 |
 |---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | |
-| `conversation_id` | INTEGER | FOREIGN KEY (chat_conversations.id), INDEX | |
-| `client_msg_id` | Unicode(36) | NOT NULL | 前端產生的 UUID；AI 訊息由後端產生。`(conversation_id, client_msg_id)` 唯一 |
-| `seq` | INTEGER | NOT NULL | 後端指派的單調遞增序號。`(conversation_id, seq)` 唯一 |
+| `id` | INTEGER | PRIMARY KEY | |
+| `conversation_id` | INTEGER | FOREIGN KEY (chat_conversations.id) **ON DELETE CASCADE**, NOT NULL | |
+| `client_msg_id` | Unicode(36) | NOT NULL, `(conversation_id, client_msg_id)` UNIQUE | 使用者訊息：前端的 UUID；助理訊息：由使用者訊息的識別碼決定性地推得，所以「一則使用者訊息至多一則助理回覆」由資料庫保證 |
+| `seq` | INTEGER | NOT NULL, `(conversation_id, seq)` UNIQUE | 後端指派的單調遞增序號 |
 | `role` | Unicode(10) | NOT NULL | `user` 或 `assistant` |
 | `content` | UnicodeText | NOT NULL | 使用者原文，或 AI 的 `reply_text` |
-| `intent` | Unicode(50) | NULLABLE, INDEX | 僅 assistant 訊息 |
+| `intent` | Unicode(50) | NULLABLE, INDEX | 僅 assistant 訊息；供統計 |
 | `entities_json` | JSON | NULLABLE | 驗證後的 entities |
 | `suggested_actions_json` | JSON | NULLABLE | 驗證後的建議動作 |
 | `confidence` | FLOAT | NULLABLE | |
-| `msg_status` | Unicode(10) | NOT NULL, DEFAULT 'ok' | `ok` 或 `fallback`（降級回覆，不計入配額） |
-| `created_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | |
+| `msg_status` | Unicode(10) | NOT NULL, DEFAULT 'ok' | `ok` 或 `fallback`（降級回覆：不計入配額、不進入模型的上下文） |
+| `created_at` | DATETIME2 (UTC) | NOT NULL | |
 
-不得依 `entities_json` 內容做篩選查詢；統計使用 `intent` 欄位。
+不得依 `entities_json` 內容做篩選查詢；統計使用 `intent` 欄位。API 不回傳 `intent`、`entities_json`、`confidence`。
 
 #### 6. LLM 呼叫紀錄表 (`llm_call_logs`)
 
-兼作用量帳本與失敗紀錄，**不保存對話全文**。
+兼作用量帳本與失敗紀錄，**不保存對話全文**；每一次對模型供應商的呼叫一筆。
 
 | 欄位名稱 | 型態 | 約束 | 說明 |
 |---|---|---|---|
-| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | |
-| `user_id` | INTEGER | FOREIGN KEY (users.id), NULLABLE | 帳號刪除後設為 NULL（匿名化） |
-| `conversation_id` | INTEGER | NULLABLE | |
-| `kind` | Unicode(20) | NOT NULL | `chat`、`summary`（RPG 之後新增 `rpg_stream`、`rpg_delta`） |
-| `status` | Unicode(20) | NOT NULL | `ok`、`validation_failed`、`timeout`、`api_error`、`blocked` |
-| `prompt_tokens`、`completion_tokens` | INTEGER | NULLABLE | |
-| `latency_ms` | INTEGER | NULLABLE | |
-| `attempt` | INTEGER | NOT NULL, DEFAULT 1 | |
-| `error_detail` | UnicodeText | NULLABLE | 失敗的模型原文，截斷至 2000 字，保存 14 天，僅管理員可讀 |
-| `created_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | |
+| `id` | INTEGER | PRIMARY KEY | |
+| `user_id` | INTEGER | FOREIGN KEY (users.id) **ON DELETE SET NULL**, NULLABLE | 帳號刪除後設為 NULL（匿名化）；與 `created_at` 組成索引 |
+| `conversation_id` | INTEGER | NULLABLE，**不設外鍵** | SQL Server 不允許經由多條路徑的串聯動作（`users` 到本表會有兩條）；對話被刪除時由程式清為空值，帳號刪除前也須先清除 |
+| `kind` | Unicode(10) | NOT NULL | `chat`、`summary`（RPG 之後新增串流用途） |
+| `provider` | Unicode(20) | NOT NULL | 供應商名稱（例如 `gemini`）；日後換供應商時可分辨 |
+| `model` | Unicode(64) | NOT NULL | **實際使用的模型**（備援時是備援模型） |
+| `attempt` | INTEGER | NOT NULL | 該則訊息的第幾次呼叫（最多 2） |
+| `status` | Unicode(20) | NOT NULL | `ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error` |
+| `counted` | BOOLEAN | NOT NULL, DEFAULT 0 | 這則訊息得到正常 AI 回覆時，最後成功的對話呼叫為真；降級、失敗的嘗試與摘要都不是（額度由 C-4 以它彙總） |
+| `prompt_tokens`、`completion_tokens`、`thinking_tokens` | INTEGER | NULLABLE | 思考 token 供應商未提供時為 NULL，不是 0 |
+| `latency_ms` | INTEGER | NOT NULL | |
+| `finish_reason` | Unicode(20) | NULLABLE | `stop`、`length`、`safety`、`prompt_blocked`、`other` |
+| `error_detail` | UnicodeText | NULLABLE | 只有輸出驗證失敗時寫入模型原文，截斷至 2000 字，保存 14 天，僅管理員可讀；其他失敗只有分類 |
+| `created_at` | DATETIME2 (UTC) | NOT NULL | 索引 `(model, status, created_at)` 供斷路查詢（主要模型近 N 秒是否逾時或伺服器錯誤） |
 
 #### 6-1. 刪除紀錄表 (`deletion_tombstones`)
 

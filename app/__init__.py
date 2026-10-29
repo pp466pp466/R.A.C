@@ -15,12 +15,15 @@ from app.config import DEV_TOOL_ENVS, AppConfig, load_config
 from app.controllers.api_controller import api_bp
 from app.controllers.auth_api_controller import auth_api_bp
 from app.controllers.auth_page_controller import auth_pages_bp
+from app.controllers.cs_api_controller import cs_api_bp
+from app.controllers.cs_page_controller import cs_pages_bp
 from app.controllers.errors import register_error_handlers
 from app.controllers.health_controller import health_bp
 from app.controllers.page_controller import page_bp
 from app.controllers.site_controller import site_bp
 from app.db.dialect import create_engine_for
 from app.db.session import init_session
+from app.llm.gemini import GeminiProvider
 from app.models.base import utcnow
 from app.observability.json_logging import configure_logging
 from app.observability.request_logging import init_request_logging
@@ -44,10 +47,11 @@ def create_app(
     identity_provider: Any | None = None,
     clock: Clock | None = None,
     age_policy: AgePolicy | None = None,
+    llm_provider: Any | None = None,
 ) -> Flask:
     """建立應用程式實例。
 
-    後四個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘、不同的年齡規則）；
+    後五個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘、不同的年齡規則、假的模型供應商）；
     正式執行時省略即可，由設定建立真實的實作（年齡規則用 `DEFAULT_AGE_POLICY`）。
     """
     cfg = config or load_config()
@@ -66,6 +70,8 @@ def create_app(
     app.extensions["identity_provider"] = identity_provider or (
         GoogleOidcClient(cfg.google, redirect_uri=f"{cfg.base_url}/auth/google/callback") if cfg.google else None
     )
+    # 模型供應商：測試可注入假的；否則在設定了 GEMINI_API_KEY 時建立 Gemini 轉接器；兩者皆無則為空（需要模型的功能回 503）
+    app.extensions["llm_provider"] = llm_provider or (GeminiProvider(cfg.llm.api_key.reveal()) if cfg.llm.enabled else None)
     app.extensions["signed_cookies"] = SignedCookies(cfg, app.extensions["clock"])
     init_login_session(app)
 
@@ -84,6 +90,8 @@ def create_app(
     app.register_blueprint(auth_pages_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_api_bp)
+    app.register_blueprint(cs_api_bp)
+    app.register_blueprint(cs_pages_bp)
     app.register_blueprint(health_bp)
     app.register_blueprint(site_bp)
     if cfg.env in DEV_TOOL_ENVS:
