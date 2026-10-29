@@ -6,20 +6,22 @@ from app import create_app
 from app.config import load_config
 from app.models import Base, User
 from app.models.user import STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED
-from tests.support.auth import GOOD_PASSWORD, add_user
+from tests.support.age import age_fields, birth_date_for_age
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.client import raw_client
 
 NEW_PASSWORD = "a-brand-new-password"
 FORBIDDEN_KEYS = {"id", "token_version", "password_hash", "password", "tv"}
 PROFILE_KEYS = {
     "public_id", "email", "display_name", "member_tier", "role", "status",
-    "email_verified", "has_password", "age_confirmed", "google_linked",
+    "email_verified", "has_password", "age_confirmed", "age_group", "google_linked",
 }
+AGE_SECRETS = ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult")
 
 
 @pytest.fixture()
 def app():
-    application = create_app(load_config(environ={"APP_ENV": "testing"}))
+    application = create_app(load_config(environ={"APP_ENV": "testing"}), clock=FakeClock())   # 固定的「今天」，生日不受真實日期影響
     Base.metadata.create_all(application.extensions["db_engine"])
     return application
 
@@ -36,7 +38,7 @@ def db(app) -> Session:
 def register(client, **overrides):
     body = {
         "email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "王小明",
-        "accept_terms": True, "confirm_adult": True,
+        "accept_terms": True, **age_fields(30),
     }
     body.update(overrides)
     return client.post("/api/auth/register", json=body)
@@ -82,31 +84,55 @@ def test_register_ignores_fields_that_would_raise_privileges(app, client):
 
 
 def test_register_reports_field_errors_and_creates_nothing(app, client):
-    response = register(client, email="bad", password="short", display_name="", accept_terms=False, confirm_adult=False)
+    response = register(client, email="bad", password="short", display_name="", accept_terms=False, birth_date=None, age_range=None)
     assert response.status_code == 400
     error = response.get_json()["error"]
     assert error["code"] == "validation_error"
-    assert set(error["fields"]) == {"email", "password", "display_name", "accept_terms", "confirm_adult"}
+    assert set(error["fields"]) == {"email", "password", "display_name", "accept_terms", "birth_date", "age_range"}
     assert users_in(app) == []
 
 
-def test_register_without_the_age_confirmation_creates_nothing_and_names_the_missing_field(app, client):
-    for value in (False, "true", None):
-        response = register(client, confirm_adult=value)
-        assert response.status_code == 400
-        assert set(response.get_json()["error"]["fields"]) == {"confirm_adult"}
+def test_register_without_the_birthday_or_range_creates_nothing_and_names_the_missing_field(app, client):
+    assert set(register(client, birth_date=None).get_json()["error"]["fields"]) == {"birth_date"}
+    assert set(register(client, age_range=None).get_json()["error"]["fields"]) == {"age_range"}
     payload = {"email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True}
-    omitted = client.post("/api/auth/register", json=payload)                  # 完全沒有帶 confirm_adult
+    omitted = client.post("/api/auth/register", json=payload)                 # 完全沒有帶年齡欄位
     assert omitted.status_code == 400
-    assert set(omitted.get_json()["error"]["fields"]) == {"confirm_adult"}
+    assert set(omitted.get_json()["error"]["fields"]) == {"birth_date", "age_range"}
     assert users_in(app) == []
 
 
-def test_register_records_the_age_confirmation_and_keeps_it_out_of_the_response(app, client):
-    response = register(client)
+def test_register_with_a_mismatched_birthday_says_the_data_is_wrong_and_creates_nothing(app, client):
+    response = register(client, **age_fields(30, age_range="13_17"))
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert error["code"] == "age_mismatch" and error["message"] == "資料有誤，請重新註冊。" and "fields" not in error
+    assert users_in(app) == []
+
+
+def test_register_under_13_is_refused_with_its_own_code_and_nothing_is_stored(app, client):
+    response = register(client, **age_fields(12))
+    assert response.status_code == 400 and response.get_json()["error"]["code"] == "age_not_eligible"
+    assert users_in(app) == []
+    assert birth_date_for_age(12).isoformat() not in response.get_data(as_text=True)
+
+
+def test_after_a_mismatch_the_same_email_and_password_register_straight_away(app, client):
+    """資料有誤常是輸入太快：不封鎖信箱，使用者提醒後可以立刻以同一組資料重新註冊。"""
+    for _ in range(3):
+        assert register(client, **age_fields(30, age_range="13_17")).status_code == 400
+    assert register(client).status_code == 200
+    (user,) = users_in(app)
+    assert user.email == "new@example.com" and user.birth_date == birth_date_for_age(30)
+    assert login(client).status_code == 200
+
+
+def test_register_records_the_birthday_and_range_and_keeps_them_out_of_the_response(app, client):
+    response = register(client, **age_fields(15))
     assert response.get_json() == {"ok": True, "verification_required": False, "message": "註冊完成，請前往登入。"}
     (user,) = users_in(app)
-    assert user.age_confirmed_at is not None and user.age_policy_version
+    assert user.birth_date == birth_date_for_age(15) and user.age_range == "13_17"
+    assert user.is_adult_at_confirmation is False and user.age_confirmed_at is not None and user.age_policy_version
 
 
 def test_register_requires_a_json_object_body(client):
@@ -133,82 +159,120 @@ def test_login_returns_the_profile_and_sets_the_login_cookie(client):
     assert user["email"] == "new@example.com" and user["display_name"] == "王小明"
     assert user["member_tier"] == "free" and user["role"] == "user" and user["status"] == "active"
     assert user["email_verified"] is False and user["has_password"] is True and user["google_linked"] is False
-    assert user["age_confirmed"] is True                       # 註冊時已確認
+    assert user["age_confirmed"] is True and user["age_group"] == "adult"            # 註冊時已完成
+    assert not any(secret in user for secret in AGE_SECRETS)
     assert client.get_cookie("session") is not None
 
 
 # =============================================================================
-# 補確認年滿 18 歲
+# 補填生日與年齡區間
 # =============================================================================
 
-def unconfirmed_member_client(app):
-    """升級前就存在、沒有年齡確認紀錄的帳號（直接寫入資料庫，再以 API 登入）。"""
+def unverified_member_client(app):
+    """升級前就存在、沒有年齡資料的帳號（直接寫入資料庫，再以 API 登入）。"""
     with db(app) as s:
         add_user(s, 1)
     client = app.test_client()
-    assert login(client, email="user1@example.com").get_json()["user"]["age_confirmed"] is False
+    user = login(client, email="user1@example.com").get_json()["user"]
+    assert user["age_confirmed"] is False and user["age_group"] is None
     return client
 
 
-def test_an_account_without_a_confirmation_sees_age_confirmed_false_in_login_and_me(app):
-    client = unconfirmed_member_client(app)
-    assert client.get("/api/auth/me").get_json()["user"]["age_confirmed"] is False
+def test_an_account_without_age_data_sees_age_confirmed_false_in_login_and_me(app):
+    client = unverified_member_client(app)
+    user = client.get("/api/auth/me").get_json()["user"]
+    assert user["age_confirmed"] is False and user["age_group"] is None
 
 
-def test_confirm_adult_records_it_and_returns_the_fresh_profile_without_internal_details(app):
-    client = unconfirmed_member_client(app)
-    response = client.post("/api/auth/confirm-adult", json={"confirm_adult": True})
+@pytest.mark.parametrize(("age", "group"), [(15, "minor"), (30, "adult")])
+def test_verify_age_records_everything_and_returns_the_fresh_profile_without_the_birthday(app, age, group):
+    client = unverified_member_client(app)
+    response = client.post("/api/auth/verify-age", json=age_fields(age))
     assert response.status_code == 200
     user = response.get_json()["user"]
-    assert set(user) == PROFILE_KEYS and user["age_confirmed"] is True
-    assert "age_confirmed_at" not in user and "age_policy_version" not in user
-    assert client.get("/api/auth/me").get_json()["user"]["age_confirmed"] is True        # 登入狀態沒有失效
+    assert set(user) == PROFILE_KEYS and user["age_confirmed"] is True and user["age_group"] == group
+    assert not any(secret in user for secret in AGE_SECRETS)
+    assert birth_date_for_age(age).isoformat() not in response.get_data(as_text=True)
+    me = client.get("/api/auth/me").get_json()["user"]                                       # 登入狀態沒有失效
+    assert me["age_confirmed"] is True and me["age_group"] == group
     (stored,) = users_in(app)
-    assert stored.age_confirmed_at is not None and stored.age_policy_version
+    assert stored.birth_date == birth_date_for_age(age) and stored.age_range and stored.age_policy_version
 
 
-@pytest.mark.parametrize("body", [{}, {"confirm_adult": False}, {"confirm_adult": "true"}, {"confirm_adult": 1}, {"confirm_adult": None}])
-def test_confirm_adult_without_an_explicit_true_is_a_400_and_writes_nothing(app, body):
-    client = unconfirmed_member_client(app)
-    response = client.post("/api/auth/confirm-adult", json=body)
+@pytest.mark.parametrize(
+    ("body", "code", "fields"),
+    [
+        ({}, "validation_error", {"birth_date", "age_range"}),
+        ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error", {"birth_date"}),
+        (age_fields(30, age_range=None), "validation_error", {"age_range"}),
+        (age_fields(30, age_range="13_17"), "age_mismatch", None),
+        (age_fields(12), "age_not_eligible", {"birth_date"}),
+    ],
+)
+def test_verify_age_with_invalid_input_is_a_400_and_writes_nothing(app, body, code, fields):
+    client = unverified_member_client(app)
+    response = client.post("/api/auth/verify-age", json=body)
     assert response.status_code == 400
     error = response.get_json()["error"]
-    assert error["code"] == "validation_error" and set(error["fields"]) == {"confirm_adult"}
+    assert error["code"] == code and (set(error["fields"]) == fields if fields else "fields" not in error)
     (stored,) = users_in(app)
-    assert stored.age_confirmed_at is None and stored.age_policy_version is None
+    assert stored.birth_date is None and stored.age_range is None and stored.age_confirmed_at is None
 
 
-def test_confirm_adult_needs_a_login(app, client):
-    response = client.post("/api/auth/confirm-adult", json={"confirm_adult": True})
+def test_verify_age_needs_a_login(app, client):
+    response = client.post("/api/auth/verify-age", json=age_fields(30))
     assert response.status_code == 401 and response.get_json()["error"]["code"] == "unauthorized"
 
 
-def test_confirm_adult_twice_succeeds_and_keeps_the_first_record(app):
-    client = unconfirmed_member_client(app)
-    assert client.post("/api/auth/confirm-adult", json={"confirm_adult": True}).status_code == 200
-    (first,) = users_in(app)
-    recorded = (first.age_confirmed_at, first.age_policy_version)
-    assert client.post("/api/auth/confirm-adult", json={"confirm_adult": True}).status_code == 200
-    (again,) = users_in(app)
-    assert (again.age_confirmed_at, again.age_policy_version) == recorded
-
-
-def test_confirm_adult_without_csrf_is_rejected_and_writes_nothing(app):
-    client = unconfirmed_member_client(app)
-    raw = raw_client(app)
-    response = raw.post("/api/auth/confirm-adult", json={"confirm_adult": True}, headers={"Origin": "http://localhost"})
-    assert response.status_code == 403
+def test_the_old_confirm_adult_endpoint_no_longer_exists(app):
+    client = unverified_member_client(app)
+    assert client.post("/api/auth/confirm-adult", json={"confirm_adult": True}).status_code == 404
     (stored,) = users_in(app)
     assert stored.age_confirmed_at is None
 
 
-def test_confirm_adult_only_changes_the_callers_own_account(app):
+def test_verify_age_twice_succeeds_and_keeps_the_first_record(app):
+    client = unverified_member_client(app)
+    assert client.post("/api/auth/verify-age", json=age_fields(30)).status_code == 200
+    (first,) = users_in(app)
+    recorded = (first.birth_date, first.age_range, first.age_confirmed_at, first.age_policy_version)
+    assert client.post("/api/auth/verify-age", json=age_fields(15)).status_code == 200      # 內容不同仍成功，但不改動
+    (again,) = users_in(app)
+    assert (again.birth_date, again.age_range, again.age_confirmed_at, again.age_policy_version) == recorded
+
+
+def test_verify_age_without_csrf_is_rejected_and_writes_nothing(app):
+    unverified_member_client(app)
+    raw = raw_client(app)
+    response = raw.post("/api/auth/verify-age", json=age_fields(30), headers={"Origin": "http://localhost"})
+    assert response.status_code == 403
+    (stored,) = users_in(app)
+    assert stored.birth_date is None
+
+
+def test_verify_age_only_changes_the_callers_own_account(app):
     with db(app) as s:
         add_user(s, 2)
-    client = unconfirmed_member_client(app)
-    client.post("/api/auth/confirm-adult", json={"confirm_adult": True})
-    confirmed = {user.email: user.age_confirmed_at is not None for user in users_in(app)}
-    assert confirmed == {"user1@example.com": True, "user2@example.com": False}
+    client = unverified_member_client(app)
+    client.post("/api/auth/verify-age", json=age_fields(30))
+    done = {user.email: user.birth_date is not None for user in users_in(app)}
+    assert done == {"user1@example.com": True, "user2@example.com": False}
+
+
+def test_no_auth_response_ever_contains_the_birthday_or_the_range(app):
+    """走一遍註冊、登入、查詢、補填，所有回應文字都不含生日、區間代碼與其欄位名稱。"""
+    client = app.test_client()
+    texts = [register(client, **age_fields(15)).get_data(as_text=True), login(client).get_data(as_text=True)]
+    texts.append(client.get("/api/auth/me").get_data(as_text=True))
+    with db(app) as s:
+        add_user(s, 5)
+    other = app.test_client()
+    login(other, email="user5@example.com")
+    texts.append(other.post("/api/auth/verify-age", json=age_fields(40)).get_data(as_text=True))
+    texts.append(other.post("/api/auth/verify-age", json=age_fields(40, age_range="13_17")).get_data(as_text=True))
+    joined = " ".join(texts)
+    for secret in (birth_date_for_age(15).isoformat(), birth_date_for_age(40).isoformat(), "13_17", "35_44", *AGE_SECRETS):
+        assert secret not in joined, secret
 
 
 def test_me_returns_the_same_profile_after_login_and_401_before(client):
@@ -306,7 +370,7 @@ def test_changing_the_password_keeps_the_page_usable_because_the_csrf_token_is_n
     client.get("/")
     token = client.get_cookie("csrf").value
     headers = {"Origin": "http://localhost", "X-CSRF-Token": token}
-    client.post("/api/auth/register", json={"email": "keep@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, "confirm_adult": True}, headers=headers)
+    client.post("/api/auth/register", json={"email": "keep@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, **age_fields(30)}, headers=headers)
     assert client.post("/api/auth/login", json={"email": "keep@example.com", "password": GOOD_PASSWORD}, headers=headers).status_code == 200
     token = client.get_cookie("csrf").value                   # 登入換發了新權杖（頁面會跟著重新載入）
     headers = {"Origin": "http://localhost", "X-CSRF-Token": token}

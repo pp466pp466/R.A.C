@@ -9,15 +9,14 @@ from app.repositories.errors import DuplicateUserError
 from app.repositories.user_repository import UserRepository
 from app.services.errors import ValidationError
 from app.services.legal import CURRENT_AGE_POLICY_VERSION, CURRENT_TERMS_VERSION
+from tests.support.age import age_fields, birth_date_for_age
 from tests.support.auth import GOOD_PASSWORD, START, FakeClock, RecordingMailer, add_user, make_auth_service
 
 UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$")
 
 
 def register(service, **overrides):
-    values = dict(
-        email="new@example.com", password=GOOD_PASSWORD, display_name="王小明", accept_terms=True, confirm_adult=True
-    )
+    values = dict(email="new@example.com", password=GOOD_PASSWORD, display_name="王小明", accept_terms=True, **age_fields(30))
     values.update(overrides)
     return service.register(**values)
 
@@ -111,9 +110,9 @@ def test_every_field_error_is_reported_at_once(member_session):
     with pytest.raises(ValidationError) as exc:
         register(
             make_auth_service(member_session), email="bad", password="short", display_name="",
-            accept_terms=False, confirm_adult=False,
+            accept_terms=False, birth_date=None, age_range=None,
         )
-    assert set(exc.value.fields) == {"email", "password", "display_name", "accept_terms", "confirm_adult"}
+    assert set(exc.value.fields) == {"email", "password", "display_name", "accept_terms", "birth_date", "age_range"}
 
 
 # ---- email 正規化與唯一性 -----------------------------------------------------
@@ -296,55 +295,117 @@ def test_the_accepted_terms_version_and_time_are_recorded(member_session):
     assert user.terms_accepted_at == START
 
 
-# ---- 年齡確認（與條款同意各自獨立）---------------------------------------------
+# ---- 年齡確認：生日加年齡區間 -------------------------------------------------
 
-@pytest.mark.parametrize("value", [False, None, "true", 1, "on", 0, [], {}])
-def test_not_confirming_adulthood_creates_no_account(member_session, value):
-    with pytest.raises(ValidationError) as exc:
-        register(make_auth_service(member_session), confirm_adult=value)
-    assert set(exc.value.fields) == {"confirm_adult"}
-    assert exc.value.fields["confirm_adult"] == "請先確認您已年滿 18 歲。"
-    assert user_count(member_session) == 0
-
-
-def test_the_two_confirmations_are_reported_independently(member_session):
-    service = make_auth_service(member_session)
-    with pytest.raises(ValidationError) as only_terms:
-        register(service, accept_terms=True, confirm_adult=False)
-    with pytest.raises(ValidationError) as only_age:
-        register(service, accept_terms=False, confirm_adult=True)
-    with pytest.raises(ValidationError) as neither:
-        register(service, accept_terms=False, confirm_adult=False)
-    assert set(only_terms.value.fields) == {"confirm_adult"}
-    assert set(only_age.value.fields) == {"accept_terms"}
-    assert set(neither.value.fields) == {"accept_terms", "confirm_adult"}
-    assert user_count(member_session) == 0
-
-
-def test_the_age_confirmation_time_and_policy_version_are_recorded_with_the_terms(member_session):
-    register(make_auth_service(member_session, clock=FakeClock()))
+def test_a_successful_registration_records_every_age_field_with_the_terms(member_session):
+    register(make_auth_service(member_session, clock=FakeClock()), **age_fields(15))
     user = by_email(member_session, "new@example.com")
-    assert user.age_confirmed_at == START and user.age_policy_version == CURRENT_AGE_POLICY_VERSION
-    assert user.age_confirmed_at == user.terms_accepted_at
+    assert user.birth_date == birth_date_for_age(15) and user.age_range == "13_17"
+    assert user.is_adult_at_confirmation is False
+    assert user.age_confirmed_at == START == user.terms_accepted_at and user.age_policy_version == CURRENT_AGE_POLICY_VERSION
+
+
+def test_an_adult_is_recorded_as_an_adult_and_the_flag_is_only_a_record(member_session):
+    register(make_auth_service(member_session), **age_fields(30))
+    assert by_email(member_session, "new@example.com").is_adult_at_confirmation is True
+
+
+@pytest.mark.parametrize("age", [13, 14, 17, 18, 25, 55, 90])
+def test_every_eligible_age_can_register_with_the_matching_range(member_session, age):
+    register(make_auth_service(member_session), **age_fields(age))
+    assert user_count(member_session) == 1
+
+
+def test_a_missing_or_invalid_age_input_is_a_field_error_for_that_field_only_and_creates_nothing(member_session):
+    service = make_auth_service(member_session)
+    with pytest.raises(ValidationError) as no_birthday:
+        register(service, birth_date=None)
+    with pytest.raises(ValidationError) as no_range:
+        register(service, age_range=None)
+    with pytest.raises(ValidationError) as bad_date:
+        register(service, birth_date="2026-02-30")
+    assert set(no_birthday.value.fields) == {"birth_date"}
+    assert set(no_range.value.fields) == {"age_range"}
+    assert set(bad_date.value.fields) == {"birth_date"}
+    assert user_count(member_session) == 0
+
+
+def test_a_mismatch_is_refused_with_the_fixed_message_creates_nothing_and_logs_only_the_event_name(member_session, log_lines):
+    with pytest.raises(ValidationError) as exc:
+        register(make_auth_service(member_session), **age_fields(30, age_range="13_17"))
+    assert exc.value.code == "age_mismatch" and exc.value.message == "資料有誤，請重新註冊。" and exc.value.fields == {}
+    assert user_count(member_session) == 0
+    events = [line["event"] for line in log_lines() if "event" in line]
+    assert events == ["auth.age_rejected.mismatch"]
+    assert "1996" not in log_lines.raw() and "13_17" not in log_lines.raw()
+
+
+@pytest.mark.parametrize("age_range", ["under_13", "13_17", "18_24"])
+def test_under_13_is_refused_whatever_range_was_chosen_and_nothing_is_stored_or_logged(member_session, log_lines, age_range):
+    with pytest.raises(ValidationError) as exc:
+        register(make_auth_service(member_session), birth_date=birth_date_for_age(12).isoformat(), age_range=age_range)
+    assert exc.value.code == "age_not_eligible"
+    assert user_count(member_session) == 0                          # 沒有帳號，也就沒有任何地方存著這個生日
+    events = [line["event"] for line in log_lines() if "event" in line]
+    assert events == ["auth.age_rejected.underage"]
+    raw = log_lines.raw()
+    assert birth_date_for_age(12).isoformat() not in raw and "2014" not in raw
+
+
+def test_the_terms_and_the_age_check_are_reported_independently(member_session):
+    service = make_auth_service(member_session)
+    with pytest.raises(ValidationError) as only_terms_missing:
+        register(service, accept_terms=False)
+    with pytest.raises(ValidationError) as only_age_missing:
+        register(service, accept_terms=True, birth_date=None, age_range=None)
+    with pytest.raises(ValidationError) as both:
+        register(service, accept_terms=False, birth_date=None, age_range=None)
+    assert set(only_terms_missing.value.fields) == {"accept_terms"}
+    assert set(only_age_missing.value.fields) == {"birth_date", "age_range"}
+    assert set(both.value.fields) == {"accept_terms", "birth_date", "age_range"}
+    assert user_count(member_session) == 0
+
+
+def test_field_errors_come_before_a_semantic_age_error_so_they_can_be_fixed_in_place(member_session):
+    with pytest.raises(ValidationError) as exc:
+        register(make_auth_service(member_session), email="bad", **age_fields(30, age_range="13_17"))
+    assert exc.value.code == "validation_error" and set(exc.value.fields) == {"email"}
+
+
+def test_after_a_refusal_the_same_address_and_password_can_register_immediately(member_session, log_lines):
+    """資料有誤常是輸入太快：不封鎖信箱、不累計次數，立刻以同一個信箱與密碼再註冊就成功。"""
+    service = make_auth_service(member_session)
+    for _ in range(3):                                            # 連續失敗多次也不影響
+        with pytest.raises(ValidationError) as exc:
+            register(service, **age_fields(30, age_range="13_17"))
+        assert exc.value.code == "age_mismatch"
+    with pytest.raises(ValidationError):
+        register(service, birth_date=birth_date_for_age(12).isoformat(), age_range="under_13")
+    assert user_count(member_session) == 0
+    register(service, **age_fields(30))                           # 同一個信箱、同一組密碼
+    user = by_email(member_session, "new@example.com")
+    assert user is not None and user.birth_date == birth_date_for_age(30)
+    assert user.failed_login_count == 0 and user.locked_until is None and user.status == STATUS_ACTIVE
 
 
 def test_registering_an_existing_address_never_touches_its_age_record(member_session):
-    existing = add_user(member_session, 1)                   # 沒有年齡確認紀錄的既有帳號
-    register(make_auth_service(member_session), email="user1@example.com")
+    existing = add_user(member_session, 1)                        # 沒有年齡資料的既有帳號
+    register(make_auth_service(member_session), email="user1@example.com", **age_fields(30))
     member_session.refresh(existing)
-    assert existing.age_confirmed_at is None and existing.age_policy_version is None
+    assert existing.birth_date is None and existing.age_range is None and existing.age_confirmed_at is None
 
 
 def test_validation_happens_before_the_account_lookup_so_existing_and_new_addresses_look_alike(member_session):
-    """輸入不合法時，已存在與不存在的信箱必須得到完全相同的欄位錯誤，不洩漏帳號是否存在。"""
+    """輸入不合法時，已存在與不存在的信箱必須得到完全相同的錯誤，不洩漏帳號是否存在。"""
     add_user(member_session, 1)
     service = make_auth_service(member_session)
-    errors = []
-    for email in ("user1@example.com", "nobody@example.com"):
-        with pytest.raises(ValidationError) as exc:
-            register(service, email=email, confirm_adult=False)
-        errors.append((exc.value.code, exc.value.message, exc.value.fields))
-    assert errors[0] == errors[1]
+    for overrides in (age_fields(30, age_range="13_17"), {"birth_date": birth_date_for_age(12).isoformat(), "age_range": "under_13"}, {"birth_date": None}):
+        errors = []
+        for email in ("user1@example.com", "nobody@example.com"):
+            with pytest.raises(ValidationError) as exc:
+                register(service, email=email, **overrides)
+            errors.append((exc.value.code, exc.value.message, exc.value.fields))
+        assert errors[0] == errors[1]
 
 
 def test_a_successful_registration_to_an_existing_address_looks_exactly_like_a_new_one(member_session):
@@ -352,6 +413,17 @@ def test_a_successful_registration_to_an_existing_address_looks_exactly_like_a_n
     service = make_auth_service(member_session)
     assert register(service, email="user1@example.com") == register(service, email="fresh@example.com") is None
     assert user_count(member_session) == 2
+
+
+def test_the_age_rules_come_from_the_policy_so_a_custom_policy_changes_who_can_register(member_session):
+    from app.services.age_policy import AgePolicy
+
+    strict = make_auth_service(member_session, age_policy=AgePolicy(min_register_age=18, min_use_age=18))
+    with pytest.raises(ValidationError) as exc:
+        register(strict, **age_fields(15))
+    assert exc.value.code == "age_not_eligible" and "18" in exc.value.message
+    register(strict, **age_fields(18))
+    assert user_count(member_session) == 1
 
 
 # ---- 日誌 ---------------------------------------------------------------------

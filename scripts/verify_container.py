@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -71,6 +72,7 @@ def run_sh_in_image(image: str, script: str) -> tuple[int, str]:
 # 因此 staging 的 Secure、__Host- 前綴的 cookie 會被發放；Secure cookie 不會被 urllib 在 http 上送回，所以手動管理 cookie。
 AUTH_FLOW = r'''
 import json, urllib.error, urllib.request
+from datetime import datetime, timedelta, timezone
 
 BASE = "http://127.0.0.1:8080"
 ORIGIN = "https://cs.example.com"
@@ -120,6 +122,18 @@ def report(name, ok, detail=""):
     print("RESULT|%%s|%%s|%%s" %% (name, "1" if ok else "0", detail))
 
 
+# the age of "today" in Asia/Taipei; born(N) is a birthday that makes the person exactly N years old (day capped at 28)
+today = datetime.now(timezone(timedelta(hours=8))).date()
+
+
+def born(age):
+    return "%%04d-%%02d-%%02d" %% (today.year - age, today.month, min(today.day, 28))
+
+
+AGE_SECRETS = {"birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult_at_confirmation"}
+BASE_BODY = {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True}
+
+
 status, _, headers = call("GET", "/login")
 report("login page is served", status == 200)
 csrf_cookie = attributes.get("__Host-csrf", "")
@@ -127,10 +141,14 @@ report("csrf cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/,
        all(part in csrf_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/")) and "Domain" not in csrf_cookie, csrf_cookie.split(";")[0][:20])
 report("html pages are not cacheable", headers.get("Cache-Control") == "no-store")
 
-status, body, _ = call("POST", "/api/auth/register", {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True})
-report("register without the age confirmation is refused with a field error", status == 400 and set(body["error"]["fields"]) == {"confirm_adult"}, str(status))
-status, body, _ = call("POST", "/api/auth/register", {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True, "confirm_adult": True})
-report("register succeeds", status == 200 and body.get("ok") is True, str(status))
+status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY))
+report("register without the birthday and range is refused with field errors", status == 400 and set(body["error"]["fields"]) == {"birth_date", "age_range"}, str(status))
+status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY, birth_date=born(30), age_range="13_17"))
+report("a mismatched birthday and range is refused with the fixed message and no field", status == 400 and body["error"]["code"] == "age_mismatch" and "fields" not in body["error"], str(status))
+status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY, birth_date=born(12), age_range="under_13"))
+report("someone under 13 is refused", status == 400 and body["error"]["code"] == "age_not_eligible", str(status))
+status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY, birth_date=born(30), age_range="25_34"))
+report("after the refusals the same address and password register straight away", status == 200 and body.get("ok") is True, str(status))
 status, body, _ = call("POST", "/api/auth/login", {"email": EMAIL, "password": PASSWORD})
 report("login succeeds", status == 200, str(status))
 session_cookie = attributes.get("__Host-session", "")
@@ -138,11 +156,12 @@ report("session cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path
        all(part in session_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/", "Expires=")) and "Domain" not in session_cookie)
 status, body, _ = call("GET", "/api/auth/me")
 report("/api/auth/me returns the member", status == 200 and body["user"]["email"] == EMAIL, str(status))
-status, _, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": True}, csrf=False)
-report("confirm-adult without the CSRF header is refused", status == 403, str(status))
-report("/api/auth/me never exposes internals", not ({"id", "token_version", "password_hash"} & set(body["user"])))
-report("a member who confirmed at registration reports age_confirmed, without the time or version",
-       body["user"].get("age_confirmed") is True and not ({"age_confirmed_at", "age_policy_version"} & set(body["user"])))
+me = body
+status, _, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "25_34"}, csrf=False)
+report("verify-age without the CSRF header is refused", status == 403, str(status))
+report("/api/auth/me never exposes internals", not ({"id", "token_version", "password_hash"} & set(me["user"])))
+report("a member who registered with a birthday reports age_confirmed and age_group, never the birthday or range",
+       me["user"].get("age_confirmed") is True and me["user"].get("age_group") == "adult" and not (AGE_SECRETS & set(me["user"])))
 status, body, _ = call("GET", "/account")
 report("/account renders for a logged-in member", status == 200 and "account-list" in body)
 status, body, _ = call("POST", "/api/auth/change-password", {"current_password": PASSWORD, "new_password": PASSWORD + "-new"}, csrf=False)
@@ -151,19 +170,21 @@ status, _, _ = call("POST", "/api/auth/logout")
 report("logout succeeds", status == 200)
 status, _, _ = call("GET", "/api/auth/me")
 report("after logout /api/auth/me is 401", status == 401, str(status))
-status, _, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": True})
-report("confirm-adult needs a login", status == 401, str(status))
+status, _, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "25_34"})
+report("verify-age needs a login", status == 401, str(status))
 
-# create-admin is run in the container beforehand and deliberately does not confirm the age: the admin is an unconfirmed account
+# create-admin is run in the container beforehand and deliberately does not fill in the age: the admin has no birthday yet
 status, body, _ = call("POST", "/api/auth/login", {"email": "%(admin_email)s", "password": "%(admin_password)s"})
 report("the admin created by the command can log in", status == 200 and body["user"]["role"] == "admin", str(status))
-report("the admin starts without an age confirmation", body["user"].get("age_confirmed") is False)
-status, body, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": False})
-report("confirm-adult needs an explicit true", status == 400 and set(body["error"]["fields"]) == {"confirm_adult"}, str(status))
-status, body, _ = call("POST", "/api/auth/confirm-adult", {"confirm_adult": True})
-report("confirm-adult records the confirmation and returns the fresh profile", status == 200 and body["user"]["age_confirmed"] is True, str(status))
+report("the admin starts without any age data", body["user"].get("age_confirmed") is False and body["user"].get("age_group") is None)
+status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "13_17"})
+report("verify-age refuses a mismatch", status == 400 and body["error"]["code"] == "age_mismatch", str(status))
+status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(12), "age_range": "under_13"})
+report("verify-age refuses someone under 13", status == 400 and body["error"]["code"] == "age_not_eligible", str(status))
+status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(15), "age_range": "13_17"})
+report("verify-age records the data and reports a minor", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "minor" and not (AGE_SECRETS & set(body["user"])), str(status))
 status, body, _ = call("GET", "/api/auth/me")
-report("the confirmation persists for the logged-in session", status == 200 and body["user"]["age_confirmed"] is True, str(status))
+report("the result persists for the logged-in session", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "minor", str(status))
 call("POST", "/api/auth/logout")
 status, _, headers = call("GET", "/account")
 report("an anonymous /account redirects to /login keeping next", status == 302 and headers.get("Location", "").startswith("/login?next="), headers.get("Location", ""))
@@ -195,7 +216,12 @@ def main() -> int:
     image = args.image
 
     wsl("service", "docker", "start")  # 舊版 WSL 不支援 systemd，需手動啟動（可重複執行）
-    code, out = docker("version", "--format", "{{.Server.Version}}")
+    # 冷啟動時 daemon 在 `service docker start` 返回後還要幾秒才接受連線，所以輪詢最多 30 秒
+    for _ in range(15):
+        code, out = docker("version", "--format", "{{.Server.Version}}")
+        if code == 0:
+            break
+        time.sleep(2)
     check("Docker 服務可用", code == 0, out.strip())
     if code != 0:
         return 2
@@ -315,10 +341,10 @@ def verify_member_flow(image: str) -> None:
         check("[會員流程] 預備環境容器啟動（驗證關閉、SQLite 檔案資料庫）", code == 0, out.strip()[:80])
         time.sleep(4)
         code, out = docker("exec", name, "python", "-m", "alembic", "upgrade", "head", timeout=120)
-        check("[會員流程] 在容器內執行 alembic upgrade head 成功，升級到年齡確認的 0003",
-              code == 0 and "0002_users_and_auth_tokens" in out and "0003_users_age_confirmation" in out, out.strip()[-160:].replace("\n", " "))
+        check("[會員流程] 在容器內執行 alembic upgrade head 成功，升級到生日與年齡區間的 0004",
+              code == 0 and "0003_users_age_confirmation" in out and "0004_users_birthdate" in out, out.strip()[-200:].replace("\n", " "))
 
-        # 容器內沒有會呼叫 Gemini 的端點可以直接驗年齡閘門；管理員指令刻意不代為確認年齡，所以用它建立一個「尚未確認」的帳號
+        # 容器內沒有會呼叫 Gemini 的端點可以直接驗年齡閘門；管理員指令刻意不代為填寫年齡，所以用它建立一個「尚未完成」的帳號
         code, out = docker("exec", "-i", name, "python", "-m", "flask", "--app", "wsgi", "create-admin",
                            "--email", ADMIN_EMAIL, "--display-name", "container-admin", "--password-stdin",
                            stdin=ADMIN_PASSWORD + "\n", timeout=120)
@@ -326,7 +352,7 @@ def verify_member_flow(image: str) -> None:
 
         code, out = docker("exec", "-i", name, "python", "-", stdin=AUTH_FLOW, timeout=120)
         flow = [line.split("|", 3) for line in out.splitlines() if line.startswith("RESULT|")]
-        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 24, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 24 else f"{len(flow)} 項")
+        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 27, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 27 else f"{len(flow)} 項")
         for _, label, ok, detail in flow:
             check(f"[會員流程] {label}", ok == "1", detail)
 
@@ -335,11 +361,67 @@ def verify_member_flow(image: str) -> None:
               not any(secret in logs for secret in (MEMBER_EMAIL, MEMBER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET)))
         events = re.findall(r'"event":"([a-z_.]+)"', logs)
         check("[會員流程] 日誌有註冊、登入、登出的安全事件", {"auth.register", "auth.login_success", "auth.logout"} <= set(events), ", ".join(sorted(set(events))))
-        check("[會員流程] 日誌有註冊時與事後補確認年齡的安全事件", {"auth.age_confirmed.register", "auth.age_confirmed.later"} <= set(events), ", ".join(sorted(set(events))))
+        check("[會員流程] 日誌有註冊、補填年齡，以及不一致與未滿 13 歲被拒絕的安全事件",
+              {"auth.age_confirmed.register", "auth.age_confirmed.later", "auth.age_rejected.mismatch", "auth.age_rejected.underage"} <= set(events),
+              ", ".join(sorted(set(events))))
+        # gunicorn 自己的啟動行（"[2026-10-28 09:00:00 +0000] ..."）本來就有日期，所以只掃結構化 JSON 日誌，並先去掉 time 欄位
+        app_lines = [re.sub(r'"time":"[^"]*",?', "", line) for line in logs.splitlines() if line.startswith("{")]
+        stray_dates = sorted({m for line in app_lines for m in re.findall(r"\d{4}-\d{2}-\d{2}", line)})
+        today = datetime.now(timezone(timedelta(hours=8))).date()
+        birthdays = {f"{today.year - age:04d}-{today.month:02d}-{min(today.day, 28):02d}" for age in (30, 15, 12)}
+        check("[會員流程] 結構化日誌裡沒有任何日期，也找不到測試用的三個生日",
+              not stray_dates and not any(day in logs for day in birthdays), ", ".join(stray_dates)[:160])
+
+        verify_retention_commands(name)
         code, out = docker("exec", name, "sh", "-c", "test ! -e /app/.env && test ! -e /app/tests && echo clean")
         check("[會員流程] 映像內仍然沒有 .env 與測試", code == 0 and out.strip() == "clean", out.strip()[:120])
     finally:
         docker("rm", "-f", name)
+
+
+# 在容器內放入一個 400 天沒登入的帳號（程式碼必須是 ASCII）
+SEED_STALE_ACCOUNT = r'''
+from datetime import datetime, timedelta, timezone
+from app import create_app
+from app.models.user import User
+
+app = create_app()
+with app.extensions["db_session_factory"]() as session:
+    old = datetime.now(timezone.utc) - timedelta(days=400)
+    session.add(User(email="stale.container@example.com", email_canonical="stale.container@example.com", display_name="stale",
+                     status="active", last_login_at=old, created_at=old, updated_at=old))
+    session.commit()
+print("seeded")
+'''
+
+
+def verify_retention_commands(name: str) -> None:
+    """年齡統計與閒置帳號清除指令：在容器內以 SQLite 實際執行（此時資料庫有 3 個帳號：註冊的會員、管理員、閒置者）。"""
+    code, out = docker("exec", "-i", name, "python", "-", stdin=SEED_STALE_ACCOUNT, timeout=120)
+    check("[保存期限] 在容器內放入一個 400 天沒登入的帳號", code == 0 and "seeded" in out, out.strip()[-160:])
+
+    flask = ("exec", name, "python", "-m", "flask", "--app", "wsgi")
+    code, stats = docker(*flask, "age-stats", timeout=120)
+    lines = {line.strip() for line in stats.splitlines()}
+    check("[保存期限] age-stats 只列出各區間人數與尚未完成的人數",
+          code == 0 and {"25 至 34 歲：1", "13 至 17 歲：1", "尚未完成年齡確認：1", "合計：3"} <= lines
+          and not any(secret in stats for secret in (MEMBER_EMAIL, ADMIN_EMAIL, "stale.container")), stats.strip()[-200:].replace("\n", " | "))
+
+    code, preview = docker(*flask, "purge-inactive-accounts", "--dry-run", timeout=120)
+    check("[保存期限] 預覽模式只報告筆數、不刪除", code == 0 and "預覽" in preview and "1 個" in preview and "未刪除" in preview, preview.strip())
+    code, still = docker(*flask, "age-stats", timeout=120)
+    check("[保存期限] 預覽之後帳號仍是 3 個", "合計：3" in still)
+
+    code, purged = docker(*flask, "purge-inactive-accounts", timeout=120)
+    check("[保存期限] 實際執行刪除 1 個閒置帳號，輸出沒有個資",
+          code == 0 and "已刪除 1 個" in purged and "stale.container" not in purged, purged.strip())
+    code, after = docker(*flask, "age-stats", timeout=120)
+    check("[保存期限] 刪除後剩 2 個（管理員與會員都保留）", "合計：2" in after and "尚未完成年齡確認：0" in after, after.strip()[-120:].replace("\n", " | "))
+    code, again = docker(*flask, "purge-inactive-accounts", timeout=120)
+    check("[保存期限] 重複執行不會再刪任何帳號", code == 0 and "已刪除 0 個" in again, again.strip())
+    # 指令是另一個 docker exec 行程，結構化日誌寫在它自己的標準輸出，不在容器主行程的日誌裡
+    check("[保存期限] 清除指令輸出了清除事件的日誌，且沒有被刪帳號的信箱",
+          '"event":"account.inactive_purged"' in purged and "stale.container" not in purged, purged.strip()[-200:].replace("\n", " | "))
 
 
 if __name__ == "__main__":

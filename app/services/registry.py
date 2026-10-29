@@ -13,11 +13,17 @@ from sqlalchemy.orm import Session
 from app.config import AppConfig
 from app.db.session import defer_until_commit, get_session, keep_changes_on_error
 from app.repositories.auth_token_repository import AuthTokenRepository
+from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.health_repository import HealthRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
-from app.runtime import current_request_id, get_clock, get_config, get_identity_provider, get_mail_sender
+from app.runtime import (
+    current_request_id, get_age_policy, get_clock, get_config, get_identity_provider, get_mail_sender,
+)
 from app.services.access_policy import AccessPolicy
+from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
+from app.services.account_retention_service import AccountRetentionService
+from app.services.age_stats_service import AgeStatsService
 from app.services.auth_service import AccountMailer, AuthService
 from app.services.email_flow_service import EmailFlowService
 from app.services.google_sign_in_service import GoogleSignInService
@@ -37,6 +43,7 @@ def build_auth_service(
     clock: Callable[[], datetime],
     mailer: AccountMailer | None = None,
     persist_failures: Callable[[], None] | None = None,
+    age_policy: AgePolicy = DEFAULT_AGE_POLICY,
 ) -> AuthService:
     return AuthService(
         users=UserRepository(session),
@@ -46,6 +53,7 @@ def build_auth_service(
         email_verification_required=config.email_verification_required,
         mailer=mailer,
         persist_failures=persist_failures,
+        age_policy=age_policy,
     )
 
 
@@ -56,12 +64,17 @@ def get_google_sign_in_service() -> GoogleSignInService:
         raise RuntimeError("Google 登入未啟用，沒有身分供應商。")
     session = get_session()
     return GoogleSignInService(
-        users=UserRepository(session), identities=UserIdentityRepository(session), provider=provider, clock=get_clock()
+        users=UserRepository(session), identities=UserIdentityRepository(session), provider=provider, clock=get_clock(),
+        age_policy=get_age_policy(),
     )
 
 
 def get_access_policy() -> AccessPolicy:
-    return AccessPolicy(email_verification_required=get_config().email_verification_required)
+    return AccessPolicy(
+        email_verification_required=get_config().email_verification_required,
+        age_policy=get_age_policy(),
+        clock=get_clock(),
+    )
 
 
 def build_email_flow_service(
@@ -103,5 +116,17 @@ def get_auth_service() -> AuthService:
     config = get_config()
     mailer = get_email_flow_service() if config.email_verification_required else None
     return build_auth_service(
-        get_session(), config=config, clock=get_clock(), mailer=mailer, persist_failures=keep_changes_on_error
+        get_session(), config=config, clock=get_clock(), mailer=mailer, persist_failures=keep_changes_on_error,
+        age_policy=get_age_policy(),
     )
+
+
+def build_account_retention_service(session: Session, *, clock: Callable[[], datetime]) -> AccountRetentionService:
+    """命令列用：每個帳號的「刪除＋刪除紀錄」在同一個交易，立刻提交。"""
+    return AccountRetentionService(
+        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), clock=clock, commit=session.commit
+    )
+
+
+def build_age_stats_service(session: Session, *, age_policy: AgePolicy = DEFAULT_AGE_POLICY) -> AgeStatsService:
+    return AgeStatsService(users=UserRepository(session), age_policy=age_policy)

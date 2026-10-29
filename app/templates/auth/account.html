@@ -17,26 +17,43 @@
     <dt>信箱驗證</dt>
     <dd>{{ user.email_verified ? '已驗證' : '尚未驗證' }}</dd>
     <dt>年齡確認</dt>
-    <dd>{{ ageConfirmed ? '已確認年滿 18 歲' : '尚未確認' }}</dd>
+    <dd>{{ ageConfirmed ? '已完成' : '尚未完成' }}</dd>
     <dt>登入方式</dt>
     <dd>{{ methods }}</dd>
   </dl>
 
   <section v-if="!ageConfirmed" class="auth-notice" aria-labelledby="age-title" role="status">
-    <h2 id="age-title" class="account-notice-title">請先確認年滿 18 歲</h2>
-    <p>本平台僅供年滿 18 歲者使用。確認之前，無法使用客服等需要 AI 回覆的功能。我們只記錄您確認的時間與政策版本，不蒐集生日、年齡或證件。</p>
-    <form @submit.prevent="confirmAdult" novalidate>
-      <label class="auth-check" for="account_confirm_adult">
-        <input id="account_confirm_adult" name="confirm_adult" type="checkbox" v-model="ageForm.values.confirm_adult" :disabled="ageForm.state.submitting"
-               :aria-invalid="ageForm.fieldErrors.confirm_adult ? 'true' : 'false'">
-        <span>我已年滿 18 歲</span>
-      </label>
-      <p v-if="ageForm.fieldErrors.confirm_adult" class="auth-error" role="alert">{{ ageForm.fieldErrors.confirm_adult }}</p>
+    <h2 id="age-title" class="account-notice-title">請先填寫生日與年齡區間</h2>
+    <p>完成之前，無法使用客服等需要 AI 回覆的功能。本服務僅供 {{ ageRules.minRegisterAge }} 歲以上使用；生日與年齡區間會互相對照，只用於年齡確認與內容分級，不會顯示給其他人。</p>
+    <form @submit.prevent="verifyAge" novalidate>
       <p v-if="ageForm.state.formError" class="auth-form-error" role="alert">{{ ageForm.state.formError }}</p>
+      <div class="auth-field">
+        <label class="auth-label" for="account_birth_date">生日</label>
+        <input id="account_birth_date" name="birth_date" type="date" class="auth-input" autocomplete="bday" required
+               :min="ageRules.birthDateMin" :max="ageRules.birthDateMax"
+               v-model="ageForm.values.birth_date" :disabled="ageForm.state.submitting"
+               :aria-invalid="ageForm.fieldErrors.birth_date ? 'true' : 'false'" :aria-describedby="ageForm.fieldErrors.birth_date ? 'account_birth_date-error' : null">
+        <p v-if="ageForm.fieldErrors.birth_date" id="account_birth_date-error" class="auth-error" role="alert">{{ ageForm.fieldErrors.birth_date }}</p>
+      </div>
+      <div class="auth-field">
+        <label class="auth-label" for="account_age_range">年齡區間</label>
+        <select id="account_age_range" name="age_range" class="auth-input" required
+                v-model="ageForm.values.age_range" :disabled="ageForm.state.submitting"
+                :aria-invalid="ageForm.fieldErrors.age_range ? 'true' : 'false'" :aria-describedby="ageForm.fieldErrors.age_range ? 'account_age_range-error' : null">
+          <option value="" disabled>請選擇</option>
+          <option v-for="range in ageRules.ranges" :key="range.code" :value="range.code">{{ range.label }}</option>
+        </select>
+        <p v-if="ageForm.fieldErrors.age_range" id="account_age_range-error" class="auth-error" role="alert">{{ ageForm.fieldErrors.age_range }}</p>
+      </div>
       <button type="submit" class="ui-btn ui-btn--primary" :disabled="ageForm.state.submitting" :aria-busy="ageForm.state.submitting ? 'true' : 'false'">
         {{ ageForm.state.submitting ? '送出中…' : '確認' }}
       </button>
     </form>
+  </section>
+
+  <section v-if="ageGroup === 'minor'" class="auth-notice" aria-labelledby="safe-mode-title" role="status">
+    <h2 id="safe-mode-title" class="account-notice-title">目前為安全模式</h2>
+    <p>因為您未滿 {{ ageRules.adultAge }} 歲，內容會限制在適合所有年齡的範圍，且無法調整。滿 {{ ageRules.adultAge }} 歲之後會自動解除，不需要任何操作。</p>
   </section>
 
   <div v-if="verificationRequired && !user.email_verified" class="auth-notice" role="status">

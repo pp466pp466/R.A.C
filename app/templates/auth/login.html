@@ -40,11 +40,24 @@
       <span>我同意<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>（首次使用 Google 註冊時必須勾選）</span>
     </label>
     <p v-if="google.fieldErrors.accept_terms" class="auth-error" role="alert">{{ google.fieldErrors.accept_terms }}</p>
-    <label class="auth-check" for="google-adult">
-      <input id="google-adult" type="checkbox" v-model="google.values.confirmAdult" :disabled="google.state.submitting">
-      <span>我已年滿 18 歲（首次使用 Google 註冊時必須勾選）</span>
-    </label>
-    <p v-if="google.fieldErrors.confirm_adult" class="auth-error" role="alert">{{ google.fieldErrors.confirm_adult }}</p>
+    <div class="auth-field">
+      <label class="auth-label" for="google-birth-date">生日</label>
+      <input id="google-birth-date" type="date" class="auth-input" autocomplete="bday"
+             :min="ageRules.birthDateMin" :max="ageRules.birthDateMax"
+             v-model="google.values.birthDate" :disabled="google.state.submitting"
+             :aria-invalid="google.fieldErrors.birth_date ? 'true' : 'false'" :aria-describedby="google.fieldErrors.birth_date ? 'google-birth-date-error' : null">
+      <p v-if="google.fieldErrors.birth_date" id="google-birth-date-error" class="auth-error" role="alert">{{ google.fieldErrors.birth_date }}</p>
+    </div>
+    <div class="auth-field">
+      <label class="auth-label" for="google-age-range">年齡區間</label>
+      <select id="google-age-range" class="auth-input" v-model="google.values.ageRange" :disabled="google.state.submitting"
+              :aria-invalid="google.fieldErrors.age_range ? 'true' : 'false'" :aria-describedby="google.fieldErrors.age_range ? 'google-age-range-error' : 'google-age-hint'">
+        <option value="" disabled>請選擇</option>
+        <option v-for="range in ageRules.ranges" :key="range.code" :value="range.code">{{ range.label }}</option>
+      </select>
+      <p v-if="google.fieldErrors.age_range" id="google-age-range-error" class="auth-error" role="alert">{{ google.fieldErrors.age_range }}</p>
+      <p id="google-age-hint" class="auth-hint">使用 Google 登入前請先填寫生日與年齡區間（首次註冊時用於年齡確認；本服務僅供 {{ ageRules.minRegisterAge }} 歲以上使用）。</p>
+    </div>
     <p v-if="google.state.formError" class="auth-form-error" role="alert">{{ google.state.formError }}</p>
     <div class="auth-actions">
       <button type="button" class="ui-btn" :disabled="google.state.submitting" :aria-busy="google.state.submitting ? 'true' : 'false'" @click="signInWithGoogle">

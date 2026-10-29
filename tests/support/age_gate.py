@@ -18,6 +18,8 @@ def add_ai_endpoint(app: Flask) -> None:
     @app.post(ENDPOINT)
     def ai_endpoint():
         user = require_login()
-        get_access_policy().require_chat_access(user)
+        policy = get_access_policy()
+        policy.require_chat_access(user)
         app.work_done.append(user.id)
-        return jsonify(ok=True)
+        ceiling = policy.content_ceiling(user)
+        return jsonify(ok=True, ceiling={"sexual_content_level": ceiling.sexual_content_level, "safe_mode": ceiling.safe_mode})

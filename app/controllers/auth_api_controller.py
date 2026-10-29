@@ -30,7 +30,8 @@ def register():
         password=body.get("password"),
         display_name=body.get("display_name"),
         accept_terms=body.get("accept_terms"),
-        confirm_adult=body.get("confirm_adult"),
+        birth_date=body.get("birth_date"),
+        age_range=body.get("age_range"),
     )
     verification = get_config().email_verification_required
     return jsonify(
@@ -73,13 +74,13 @@ def me():
     return jsonify(user=get_auth_service().profile(user))
 
 
-@auth_api_bp.post("/confirm-adult")
-def confirm_adult():
-    """已登入的使用者補確認年滿 18 歲。`token_version` 沒有變，所以不需要換發登入 cookie。"""
+@auth_api_bp.post("/verify-age")
+def verify_age():
+    """已登入的使用者補填生日與年齡區間。`token_version` 沒有變，所以不需要換發登入 cookie。"""
     user = require_login()
     body = read_json_object()
     service = get_auth_service()
-    updated = service.confirm_adult(user, confirm=body.get("confirm_adult"))
+    updated = service.verify_age(user, birth_date=body.get("birth_date"), age_range=body.get("age_range"))
     return jsonify(user=service.profile(updated))
 
 
@@ -136,7 +137,7 @@ def google_start():
         abort(404)
     body = read_json_object()
     start = get_google_sign_in_service().begin(
-        accept_terms=body.get("accept_terms"), confirm_adult=body.get("confirm_adult")
+        accept_terms=body.get("accept_terms"), birth_date=body.get("birth_date"), age_range=body.get("age_range")
     )
     transaction = {**start.transaction, "x": safe_next(body.get("next"))}     # 登入後的返回位置：此時就先驗證
     response = jsonify(authorization_url=start.authorization_url)

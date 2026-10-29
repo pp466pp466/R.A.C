@@ -10,6 +10,7 @@ from app.config import load_config
 from app.models import Base
 from app.observability.json_logging import ALLOWED_FIELDS
 from app.services.google_oidc import GoogleProfile
+from tests.support.age import age_fields
 from tests.support.age_gate import add_ai_endpoint
 from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.config_env import AUTH_ENV
@@ -19,6 +20,7 @@ from tests.support.google import FakeProvider
 MEMBER_EMAIL = "scan.member@example.com"
 GOOGLE_EMAIL = "scan.google@example.com"
 ADMIN_EMAIL = "scan.admin@example.com"
+STALE_EMAIL = "scan.stale@example.com"
 GOOGLE_SUB = "sub-9876543210-scan"
 PASSWORDS = {
     "first": "scan-first-password-A1",
@@ -67,7 +69,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     extra = {"headers": {"Authorization": f"Bearer {BEARER}"}}
 
     # 註冊 → 驗證信 → 驗證
-    assert client.post(f"{api}/register", json={"email": MEMBER_EMAIL, "password": PASSWORDS["first"], "display_name": "掃描使用者", "accept_terms": True, "confirm_adult": True}, **extra).status_code == 200
+    assert client.post(f"{api}/register", json={"email": MEMBER_EMAIL, "password": PASSWORDS["first"], "display_name": "掃描使用者", "accept_terms": True, **age_fields(30)}, **extra).status_code == 200
     verify_token = sender.last_token()
     assert client.post(f"{api}/verify-email", json={"token": verify_token}).status_code == 200
 
@@ -89,7 +91,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
 
     # Google 登入（新帳號）
     google = app.test_client()
-    assert google.post(f"{api}/google/start", json={"accept_terms": True, "confirm_adult": True}).status_code == 200
+    assert google.post(f"{api}/google/start", json={"accept_terms": True, **age_fields(30)}).status_code == 200
     remember_cookies(google)
     from app.security.cookies import SignedCookies
     from app.security.oauth_cookie import OAUTH_SALT
@@ -105,7 +107,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     # Google 登入（新帳號但沒有確認年滿 18 歲）：被拒絕，導向登入頁
     provider.profile = GoogleProfile(GOOGLE_SUB + "-b", "scan.google.b@example.com", True, "掃描用 Google 使用者 B")
     refused = app.test_client()
-    assert refused.post(f"{api}/google/start", json={"accept_terms": True, "confirm_adult": False}).status_code == 200
+    assert refused.post(f"{api}/google/start", json={"accept_terms": True, "birth_date": None, "age_range": None}).status_code == 200
     refused_tx = SignedCookies(app.extensions["app_config"], app.extensions["clock"]).loads(
         OAUTH_SALT, refused.get_cookie("oauth_tx").value, max_age_seconds=600
     )
@@ -119,7 +121,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     assert legacy.post(f"{api}/login", json={"email": "scan.legacy@example.com", "password": GOOD_PASSWORD}).status_code == 200
     remember_cookies(legacy)
     assert legacy.post("/api/_t/ai", json={}).status_code == 403
-    assert legacy.post(f"{api}/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    assert legacy.post(f"{api}/verify-age", json=age_fields(41)).status_code == 200
     assert legacy.post("/api/_t/ai", json={}).status_code == 200
 
     # 一般的頁面請求（帶著 Cookie 與授權標頭）
@@ -134,20 +136,40 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     assert admin_client.post(f"{api}/login", json={"email": ADMIN_EMAIL, "password": PASSWORDS["admin"]}).status_code == 200
     remember_cookies(admin_client)
     assert admin_client.post("/api/_t/ai", json={}).status_code == 403
-    assert admin_client.post(f"{api}/confirm-adult", json={"confirm_adult": True}).status_code == 200
+    assert admin_client.post(f"{api}/verify-age", json=age_fields(52)).status_code == 200
     assert admin_client.post("/api/_t/ai", json={}).status_code == 200
+
+    # 閒置帳號清除：一個超過 12 個月沒登入、資料齊全的帳號被刪除；輸出與日誌都不得出現它的任何個資
+    from datetime import timedelta
+
+    from tests.support.auth import START
+
+    with Session(app.extensions["db_engine"]) as s:
+        add_user(
+            s, 8, email=STALE_EMAIL, email_canonical=STALE_EMAIL, display_name="閒置的人", age=22,
+            last_login_at=START - timedelta(days=500), created_at=START - timedelta(days=600),
+        )
+    preview = app.test_cli_runner().invoke(args=["purge-inactive-accounts", "--dry-run"])
+    purged = app.test_cli_runner().invoke(args=["purge-inactive-accounts"])
+    assert preview.exit_code == 0 and purged.exit_code == 0 and "已刪除 1 個" in purged.output
+    stats = app.test_cli_runner().invoke(args=["age-stats"])
+    assert stats.exit_code == 0
+    cli_output = preview.output + purged.output + stats.output
 
     # ---- 掃描 ----
     raw = log_lines.raw()
     assert raw.strip(), "測試沒有產生任何日誌，掃描沒有意義"
     samples = {
         MEMBER_EMAIL, GOOGLE_EMAIL, ADMIN_EMAIL, GOOGLE_SUB, AUTH_CODE, BEARER, verify_token, reset_token,
-        "forged-state-for-scan", "scan.google.b@example.com", "scan.legacy@example.com", GOOGLE_SUB + "-b",
+        "forged-state-for-scan", "scan.google.b@example.com", "scan.legacy@example.com", GOOGLE_SUB + "-b", STALE_EMAIL,
+        age_fields(22)["birth_date"],
         GOOD_PASSWORD, *PASSWORDS.values(), *secrets_seen,
+        *(age_fields(age)["birth_date"] for age in (30, 41, 52)),                 # 所有人的生日都不得出現在日誌
     }
     assert len(secrets_seen) >= 4
     for sample in samples:
         assert sample and sample not in raw, f"日誌洩漏了：{sample[:12]}…"
+        assert sample not in cli_output, f"指令輸出洩漏了：{sample[:12]}…"
 
     # 每一行都是合法的 JSON，且只有允許的欄位
     lines = log_lines()
@@ -160,7 +182,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
         "auth.password_changed", "auth.logout", "auth.password_reset_requested", "auth.password_reset", "auth.logout_all",
         "auth.google_started", "auth.google_registered", "auth.google_rejected.state", "auth.admin_created",
         "auth.age_confirmed.register", "auth.age_confirmed.google", "auth.age_confirmed.later", "auth.age_gate_denied",
-        "auth.google_rejected.age",
+        "auth.google_rejected.age", "account.inactive_purged",
     } <= events
     # 請求日誌的路徑只有路由規則，不含查詢字串（Google 回呼的 code 與 state 在查詢字串裡）
     assert all("?" not in line.get("path", "") for line in lines)

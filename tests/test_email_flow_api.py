@@ -8,6 +8,7 @@ from app import create_app
 from app.config import load_config
 from app.models import Base, User
 from app.models.user import STATUS_ACTIVE, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED
+from tests.support.age import age_fields
 from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.client import raw_client
 from tests.support.config_env import AUTH_ENV
@@ -52,7 +53,7 @@ def db(app) -> Session:
 
 
 def register(client, email="new@example.com", **overrides):
-    body = {"email": email, "password": GOOD_PASSWORD, "display_name": "新朋友", "accept_terms": True, "confirm_adult": True}
+    body = {"email": email, "password": GOOD_PASSWORD, "display_name": "新朋友", "accept_terms": True, **age_fields(30)}
     body.update(overrides)
     return client.post("/api/auth/register", json=body)
 
@@ -119,7 +120,7 @@ def test_mail_is_sent_only_after_the_response_has_been_produced(app, sender):
     csrf = client.get_cookie("csrf").value
     response = client.post(
         "/api/auth/register",
-        json={"email": "late@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, "confirm_adult": True},
+        json={"email": "late@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, **age_fields(30)},
         headers={"Origin": "http://localhost", "X-CSRF-Token": csrf},
         buffered=False,
     )

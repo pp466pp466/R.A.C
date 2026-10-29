@@ -11,8 +11,9 @@
   - 信箱已驗證 → 綁定，原有密碼仍可使用；
   - 信箱未驗證（含信箱驗證關閉期間註冊的帳號）→ **清除其密碼憑證**、視為已驗證、`token_version` 加 1
     （撤銷任何以該密碼建立的登入狀態），再綁定。這是防止「預先佔用信箱」的帳號劫持；
-  - 沒有帳號 → 建立新帳號（已驗證、沒有密碼），需要發起時已勾選同意條款、並且已（另外）確認年滿 18 歲，
-    成功時同時記錄兩者；先檢查條款、再檢查年齡，各自回報不同的錯誤代碼。
+  - 沒有帳號 → 建立新帳號（已驗證、沒有密碼），需要發起時已勾選同意條款、並且已通過生日與年齡區間的驗證
+    （規則見 `age_policy`；驗證在發起時就完成，交易裡只放通過驗證的值，回呼時再驗證一次），成功時同時記錄兩者；
+    先檢查條款、再檢查年齡，各自回報不同的錯誤代碼。
 - 該帳號已綁定另一個 Google 身分、或停用中 → 拒絕，不新增綁定。
 - 已存在的帳號（已綁定、或以信箱合併）登入時不需要這兩項確認，也**不會**被順便標記為已確認年齡：
   補確認只能在帳號設定頁明確完成。
@@ -38,7 +39,9 @@ from app.services.google_oidc import (
     GoogleAuthError, GoogleIdentityProvider, GoogleProfile, code_challenge_for, new_code_verifier, new_state_or_nonce,
 )
 from app.services.input_cleaning import clean_single_line
-from app.services.legal import CURRENT_AGE_POLICY_VERSION, CURRENT_TERMS_VERSION
+from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, VerifiedAge, taipei_today, validate_age_input
+from app.services.errors import ValidationError
+from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.normalization import canonical_email, is_valid_email, normalize_email
 
 MAX_DISPLAY_NAME_LENGTH = 50
@@ -86,7 +89,9 @@ class GoogleSignInService:
         identities: UserIdentityRepository,
         provider: GoogleIdentityProvider,
         clock: Callable[[], datetime],
+        age_policy: AgePolicy = DEFAULT_AGE_POLICY,
     ) -> None:
+        self._age_policy = age_policy
         self._users = users
         self._identities = identities
         self._provider = provider
@@ -94,19 +99,33 @@ class GoogleSignInService:
 
     # ---- 發起 ----------------------------------------------------------------
 
-    def begin(self, *, accept_terms: object, confirm_adult: object) -> GoogleStart:
-        """旗標 `t`（同意條款）與 `a`（確認年滿 18 歲）只有明確為 `True` 才成立，並簽進交易 cookie。"""
+    def begin(self, *, accept_terms: object, birth_date: object, age_range: object) -> GoogleStart:
+        """旗標 `t`（同意條款）只有明確為 `True` 才成立；生日與年齡區間若有提供，就在這裡完成驗證。
+
+        - 兩者都沒提供：交易不帶年齡資料（已有帳號的使用者登入不需要；真的要建立新帳號時回呼會拒絕）。
+        - 有提供（只提供一個也算）：必須通過 `validate_age_input`，否則直接拋出 `ValidationError`——
+          使用者不會被導向 Google，也不會留下任何資料。未滿最低年齡與不一致各記一筆只有事件名稱的警告。
+        - 通過的值（ISO 生日 `b`、區間代碼 `r`）放進簽章、10 分鐘有效、回呼結束即刪除的交易 cookie。
+        """
+        provided = any(value not in (None, "") for value in (birth_date, age_range))
+        verified = self._validate_age(birth_date, age_range) if provided else None
         state, nonce, verifier = new_state_or_nonce(), new_state_or_nonce(), new_code_verifier()
         url = self._provider.build_authorization_url(
             state=state, nonce=nonce, code_challenge=code_challenge_for(verifier)
         )
         security_events.log_event(security_events.GOOGLE_STARTED)
-        return GoogleStart(
-            authorization_url=url,
-            transaction={
-                "s": state, "n": nonce, "v": verifier, "t": accept_terms is True, "a": confirm_adult is True,
-            },
-        )
+        transaction: dict[str, Any] = {"s": state, "n": nonce, "v": verifier, "t": accept_terms is True}
+        if verified is not None:
+            transaction["b"] = verified.birth_date.isoformat()
+            transaction["r"] = verified.age_range
+        return GoogleStart(authorization_url=url, transaction=transaction)
+
+    def _validate_age(self, birth_date: object, age_range: object) -> VerifiedAge:
+        try:
+            return validate_age_input(birth_date, age_range, taipei_today(self._clock()), self._age_policy)
+        except ValidationError as error:
+            security_events.log_age_rejection(error.code)
+            raise
 
     # ---- 回呼 ----------------------------------------------------------------
 
@@ -133,9 +152,12 @@ class GoogleSignInService:
             if error.reason == "unavailable":
                 self._refuse(ERROR_UNAVAILABLE, security_events.GOOGLE_REJECTED_UNAVAILABLE)
             self._refuse(ERROR_REJECTED, security_events.GOOGLE_REJECTED_TOKEN)
-        # 沒有 `a` 的交易（例如更新前發起的流程）一律視為「未確認年齡」
+        # 沒有 `b`、`r` 的交易（沒提供，或更新前發起的流程）一律視為「尚未通過年齡驗證」
         return self._resolve(
-            profile, accepted_terms=transaction.get("t") is True, confirmed_adult=transaction.get("a") is True
+            profile,
+            accepted_terms=transaction.get("t") is True,
+            birth_date=transaction.get("b"),
+            age_range=transaction.get("r"),
         )
 
     def _check_state(self, state: object, transaction: dict[str, Any] | None) -> None:
@@ -155,7 +177,9 @@ class GoogleSignInService:
 
     # ---- 帳號對應 ------------------------------------------------------------
 
-    def _resolve(self, profile: GoogleProfile, *, accepted_terms: bool, confirmed_adult: bool) -> GoogleLoginResult:
+    def _resolve(
+        self, profile: GoogleProfile, *, accepted_terms: bool, birth_date: object, age_range: object
+    ) -> GoogleLoginResult:
         now = self._clock()
 
         identity = self._identities.get_by_subject(PROVIDER_GOOGLE, profile.subject)
@@ -175,9 +199,11 @@ class GoogleSignInService:
         if user is None:
             if not accepted_terms:
                 self._refuse(ERROR_TERMS, security_events.GOOGLE_REJECTED_TERMS)
-            if not confirmed_adult:
+            try:                                                       # 不信任 cookie 的內容，也處理剛好跨日的邊界
+                verified = validate_age_input(birth_date, age_range, taipei_today(now), self._age_policy)
+            except ValidationError:
                 self._refuse(ERROR_AGE, security_events.GOOGLE_REJECTED_AGE)
-            user = self._create_account(profile, canonical, now)
+            user = self._create_account(profile, canonical, now, verified)
             if user is not None:
                 self._bind(user, profile.subject)
                 security_events.log_event(security_events.AGE_CONFIRMED_GOOGLE, user_id=user.id)
@@ -211,7 +237,7 @@ class GoogleSignInService:
         if user.status in _DISABLED:
             self._refuse(ERROR_DISABLED, security_events.GOOGLE_REJECTED_DISABLED, user_id=user.id)
 
-    def _create_account(self, profile: GoogleProfile, canonical: str, now: datetime) -> User | None:
+    def _create_account(self, profile: GoogleProfile, canonical: str, now: datetime, verified: VerifiedAge) -> User | None:
         user = User(
             email=normalize_email(profile.email),
             email_canonical=canonical,
@@ -221,8 +247,11 @@ class GoogleSignInService:
             status=STATUS_ACTIVE,
             terms_version=CURRENT_TERMS_VERSION,
             terms_accepted_at=now,
+            birth_date=verified.birth_date,
+            age_range=verified.age_range,
+            is_adult_at_confirmation=verified.is_adult,
             age_confirmed_at=now,
-            age_policy_version=CURRENT_AGE_POLICY_VERSION,
+            age_policy_version=self._age_policy.version,
         )
         try:
             self._users.add_user(user)

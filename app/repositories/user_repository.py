@@ -8,12 +8,12 @@ UPDATE 完成，不做「讀出、在 Python 加一、寫回」，否則兩個 w
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.models.user import User
+from app.models.user import ROLE_ADMIN, User
 from app.repositories.base import BaseRepository
 from app.repositories.errors import DuplicateUserError
 
@@ -101,17 +101,76 @@ class UserRepository(BaseRepository[User]):
         self._run_update(user, update(User).where(User.id == user.id).values(token_version=User.token_version + 1))
         return self._session.execute(select(User.token_version).where(User.id == user.id)).scalar_one()
 
-    def confirm_adult_if_unset(self, user: User, *, confirmed_at: datetime, policy_version: str) -> bool:
-        """尚未確認年滿 18 歲時，記錄確認時間與政策版本；已確認的帳號完全不改動。回傳是否真的寫入。
+    def complete_age_verification_if_unset(
+        self,
+        user: User,
+        *,
+        birth_date: date,
+        age_range: str,
+        is_adult: bool,
+        confirmed_at: datetime,
+        policy_version: str,
+    ) -> bool:
+        """尚未完成年齡確認時，一次寫入全部年齡欄位；已完成的帳號完全不改動。回傳是否真的寫入。
 
-        條件式 UPDATE（`age_confirmed_at IS NULL`）：並行的兩次確認只有一次會寫入，第一次寫入的時間與版本
-        不會被覆蓋，所以「已確認的帳號再次確認」不會改變原本的紀錄。
+        條件式 UPDATE（`birth_date IS NULL`；「完成」只看生日是否存在，勾選版時代只有 `age_confirmed_at` 的帳號
+        視為尚未完成）：並行的兩次補填只有一次會寫入，第一次寫入的內容不會被覆蓋，所以「已完成的帳號再次提交」
+        不會改變原本的紀錄。五個欄位在同一個 UPDATE 寫入，不會出現只寫一半的狀態。
         """
         changed = self._run_update(
             user,
             update(User)
             .where(User.id == user.id)
-            .where(User.age_confirmed_at.is_(None))
-            .values(age_confirmed_at=confirmed_at, age_policy_version=policy_version),
+            .where(User.birth_date.is_(None))
+            .values(
+                birth_date=birth_date,
+                age_range=age_range,
+                is_adult_at_confirmation=is_adult,
+                age_confirmed_at=confirmed_at,
+                age_policy_version=policy_version,
+            ),
         )
         return changed == 1
+
+    def count_by_age_range(self) -> dict[str | None, int]:
+        """各年齡區間的人數（`GROUP BY`，只回計數）；尚未完成年齡確認的帳號歸在 `None`。
+
+        用於「定期察看用戶群」：回傳內容不含任何個別使用者的資料（沒有生日、email 或編號）。
+        """
+        rows = self._session.execute(select(User.age_range, func.count(User.id)).group_by(User.age_range)).all()
+        return {code: count for code, count in rows}
+
+    # ---- 閒置帳號（account-retention 規格）----------------------------------------
+
+    @staticmethod
+    def _last_seen():
+        """最後一次成功登入的時間；從未登入過的帳號以建立時間為準。"""
+        return func.coalesce(User.last_login_at, User.created_at)
+
+    def count_inactive(self, cutoff: datetime) -> int:
+        """最後一次登入早於 `cutoff` 的一般帳號數量（管理員不納入）。"""
+        return self._session.execute(
+            select(func.count(User.id)).where(User.role != ROLE_ADMIN).where(self._last_seen() < cutoff)
+        ).scalar_one()
+
+    def find_inactive_ids(self, cutoff: datetime, *, limit: int = 200) -> list[int]:
+        """最後一次登入早於 `cutoff` 的一般帳號的內部編號（由小到大，最多 `limit` 個）。只回編號，不載入任何個資。"""
+        statement = (
+            select(User.id).where(User.role != ROLE_ADMIN).where(self._last_seen() < cutoff).order_by(User.id).limit(limit)
+        )
+        return list(self._session.scalars(statement))
+
+    def delete_inactive(self, user_id: int, cutoff: datetime) -> bool:
+        """條件式 DELETE：條件在刪除當下再確認一次（剛好登入的帳號不會被刪）。回傳是否真的刪除。
+
+        `user_identities`、`auth_tokens` 靠資料庫的 `ON DELETE CASCADE` 一併移除（SQLite 由連線事件開啟外鍵）。
+        不同步 Session 內已載入的物件：呼叫端應使用這個流程專用的 Session，不拿已刪除的使用者物件繼續做事。
+        """
+        result = self._session.execute(
+            delete(User)
+            .where(User.id == user_id)
+            .where(User.role != ROLE_ADMIN)
+            .where(self._last_seen() < cutoff)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1

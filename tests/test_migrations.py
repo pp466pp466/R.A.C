@@ -19,6 +19,8 @@ from tests.conftest import require_sqlserver_test_url
 
 MEMBER_TABLES = ("users", "user_identities", "auth_tokens")
 AGE_COLUMNS = ("age_confirmed_at", "age_policy_version")
+BIRTHDATE_COLUMNS = ("birth_date", "age_range", "is_adult_at_confirmation")
+TOMBSTONE_TABLE = "deletion_tombstones"
 
 
 def alembic_config(url: str) -> Config:
@@ -40,7 +42,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -83,6 +85,59 @@ def test_0003_adds_only_two_columns_to_users_and_follows_0002(tmp_path):
     engine.dispose()
 
 
+def test_0004_adds_three_columns_and_one_table_and_follows_0003(tmp_path):
+    """age-verification-birthdate：只新增三個可為空的欄位與一張新資料表（expand）。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'birthdate.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0004_users_birthdate")
+    assert revision.down_revision == "0003_users_age_confirmation"
+
+    command.upgrade(cfg, "0003_users_age_confirmation")
+    before_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+    before_tables = set(inspect(engine).get_table_names())
+    assert not set(BIRTHDATE_COLUMNS) & before_columns and TOMBSTONE_TABLE not in before_tables
+
+    command.upgrade(cfg, "0004_users_birthdate")
+    inspector = inspect(engine)
+    after_columns = {c["name"]: c for c in inspector.get_columns("users")}
+    assert set(after_columns) - before_columns == set(BIRTHDATE_COLUMNS) and before_columns <= set(after_columns)
+    assert all(after_columns[name]["nullable"] is True for name in BIRTHDATE_COLUMNS)
+    assert set(inspector.get_table_names()) - before_tables == {TOMBSTONE_TABLE}
+    tombstone = {c["name"]: c for c in inspector.get_columns(TOMBSTONE_TABLE)}
+    assert set(tombstone) == {"id", "user_id", "deleted_at", "reason"}
+    assert inspector.get_foreign_keys(TOMBSTONE_TABLE) == []             # 被指向的帳號已不存在，不設外鍵
+
+    command.downgrade(cfg, "0003_users_age_confirmation")
+    assert {c["name"] for c in inspect(engine).get_columns("users")} == before_columns
+    assert set(inspect(engine).get_table_names()) == before_tables
+    engine.dispose()
+
+
+def test_upgrading_0004_keeps_existing_accounts_and_marks_them_as_not_verified(tmp_path):
+    """升級前的帳號（含勾選版時代、只有 age_confirmed_at 的帳號）保留，三個新欄位為空 = 尚未完成年齡確認。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'keep.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    command.upgrade(cfg, "0003_users_age_confirmation")
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        conn.execute(users.insert().values(
+            public_id="00000000-0000-4000-8000-000000000001", email="old@example.com", email_canonical="old@example.com",
+            display_name="舊帳號", role="user", member_tier="free", status="active", failed_login_count=0, token_version=1,
+            created_at=utcnow().replace(tzinfo=None), updated_at=utcnow().replace(tzinfo=None),
+            age_confirmed_at=utcnow().replace(tzinfo=None), age_policy_version="2026-10-28-self-declared",
+        ))
+
+    command.upgrade(cfg, "head")
+    with engine.connect() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        row = conn.execute(select(users)).mappings().one()
+    assert row["email"] == "old@example.com" and row["age_confirmed_at"] is not None
+    assert row["birth_date"] is None and row["age_range"] is None and row["is_adult_at_confirmation"] is None
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -121,7 +176,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert set(MEMBER_TABLES) <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):
@@ -161,6 +216,44 @@ def test_downgrading_0003_removes_only_the_age_columns_and_keeps_every_row(migra
     command.downgrade(alembic_config(engine.url.render_as_string(hide_password=False)), "0002_users_and_auth_tokens")
 
     assert not set(AGE_COLUMNS) & {c["name"] for c in inspect(engine).get_columns("users")}
+    with engine.connect() as conn:
+        for table in MEMBER_TABLES:
+            reflected = Table(table, MetaData(), autoload_with=engine)
+            assert conn.execute(select(func.count()).select_from(reflected)).scalar_one() == 1, table
+
+
+def test_birthdate_columns_are_nullable_and_the_tombstone_table_exists_after_upgrade(migrated_database):
+    """空值 = 尚未完成年齡確認；不回填，所以三個新欄位必須可為空。墓碑資料表不得有外鍵。"""
+    inspector = inspect(migrated_database)
+    columns = {c["name"]: c for c in inspector.get_columns("users")}
+    for name in BIRTHDATE_COLUMNS:
+        assert name in columns and columns[name]["nullable"] is True
+    assert TOMBSTONE_TABLE in inspector.get_table_names()
+    assert inspector.get_foreign_keys(TOMBSTONE_TABLE) == []
+
+
+def test_downgrading_0004_removes_only_the_new_columns_and_table_and_keeps_every_row(migrated_database):
+    """降級同樣不能因為 SQLite 重建資料表而連帶清掉以串聯刪除參照 users 的資料（見 0003 的同一個陷阱）。"""
+    from datetime import date
+
+    engine = migrated_database
+    with Session(engine) as session:
+        user = User(
+            email="b@example.com", email_canonical="b@example.com", display_name="乙", status="active",
+            birth_date=date(1996, 1, 5), age_range="25_34", is_adult_at_confirmation=True,
+            age_confirmed_at=utcnow(), age_policy_version="v",
+        )
+        session.add(user)
+        session.flush()
+        session.add(UserIdentity(user_id=user.id, provider="google", provider_subject="s2"))
+        session.add(AuthToken(user_id=user.id, purpose="verify_email", token_hash="g" * 64, expires_at=utcnow()))
+        session.commit()
+
+    command.downgrade(alembic_config(engine.url.render_as_string(hide_password=False)), "0003_users_age_confirmation")
+
+    columns = {c["name"] for c in inspect(engine).get_columns("users")}
+    assert not set(BIRTHDATE_COLUMNS) & columns and set(AGE_COLUMNS) <= columns        # 只退回 0004 加的
+    assert TOMBSTONE_TABLE not in inspect(engine).get_table_names()
     with engine.connect() as conn:
         for table in MEMBER_TABLES:
             reflected = Table(table, MetaData(), autoload_with=engine)

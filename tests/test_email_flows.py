@@ -21,6 +21,7 @@ from app.services.email_flow_service import (
 from app.services.errors import TooManyRequests, Unauthenticated, ValidationError
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
+from tests.support.age import age_fields
 from tests.support.auth import FAST_HASHER, GOOD_PASSWORD, START, FakeClock, add_user
 from tests.support.email_flow import BASE_URL, TOKEN_PATTERN, DeferQueue, FakeSender, make_flow
 
@@ -474,7 +475,7 @@ def test_registering_with_verification_on_sends_a_mail_and_the_link_completes_th
         users=UserRepository(member_session), identities=UserIdentityRepository(member_session), hasher=FAST_HASHER,
         clock=clock, email_verification_required=True, mailer=flow,
     )
-    auth.register(email="New.Person@Example.com", password=GOOD_PASSWORD, display_name="新朋友", accept_terms=True, confirm_adult=True)
+    auth.register(email="New.Person@Example.com", password=GOOD_PASSWORD, display_name="新朋友", accept_terms=True, **age_fields(30))
     assert sender.sent == []                                    # 還沒提交，不寄
     queue.run()
     assert [m["to"] for m in sender.sent] == ["new.person@example.com"]
@@ -494,12 +495,12 @@ def test_the_pre_hijack_scenario_heals_itself(member_session):
         users=UserRepository(member_session), identities=UserIdentityRepository(member_session), hasher=FAST_HASHER,
         clock=clock, email_verification_required=True, mailer=flow,
     )
-    auth.register(email="victim@example.com", password="attackers-chosen-pw", display_name="攻擊者", accept_terms=True, confirm_adult=True)
+    auth.register(email="victim@example.com", password="attackers-chosen-pw", display_name="攻擊者", accept_terms=True, **age_fields(30))
     queue.run()
     attacker_session = auth.login(email="victim@example.com", password="attackers-chosen-pw")   # 待驗證帳號可登入
 
     clock.advance(minutes=5)
-    auth.register(email="victim@example.com", password="victims-real-password", display_name="受害者", accept_terms=True, confirm_adult=True)
+    auth.register(email="victim@example.com", password="victims-real-password", display_name="受害者", accept_terms=True, **age_fields(30))
     queue.run()
     with pytest.raises(Unauthenticated):
         auth.login(email="victim@example.com", password="victims-real-password")   # 原密碼沒被覆蓋，受害者登入失敗

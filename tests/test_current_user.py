@@ -1,7 +1,13 @@
-"""CurrentUser 快照：年齡只對外呈現「是否已確認」，時間與政策版本是內部紀錄。"""
+"""CurrentUser 快照：年齡只對外呈現「是否已完成」與年齡群組，生日、區間、時間與政策版本都是內部紀錄。"""
+import json
+from datetime import date
+
+import pytest
+
 from app.models import User
 from app.models.base import utcnow
 from app.services.current_user import CurrentUser
+from tests.support.age import age_columns
 
 
 def make_model(**overrides) -> User:
@@ -13,19 +19,38 @@ def make_model(**overrides) -> User:
     return User(**values)
 
 
-def test_a_confirmed_member_reports_age_confirmed_true():
-    current = CurrentUser.from_model(make_model(age_confirmed_at=utcnow(), age_policy_version="v1"))
-    assert current.age_confirmed is True
+def test_a_member_with_a_birthday_and_range_reports_age_confirmed_true_and_keeps_the_birthday_internally():
+    current = CurrentUser.from_model(make_model(**age_columns(30)))
+    assert current.age_confirmed is True and current.birth_date == date(1996, 10, 27)
 
 
-def test_an_unconfirmed_member_reports_age_confirmed_false():
-    assert CurrentUser.from_model(make_model()).age_confirmed is False
+def test_a_member_without_age_data_reports_age_confirmed_false():
+    current = CurrentUser.from_model(make_model())
+    assert current.age_confirmed is False and current.birth_date is None
 
 
-def test_the_public_dict_has_the_boolean_but_never_the_time_or_the_version():
-    confirmed = CurrentUser.from_model(make_model(age_confirmed_at=utcnow(), age_policy_version="v1")).public_dict()
-    unconfirmed = CurrentUser.from_model(make_model()).public_dict()
+def test_the_old_checkbox_confirmation_alone_does_not_count_as_completed():
+    """勾選版時代的帳號只有 age_confirmed_at：完成與否只看生日與區間。"""
+    current = CurrentUser.from_model(make_model(age_confirmed_at=utcnow(), age_policy_version="2026-10-28-self-declared"))
+    assert current.age_confirmed is False
 
-    assert confirmed["age_confirmed"] is True and unconfirmed["age_confirmed"] is False
-    for data in (confirmed, unconfirmed):
-        assert "age_confirmed_at" not in data and "age_policy_version" not in data
+
+@pytest.mark.parametrize("columns", [{"birth_date": date(1996, 1, 5)}, {"age_range": "25_34"}])
+def test_a_birthday_without_a_range_or_the_reverse_is_not_complete(columns):
+    assert CurrentUser.from_model(make_model(**columns)).age_confirmed is False
+
+
+@pytest.mark.parametrize("group", ["adult", "minor", None])
+def test_the_public_dict_has_the_boolean_and_the_group_but_never_the_birthday_range_time_or_version(group):
+    current = CurrentUser.from_model(make_model(**age_columns(30)))
+    data = current.public_dict(age_group=group, google_linked=False)
+    assert data["age_confirmed"] is True and data["age_group"] == group
+    text = json.dumps(data, default=str)
+    for secret in ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult", "1996", "25_34"):
+        assert secret not in text
+
+
+def test_the_age_group_must_be_passed_explicitly():
+    """沒有預設值：忘了傳會立刻出錯，而不是悄悄把成年人顯示成未知。"""
+    with pytest.raises(TypeError):
+        CurrentUser.from_model(make_model()).public_dict()          # type: ignore[call-arg]

@@ -88,8 +88,11 @@
 | `token_version` | INTEGER | NOT NULL, DEFAULT 1 | 加 1 即撤銷既有 session |
 | `terms_version` | Unicode(40) | NULLABLE | 註冊與 Google 建立帳號時由 Service 必填（記錄同意的服務條款與隱私權政策版本）；由管理員指令建立的帳號沒有「同意」這個動作，故為空 |
 | `terms_accepted_at` | DATETIME2 (UTC) | NULLABLE | 同意時間；同上 |
-| `age_confirmed_at` | DATETIME2 (UTC) | NULLABLE | 確認年滿 18 歲的時間；空值 = 尚未確認，不得使用任何會呼叫 Gemini 的功能（age-gate）。與同意條款分開勾選；不蒐集生日、年齡或證件。由條件式 UPDATE 寫入，第一次確認後不再被覆蓋 |
-| `age_policy_version` | Unicode(40) | NULLABLE | 確認當時的年齡政策版本（`CURRENT_AGE_POLICY_VERSION`）；與 `age_confirmed_at` 同時寫入。管理員指令建立的帳號與升級前已存在的帳號為空，須於帳號設定頁補確認 |
+| `birth_date` | DATE | NULLABLE | 使用者自行聲明的生日（age-verification-birthdate）；**個資**：不進 API、日誌與模型，管理員只看年齡區間彙總；連續 12 個月未登入即隨帳號刪除。「是否已完成年齡確認」只看它（與 `age_range`）是否存在；是否成年一律由它於當下計算 |
+| `age_range` | Unicode(20) | NULLABLE | 使用者選的年齡區間代碼（`under_13`、`13_17`、`18_24`、`25_34`、`35_44`、`45_54`、`55_plus`），須與生日對照一致才會寫入；用於彙總統計（`GROUP BY`） |
+| `is_adult_at_confirmation` | BIT / BOOLEAN | NULLABLE | 確認當時是否已滿 18 歲，**僅供紀錄**，不參與任何判斷（使用者決定「都儲存」） |
+| `age_confirmed_at` | DATETIME2 (UTC) | NULLABLE | 生日與年齡區間通過對照的時間。勾選版（age-gate）時代只有這一欄的帳號視為尚未完成。由條件式 UPDATE（`WHERE birth_date IS NULL`）與其他年齡欄位同時寫入，第一次完成後不再被覆蓋 |
+| `age_policy_version` | Unicode(40) | NULLABLE | 確認當時的年齡政策版本（`AgePolicy.version`）；管理員指令建立的帳號與升級前已存在的帳號為空，須於帳號設定頁補填 |
 | `last_login_at` | DATETIME2 (UTC) | NULLABLE | 最後登入時間 |
 | `created_at`、`updated_at` | DATETIME2 (UTC) | NOT NULL | 由 Python 端維護（不使用伺服器端函式，避免兩種資料庫語法差異） |
 | `deleted_at` | DATETIME | NULLABLE | 刪除帳號流程使用；**C-2 尚未建立此欄位**，C-4 以 expand 方式新增 |
@@ -174,12 +177,23 @@
 | `error_detail` | UnicodeText | NULLABLE | 失敗的模型原文，截斷至 2000 字，保存 14 天，僅管理員可讀 |
 | `created_at` | TIMESTAMP | DEFAULT CURRENT_TIMESTAMP | |
 
+#### 6-1. 刪除紀錄表 (`deletion_tombstones`)
+
+| 欄位名稱 | 型態 | 約束 | 說明 |
+|---|---|---|---|
+| `id` | INTEGER | PRIMARY KEY AUTOINCREMENT | |
+| `user_id` | INTEGER | NOT NULL，**不設外鍵** | 已被刪除的使用者內部編號；被指向的帳號已不存在，外鍵會讓紀錄無法寫入 |
+| `deleted_at` | DATETIME2 (UTC) | NOT NULL | 刪除時間 |
+| `reason` | Unicode(30) | NOT NULL | 列舉值，目前只有 `inactive_12_months` |
+
+> 只存內部編號、時間與原因，**不含 email、名稱、生日或任何個資**。SQLite 的整數主鍵在刪除最大值後可能重用編號，SQL Server 的 IDENTITY 不會；SQLite 只用於測試與本機展示。
+
 #### 7. 其他支援表（於對應 change 建立）
 
 | 資料表 | 用途 | 所屬 change |
 |---|---|---|
 | `admin_audit_logs` | 管理員操作稽核紀錄，保存 24 個月 | usage-safety-ops |
-| `deletion_tombstones` | 刪除帳號的墓碑紀錄（僅內部 ID 與刪除日期），供還原備份後重新執行刪除 | usage-safety-ops |
+| `deletion_tombstones` | 刪除帳號的墓碑紀錄（僅內部 ID、刪除時間與原因），供還原備份後重新執行刪除。**已於 age-verification-birthdate 建立**（閒置 12 個月清除使用），C-4 的刪除帳號流程沿用 | age-verification-birthdate → usage-safety-ops |
 
 ### B. RPG 模組（延後實作，欄位維持 v2.1.1 定義）
 

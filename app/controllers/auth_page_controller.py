@@ -7,10 +7,11 @@
 """
 from flask import Blueprint, Response, abort, redirect, render_template, request
 
-from app.runtime import get_config, get_identity_provider
+from app.runtime import get_age_policy, get_clock, get_config, get_identity_provider
 from app.security.oauth_cookie import clear_transaction, read_transaction
 from app.security.redirects import DEFAULT_AFTER_LOGIN, safe_next
 from app.security.session import current_user, login_required_page, login_user
+from app.services.age_policy import EARLIEST_BIRTH_DATE, taipei_today
 from app.services.google_sign_in_service import (
     ERROR_AGE, ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
 )
@@ -25,9 +26,25 @@ LOGIN_ERROR_MESSAGES = {
     ERROR_UNAVAILABLE: "Google 登入暫時無法使用，請稍後再試，或改用信箱與密碼登入。",
     ERROR_REJECTED: "Google 登入沒有完成或被拒絕，請再試一次。",
     ERROR_TERMS: "第一次使用 Google 註冊時，請先勾選同意服務條款與隱私權政策。",
-    ERROR_AGE: "請先確認您已年滿 18 歲。",
+    ERROR_AGE: "請先完成年齡確認：填寫生日並選擇年齡區間。",
     ERROR_DISABLED: "此帳號已停用，無法登入。",
 }
+
+
+def _age_rules() -> dict:
+    """給前端的年齡規則：區間選項（代碼與標籤）、最低註冊年齡、成年門檻與生日欄位的範圍。
+
+    全部來自 `AgePolicy` 與時鐘：頁面與腳本不內嵌任何年齡數字。生日欄位的 `max` 是今天（Asia/Taipei），
+    只是方便輸入；伺服器端一律重新驗證。
+    """
+    policy = get_age_policy()
+    return {
+        "ranges": policy.range_choices(),
+        "minRegisterAge": policy.min_register_age,
+        "adultAge": policy.adult_age,
+        "birthDateMin": EARLIEST_BIRTH_DATE.isoformat(),
+        "birthDateMax": taipei_today(get_clock()()).isoformat(),
+    }
 
 
 def _state(**extra) -> dict:
@@ -36,7 +53,18 @@ def _state(**extra) -> dict:
         "googleEnabled": get_identity_provider() is not None,
         "verificationRequired": get_config().email_verification_required,
         "termsVersion": CURRENT_TERMS_VERSION,
+        "ageRules": _age_rules(),
         **extra,
+    }
+
+
+def _legal_context() -> dict:
+    """條款與隱私權政策範本的共同變數：版本與年齡數字（範本內不得寫死年齡）。"""
+    policy = get_age_policy()
+    return {
+        "terms_version": CURRENT_TERMS_VERSION,
+        "min_age": policy.min_register_age,
+        "adult_age": policy.adult_age,
     }
 
 
@@ -96,12 +124,12 @@ def account_page():
 
 @auth_pages_bp.get("/terms")
 def terms_page():
-    return render_template("legal/terms.html", terms_version=CURRENT_TERMS_VERSION)
+    return render_template("legal/terms.html", **_legal_context())
 
 
 @auth_pages_bp.get("/privacy")
 def privacy_page():
-    return render_template("legal/privacy.html", terms_version=CURRENT_TERMS_VERSION)
+    return render_template("legal/privacy.html", **_legal_context())
 
 
 # ---- Google 登入回呼 ----------------------------------------------------------

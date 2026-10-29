@@ -45,10 +45,17 @@ class Forbidden(ServiceError):
 
 
 class AgeConfirmationRequired(Forbidden):
-    """尚未確認年滿 18 歲，不得使用會呼叫 Gemini 的功能（403）。前端依 `code` 引導使用者到帳號設定補確認。"""
+    """尚未完成年齡確認，不得使用會呼叫 Gemini 的功能（403）。前端依 `code` 引導使用者到帳號設定補填生日與年齡區間。"""
 
     code = "age_confirmation_required"
-    default_message = "請先到帳號設定確認您已年滿 18 歲，才能使用這項功能。"
+    default_message = "請先到帳號設定填寫生日並選擇年齡區間，才能使用這項功能。"
+
+
+class AgeRestricted(Forbidden):
+    """年齡低於目前年齡規則的最低使用年齡（403）。與「尚未完成確認」不同：補填也沒有用，所以不引導補填。"""
+
+    code = "age_restricted"
+    default_message = "您的年齡目前不符合使用這項功能的規定。"
 
 
 class NotFound(ServiceError):

@@ -6,7 +6,8 @@ from app import create_app
 from app.config import load_config
 from app.controllers.request_helpers import read_json_object
 from app.services.errors import (
-    Conflict, Forbidden, NotFound, ServiceError, TooManyRequests, Unauthenticated, ValidationError,
+    AgeConfirmationRequired, AgeRestricted, Conflict, Forbidden, NotFound, ServiceError, TooManyRequests, Unauthenticated,
+    ValidationError,
 )
 
 TRACE_MARKERS = ("Traceback", 'File "', "app\\", "app/", "sqlalchemy", "SELECT ")
@@ -26,6 +27,10 @@ def app():
         "validation-plain": ValidationError("請輸入內容。"),
         "unauthenticated": Unauthenticated(),
         "forbidden": Forbidden(),
+        "age-required": AgeConfirmationRequired(),
+        "age-restricted": AgeRestricted(),
+        "age-mismatch": ValidationError("資料有誤，請重新註冊。", code="age_mismatch"),
+        "age-not-eligible": ValidationError("本服務僅供 13 歲以上使用，無法註冊。", fields={"birth_date": "本服務僅供 13 歲以上使用，無法註冊。"}, code="age_not_eligible"),
         "notfound": NotFound(),
         "conflict": Conflict(),
         "toomany": TooManyRequests(),
@@ -144,3 +149,22 @@ def test_a_body_over_64_kb_is_a_413_json_error(client):
 def test_a_body_just_under_the_limit_is_accepted(client):
     payload = '{"x": "' + "a" * (64 * 1024 - 100) + '"}'
     assert client.post("/api/_t/body", data=payload, content_type="application/json").status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("name", "status", "code"),
+    [("age-required", 403, "age_confirmation_required"), ("age-restricted", 403, "age_restricted"),
+     ("age-mismatch", 400, "age_mismatch"), ("age-not-eligible", 400, "age_not_eligible")],
+)
+def test_the_age_errors_map_to_their_own_codes_with_a_chinese_message(client, name, status, code):
+    response = client.get(f"/api/_t/{name}")
+    error = response.get_json()["error"]
+    assert response.status_code == status and error["code"] == code
+    assert any("\u4e00" <= ch <= "\u9fff" for ch in error["message"])
+
+
+def test_age_restricted_is_a_forbidden_but_a_different_one_from_age_confirmation_required():
+    assert issubclass(AgeRestricted, Forbidden) and issubclass(AgeConfirmationRequired, Forbidden)
+    assert not issubclass(AgeRestricted, AgeConfirmationRequired) and not issubclass(AgeConfirmationRequired, AgeRestricted)
+    assert AgeRestricted().code == "age_restricted" and AgeConfirmationRequired().code == "age_confirmation_required"
+    assert "補填" not in AgeRestricted().message              # 補填也沒有用，所以不引導

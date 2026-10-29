@@ -2,7 +2,7 @@
 
 以 LLM 驅動的雙核心平台。開發規範以根目錄的 [AGENTS.md](AGENTS.md) 為唯一權威來源；設計決策見 [docs/report.md](docs/report.md)，變更提案見 `openspec/changes/`。
 
-目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）與 `age-gate`（年齡確認閘門）都已封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**已知落差**：AGENTS.md 第 10 節已改為「生日加年齡區間」的年齡確認，程式仍是 `age-gate` 的勾選自行聲明，由後續的 `age-verification-birthdate` 實作（見 `docs/RPG.md` 的 T-10）。
+目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）與 `age-gate`（年齡確認閘門，勾選版）都已封存；`age-verification-birthdate`（年齡確認改為生日加年齡區間、閒置帳號清除）已實作完成，待審查與封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**目前的年齡設定與 Gemini 條款不符**（條款只有 18 歲門檻），僅限個人測試（見「年齡規則與帳號保存期限」）。
 
 ## 環境需求
 
@@ -90,7 +90,7 @@ node --test "tests/js/**/*.test.js"
 - Windows PowerShell 5.1 以管線傳字串給外部程式時，會在最前面加上 UTF-8 BOM；指令會自動去除它，所以上面的管線寫法可以放心使用（否則密碼會被存成「BOM＋密碼」，之後無法登入）。
 - 建立的帳號角色為 `admin`、狀態為 `active`、信箱視為已驗證；密碼規則與一般註冊相同（8 至 128 字）。
 - 信箱（含 Gmail 別名的重複判斷）已有帳號時指令會失敗，且不會改動既有帳號。
-- **年齡確認不會代為完成**：部署者建立帳號不等於本人確認年滿 18 歲，所以管理員帳號的 `age_confirmed_at` 為空。管理員**第一次登入後須到 `/account` 自行勾選確認**，否則和其他會員一樣不能使用任何會呼叫 Gemini 的功能（見「撰寫新端點」）。
+- **年齡確認不會代為完成**：部署者建立帳號不等於本人填寫了生日，所以管理員帳號沒有生日與年齡區間。管理員**第一次登入後須到 `/account` 自行填寫生日並選擇年齡區間**，否則和其他會員一樣不能使用任何會呼叫 Gemini 的功能（見「撰寫新端點」）。管理員帳號不納入閒置清除。
 
 ## 會員驗證（C-2）
 
@@ -100,24 +100,24 @@ node --test "tests/js/**/*.test.js"
 
 | 端點 | 方法 | 用途 | 需要登入 |
 |---|---|---|---|
-| `/api/auth/register` | POST | 註冊（不論信箱是否已存在，回應完全相同；不自動登入）。請求欄位 `email`、`password`、`display_name`、`accept_terms`、`confirm_adult`，後兩者各自獨立、都必須明確為 `true` | 否 |
+| `/api/auth/register` | POST | 註冊（不論信箱是否已存在，回應完全相同；不自動登入）。請求欄位 `email`、`password`、`display_name`、`accept_terms`（必須明確為 `true`）、`birth_date`（`YYYY-MM-DD`）、`age_range`（列舉代碼）。生日與區間不一致回 400 `age_mismatch`「資料有誤，請重新註冊。」，未滿最低年齡回 400 `age_not_eligible`；兩者都不建立帳號、不封鎖信箱，可立刻以同一信箱重新註冊 | 否 |
 | `/api/auth/login` | POST | 登入（失敗一律是同一則通用訊息） | 否 |
 | `/api/auth/logout` | POST | 登出目前裝置 | 否 |
 | `/api/auth/logout-all` | POST | 登出所有裝置（含目前這一台） | 是 |
-| `/api/auth/me` | GET | 目前登入者本人的資料：`public_id`、`email`、`display_name`、`member_tier`、`role`、`status`、`email_verified`、`has_password`、`age_confirmed`（布林，確認時間與政策版本不對外）、`google_linked` | 是 |
-| `/api/auth/confirm-adult` | POST | 補確認年滿 18 歲（請求 `{"confirm_adult": true}`，回應最新的帳號資料；重複確認成功但不改動第一次的紀錄） | 是 |
+| `/api/auth/me` | GET | 目前登入者本人的資料：`public_id`、`email`、`display_name`、`member_tier`、`role`、`status`、`email_verified`、`has_password`、`age_confirmed`（布林）、`age_group`（`minor`、`adult`，尚未完成為 `null`）、`google_linked`；**生日、年齡區間、確認時間與政策版本一律不對外** | 是 |
+| `/api/auth/verify-age` | POST | 補填生日與年齡區間（請求 `birth_date`、`age_range`，驗證規則同註冊，回應最新的帳號資料；已完成的帳號再次提交一律成功但不改動原紀錄）。取代舊的 `/api/auth/confirm-adult`（已移除） | 是 |
 | `/api/auth/change-password` | POST | 變更密碼（其他裝置被登出，目前裝置維持登入） | 是 |
 | `/api/auth/verify-email` | POST | 以權杖完成信箱驗證（驗證關閉時 404） | 否 |
 | `/api/auth/resend-verification` | POST | 重寄驗證信（驗證關閉時 404） | 是 |
 | `/api/auth/forgot-password` | POST | 忘記密碼（回應與信箱是否存在無關；驗證關閉時 404） | 否 |
 | `/api/auth/reset-password` | POST | 以權杖設定新密碼（驗證關閉時 404） | 否 |
-| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位 `accept_terms`、`confirm_adult`、`next`；第一次以 Google 註冊時兩項確認都需要，既有帳號登入不需要 | 否 |
+| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位 `accept_terms`、`birth_date`、`age_range`、`next`；生日與區間若有提供就在這裡驗證（未滿最低年齡或不一致直接回 400，使用者不會被導向 Google）；第一次以 Google 註冊時需要，既有帳號登入不需要 | 否 |
 
 | 頁面 | 說明 |
 |---|---|
 | `/login`、`/register` | 登入、註冊（已登入者導向 `/account`） |
 | `/forgot-password`、`/reset-password`、`/verify-email` | 信箱驗證開啟時才存在；權杖在網址片段，頁面載入時不會自動完成動作 |
-| `/account` | 帳號設定（需登入）：顯示會員等級標籤與年齡確認狀態（尚未確認時可在此補確認）、變更密碼、登出、登出所有裝置 |
+| `/account` | 帳號設定（需登入）：顯示會員等級標籤與年齡確認狀態（尚未完成時可在此補填生日與年齡區間；13 至 17 歲顯示安全模式提示，**不顯示生日**）、變更密碼、登出、登出所有裝置 |
 | `/terms`、`/privacy` | 服務條款與隱私權政策（**草稿**，待法務覆核） |
 | `/auth/google/callback` | Google 登入的回呼（回傳重新導向，不是 JSON） |
 
@@ -130,6 +130,16 @@ node --test "tests/js/**/*.test.js"
 - **登入失敗**：同一帳號連續 5 次失敗鎖定 15 分鐘，計數存放於資料庫。請求交易在 4xx 時預設回復，所以失敗的記帳會明確要求保留（見 `keep_changes_on_error`）。
 - **預先佔用信箱**：待驗證帳號被重複註冊時不覆蓋原密碼；受害者可用「忘記密碼」取回（成功後攻擊者的登入狀態與密碼都失效）；Google 登入合併時會清除未驗證帳號的密碼並撤銷其登入狀態。**殘留風險**：受害者若點了攻擊者觸發的驗證信又不察覺，攻擊者仍可登入——這是「先註冊後驗證」模式的固有限制。
 - **Google-only 帳號**：目前沒有「在帳號頁設定密碼」的功能（延後）；信箱驗證開啟時，可用「忘記密碼」流程設定密碼。
+- **年齡規則與帳號保存期限（age-verification-birthdate）**：
+  - 註冊（含首次以 Google 註冊）填生日並選年齡區間，兩者都是**自行聲明**，不核實、不收證件；伺服器依生日（Asia/Taipei 的日期）計算年齡並對照。未滿 13 歲不得註冊（生日不保存）；13 至 17 歲可以使用但固定安全模式；滿 18 歲後由生日即時計算而自動解除，不需要任何操作。
+  - **所有年齡數字只在 `app/services/age_policy.py` 的 `AgePolicy`**（最低註冊年齡、最低使用年齡、成年門檻、區間選項、版本），頁面、條款與腳本都從它取值。日後換 LLM 供應商而要把最低年齡改為 18，只需換一個 `AgePolicy` 並提高版本：13 至 17 歲者無法註冊，既有的 13 至 17 歲帳號呼叫 AI 功能回 403 `age_restricted`，不必刪帳號或改資料。
+  - **目前的設定（13 歲以上可用）與 Gemini API 條款不符**（條款只有 18 歲門檻、沒有 13 歲例外），僅限個人測試（只有本人、已成年）；對外開放前必須以實際使用的供應商條款重新確認（見 `docs/RPG.md` T-10）。
+  - **生日是個資**：不進 API 回應、日誌與模型（`/api/auth/me` 只回 `age_confirmed` 與 `age_group`），管理員也看不到個別生日；只用於年齡確認、內容分級與去識別的統計。匯出個人資料時含生日與年齡區間。
+  - **「資料有誤」不鎖信箱**：常是輸入太快，不累計次數、不封鎖、不標記；頁面回到註冊頁的初始狀態（清空生日、區間與密碼，保留電子郵件與顯示名稱），可立刻重新送出。自行聲明本來就無法防止未成年者改填成年資料，這是已知的固有限制（入口層限流屬 C-5）。
+  - **連續 12 個月未登入的帳號直接刪除**（連同生日與年齡區間，不經 7 天寬限期；管理員不納入）：
+    - `flask --app wsgi purge-inactive-accounts [--dry-run]`：由平台排程器觸發（C-5 設定），**不使用行程內計時器**。每個被刪帳號在同一個交易留下一筆只含內部編號、時間與原因的 `deletion_tombstones`；可重複執行，輸出與日誌只有筆數與內部編號。
+    - `flask --app wsgi age-stats`：各年齡區間的人數（供定期察看用戶群），沒有任何個別使用者的資料。
+    - 之後（C-3、C-4）新增指向 `users.id` 的資料表，外鍵必須是 `ON DELETE CASCADE` 或 `SET NULL`，否則 `tests/architecture/test_user_foreign_keys.py` 會失敗。
 - **預設登入後頁面**是 `/account`（C-3 完成後改為 `/cs`，在 `app/security/redirects.py` 一個常數）。
 - **登入鎖定可被用於阻斷特定帳號**（每 15 分鐘一次）：這是規範指定的行為，緩解靠入口層的 IP 限流（C-5）。
 - **開發資料庫不可啟用 SQL Server 的帳本（Ledger）**：帳本會把資料列的更新與刪除永久保留在歷史表，讓「刪除帳號時真的刪除個資」（C-4）無法成立，也會讓失敗次數這類頻繁更新的欄位累積大量歷史列，而且建立後無法關閉。本機原本的 `project` 就是啟用帳本建立的，已在 2026-10-28 重建：舊的改名保留為 `project_old_ledger`（沒有任何資料，確認不需要後可自行刪除），新的 `project` 以 `Chinese_Taiwan_Stroke_CI_AS` 定序、不啟用帳本，並已升級到最新 migration。新建資料庫時請**不要**勾選「啟用帳本」（`CREATE DATABASE` 預設不啟用）。Cloud SQL 是否支援或預設啟用帳本，C-5 要確認。
@@ -190,6 +200,32 @@ node --test "tests/js/**/*.test.js"
 | 本機開發資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`RESTORE VERIFYONLY` 通過），再 `alembic upgrade head`：`0002` → `0003_users_age_confirmation`。升級後 `alembic current` 為 `0003 (head)`、`/healthz` 與 `/readyz` 回 200、兩個新欄位存在且可為空；當時 `users`、`user_identities`、`auth_tokens` 都是 0 筆，沒有資料需要回填 |
 | migration `0003` | 升級只新增兩個可為空的欄位；降級只刪這兩欄、不影響其他資料表的資料列（SQLite 預設以重建資料表刪欄位，會連帶清掉以串聯刪除參照 `users` 的資料，已改為直接 `DROP COLUMN` 並由測試守住） |
 
+### 生日與年齡區間的瀏覽器驗收紀錄（age-verification-birthdate，2026-10-29）
+
+同樣以 Edge 無頭模式（CDP）對暫時的伺服器（SQLite 檔案資料庫、信箱驗證關閉、假的 Google 供應商、真實時鐘；預先放了三個沒有年齡資料的帳號與一個已完成的成年帳號）逐項檢查，**59 / 59 項通過**，11 張截圖逐張檢視。假的 Google 供應商只驗證「是否呼叫 `/api/auth/google/start` 並導向授權網址」，真實的 Google 登入仍需手動確認。
+
+| 範圍 | 檢查內容 |
+|---|---|
+| 註冊頁欄位 | 已沒有「我已年滿 18 歲」勾選；生日是日期欄位（`min` 為 1900-01-01、`max` 為今天的台北日期）；年齡區間是下拉選單，預設「請選擇」且不可選，其後依序為 7 個區間；說明文字帶出最低年齡 13 歲與用途（只用於年齡確認與內容分級、不會顯示給其他人）；兩個欄位都有關聯的 label、可被鍵盤聚焦 |
+| 欄位錯誤的位置 | 沒填生日與區間時，兩個錯誤各自緊接在對應欄位下方（`role=alert`、欄位標示 `aria-invalid`），不會出現其他錯誤 |
+| 生日與區間對不起來 | 顯示固定訊息「資料有誤，請重新註冊。」（表單層級、沒有欄位錯誤）；電子郵件與顯示名稱保留、密碼／生日／區間清空、同意條款的勾選維持；按鈕恢復可按；**用同一個信箱重新填寫即可成功**（以 Enter 送出），共 4 次 `POST /api/auth/register`（空白、不一致、未滿 13 歲、成功），沒有多餘請求 |
+| 未滿 13 歲 | 在生日欄位下方顯示「本服務僅供 13 歲以上使用，無法註冊。」，生日與區間同樣被清空 |
+| Google 入口（註冊頁與登入頁） | 條款、生日、區間三項都沒填：不離開本站、不呼叫 API，三項錯誤各自顯示；只勾條款：只提示生日與區間；不一致：有呼叫 `start` 但不離開本站、顯示固定訊息並清空生日與區間；未滿 13 歲：不離開本站並顯示最低年齡訊息；全部正確才導向授權網址；`/login?error=age_required` 顯示「請先完成年齡確認：填寫生日並選擇年齡區間。」，未知代碼不顯示任何外部文字 |
+| 帳號設定頁補填 | 沒有年齡資料的帳號顯示「年齡確認＝尚未完成」與補填區塊；兩個欄位都沒填就按「確認」不送出請求；不一致與未滿 13 歲都顯示訊息並清空欄位、補填區塊仍在；13 至 17 歲補填成功後清單改為「已完成」、補填區塊消失、出現「目前為安全模式」提示（說明滿 18 歲自動解除）、Toast 回報；重新整理後維持；成年人補填成功後**沒有**安全模式提示；`/api/auth/me` 的 `age_group` 分別為 `minor`、`adult`，且絕不含生日、年齡區間、時間、版本；剛用生日註冊的帳號登入後直接是「已完成」 |
+| 條款與隱私權政策 | 條款載明 13 歲以上才能使用、未滿 13 歲不得註冊、13 至 17 歲只能使用安全模式、生日與區間互相對照；隱私權政策披露生日與年齡區間的蒐集目的（年齡確認、內容分級、去識別的統計）、未滿 13 歲者不保存、連續 12 個月未登入即直接刪除、不顯示給管理員、不傳送至 Gemini；兩頁都仍標示草稿 |
+| 版面（註冊、登入、條款、隱私權政策、帳號頁 × 1280px 與 360px） | 回應 200 且停留在該頁；沒有水平捲軸、外部請求、失敗請求與主控台錯誤；360px 下註冊頁與登入頁 Google 入口的生日與區間欄位、帳號頁補填區塊的欄位與按鈕都在畫面寬度內 |
+
+驗收中發現並已修正的問題：年齡區間欄位的錯誤訊息緊貼在下方的說明文字上、沒有間距（註冊頁與登入頁的 Google 入口各一處）。這是斷言檢查不出來、看截圖才發現的版面問題，已在 `auth.css` 加上 `.auth-error + .auth-hint` 的間距。鍵盤方面驗證了欄位可聚焦與 Enter 送出；日期欄位內部以方向鍵或數字輸入各段，是瀏覽器內建控制項，未逐項測試。
+
+### 生日與年齡區間的其他驗收紀錄（age-verification-birthdate，2026-10-29）
+
+| 項目 | 結果 |
+|---|---|
+| 自動化測試 | `pytest` 2107 項通過（SQLite 1804 項、真實 SQL Server `project_test` 303 項）；`node --test` 47 項；`openspec validate age-verification-birthdate --strict` 通過 |
+| 年齡規則集中 | 所有年齡數字（最低註冊年齡、最低使用年齡、成年門檻、區間）只在 `app/services/age_policy.py`；以 AST 檢查 `AccessPolicy` 的原始碼不含 13、17、18，並掃描範本與前端程式碼沒有寫死的年齡數字；測試以另一組規則（只供成年人使用）證明改規則只動一處 |
+| 容器 | 78 / 78 項通過，映像 271 MB（見「容器建置與驗收」） |
+| 本機開發資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`RESTORE VERIFYONLY` 通過；備份檔 `project_pre_0004_20261029_085856.bak` 在 SQL Server 的預設備份目錄），再 `alembic upgrade head`：`0003_users_age_confirmation` → `0004_users_birthdate`。升級後 `alembic current` 為 `0004_users_birthdate (head)`；`users.birth_date`（`DATE`）、`age_range`（`NVARCHAR(20)`）、`is_adult_at_confirmation`（`BIT`）都存在且可為空，`deletion_tombstones` 資料表已建立（只有 `id`、`user_id`、`deleted_at`、`reason`）；`/healthz` 與 `/readyz` 回 200；`flask age-stats` 與 `flask purge-inactive-accounts --dry-run` 可執行；升級前後 `users` 都是 0 筆，沒有資料需要回填 |
+
 ## 本機測試信箱驗證
 
 本機預設**關閉**信箱驗證（註冊後直接啟用、不寄信、忘記密碼停用）。要在本機實際走一遍「註冊 → 收驗證信 → 點連結」，不需要任何真實的寄信服務：用 `scripts/dev_smtp_sink.py` 在本機收信，信件內容會印在終端機。
@@ -234,7 +270,7 @@ $env:MAIL_SMTP_SECURITY = "none"; $env:MAIL_FROM = "service@example.com"
 - 非擁有者與資源不存在必須得到**完全相同**的 404：用 `AccessPolicy.require_owner()`（它拋出 `NotFound`），不要回 403。
 - Repository 方法簽名必須帶 `user_id`，查詢一律帶 `user_id` 條件；不提供只憑 ID 取資料的方法給 API 路徑使用。
 - 會員等級（`member_tier`）只影響額度，不可用在權限判斷。
-- **每個會呼叫 Gemini 的端點（客服、RPG……）必須先呼叫 `get_access_policy().require_chat_access(user)`**，再做任何事：它依序檢查帳號狀態、信箱驗證與「已確認年滿 18 歲」，年齡不足時回 403 與代碼 `age_confirmation_required`（前端據此引導到 `/account` 補確認）。管理員與各會員等級都不豁免；端點不要自己判斷年齡。寫法見 `tests/support/age_gate.py`，HTTP 行為由 `tests/test_age_gate_api.py` 驗證。
+- **每個會呼叫 Gemini 的端點（客服、RPG……）必須先呼叫 `get_access_policy().require_chat_access(user)`**，再做任何事：它依序檢查帳號狀態、信箱驗證與年齡：尚未完成年齡確認回 403 `age_confirmation_required`（前端據此引導到 `/account` 補填）；年齡低於目前的最低使用年齡回 403 `age_restricted`（補填也沒有用，所以不引導）。管理員與各會員等級都不豁免；端點不要自己判斷年齡。需要內容上限時問 `get_access_policy().content_ceiling(user)`：未滿 18 歲固定安全模式（`sexual_content_level` 0），成年者最高 2（3 維持鎖定）。寫法見 `tests/support/age_gate.py`，HTTP 行為由 `tests/test_age_gate_api.py` 驗證。
 
 ```python
 from tests.support.idor import EndpointSpec, check_endpoint
@@ -441,6 +477,8 @@ Docker 在 WSL 內，每次使用前先啟動服務（見下一節）。驗收�
 **會員流程**（C-2 新增，在容器內以 SQLite 檔案資料庫執行）：`argon2`、`PyJWT`、`cryptography` 可載入；`alembic upgrade head` 成功；模擬入口層（`X-Forwarded-Proto: https`）後經 HTTP 走完註冊、登入、`/api/auth/me`、`/account`、缺少 CSRF 標頭被拒絕、登出、登出後 401、匿名開啟 `/account` 導向登入並保留 `next`；登入與 CSRF 的 cookie 具備 `__Host-` 前綴、`Secure`、`HttpOnly`、`SameSite=Lax`、`Path=/` 且沒有 `Domain`；日誌沒有信箱、密碼與機密，並有註冊、登入、登出的安全事件。production 的設定驗收也同步更新：`SECRET_KEY` 至少 32 字元，且預設要求信箱驗證，因此需要 https 的 `BASE_URL` 與寄信設定。
 
 **年齡確認**（age-gate 新增，2026-10-28 重新建置並驗收，**67 / 67 項通過**，映像 271 MB）：`alembic upgrade head` 升級到 `0003_users_age_confirmation`；缺少 `confirm_adult` 的註冊被拒絕（400，欄位 `confirm_adult`）；註冊時確認的帳號 `/api/auth/me` 回 `age_confirmed: true` 且不含確認時間與政策版本；`/api/auth/confirm-adult` 缺少 CSRF 標頭為 403、未登入為 401、`confirm_adult` 不是明確的 `true` 為 400。容器內沒有會呼叫 Gemini 的端點可直接驗閘門，所以改以 `flask create-admin`（刻意不代為確認年齡）建立一個「尚未確認」的帳號：登入後 `age_confirmed` 為 `false`，補確認後為 `true` 並在同一個登入狀態中維持；日誌有 `auth.age_confirmed.register` 與 `auth.age_confirmed.later`，且沒有信箱、密碼與機密。
+
+**生日與年齡區間**（age-verification-birthdate 新增，2026-10-29，**78 / 78 項通過**，映像 271 MB；以 `--no-build` 沿用剛建置的映像，含建置步驟為 79 項）：`alembic upgrade head` 升級到 `0004_users_birthdate`；缺少生日與區間的註冊被拒絕（400，欄位 `birth_date`、`age_range`）；不一致回 `age_mismatch`（沒有欄位）、未滿 13 歲回 `age_not_eligible`，被拒之後以同一個信箱與密碼可直接註冊成功；`/api/auth/me` 回 `age_confirmed` 與 `age_group`，不含生日、區間、時間與版本；`/api/auth/verify-age` 缺少 CSRF 標頭為 403、未登入為 401；`flask create-admin` 建立的管理員起初沒有任何年齡資料，補填不一致與未滿 13 歲都被拒絕，補填 13 至 17 歲成功後 `age_group` 為 `minor` 並在同一個登入狀態中維持。`flask age-stats` 只列各區間人數與尚未完成的人數、不含任何信箱；`flask purge-inactive-accounts --dry-run` 只報告筆數而不刪除；實際執行時，預先放入的 400 天未登入帳號被刪除 1 個、管理員與會員保留，重複執行為 0。日誌有 `auth.age_confirmed.register`、`auth.age_confirmed.later`、`auth.age_rejected.mismatch`、`auth.age_rejected.underage`，清除事件 `account.inactive_purged` 寫在指令自己的標準輸出（它是另一個 `docker exec` 行程）且只有內部使用者編號；結構化日誌沒有信箱、密碼、機密，也找不到驗收所用的生日。首次執行有 1 項失敗：「日誌沒有任何日期」的檢查誤把 gunicorn 自己啟動行的日期當成生日，已改為只掃結構化日誌並另外檢查三個測試用的生日；WSL 重啟後的冷啟動也讓 `service docker start` 返回時 daemon 尚未就緒，已改為最多輪詢 30 秒。
 
 不需要 Docker 的靜態檢查（`tests/test_container_files.py`）也包含在一般的 `pytest` 中。
 

@@ -5,6 +5,7 @@ from app.models import User
 from app.models.user import PROVIDER_GOOGLE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, UserIdentity
 from app.services.errors import Unauthenticated, ValidationError
 from app.services.legal import CURRENT_AGE_POLICY_VERSION
+from tests.support.age import age_fields, birth_date_for_age
 from tests.support.auth import GOOD_PASSWORD, START, FakeClock, RecordingMailer, add_user, make_auth_service
 
 NEW_PASSWORD = "a-brand-new-password"
@@ -81,7 +82,7 @@ def test_the_profile_has_the_members_own_data_and_nothing_internal(member_sessio
     assert profile == {
         "public_id": user.public_id, "email": "user1@example.com", "display_name": "使用者1", "member_tier": "plus",
         "role": "user", "status": "active", "email_verified": False, "has_password": True, "age_confirmed": False,
-        "google_linked": False,
+        "age_group": None, "google_linked": False,
     }
     assert not (FORBIDDEN_KEYS & set(profile))
     assert user.password_hash not in str(profile)
@@ -96,66 +97,140 @@ def test_the_profile_reports_a_linked_google_identity_and_a_missing_password(mem
     assert profile["google_linked"] is True and profile["has_password"] is False
 
 
-# ---- 補確認年滿 18 歲 ---------------------------------------------------------
+# ---- 年齡群組（個人資料）-------------------------------------------------------
 
-def test_confirming_adulthood_records_the_time_and_policy_version_and_returns_the_fresh_snapshot(member_session):
+@pytest.mark.parametrize(("age", "group"), [(None, None), (13, "minor"), (17, "minor"), (18, "adult"), (40, "adult")])
+def test_the_profile_reports_the_age_group_but_never_the_birthday_or_range(member_session, age, group):
+    user = add_user(member_session, 1, age=age)
+    service = make_auth_service(member_session)
+    profile = service.profile(service.resolve_session(user.id, 1))
+    assert profile["age_group"] == group and profile["age_confirmed"] is (age is not None)
+    for hidden in ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult_at_confirmation"):
+        assert hidden not in profile
+    assert "1996" not in str(profile) and "25_34" not in str(profile)
+
+
+def test_a_minor_becomes_an_adult_in_the_profile_when_the_clock_passes_the_birthday(member_session):
+    """註冊時 17 歲、明天才滿 18 歲：不需要重新登入或補填，群組由生日於當下計算。"""
+    clock = FakeClock()
+    tomorrows_18th_birthday = birth_date_for_age(18).replace(day=birth_date_for_age(18).day + 1)
+    user = add_user(member_session, 1, age=17, birth_date=tomorrows_18th_birthday)
+    service = make_auth_service(member_session, clock=clock)
+    assert service.profile(service.resolve_session(user.id, 1))["age_group"] == "minor"
+    clock.advance(days=1)
+    assert service.profile(service.resolve_session(user.id, 1))["age_group"] == "adult"
+
+
+# ---- 補填生日與年齡區間 --------------------------------------------------------
+
+def test_verifying_the_age_records_every_field_and_returns_the_fresh_snapshot(member_session):
     user = add_user(member_session, 1)
     service = make_auth_service(member_session, clock=FakeClock())
     current = service.resolve_session(user.id, 1)
     assert current.age_confirmed is False
 
-    updated = service.confirm_adult(current, confirm=True)
+    updated = service.verify_age(current, **age_fields(15))
 
     assert updated.age_confirmed is True and updated.id == user.id
     stored = reload(member_session, user)
+    assert stored.birth_date == birth_date_for_age(15) and stored.age_range == "13_17"
+    assert stored.is_adult_at_confirmation is False
     assert stored.age_confirmed_at == START and stored.age_policy_version == CURRENT_AGE_POLICY_VERSION
 
 
-@pytest.mark.parametrize("value", [False, None, "true", 1, "on", 0, [], {}])
-def test_anything_but_an_explicit_true_is_refused_and_writes_nothing(member_session, value):
+@pytest.mark.parametrize(
+    ("age_input", "code"),
+    [
+        ({"birth_date": None, "age_range": None}, "validation_error"),
+        ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error"),
+        (age_fields(30, age_range="13_17"), "age_mismatch"),
+        (age_fields(12), "age_not_eligible"),
+    ],
+)
+def test_every_kind_of_invalid_input_is_refused_and_writes_nothing(member_session, age_input, code):
     user = add_user(member_session, 1)
     service = make_auth_service(member_session)
     with pytest.raises(ValidationError) as exc:
-        service.confirm_adult(service.resolve_session(user.id, 1), confirm=value)
-    assert set(exc.value.fields) == {"confirm_adult"}
+        service.verify_age(service.resolve_session(user.id, 1), **age_input)
+    assert exc.value.code == code
     stored = reload(member_session, user)
+    assert stored.birth_date is None and stored.age_range is None and stored.is_adult_at_confirmation is None
     assert stored.age_confirmed_at is None and stored.age_policy_version is None
 
 
-def test_confirming_again_succeeds_but_keeps_the_original_time_and_version(member_session):
+def test_after_a_refusal_the_same_account_can_verify_immediately(member_session):
+    user = add_user(member_session, 1)
+    service = make_auth_service(member_session)
+    current = service.resolve_session(user.id, 1)
+    with pytest.raises(ValidationError):
+        service.verify_age(current, **age_fields(30, age_range="13_17"))
+    assert service.verify_age(current, **age_fields(30)).age_confirmed is True
+
+
+def test_an_account_with_only_the_old_checkbox_time_can_still_verify(member_session):
+    user = add_user(member_session, 1, age_confirmed_at=START, age_policy_version="2026-10-28-self-declared")
+    service = make_auth_service(member_session)
+    assert service.resolve_session(user.id, 1).age_confirmed is False
+    service.verify_age(service.resolve_session(user.id, 1), **age_fields(30))
+    stored = reload(member_session, user)
+    assert stored.birth_date == birth_date_for_age(30) and stored.age_policy_version == CURRENT_AGE_POLICY_VERSION
+
+
+def test_submitting_again_succeeds_and_keeps_every_original_value_even_if_the_content_differs(member_session):
     user = add_user(member_session, 1)
     clock = FakeClock()
     service = make_auth_service(member_session, clock=clock)
-    current = service.resolve_session(user.id, 1)
-    service.confirm_adult(current, confirm=True)
+    service.verify_age(service.resolve_session(user.id, 1), **age_fields(30))
 
     clock.advance(days=30)
-    again = service.confirm_adult(service.resolve_session(user.id, 1), confirm=True)
+    again = service.verify_age(service.resolve_session(user.id, 1), **age_fields(15))        # 內容不同，仍成功
 
     assert again.age_confirmed is True
     stored = reload(member_session, user)
-    assert stored.age_confirmed_at == START and stored.age_policy_version == CURRENT_AGE_POLICY_VERSION
+    assert stored.birth_date == birth_date_for_age(30) and stored.age_range == "25_34"
+    assert stored.is_adult_at_confirmation is True and stored.age_confirmed_at == START
 
 
-def test_the_event_is_logged_only_for_the_first_confirmation_and_never_carries_personal_data(member_session, log_lines):
+def test_even_garbage_after_completion_changes_nothing_and_is_not_an_error(member_session):
+    user = add_user(member_session, 1, age=30)
+    service = make_auth_service(member_session)
+    result = service.verify_age(service.resolve_session(user.id, 1), birth_date="garbage", age_range=None)
+    assert result.age_confirmed is True and reload(member_session, user).birth_date == birth_date_for_age(30)
+
+
+def test_the_event_is_logged_only_for_the_first_verification_and_never_carries_personal_data(member_session, log_lines):
     user = add_user(member_session, 1)
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
-    service.confirm_adult(current, confirm=True)
-    service.confirm_adult(current, confirm=True)
     with pytest.raises(ValidationError):
-        service.confirm_adult(current, confirm=False)
+        service.verify_age(current, **age_fields(30, age_range="13_17"))
+    service.verify_age(current, **age_fields(30))
+    service.verify_age(current, **age_fields(30))
 
-    events = [line for line in log_lines() if line.get("event", "").startswith("auth.age_confirmed")]
-    assert [(e["event"], e["user_id"]) for e in events] == [("auth.age_confirmed.later", user.id)]
-    assert "user1@example.com" not in log_lines.raw()
+    events = [(line["event"], line.get("user_id")) for line in log_lines() if line.get("event", "").startswith("auth.age_")]
+    assert events == [("auth.age_rejected.mismatch", None), ("auth.age_confirmed.later", user.id)]
+    raw = log_lines.raw()
+    assert "user1@example.com" not in raw and birth_date_for_age(30).isoformat() not in raw and "25_34" not in raw
 
 
-def test_confirming_adulthood_touches_nobody_else(member_session):
+def test_verifying_the_age_touches_nobody_else(member_session):
     me, other = add_user(member_session, 1), add_user(member_session, 2)
     service = make_auth_service(member_session)
-    service.confirm_adult(service.resolve_session(me.id, 1), confirm=True)
-    assert reload(member_session, other).age_confirmed_at is None
+    service.verify_age(service.resolve_session(me.id, 1), **age_fields(30))
+    stored = reload(member_session, other)
+    assert stored.birth_date is None and stored.age_range is None and stored.age_confirmed_at is None
+
+
+def test_the_stored_adult_flag_is_only_a_record_and_decides_nothing(member_session):
+    """把「確認當時是否成年」改成與生日矛盾的值：年齡群組與內容上限仍由生日當下計算。"""
+    from app.services.access_policy import AccessPolicy
+    from tests.support.age import TODAY_UTC
+
+    user = add_user(member_session, 1, age=15, is_adult_at_confirmation=True)               # 紀錄說成年，生日說 15 歲
+    service = make_auth_service(member_session)
+    current = service.resolve_session(user.id, 1)
+    assert service.profile(current)["age_group"] == "minor"
+    assert AccessPolicy(email_verification_required=False, clock=lambda: TODAY_UTC).content_ceiling(current).safe_mode is True
 
 
 # ---- 變更密碼 -----------------------------------------------------------------
@@ -267,5 +342,5 @@ def test_a_notice_mail_is_requested_only_when_verification_is_on(member_session)
 def test_the_public_dict_never_exposes_internal_fields(member_session):
     add_user(member_session, 1)
     current = logged_in(member_session, make_auth_service(member_session))
-    assert not (FORBIDDEN_KEYS & set(current.public_dict()))
-    assert "google_linked" not in current.public_dict()
+    assert not (FORBIDDEN_KEYS & set(current.public_dict(age_group=None)))
+    assert "google_linked" not in current.public_dict(age_group=None)

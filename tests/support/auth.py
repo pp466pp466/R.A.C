@@ -8,8 +8,10 @@ from sqlalchemy.orm import Session
 from app.models.user import STATUS_ACTIVE, User
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
+from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.auth_service import AuthService
 from app.services.password_hasher import TESTING_PARAMETERS, PasswordHasherService
+from tests.support.age import age_columns
 
 FAST_HASHER = PasswordHasherService(TESTING_PARAMETERS)
 GOOD_PASSWORD = "correct-horse-battery"
@@ -50,6 +52,7 @@ def make_auth_service(
     clock: FakeClock | None = None,
     mailer: RecordingMailer | None = None,
     hasher: PasswordHasherService | None = None,
+    age_policy: AgePolicy = DEFAULT_AGE_POLICY,
 ) -> AuthService:
     if verification_required and mailer is None:
         mailer = RecordingMailer()
@@ -60,11 +63,17 @@ def make_auth_service(
         clock=clock or FakeClock(),
         email_verification_required=verification_required,
         mailer=mailer,
+        age_policy=age_policy,
     )
 
 
-def add_user(session: Session, n: int = 1, *, password: str | None = GOOD_PASSWORD, **overrides) -> User:
-    """直接寫入一位使用者（不經過 Service）。email 預設為 userN@example.com。"""
+def add_user(
+    session: Session, n: int = 1, *, password: str | None = GOOD_PASSWORD, age: int | None = None, **overrides
+) -> User:
+    """直接寫入一位使用者（不經過 Service）。email 預設為 userN@example.com。
+
+    預設**尚未完成年齡確認**（與管理員指令建立的帳號相同）；傳入 `age=N` 代表已完成、且剛好 N 歲。
+    """
     values = dict(
         email=f"user{n}@example.com",
         email_canonical=f"user{n}@example.com",
@@ -72,6 +81,8 @@ def add_user(session: Session, n: int = 1, *, password: str | None = GOOD_PASSWO
         status=STATUS_ACTIVE,
         password_hash=FAST_HASHER.hash(password) if password is not None else None,
     )
+    if age is not None:
+        values.update(age_columns(age))
     values.update(overrides)
     user = User(**values)
     UserRepository(session).add_user(user)

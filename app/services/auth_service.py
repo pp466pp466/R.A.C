@@ -22,7 +22,8 @@ from app.repositories.user_repository import UserRepository
 from app.services.current_user import CurrentUser
 from app.services.errors import Conflict, Forbidden, Unauthenticated, ValidationError
 from app.services.input_cleaning import clean_single_line
-from app.services.legal import CURRENT_AGE_POLICY_VERSION, CURRENT_TERMS_VERSION
+from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, VerifiedAge, age_group, taipei_today, validate_age_input
+from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.normalization import canonical_email, is_valid_email, normalize_email
 from app.services.password_hasher import MAX_PASSWORD_LENGTH, PasswordHasherService, normalize_password, password_problem
 
@@ -60,7 +61,9 @@ class AuthService:
         email_verification_required: bool,
         mailer: AccountMailer | None = None,
         persist_failures: Callable[[], None] | None = None,
+        age_policy: AgePolicy = DEFAULT_AGE_POLICY,
     ) -> None:
+        self._age_policy = age_policy
         self._users = users
         self._identities = identities
         self._hasher = hasher
@@ -76,20 +79,31 @@ class AuthService:
     # =========================================================================
 
     def register(
-        self, *, email: object, password: object, display_name: object, accept_terms: object, confirm_adult: object
+        self,
+        *,
+        email: object,
+        password: object,
+        display_name: object,
+        accept_terms: object,
+        birth_date: object,
+        age_range: object,
     ) -> None:
         """以信箱加密碼註冊。不論信箱是否已有帳號，回傳與副作用以外的行為完全相同（沒有回傳值）。
 
-        - 同意條款與確認年滿 18 歲是各自獨立的兩項，都必須明確為 `True`；驗證發生在查詢信箱是否存在之前，
-          所以輸入不合法時，已存在與不存在的信箱得到同樣的欄位錯誤。
+        - 同意條款（獨立的明確勾選）與生日加年齡區間（規則見 `age_policy.validate_age_input`）都要通過；驗證發生在
+          查詢信箱是否存在之前，所以輸入不合法時，已存在與不存在的信箱得到同樣的錯誤。
+        - 生日與年齡區間不一致、或未滿最低註冊年齡：不建立帳號、不保存任何年齡資料、**不封鎖或標記該信箱**，
+          也不累計次數，使用者可以立刻以同一個信箱與密碼再註冊；日誌只記事件名稱。
         - 信箱驗證開啟：新帳號為 pending_verification 並寄驗證信；關閉：直接 active，不寄信。
         - 信箱已存在：不建立帳號，也不覆蓋既有的密碼、資料與年齡確認紀錄；若該帳號尚未驗證信箱且驗證開啟，
           重新寄驗證信（受寄信頻率限制）。
         - 不自動登入。
         """
-        clean_email, clean_name = self._validate_new_account(
-            email, password, display_name, require_consents=True, accept_terms=accept_terms, confirm_adult=confirm_adult
+        clean_email, clean_name, verified = self._validate_new_account(
+            email, password, display_name, require_consents=True, accept_terms=accept_terms,
+            birth_date=birth_date, age_range=age_range,
         )
+        assert verified is not None
         password_hash = self._hasher.hash(str(password))      # 不論信箱是否存在都先雜湊，使耗時一致
         canonical = canonical_email(clean_email)
 
@@ -104,8 +118,11 @@ class AuthService:
                 status=STATUS_PENDING_VERIFICATION if self._verification_required else STATUS_ACTIVE,
                 terms_version=CURRENT_TERMS_VERSION,
                 terms_accepted_at=now,
+                birth_date=verified.birth_date,
+                age_range=verified.age_range,
+                is_adult_at_confirmation=verified.is_adult,
                 age_confirmed_at=now,
-                age_policy_version=CURRENT_AGE_POLICY_VERSION,
+                age_policy_version=self._age_policy.version,
             )
             try:
                 self._users.add_user(user)
@@ -205,22 +222,33 @@ class AuthService:
         return CurrentUser.from_model(user)
 
     def profile(self, current: CurrentUser) -> dict:
-        """`/api/auth/me` 的內容：使用者本人的資料，另含是否已綁定 Google。"""
+        """`/api/auth/me` 的內容：使用者本人的資料，另含是否已綁定 Google 與年齡群組（不含生日與年齡區間）。"""
         linked = self._identities.get_for_user(current.id, PROVIDER_GOOGLE) is not None
-        return current.public_dict(google_linked=linked)
+        group = age_group(current.birth_date, taipei_today(self._clock()), self._age_policy)
+        return current.public_dict(age_group=group, google_linked=linked)
 
-    def confirm_adult(self, current: CurrentUser, *, confirm: object) -> CurrentUser:
-        """已登入的使用者補確認年滿 18 歲（升級前的帳號、管理員指令建立的帳號都要走這裡）。
+    def verify_age(self, current: CurrentUser, *, birth_date: object, age_range: object) -> CurrentUser:
+        """已登入、尚未完成年齡確認的使用者補填生日與年齡區間（管理員指令建立的帳號、勾選版時代的帳號都走這裡）。
 
-        - `confirm` 必須明確為 `True`，否則回報欄位錯誤 `confirm_adult`，不寫入任何東西。
-        - 已確認的帳號再次確認也成功，但不改動原本的時間與政策版本，也不再記錄事件。
-        - 回傳最新的帳號快照，讓前端立刻知道已確認。
+        - 已完成的帳號再次提交一律成功、完全不改動原本的紀錄，也不再記錄事件（即使內容不同）。
+        - 驗證規則與註冊相同；不通過時不寫入任何東西，日誌只記事件名稱。
+        - 回傳最新的帳號快照，讓前端立刻知道已完成。
         """
-        if confirm is not True:
-            raise ValidationError(fields={"confirm_adult": "請先確認您已年滿 18 歲。"})
         user = self._require_user(current)
-        if self._users.confirm_adult_if_unset(
-            user, confirmed_at=self._clock(), policy_version=CURRENT_AGE_POLICY_VERSION
+        if user.birth_date is not None and user.age_range is not None:
+            return CurrentUser.from_model(user)
+        verified, error = self._check_age_input(birth_date, age_range)
+        if error is not None:
+            security_events.log_age_rejection(error.code)
+            raise error
+        assert verified is not None
+        if self._users.complete_age_verification_if_unset(
+            user,
+            birth_date=verified.birth_date,
+            age_range=verified.age_range,
+            is_adult=verified.is_adult,
+            confirmed_at=self._clock(),
+            policy_version=self._age_policy.version,
         ):
             security_events.log_event(security_events.AGE_CONFIRMED_LATER, user_id=user.id)
         return CurrentUser.from_model(user)
@@ -282,7 +310,7 @@ class AuthService:
 
     def create_admin(self, *, email: object, display_name: object, password: object) -> CurrentUser:
         """由部署者以一次性指令建立管理員：角色 admin、狀態 active、信箱視為已驗證。信箱已存在時拒絕且不改動既有帳號。"""
-        clean_email, clean_name = self._validate_new_account(email, password, display_name, require_consents=False)
+        clean_email, clean_name, _ = self._validate_new_account(email, password, display_name, require_consents=False)
         canonical = canonical_email(clean_email)
         if self._users.get_by_canonical_email(canonical) is not None:
             raise Conflict("這個信箱已經有帳號了。", code="email_exists")
@@ -314,8 +342,11 @@ class AuthService:
         *,
         require_consents: bool,
         accept_terms: object = True,
-        confirm_adult: object = True,
-    ) -> tuple[str, str]:
+        birth_date: object = None,
+        age_range: object = None,
+    ) -> tuple[str, str, VerifiedAge | None]:
+        """驗證新帳號的輸入。欄位錯誤一次回報；年齡的語意錯誤（未滿最低年齡、不一致）只在沒有欄位錯誤時才拋出，
+        因為欄位錯誤可以就地修正，而語意錯誤要求使用者重新填寫。管理員指令（`require_consents=False`）不涉及年齡。"""
         fields: dict[str, str] = {}
         if not isinstance(email, str) or not is_valid_email(email):
             fields["email"] = "請輸入有效的電子郵件地址。"
@@ -325,14 +356,29 @@ class AuthService:
         cleaned_name = clean_single_line(display_name) if isinstance(display_name, str) else None
         if not cleaned_name or len(cleaned_name) > MAX_DISPLAY_NAME_LENGTH:
             fields["display_name"] = f"顯示名稱須為 1 至 {MAX_DISPLAY_NAME_LENGTH} 字。"
-        if require_consents and accept_terms is not True:
-            fields["accept_terms"] = "請先勾選同意服務條款與隱私權政策。"
-        if require_consents and confirm_adult is not True:
-            fields["confirm_adult"] = "請先確認您已年滿 18 歲。"
+        verified: VerifiedAge | None = None
+        age_error: ValidationError | None = None
+        if require_consents:
+            if accept_terms is not True:
+                fields["accept_terms"] = "請先勾選同意服務條款與隱私權政策。"
+            verified, age_error = self._check_age_input(birth_date, age_range)
+            if age_error is not None and age_error.code == ValidationError.code:    # 缺少或格式不合法：欄位錯誤，一併回報
+                fields.update(age_error.fields)
+                age_error = None
         if fields:
             raise ValidationError(fields=fields)
+        if age_error is not None:
+            security_events.log_age_rejection(age_error.code)
+            raise age_error
         assert isinstance(email, str) and cleaned_name is not None
-        return email, cleaned_name
+        return email, cleaned_name, verified
+
+    def _check_age_input(self, birth_date: object, age_range: object) -> tuple[VerifiedAge | None, ValidationError | None]:
+        """以「今天（Asia/Taipei）」驗證生日與年齡區間；回傳（結果, 錯誤），不拋出、不記錄。"""
+        try:
+            return validate_age_input(birth_date, age_range, taipei_today(self._clock()), self._age_policy), None
+        except ValidationError as error:
+            return None, error
 
     def _require_user(self, current: CurrentUser) -> User:
         user = self._users.get_by_id(current.id)

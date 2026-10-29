@@ -13,6 +13,7 @@ from flask import current_app, g, has_request_context
 
 from app.config import AppConfig
 from app.db.session import defer_until_commit, keep_changes_on_error  # noqa: F401 - 讓 Service 經由 runtime 取得，而不必匯入資料庫層
+from app.services.age_policy import AgePolicy
 
 Clock = Callable[[], datetime]
 
@@ -24,6 +25,11 @@ def get_config() -> AppConfig:
 def get_clock() -> Clock:
     """目前時間（帶 UTC 時區）。測試可注入假時鐘，以便不必真的等待就能驗證到期與鎖定。"""
     return current_app.extensions["clock"]
+
+
+def get_age_policy() -> AgePolicy:
+    """年齡規則（最低年齡、成年門檻、區間選項、版本）。測試可在 `create_app` 注入不同的規則。"""
+    return current_app.extensions["age_policy"]
 
 
 def current_request_id() -> str | None:

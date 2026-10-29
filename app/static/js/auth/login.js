@@ -14,7 +14,7 @@
   var app = Vue.createApp({
     setup: function () {
       var form = Auth.useForm({ email: '', password: '' });
-      var google = Auth.useForm({ acceptTerms: false, confirmAdult: false });
+      var google = Auth.useForm({ acceptTerms: false, birthDate: '', ageRange: '' });
 
       function submit() {
         return form.run(function () {
@@ -26,20 +26,37 @@
 
       function signInWithGoogle() {
         google.clearErrors();
-        // 兩個確認各自獨立；任一項未勾選都不離開本站（避免被帶到 Google 才被拒絕），缺哪項就提示哪項
+        // 同意條款、生日、年齡區間各自獨立；任一項沒填都不離開本站（避免被帶到 Google 才被拒絕），缺哪項就提示哪項。
+        // 生日與區間的對照由伺服器在發起時完成：不一致或未滿最低年齡都直接回 400，使用者不會被導向 Google。
         if (!google.values.acceptTerms) {
           google.fieldErrors.accept_terms = '請先勾選同意服務條款與隱私權政策。';
         }
-        if (!google.values.confirmAdult) {
-          google.fieldErrors.confirm_adult = '請先確認您已年滿 18 歲。';
+        if (!google.values.birthDate) {
+          google.fieldErrors.birth_date = '請輸入生日。';
         }
-        if (!google.values.acceptTerms || !google.values.confirmAdult) {
+        if (!google.values.ageRange) {
+          google.fieldErrors.age_range = '請選擇年齡區間。';
+        }
+        if (Object.keys(google.fieldErrors).length) {
           return Promise.resolve(false);
         }
         return google.run(function () {
-          return axios.post('/api/auth/google/start', { accept_terms: true, confirm_adult: true, next: state.next }).then(function (response) {
+          return axios.post('/api/auth/google/start', {
+            accept_terms: true,
+            birth_date: google.values.birthDate,
+            age_range: google.values.ageRange,
+            next: state.next
+          }).then(function (response) {
             goToProvider(response.data.authorization_url);
           });
+        }, {
+          // 對不起來（常是輸入太快）或不符合資格：清空生日與區間，使用者可立刻重新填寫
+          onError: function (info) {
+            if (info.code === 'age_mismatch' || info.code === 'age_not_eligible') {
+              google.values.birthDate = '';
+              google.values.ageRange = '';
+            }
+          }
         });
       }
 
@@ -47,6 +64,7 @@
         form: form,
         google: google,
         notice: state.notice || '',
+        ageRules: state.ageRules,
         googleEnabled: !!state.googleEnabled,
         verificationRequired: !!state.verificationRequired,
         submit: submit,

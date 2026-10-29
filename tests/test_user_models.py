@@ -55,7 +55,7 @@ def test_nullable_columns_are_exactly_the_documented_ones():
     nullable = {c.name for c in columns if c.nullable}
     assert nullable == {
         "password_hash", "email_verified_at", "locked_until", "terms_version", "terms_accepted_at",
-        "age_confirmed_at", "age_policy_version", "last_login_at",
+        "age_confirmed_at", "age_policy_version", "birth_date", "age_range", "is_adult_at_confirmation", "last_login_at",
     }
     tokens = {c.name for c in Base.metadata.tables["auth_tokens"].columns if c.nullable}
     assert tokens == {"used_at"}
@@ -140,9 +140,53 @@ def test_new_user_gets_the_documented_defaults(session):
     assert (user.role, user.member_tier, user.token_version, user.failed_login_count) == ("user", "free", 1, 0)
     assert user.password_hash is None and user.email_verified_at is None and user.locked_until is None
     assert user.terms_version is None and user.last_login_at is None
-    assert user.age_confirmed_at is None and user.age_policy_version is None     # 預設視為尚未確認年滿 18 歲
+    assert user.age_confirmed_at is None and user.age_policy_version is None     # 預設視為尚未完成年齡確認
+    assert user.birth_date is None and user.age_range is None and user.is_adult_at_confirmation is None
     assert len(user.public_id) == 36
     assert user.created_at.tzinfo is not None
+
+
+def test_the_birthday_range_and_adult_flag_round_trip_as_a_plain_date(session):
+    """生日是 `Date`（沒有時間、沒有時區），兩種資料庫讀回的都是同一個日期；布林可為真、假或空。"""
+    from datetime import date
+
+    session.add_all([
+        make_user(1, birth_date=date(1996, 1, 5), age_range="25_34", is_adult_at_confirmation=True),
+        make_user(2, birth_date=date(2011, 10, 28), age_range="13_17", is_adult_at_confirmation=False),
+        make_user(3),
+    ])
+    session.commit()
+    session.expire_all()
+    adult, minor, blank = (session.scalar(select(User).where(User.email == f"user{n}@example.com")) for n in (1, 2, 3))
+    assert (adult.birth_date, adult.age_range, adult.is_adult_at_confirmation) == (date(1996, 1, 5), "25_34", True)
+    assert type(adult.birth_date) is date
+    assert (minor.birth_date, minor.is_adult_at_confirmation) == (date(2011, 10, 28), False)
+    assert blank.birth_date is None and blank.is_adult_at_confirmation is None
+
+
+# ---- 刪除紀錄 -----------------------------------------------------------------
+
+def test_the_deletion_tombstone_holds_only_an_id_a_time_and_a_reason_and_has_no_foreign_key():
+    table = Base.metadata.tables["deletion_tombstones"]
+    assert {c.name for c in table.columns} == {"id", "user_id", "deleted_at", "reason"}
+    assert not table.foreign_keys                      # 被指向的帳號已不存在，外鍵會讓紀錄寫不進去
+    assert not any(c.nullable for c in table.columns if c.name != "id" and not c.primary_key)
+
+
+def test_a_tombstone_can_be_written_after_its_user_is_gone(session):
+    from app.models import DeletionTombstone
+    from app.models.deletion_tombstone import REASON_INACTIVE_12_MONTHS
+
+    user = make_user()
+    session.add(user)
+    session.commit()
+    user_id = user.id
+    session.delete(user)
+    session.add(DeletionTombstone(user_id=user_id, reason=REASON_INACTIVE_12_MONTHS))
+    session.commit()
+    stored = session.scalars(select(DeletionTombstone)).one()
+    assert (stored.user_id, stored.reason) == (user_id, "inactive_12_months")
+    assert stored.deleted_at.tzinfo is not None
 
 
 def test_status_is_required_so_services_must_choose_it_explicitly(session):

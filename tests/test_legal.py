@@ -12,5 +12,8 @@ def test_versions_are_non_empty_strings_that_fit_their_columns(version):
     assert len(version) <= User.__table__.c.age_policy_version.type.length
 
 
-def test_the_age_policy_version_names_the_self_declared_approach():
-    assert CURRENT_AGE_POLICY_VERSION.endswith("self-declared")
+def test_the_age_policy_version_names_the_birthdate_and_range_approach_and_comes_from_the_policy():
+    from app.services.age_policy import DEFAULT_AGE_POLICY
+
+    assert CURRENT_AGE_POLICY_VERSION == DEFAULT_AGE_POLICY.version
+    assert CURRENT_AGE_POLICY_VERSION.endswith("birthdate-range")

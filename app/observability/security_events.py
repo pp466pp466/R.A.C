@@ -54,6 +54,12 @@ AGE_CONFIRMED_REGISTER = "auth.age_confirmed.register"
 AGE_CONFIRMED_GOOGLE = "auth.age_confirmed.google"
 AGE_CONFIRMED_LATER = "auth.age_confirmed.later"
 AGE_GATE_DENIED = "auth.age_gate_denied"
+# 被拒絕註冊或補填：只有事件名稱，不帶任何輸入（生日與區間都不得進入日誌）
+AGE_REJECTED_UNDERAGE = "auth.age_rejected.underage"
+AGE_REJECTED_MISMATCH = "auth.age_rejected.mismatch"
+
+# ---- 帳號保存期限 ----
+ACCOUNT_INACTIVE_PURGED = "account.inactive_purged"
 
 # ---- 其他安全事件 ----
 CSRF_REJECTED = "security.csrf_rejected"
@@ -73,3 +79,14 @@ def log_event(event: str, *, user_id: int | None = None, request_id: str | None 
         raise ValueError(f"未登記的安全事件名稱：{event}")
     level = logging.WARNING if any(marker in event for marker in _WARNING_MARKERS) else logging.INFO
     logger.log(level, "安全事件", extra={"event": event, "user_id": user_id, "request_id": request_id})
+
+
+def log_age_rejection(error_code: str) -> None:
+    """年齡驗證被拒絕時的事件：只有事件名稱，**不帶任何輸入**（生日與年齡區間都不得進入日誌）。
+
+    只有「未滿最低年齡」與「生日與區間不一致」各記一筆警告；缺少或格式不合法是可就地修正的欄位錯誤，不記。
+    """
+    if error_code == "age_not_eligible":
+        log_event(AGE_REJECTED_UNDERAGE)
+    elif error_code == "age_mismatch":
+        log_event(AGE_REJECTED_MISMATCH)

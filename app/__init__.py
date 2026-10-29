@@ -29,6 +29,7 @@ from app.security.cookies import SignedCookies, flask_session_settings
 from app.security.cache_headers import init_no_store
 from app.security.csrf import init_csrf
 from app.security.session import init_login_session
+from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.google_oidc import GoogleOidcClient
 from app.services.mail_sender import SmtpMailSender
 
@@ -42,11 +43,12 @@ def create_app(
     mail_sender: Any | None = None,
     identity_provider: Any | None = None,
     clock: Clock | None = None,
+    age_policy: AgePolicy | None = None,
 ) -> Flask:
     """建立應用程式實例。
 
-    後三個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘）；
-    正式執行時省略即可，由設定建立真實的實作。
+    後四個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘、不同的年齡規則）；
+    正式執行時省略即可，由設定建立真實的實作（年齡規則用 `DEFAULT_AGE_POLICY`）。
     """
     cfg = config or load_config()
     configure_logging(cfg.log_level)
@@ -57,6 +59,7 @@ def create_app(
     app.json.ensure_ascii = False  # Flask 3 起用此屬性；回應中的繁體中文不轉成 \uXXXX
     app.extensions["app_config"] = cfg
     app.extensions["clock"] = clock or utcnow
+    app.extensions["age_policy"] = age_policy or DEFAULT_AGE_POLICY
     # 寄信器：測試可注入假的；否則在設定了寄信參數（信箱驗證開啟）時以設定建立真實的 SMTP 寄信器
     app.extensions["mail_sender"] = mail_sender or (SmtpMailSender(cfg.mail) if cfg.mail else None)
     # Google 身分供應商：測試可注入假的；否則在設定了 Google 用戶端時以設定建立真實的 OIDC 用戶端
