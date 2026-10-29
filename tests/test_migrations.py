@@ -161,6 +161,36 @@ def test_0005_adds_only_the_three_chat_tables_and_follows_0004(tmp_path):
     engine.dispose()
 
 
+def test_0006_adds_only_two_indexes_and_keeps_every_row(tmp_path):
+    """usage-limits：只新增索引（expand），不動任何資料表的欄位與資料；回復只移除這兩個索引。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'usage.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0006_usage_indexes")
+    assert revision.down_revision == "0005_chat_core" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0005_chat_core")
+    inspector = inspect(engine)
+    before_tables = set(inspector.get_table_names())
+    before_columns = {t: {c["name"] for c in inspector.get_columns(t)} for t in CHAT_TABLES}
+    before_indexes = {t: {i["name"] for i in inspector.get_indexes(t)} for t in ("llm_call_logs", "chat_messages")}
+    assert "ix_llm_call_logs_created_at" not in before_indexes["llm_call_logs"]
+
+    command.upgrade(cfg, "0006_usage_indexes")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    assert {t: {c["name"] for c in inspector.get_columns(t)} for t in CHAT_TABLES} == before_columns
+    after = {t: {i["name"] for i in inspector.get_indexes(t)} for t in ("llm_call_logs", "chat_messages")}
+    assert after["llm_call_logs"] - before_indexes["llm_call_logs"] == {"ix_llm_call_logs_created_at"}
+    assert after["chat_messages"] - before_indexes["chat_messages"] == {"ix_chat_messages_created_at"}
+    assert [i["column_names"] for i in inspector.get_indexes("llm_call_logs") if i["name"] == "ix_llm_call_logs_created_at"] == [["created_at"]]
+
+    command.downgrade(cfg, "0005_chat_core")
+    inspector = inspect(engine)
+    assert {t: {i["name"] for i in inspector.get_indexes(t)} for t in ("llm_call_logs", "chat_messages")} == before_indexes
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):

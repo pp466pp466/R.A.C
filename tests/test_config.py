@@ -538,6 +538,37 @@ def test_a_call_timeout_equal_to_the_budget_is_accepted(tmp_path):
     assert load_dev(tmp_path, LLM_CALL_TIMEOUT_SECONDS="30").llm.call_timeout_seconds == 30
 
 
+# ---- 全站每日用量上限（global-usage-budget 與 app-configuration 規格）----------------------
+
+def test_the_daily_usage_limits_default_to_the_values_for_the_free_tier_quota(tmp_path):
+    usage = load_dev(tmp_path).usage
+    assert (usage.daily_token_limit, usage.daily_call_limit) == (1_000_000, 450)      # 450 = 每日 500 次請求的 90%
+
+
+def test_the_daily_usage_limits_can_be_set(tmp_path):
+    usage = load_dev(tmp_path, USAGE_DAILY_TOKEN_LIMIT="500000", USAGE_DAILY_CALL_LIMIT="300").usage
+    assert (usage.daily_token_limit, usage.daily_call_limit) == (500_000, 300)
+
+
+def test_blank_usage_limits_fall_back_to_the_defaults(tmp_path):
+    usage = load_dev(tmp_path, USAGE_DAILY_TOKEN_LIMIT="  ", USAGE_DAILY_CALL_LIMIT="").usage
+    assert (usage.daily_token_limit, usage.daily_call_limit) == (1_000_000, 450)
+
+
+@pytest.mark.parametrize("variable", ["USAGE_DAILY_TOKEN_LIMIT", "USAGE_DAILY_CALL_LIMIT"])
+@pytest.mark.parametrize("bad", ["0", "-5", "abc", "1.5", "99999999999999"])
+def test_invalid_usage_limits_fail_and_name_the_variable(tmp_path, variable, bad):
+    with pytest.raises(ConfigError) as exc:
+        load_dev(tmp_path, **{variable: bad})
+    assert variable in str(exc.value)
+
+
+@pytest.mark.parametrize("env_name", ["staging", "production"])
+def test_production_like_environments_accept_the_usage_limits(env_name):
+    usage = load_config(environ=prod_env(APP_ENV=env_name, USAGE_DAILY_CALL_LIMIT="200")).usage
+    assert usage.daily_call_limit == 200
+
+
 @pytest.mark.parametrize("env_name", ["staging", "production"])
 def test_production_like_without_the_model_key_fails_and_names_only_the_variable(env_name):
     env = prod_env(APP_ENV=env_name, GEMINI_API_KEY=None)

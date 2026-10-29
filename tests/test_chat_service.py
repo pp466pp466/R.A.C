@@ -12,10 +12,13 @@ import pytest
 from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
+from app.config import UsageSettings
 from app.models import ChatConversation, ChatMessage, LlmCallLog
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.llm_call_log_repository import LlmCallLogRepository
 from app.services.access_policy import AccessPolicy
-from app.services.chat_service import ChatService, assistant_message_id
+from app.services.chat_service import PROCESSING_STALE_AFTER, ChatService, assistant_message_id
+from app.services.usage_service import UsageService
 from app.services.cs_prompt import (
     DEGRADED_BLOCKED_TEXT, DEGRADED_BUSY_TEXT, DEGRADED_VALIDATION_TEXT, leak_marker,
 )
@@ -48,9 +51,16 @@ def make_service(session, provider, *, wall=None, llm=True, after_reply=None, ve
     wall = wall or Wall()
     return ChatService(
         chats=ChatRepository(session), llm=build(session, provider, wall=wall) if llm else None,
-        policy=AccessPolicy(email_verification_required=verification, clock=wall), clock=wall, commit=session.commit,
-        rollback=session.rollback, marker=MARKER, after_reply=after_reply,
+        policy=AccessPolicy(email_verification_required=verification, clock=wall),
+        usage=UsageService(
+            ledger=LlmCallLogRepository(session), chats=ChatRepository(session), settings=UsageSettings(), clock=wall,
+            processing_ttl=PROCESSING_STALE_AFTER,
+        ),
+        clock=wall, commit=session.commit, rollback=session.rollback, marker=MARKER, after_reply=after_reply,
     )
+
+
+pytestmark = pytest.mark.usefixtures("generous_free_limits")      # 這個檔案測對話流程，不是用量限制（見 conftest）
 
 
 def current(session, n=1, *, age=30, **overrides) -> CurrentUser:

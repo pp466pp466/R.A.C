@@ -1,6 +1,6 @@
 # 前端架構
 
-> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-29 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core ｜ 規範依據：AGENTS.md 第 1、2、5、6、7 節
+> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 1、2、5、6、7 節
 
 本文件說明前端的資產載入、共用元件、會員頁面與客服頁面的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md)。
 
@@ -14,7 +14,7 @@ flowchart TD
     Base --> Ui["共用：typewriter.js → toast-store.js → ui-components.js"]
     Ui --> Page{"頁面"}
     Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → 各頁腳本<br/>（login、register、account…）"]
-    Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → chat.js"]
+    Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
 ```
 
 - 第三方資產（Vue、Bootstrap CSS、axios、字型）全部在 `static/vendor`、`static/fonts`，**不使用 CDN**；字型為 Noto Sans TC（108 個 `unicode-range` 切片的 woff2）。
@@ -38,10 +38,12 @@ flowchart LR
     Chat["chat.js<br/>Vue 3 應用：畫面狀態與事件"]
     Chat --> Sidebar["cs-sidebar.js<br/>開關規則（純函式）"]
     Chat --> Sync["cs-sync.js<br/>同步引擎"]
+    Chat --> Usage["cs-usage.js<br/>剩餘輪數與暫停時間（純函式）"]
     Chat --> Tw["typewriter.js<br/>新回覆逐字顯示"]
     Chat --> Ui["ui-components.js<br/>Modal 與 Toast"]
     Sync --> Store["cs-store.js<br/>IndexedDB 或記憶體"]
-    Sync --> Api["createAxiosApi → /api/cs/*"]
+    Sync --> Api["createAxiosApi → /api/cs/*（含 /api/cs/usage）"]
+    Chat -.->|"getUsage"| Api
     Sidebar --> Ls["localStorage（讀寫皆包 try/catch）"]
     Html -.->|"request_timeout_ms、chat_gate、user"| Chat
 ```
@@ -51,6 +53,8 @@ flowchart LR
 - **Sidebar**：寬 280px；992px 以上預設開啟並推擠主區域、狀態記在 `localStorage`；未滿 992px 預設關閉、以覆蓋方式顯示並附遮罩、不記住狀態、選擇對話後自動關閉。
 - **chips**：最後一則助理訊息帶建議動作、打字機結束、其後沒有任何新訊息時才顯示（最多 4 個）；點擊後立即移除並以其文字送出。
 - **閘門與 503**：`chat_gate` 不是 `null` 時顯示說明（需補填年齡時附前往帳號設定的連結）並停用輸入；服務暫時無法使用時保留已輸入的文字為待送。
+- **用量**（`GET /api/cs/usage`，邏輯在 `cs-usage.js`）：Sidebar 底部一行顯示「今日剩餘 N 輪」（用完時「今日額度已用完」），每則回覆或被拒絕之後重新讀取；**取得失敗或離線就整行隱藏**，其他功能不受影響，因為真正的限制永遠在後端。暫停期間橫幅顯示恢復時間（台灣時間，固定 UTC+8，不依賴 `Intl`）並停用輸入與「新對話」，到點由計時器自動恢復，不必重新整理。
+- **用量類的拒絕**：每分鐘限制（`rate_limited`）與全站忙碌（`system_busy`）是暫時的，訊息保留為待送、稍後自動重送，並以 toast 說明原因（不是「無法連線」）；今日額度用完、對話暫停、對話數已滿（`daily_quota_exceeded`、`chat_suspended`、`conversation_limit_reached`）短時間內不會成功，訊息標記為無法送出、**不自動重送**並顯示伺服器的說明，使用者可以重試或移除。對話數已滿時，離線建立的對話不可能建立成功，會連同其中的待送一起移除，原因以 toast 說明，輸入的文字留在輸入框。
 
 ## 4. 暫存、待送與同步
 
@@ -81,8 +85,10 @@ sequenceDiagram
         alt 成功
             Sv-->>Sy: user_message、assistant_message、conversation
             Sy->>St: 以回應取代待送、更新對話
-        else 網路錯誤、逾時、5xx、429
+        else 網路錯誤、逾時、5xx、429（含 rate_limited、system_busy）
             Sy->>St: 保留待送並停止本輪（10 秒後自動重試、連線恢復時重試）
+        else daily_quota_exceeded、chat_suspended、conversation_limit_reached
+            Sy->>St: 標記為無法送出並記下伺服器的說明（不自動重送），繼續下一則
         else 409 conversation_busy
             Sy->>Sy: 依序退避 1、2、4 秒後重試，仍忙則保留並停止
         else 401
@@ -102,7 +108,7 @@ sequenceDiagram
 
 | 層級 | 內容 |
 |---|---|
-| Node 單元測試 | `tests/js/*.test.js`：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件）、打字機、Toast、共用函式 |
+| Node 單元測試 | `tests/js/*.test.js`：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式 |
 | 架構掃描 | `tests/architecture/test_frontend_rules.py`、`tests/test_cs_pages.py`：離線規則、逾時不寫死、`v-cloak`、純文字、自製 Modal 與 Toast |
 | 瀏覽器驗收 | Edge 無頭模式（CDP）的整頁驗收，結果與截圖摘要記在 README 的「瀏覽器驗收」 |
 

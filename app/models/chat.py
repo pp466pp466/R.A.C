@@ -53,6 +53,8 @@ class ChatMessage(Base):
     __table_args__ = (
         UniqueConstraint("conversation_id", "seq", name="uq_chat_messages_conversation_seq"),
         UniqueConstraint("conversation_id", "client_msg_id", name="uq_chat_messages_conversation_client_msg"),
+        # 每分鐘訊息數限制：「最近 60 秒、某位使用者」的訊息，先以時間範圍縮小再連到對話（C-4a）
+        Index("ix_chat_messages_created_at", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

@@ -26,6 +26,7 @@ from app.services.llm_service import (
     DEGRADED_BLOCKED, DEGRADED_BUDGET, DEGRADED_CONFIG, DEGRADED_TRANSIENT, DEGRADED_VALIDATION,
 )
 from app.services.password_hasher import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+from app.services.quota_policy import tier_facts
 
 MARKER_LABEL = b"cs-prompt-marker-v1"
 MARKER_LENGTH = 24
@@ -62,12 +63,8 @@ def leak_marker(secret_key: str) -> str:
 
 # ---- 系統指令 ---------------------------------------------------------------------------
 
-# 平台資料：模型唯一可以依據的事實。數字取自實際生效的常數（密碼長度、鎖定、連結有效期），以免提示詞與系統行為各說各話。
-# 會員額度目前是 AGENTS.md 第 7 節的初始值；額度可設定後（C-4）須改為取自同一份設定。
-_QUOTA_FACTS = (
-    "會員等級的初始額度——每日對話輪數：free 30、plus 100、vip 300；每分鐘訊息數：free 6、plus 10、vip 20；"
-    "對話數上限：free 20、plus 100、vip 500；單則訊息上限一律是 1000 字。"
-)
+# 平台資料：模型唯一可以依據的事實。數字取自實際生效的常數（密碼長度、鎖定、連結有效期、各等級的額度），
+# 以免提示詞與系統行為各說各話；額度的數字與 `UsageService` 判斷用的是同一份 `quota_policy.TIER_LIMITS`。
 
 
 def _platform_facts() -> tuple[str, ...]:
@@ -85,7 +82,7 @@ def _platform_facts() -> tuple[str, ...]:
         "也可以用 Google 帳號登入；Google 的信箱與已註冊的信箱相同時，會視為同一個帳號。",
         "登入後在「帳號」頁可以變更密碼、登出所有裝置、登出；未完成年齡確認的帳號可在這裡補填生日與年齡區間。",
         "會員等級分為 free（一般）、plus（進階）、vip（尊榮）；等級只影響額度，不影響功能與權限。",
-        _QUOTA_FACTS,
+        tier_facts(),
         "意見回饋：使用者直接在對話中說出意見、客訴、建議或回報問題，內容會保存在對話紀錄中，管理員之後會檢視；沒有另外的表單。",
         "本客服僅由 AI 提供，目前沒有真人客服。",
     )

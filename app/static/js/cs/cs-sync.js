@@ -7,6 +7,9 @@
  *  - 成功後以回應中的兩則訊息取代待送；網路錯誤、逾時與伺服器暫時不可用：待送保留並停止本輪（連線恢復後再來）；
  *    409 conversation_busy：依序退避後重試，仍忙就保留並停止；401：停止並通知登入已失效；
  *    其他 4xx（內容不合法、閘門、對話不存在……）：標記為「無法送出」，不再自動重送，使用者可以重試或移除。
+ *    用量限制：每分鐘限制（rate_limited）與全站忙碌（system_busy）是暫時的，保留並稍後自動重送；今日額度用完、對話暫停、
+ *    對話數已滿（daily_quota_exceeded、chat_suspended、conversation_limit_reached）短時間內不會成功，歸為「無法送出」。
+ *    對話數已滿時，離線建立的對話不可能建立成功，會被移除（flush 的結果帶 `limited`）。
  *  - 前端中止（取消、切換對話、離開頁面）不代表後端中止：待送保留，之後以 since_seq 補齊後端已寫入的結果。
  *  - 以 since_seq 增量拉取時，後端的訊息覆寫本機同序號的快取；已經有完整回覆的待送隨之移除。
  *  - 離線建立的對話以 client_id 冪等地重送建立，成功後改用正式識別碼。
@@ -26,6 +29,10 @@
   var DEFAULT_BACKOFF_MS = [1000, 2000, 4000];
   var PAGE_SIZE = 200;
   var RETRY_LATER_STATUSES = { 408: true, 429: true, 500: true, 502: true, 503: true, 504: true };
+  /* 用量限制中「短時間內不會成功」的拒絕：今日額度用完（429）、對話暫停（403）、對話數已滿（409）。
+     不能被當成「稍後再試」自動重送（429 在上面的表裡），否則會每 10 秒打一次必敗的請求。
+     每分鐘限制（rate_limited）與全站忙碌（system_busy）是暫時的，沿用「稍後再試」。 */
+  var NO_AUTO_RETRY_CODES = { daily_quota_exceeded: true, chat_suspended: true, conversation_limit_reached: true };
 
   function conversationRecord(conversation, extra) {
     var record = {
@@ -44,6 +51,7 @@
     if (kind === 'network' || kind === 'timeout') { return 'retry'; }
     if (status === 401) { return 'auth'; }
     if (status === 409 && error.code === 'conversation_busy') { return 'busy'; }
+    if (error && NO_AUTO_RETRY_CODES[error.code]) { return 'fail'; }
     if (RETRY_LATER_STATUSES[status]) { return 'retry'; }
     return 'fail';
   }
@@ -150,6 +158,10 @@
             return createRemote(local, signal).then(function () { return null; }, function (error) {
               var verdict = classify(error);
               if (verdict === 'auth') { onAuthLost(); }
+              if (error && error.code === 'conversation_limit_reached') {      // 同上：不可能成功的離線對話連同其中的待送一起移除
+                summary.limited = error.message || true;
+                return store.removeConversation(local.key).then(function () { emit({ type: 'conversations' }); return null; });
+              }
               return verdict === 'fail' ? null : (verdict === 'retry' ? 'network' : verdict);
             });
           });
@@ -180,7 +192,7 @@
     function flush(flushOptions) {
       if (running) { again = true; return running; }
       var signal = flushOptions && flushOptions.signal;
-      var summary = { sent: 0, failed: 0, stopped: null };
+      var summary = { sent: 0, failed: 0, stopped: null };          // `limited` 只在對話數已滿時才會加上去
       running = (function loop() {
         again = false;
         return pass(signal, summary).then(function (stopped) {
@@ -258,7 +270,14 @@
       var local = { key: CSStore.localConversationKey(id), id: null, client_id: id, title: '新對話', state_version: 1, updated_at: now, created_at: now };
       return store.saveConversation(local).then(function () {
         emit({ type: 'conversations' });
-        return createRemote(local).then(function () { return id; }, function () { return id; });
+        return createRemote(local).then(function () { return id; }, function (error) {
+          // 對話數已滿：這個對話不可能建立成功，留著只會永遠停在「待建立」，所以移除並把原因交給呼叫端顯示。
+          // 其他失敗（離線、伺服器暫時不可用……）保留為離線對話，之後 flush 會冪等地重送建立。
+          if (error && error.code === 'conversation_limit_reached') {
+            return store.removeConversation(local.key).then(function () { emit({ type: 'conversations' }); throw error; });
+          }
+          return id;
+        });
       }).then(function () {
         return store.listConversations().then(function (list) {
           return list.filter(function (record) { return record.client_id === id; })[0];
@@ -340,6 +359,10 @@
         return wrap(axios.get(base + '/' + encodeURIComponent(id) + '/messages', {
           params: { since_seq: opts.since_seq, limit: opts.limit }, signal: opts.signal
         }));
+      },
+      /* 呼叫者自己的用量（今日輪數、對話數、暫停截止時間）；只用於顯示，真正的限制在後端。 */
+      getUsage: function (opts) {
+        return wrap(axios.get('/api/cs/usage', { signal: opts && opts.signal }));
       }
     };
   }

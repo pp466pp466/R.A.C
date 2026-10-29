@@ -166,7 +166,7 @@ def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/cs/") or rule.endpoint.startswith("cs_pages."):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 7, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 8, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 

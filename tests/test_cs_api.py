@@ -23,6 +23,8 @@ from tests.support.llm import FakeLLMProvider, Step
 
 BASE = "/api/cs/conversations"
 
+pytestmark = pytest.mark.usefixtures("generous_free_limits")      # 這個檔案測端點與流程，不是用量限制（見 conftest）
+
 
 def uid(n: int) -> str:
     return str(uuid.UUID(int=n))

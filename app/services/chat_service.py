@@ -3,6 +3,8 @@
 重點：
 - 每個方法都以呼叫者（`CurrentUser`）為擁有者條件；非擁有者與不存在一律 `NotFound`。
 - 會寫入或呼叫模型的操作（建立、改名、送出訊息）先過 `AccessPolicy.require_chat_access`；讀取與刪除自己的對話只需登入與擁有者。
+- 建立對話與送出新訊息再過 `UsageService` 的用量檢查（對話數上限；暫停、每分鐘、每日輪數、全站用量）：拒絕發生在寫入與取得
+  處理標記之前，所以不留任何痕跡；已有回覆的重送在檢查之前就回傳，不受限制也不重複計入。
 - 送出訊息的提交點（D8）：使用者訊息與處理標記先提交，**呼叫模型時沒有資料庫交易**（最長 30 秒），
   再把助理訊息、狀態、最後一筆帳本與清除標記在同一個交易提交。任何例外都會回復並清除標記後才往外傳。
 - 重送是冪等的：以（對話、訊息識別碼）去重，已有回覆就直接回傳，不呼叫模型；使用者訊息已存在但沒有回覆（上次中斷）只補一次呼叫。
@@ -34,7 +36,8 @@ from app.services.errors import (
     ConversationBusy, MessageIdReused, NotFound, ServiceUnavailable, ValidationError, VersionConflict,
 )
 from app.services.input_cleaning import clean_message, clean_single_line
-from app.services.llm_service import LlmService
+from app.services.llm_service import DEGRADED_BLOCKED, LlmService
+from app.services.usage_service import UsageService
 
 logger = logging.getLogger(__name__)
 
@@ -136,6 +139,7 @@ class ChatService:
         chats: ChatRepository,
         llm: LlmService | None,
         policy: AccessPolicy,
+        usage: UsageService,
         clock: Callable[[], datetime],
         commit: Callable[[], None],
         rollback: Callable[[], None],
@@ -145,6 +149,7 @@ class ChatService:
         self._chats = chats
         self._llm = llm
         self._policy = policy
+        self._usage = usage
         self._clock = clock
         self._commit = commit
         self._rollback = rollback
@@ -166,6 +171,7 @@ class ChatService:
         existing = self._chats.find_conversation_by_client_id(user.id, key)
         if existing is not None:
             return ConversationView.from_model(existing), False
+        self._usage.check_create_conversation(user)           # 冪等重送在上面就回傳了，不受對話數上限影響
         try:
             conversation = self._chats.create_conversation(
                 user.id, client_id=key, state=initial_state(user.member_tier), now=self._clock()
@@ -249,6 +255,10 @@ class ChatService:
             if reply is not None:                            # 已處理過：回傳既有的回覆，不呼叫模型
                 return self._result(existing, reply, conversation)
 
+        # 用量限制：在取得處理標記之前檢查，拒絕時不寫入訊息、不設標記、不呼叫模型、不新增帳本。
+        # 已儲存但沒有回覆的訊息（上次中斷）已被接受過一次，不再受每分鐘限制。
+        self._usage.check_send(user, conversation_id=conversation.id, already_accepted=existing is not None)
+
         held_since = self._clock()
         if not self._chats.acquire_processing(
             user.id, conversation, now=held_since, stale_before=held_since - PROCESSING_STALE_AFTER
@@ -330,6 +340,8 @@ class ChatService:
             user_id=user.id, conversation_id=conversation.id, intent=reply.intent if reply else None,
             outcome=MSG_STATUS_OK if reply else MSG_STATUS_FALLBACK,
         )
+        if outcome.degraded == DEGRADED_BLOCKED:             # 被安全過濾擋下的那一列帳本已隨上面的提交落地，才能算出是否達到暫停門檻
+            self._usage.record_block_outcome(user)
         if self._after_reply is not None and reply is not None:
             try:
                 self._after_reply(user.id, conversation.public_id)

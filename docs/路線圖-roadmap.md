@@ -1,6 +1,6 @@
 # 路線圖與待決定事項
 
-> 狀態：持續更新 ｜ 最後更新：2026-10-29 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
+> 狀態：持續更新 ｜ 最後更新：2026-10-30 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
 
 本文件說明各個 change 的順序、相依與目前狀態，以及尚未決定的事項。細節與理由在 report.md 與 RPG.md；這裡只維護「現在在哪裡、下一步是什麼」。
 
@@ -13,7 +13,9 @@ flowchart LR
     AG["age-gate<br/>年齡閘門（共用層）"]:::done
     AB["age-verification-birthdate<br/>生日與年齡區間、閒置帳號清除"]:::done
     C3["C-3 cs-chat-core<br/>客服對話核心與模型呼叫層"]:::done
-    C4["C-4 usage-safety-ops<br/>額度、限流、保留期限、管理員後台、匯出與刪除帳號"]:::plan
+    C4A["C-4a usage-limits<br/>額度、限流、全站用量上限、安全過濾暫停"]:::active
+    C4B["C-4b admin-console<br/>/admin、停權、調整等級、稽核"]:::plan
+    C4C["C-4c privacy-lifecycle<br/>刪除帳號、匯出、保留期限清理、告警"]:::plan
     C5["C-5 production-launch<br/>部署、入口層、備份演練、營運手冊"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
     RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料"]:::plan
@@ -24,17 +26,18 @@ flowchart LR
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
 
     C1 --> C2 --> AG --> AB --> C3
-    C3 --> C4 --> C5
+    C3 --> C4A --> C4B --> C4C --> C5
     C3 --> C6
-    C4 --> RC1 --> RC2 --> RC3 --> RC4
+    C4C --> RC1 --> RC2 --> RC3 --> RC4
     RC2 --> RC5
-    C4 --> RC6
+    C4C --> RC6
 
     classDef done fill:#1f3d2b,stroke:#4c9a6a,color:#e2e4e9
+    classDef active fill:#3d2f1f,stroke:#ff6b35,color:#e2e4e9
     classDef plan fill:#1c1e23,stroke:#2a2d34,color:#8a8f99
 ```
 
-圖例：深綠＝已封存；灰＝規劃中。
+圖例：深綠＝已封存；琥珀＝實作中；灰＝規劃中。
 
 | change | 狀態 | 日期／提交 | 說明 |
 |---|---|---|---|
@@ -43,7 +46,9 @@ flowchart LR
 | age-gate | 已封存 | 2026-10-28 | 年齡閘門：未確認年齡不得使用任何會呼叫模型的功能 |
 | age-verification-birthdate | 已封存 | 2026-10-29 | 以生日加年齡區間取代單一勾選；13 至 17 歲固定安全模式；閒置 12 個月帳號清除 |
 | cs-chat-core（C-3） | 已封存 | 2026-10-29（實作 `3cd6284`；封存時同步 6 個新能力、修改 4 個既有能力） | 客服對話、模型呼叫層、補償式摘要、`/cs` 頁面；新增主規格 `cs-conversations`、`cs-conversation-memory`、`cs-nlp-contract`、`cs-chat-ui`、`llm-provider`、`llm-structured-calls`，並修改 `access-control`、`service-observability`、`app-configuration`、`application-layering` |
-| usage-safety-ops（C-4） | 規劃中（下一個） | — | **C-4 之前不得對公開網路開放客服**：目前沒有額度、限流、全站預算與安全過濾累計暫停 |
+| usage-limits（C-4a） | 實作完成，待封存 | 2026-10-30 提案並實作（pytest 3782、Node 142、瀏覽器驗收 30 項，本機資料庫已升級到 `0006`） | 原 C-4（usage-safety-ops）依使用者決定拆成三個。本 change：每位使用者依等級的每分鐘／每日／對話數限制、全站每日 token 與呼叫次數上限（依 `gemini-3.5-flash-lite` 免費層 15 RPM、25 萬 TPM、500 RPD）、安全過濾累計暫停、額度顯示。**客服對外開放前至少要完成 C-4a**；完成後仍缺 C-4b、C-4c |
+| admin-console（C-4b） | 規劃中 | — | `/admin` 與 `/api/admin/*`：停權與解除、調整會員等級、查看用量與意見回饋、被標記對話、刪除違規內容、`admin_audit_logs`、高風險操作重輸密碼 |
+| privacy-lifecycle（C-4c） | 規劃中 | — | 使用者自助刪除帳號（`deletion_pending`、7 天寬限）、匯出個人資料、保留期限清理、監控與告警管道 |
 | production-launch（C-5） | 規劃中 | — | 入口層、HTTPS、備份與還原演練、營運手冊；上線前要重新確認供應商條款與年齡規則 |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流 |
@@ -59,7 +64,7 @@ flowchart LR
 | 過渡期的模型：本機與驗收環境用 `gemini-3.5-flash-lite` | 已決定（`gemini-3.8-flash` 免費層每日約 20 次） | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
 | 逾時（20 / 30 / 35 秒）要不要調整 | 等正式模型確定後以量測資料決定 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
 | 登入後的預設頁面（現為 `/account`，可改為 `/cs`，單一常數 `app/security/redirects.py`） | 待決定 | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
-| 提示詞中的會員額度是 AGENTS.md 第 7 節的初始值（`cs_prompt._QUOTA_FACTS`） | C-4 讓額度可設定時須改取自同一份設定 | [客服對話-chat-service.md](客服對話-chat-service.md)、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
+| 全站每日用量上限的預設值綁定 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、500 RPD） | 換模型或正式環境改用 OpenAI 時須重設 `USAGE_DAILY_TOKEN_LIMIT`、`USAGE_DAILY_CALL_LIMIT`；15 RPM 是全站共用，多人同時使用才需要另加全站每分鐘閘門 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | 13 至 17 歲可使用 AI 功能與 Gemini 條款不符 | 僅限個人測試；對外開放前須以實際供應商條款重新確認（RPG.md R-15.4） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 
 ## 3. 每次封存後要做的事

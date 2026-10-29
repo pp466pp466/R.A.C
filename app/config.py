@@ -46,6 +46,13 @@ DEFAULT_MAX_OUTPUT_TOKENS = 4096          # 含供應商計入的思考 token
 MIN_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS = 256, 32768
 _MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
 
+# ---- 全站每日用量上限（C-4a）：預設值依 gemini-3.5-flash-lite 免費層（15 RPM、25 萬 TPM、每日 500 次請求）----
+# 呼叫次數取 RPD 的 90%（留給進行中的請求）；token 取一般對話約 330 輪。換模型或供應商時須重設這兩個變數。
+DEFAULT_DAILY_TOKEN_LIMIT = 1_000_000
+DEFAULT_DAILY_CALL_LIMIT = 450
+MAX_DAILY_TOKEN_LIMIT = 1_000_000_000
+MAX_DAILY_CALL_LIMIT = 10_000_000
+
 TESTING_DATABASE_URL = "sqlite+pysqlite:///:memory:"
 TESTING_SECRET_KEY = "testing-only-not-a-secret"
 
@@ -135,6 +142,14 @@ class LlmSettings:
 
 
 @dataclass(frozen=True)
+class UsageSettings:
+    """全站每日用量上限（以 Asia/Taipei 的日界計）；每位使用者依等級的限制是程式常數，見 `quota_policy`。"""
+
+    daily_token_limit: int = DEFAULT_DAILY_TOKEN_LIMIT
+    daily_call_limit: int = DEFAULT_DAILY_CALL_LIMIT
+
+
+@dataclass(frozen=True)
 class AppConfig:
     """已驗證的應用程式設定。"""
 
@@ -152,6 +167,8 @@ class AppConfig:
     secret_key_fallbacks: tuple[Secret, ...] = ()
     # ---- 客服與模型呼叫（C-3）----
     llm: LlmSettings = LlmSettings()
+    # ---- 用量限制（C-4a）----
+    usage: UsageSettings = UsageSettings()
 
     @property
     def is_production_like(self) -> bool:
@@ -408,6 +425,26 @@ def _resolve_llm(values: Mapping[str, str]) -> LlmSettings:
     )
 
 
+def _positive_int(values: Mapping[str, str], name: str, default: int, maximum: int) -> int:
+    raw = _get(values, name)
+    if not raw:
+        return default
+    try:
+        number = int(raw)
+    except ValueError:
+        number = 0
+    if not 1 <= number <= maximum:
+        raise ConfigError(f"{name} 必須是 1 至 {maximum} 的整數。")
+    return number
+
+
+def _resolve_usage(values: Mapping[str, str]) -> UsageSettings:
+    return UsageSettings(
+        daily_token_limit=_positive_int(values, "USAGE_DAILY_TOKEN_LIMIT", DEFAULT_DAILY_TOKEN_LIMIT, MAX_DAILY_TOKEN_LIMIT),
+        daily_call_limit=_positive_int(values, "USAGE_DAILY_CALL_LIMIT", DEFAULT_DAILY_CALL_LIMIT, MAX_DAILY_CALL_LIMIT),
+    )
+
+
 def _resolve_secret_key_fallbacks(values: Mapping[str, str]) -> tuple[Secret, ...]:
     """輪替期間仍可驗證舊金鑰簽發的內容（以逗號分隔）；新簽發的內容一律使用目前的 SECRET_KEY。"""
     raw = values.get("SECRET_KEY_FALLBACKS") or ""
@@ -491,4 +528,5 @@ def load_config(
         google=google,
         secret_key_fallbacks=_resolve_secret_key_fallbacks(values),
         llm=_resolve_llm(values),
+        usage=_resolve_usage(values),
     )

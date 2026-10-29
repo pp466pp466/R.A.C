@@ -19,7 +19,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.models.chat import (
-    DEFAULT_CONVERSATION_TITLE, MSG_STATUS_OK, ChatConversation, ChatMessage,
+    DEFAULT_CONVERSATION_TITLE, MSG_STATUS_OK, ROLE_USER, ChatConversation, ChatMessage,
 )
 from app.models.llm_call_log import LlmCallLog
 from app.repositories.errors import DuplicateConversationError, DuplicateMessageError
@@ -117,6 +117,43 @@ class ChatRepository:
         )
         self._session.expunge_all()          # 被刪的對話與訊息物件不能再被使用
         return result.rowcount == 1
+
+    # ---- 用量限制的計數（只讀；見 cs-usage-limits 規格）-------------------------------------
+
+    def count_conversations(self, user_id: int) -> int:
+        return self._session.scalar(select(func.count(ChatConversation.id)).where(ChatConversation.user_id == user_id)) or 0
+
+    def count_processing(self, user_id: int, *, fresh_since: datetime, exclude_conversation_id: int | None = None) -> int:
+        """這位使用者「處理標記仍有效」（不早於 `fresh_since`）的對話數；可排除指定的對話（正要送出的那一個）。
+
+        正在處理的訊息還沒有計入帳本，把它們當成已預留的名額，並行送出就不會一起通過每日額度的檢查。
+        """
+        statement = select(func.count(ChatConversation.id)).where(
+            ChatConversation.user_id == user_id,
+            ChatConversation.processing_since.is_not(None),
+            ChatConversation.processing_since >= fresh_since,
+        )
+        if exclude_conversation_id is not None:
+            statement = statement.where(ChatConversation.id != exclude_conversation_id)
+        return self._session.scalar(statement) or 0
+
+    def recent_user_message_times(self, user_id: int, *, since: datetime, limit: int) -> list[datetime]:
+        """這位使用者自 `since` 起「已被接受」的使用者訊息時間（由新到舊，最多 `limit` 筆）。
+
+        使用者訊息在呼叫模型之前就已提交，所以並行連發的請求彼此看得到；被拒絕的請求沒有寫入訊息，不會被算進來。
+        第 `limit` 筆加上視窗長度就是最早可再送出的時間。
+        """
+        return list(self._session.scalars(
+            select(ChatMessage.created_at)
+            .join(ChatConversation, ChatConversation.id == ChatMessage.conversation_id)
+            .where(
+                ChatConversation.user_id == user_id,
+                ChatMessage.role == ROLE_USER,
+                ChatMessage.created_at >= since,
+            )
+            .order_by(ChatMessage.created_at.desc())
+            .limit(limit)
+        ).all())
 
     # ---- 處理標記（同一對話同時只處理一則）-------------------------------------------
 

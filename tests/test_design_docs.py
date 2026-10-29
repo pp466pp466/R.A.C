@@ -179,7 +179,8 @@ def test_the_architecture_doc_names_every_layer_and_every_injected_dependency():
 
     text = read("系統架構-architecture.md")
     for layer in FORBIDDEN_IMPORTS:
-        assert f"| {layer} |" in text, f"系統架構-architecture.md 的禁止匯入表沒有 {layer} 層"
+        # 不在意欄位前後的空白：編輯器的 Markdown 格式化會把表格對齊補上空白，那只是排版
+        assert re.search(rf"\|\s*{re.escape(layer)}\s*\|", text), f"系統架構-architecture.md 的禁止匯入表沒有 {layer} 層"
     injected = [name for name, p in inspect.signature(create_app).parameters.items() if p.kind is inspect.Parameter.KEYWORD_ONLY]
     assert [name for name in injected if name not in text] == [], "系統架構-architecture.md 沒有提到 create_app 的注入參數"
 

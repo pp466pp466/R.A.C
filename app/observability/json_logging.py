@@ -44,6 +44,9 @@ ALLOWED_FIELDS = (
     "thinking_tokens",
     "reason",
     "provider_status",
+    # 用量事件（usage_events.py）：只有整數，沒有任何文字內容
+    "used",
+    "limit",
 )
 
 MAX_TEXT_LENGTH = 300

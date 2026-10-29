@@ -17,6 +17,8 @@ from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 from tests.support.google import FakeProvider
 
+pytestmark = pytest.mark.usefixtures("generous_free_limits")      # 掃描日誌用的流程不是用量限制（見 conftest）
+
 MEMBER_EMAIL = "scan.member@example.com"
 GOOGLE_EMAIL = "scan.google@example.com"
 ADMIN_EMAIL = "scan.admin@example.com"

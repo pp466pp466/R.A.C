@@ -104,3 +104,93 @@ def test_the_answer_comes_from_the_database_so_another_session_sees_it(db_engine
     member_session.commit()
     with Session(db_engine) as other:
         assert LlmCallLogRepository(other).model_unhealthy_since(PRIMARY, NOW - timedelta(seconds=60)) is True
+
+
+# ---- 用量彙總（usage-limits：每日輪數、全站用量、安全過濾暫停）------------------------------
+
+DAY_START = datetime(2026, 10, 28, 16, 0, tzinfo=timezone.utc)         # 台灣 10/29 00:00
+DAY_END = datetime(2026, 10, 29, 16, 0, tzinfo=timezone.utc)
+DURING = DAY_START + timedelta(hours=5)
+
+
+@pytest.fixture()
+def two_users(member_session):
+    from tests.support.auth import add_user
+
+    return add_user(member_session, 1).id, add_user(member_session, 2).id
+
+
+def test_the_daily_turn_count_only_counts_counted_chat_calls_of_that_user_in_the_period(ledger, two_users):
+    alice, bob = two_users
+    record(ledger, user_id=alice, counted=True, at=DURING)
+    record(ledger, user_id=alice, counted=True, at=DURING + timedelta(minutes=1))
+    record(ledger, user_id=alice, counted=False, at=DURING)                              # 降級或失敗的嘗試
+    record(ledger, user_id=alice, counted=True, kind="summary", at=DURING)               # 摘要不計
+    record(ledger, user_id=bob, counted=True, at=DURING)                                 # 別人的不算
+    assert ledger.count_counted_chat_calls(alice, start=DAY_START, end=DAY_END) == 2
+    assert ledger.count_counted_chat_calls(bob, start=DAY_START, end=DAY_END) == 1
+
+
+def test_the_period_includes_its_start_and_excludes_its_end(ledger, two_users):
+    alice, _ = two_users
+    record(ledger, user_id=alice, counted=True, at=DAY_START)                            # 台灣 00:00 整點屬於今天
+    record(ledger, user_id=alice, counted=True, at=DAY_END)                              # 明天 00:00 整點屬於明天
+    record(ledger, user_id=alice, counted=True, at=DAY_START - timedelta(seconds=1))     # 昨天最後一秒
+    assert ledger.count_counted_chat_calls(alice, start=DAY_START, end=DAY_END) == 1
+
+
+def test_a_user_without_any_call_has_zero_turns_and_no_blocks(ledger, two_users):
+    alice, _ = two_users
+    assert ledger.count_counted_chat_calls(alice, start=DAY_START, end=DAY_END) == 0
+    assert ledger.blocked_chat_calls(alice, start=DAY_START, end=DAY_END) == (0, None)
+
+
+def test_blocked_calls_count_only_chat_calls_with_the_blocked_status_and_report_the_latest_time(ledger, two_users):
+    alice, bob = two_users
+    record(ledger, user_id=alice, status="blocked", at=DURING)
+    record(ledger, user_id=alice, status="blocked", at=DURING + timedelta(minutes=7))
+    record(ledger, user_id=alice, status="blocked", kind="summary", at=DURING + timedelta(minutes=30))   # 摘要被擋不算
+    record(ledger, user_id=alice, status="ok", at=DURING + timedelta(minutes=40))
+    record(ledger, user_id=alice, status="validation_failed", at=DURING + timedelta(minutes=41))
+    record(ledger, user_id=bob, status="blocked", at=DURING + timedelta(minutes=50))
+    count, latest = ledger.blocked_chat_calls(alice, start=DAY_START, end=DAY_END)
+    assert count == 2
+    assert latest == DURING + timedelta(minutes=7) and latest.tzinfo is not None
+
+
+def test_blocked_calls_of_another_day_are_not_counted(ledger, two_users):
+    alice, _ = two_users
+    record(ledger, user_id=alice, status="blocked", at=DAY_START - timedelta(hours=1))
+    record(ledger, user_id=alice, status="blocked", at=DAY_END + timedelta(hours=1))
+    assert ledger.blocked_chat_calls(alice, start=DAY_START, end=DAY_END) == (0, None)
+
+
+def test_the_site_totals_add_all_three_token_kinds_and_every_row_of_every_kind(ledger, two_users):
+    alice, bob = two_users
+    record(ledger, user_id=alice, prompt_tokens=1000, completion_tokens=300, thinking_tokens=50, at=DURING)
+    record(ledger, user_id=bob, kind="summary", prompt_tokens=400, completion_tokens=100, at=DURING)       # 摘要也算
+    record(ledger, user_id=alice, status="timeout", prompt_tokens=200, at=DURING)                           # 失敗的嘗試也算
+    assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (2050, 3)
+
+
+def test_rows_without_token_counts_still_count_as_calls(ledger):
+    record(ledger, at=DURING)                                                    # 全部是空值
+    record(ledger, prompt_tokens=10, at=DURING)
+    assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (10, 2)
+
+
+def test_an_empty_period_has_zero_totals(ledger):
+    assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (0, 0)
+
+
+def test_rows_with_a_null_user_are_part_of_the_site_totals(ledger):
+    """帳號被刪除後帳本的 user_id 變成空值；用量仍屬於全站。"""
+    record(ledger, user_id=None, prompt_tokens=500, at=DURING)
+    assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (500, 1)
+
+
+def test_the_site_totals_exclude_other_days(ledger):
+    record(ledger, prompt_tokens=100, at=DAY_START - timedelta(seconds=1))
+    record(ledger, prompt_tokens=100, at=DAY_END)
+    record(ledger, prompt_tokens=7, at=DAY_START)
+    assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (7, 1)

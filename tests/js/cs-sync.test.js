@@ -38,6 +38,7 @@ function fakeServer() {
     createConversation(clientId) {
       server.calls.push(['create', clientId]);
       if (server.offline) { return Promise.reject(NETWORK()); }
+      if (server.createError) { return Promise.reject(server.createError); }
       if (!byClient.has(clientId)) {
         const conversation = server.addConversation('srv-' + (++conversationCounter), '新對話');
         byClient.set(clientId, conversation);
@@ -443,4 +444,116 @@ test('the axios adapter sends with the timeout given by the server, passes the a
   await assert.rejects(adapter.renameConversation('c1', '我的', 1), (error) => error.code === 'version_conflict' && error.conversation.title === '後端的');
   await adapter.deleteConversation('c1');
   assert.equal(requests[3][1], '/api/cs/conversations/c1');
+});
+
+
+// ---- 用量限制（usage-limits）--------------------------------------------------------------------------
+
+const RATE_LIMITED = () => failure('server', 429, 'rate_limited', { message: '您傳送訊息的速度太快了，請稍候幾秒再試。' });
+const SYSTEM_BUSY = () => failure('server', 503, 'system_busy', { message: '目前使用人數較多，請稍後再試。' });
+const DAILY_QUOTA = () => failure('server', 429, 'daily_quota_exceeded', { message: '您今日的對話額度已用完，將於明日 00:00（台灣時間）重置。' });
+const SUSPENDED = () => failure('server', 403, 'chat_suspended', { message: '客服對話已暫停，將於 13:00（台灣時間）恢復。' });
+const CONVERSATION_LIMIT = () => failure('server', 409, 'conversation_limit_reached', { message: '對話數已達上限，請先刪除不需要的對話。' });
+
+test('usage rejections are classified: temporary ones are retried later, the ones that cannot succeed soon are not', () => {
+  assert.equal(Sync.classify(RATE_LIMITED()), 'retry');
+  assert.equal(Sync.classify(SYSTEM_BUSY()), 'retry');
+  assert.equal(Sync.classify(DAILY_QUOTA()), 'fail');          // 429，但不能被當成「稍後再試」自動重送
+  assert.equal(Sync.classify(SUSPENDED()), 'fail');
+  assert.equal(Sync.classify(CONVERSATION_LIMIT()), 'fail');
+});
+
+test('the existing classifications do not change', () => {
+  assert.equal(Sync.classify(failure('server', 429, 'too_many_requests')), 'retry');
+  assert.equal(Sync.classify(failure('server', 503, 'service_unavailable')), 'retry');
+  assert.equal(Sync.classify(BUSY()), 'busy');
+  assert.equal(Sync.classify(failure('server', 403, 'forbidden')), 'fail');
+  assert.equal(Sync.classify(failure('server', 401, 'unauthorized')), 'auth');
+  assert.equal(Sync.classify(NETWORK()), 'retry');
+  assert.equal(Sync.classify(failure('canceled', 0, 'canceled')), 'canceled');
+});
+
+for (const [label, scripted] of [['rate_limited', RATE_LIMITED()], ['system_busy', SYSTEM_BUSY()]]) {
+  test(`${label}: the message stays queued with the code, the round stops, and the same id is sent again later`, async () => {
+    const { server, store, sync } = await setup();
+    server.script.push({ beforeProcessing: scripted });
+    await sync.enqueue('c1', '甲', 'm1');
+    const first = await sync.flush();
+    assert.equal(first.stopped, 'network');
+    assert.deepEqual((await store.listPending()).map((p) => [p.client_msg_id, p.status, p.error]), [['m1', 'queued', label]]);
+    assert.deepEqual(await sync.flush(), { sent: 1, failed: 0, stopped: null });
+    assert.deepEqual(sentIds(server), ['m1', 'm1']);
+  });
+}
+
+for (const [label, scripted] of [['daily_quota_exceeded', DAILY_QUOTA()], ['chat_suspended', SUSPENDED()]]) {
+  test(`${label}: the message is marked unsendable with the server's explanation and is not sent again by itself`, async () => {
+    const { server, store, sync } = await setup();
+    server.script.push({ beforeProcessing: scripted });
+    await sync.enqueue('c1', '甲', 'm1');
+    assert.deepEqual(await sync.flush(), { sent: 0, failed: 1, stopped: null });
+    const [entry] = await store.listPending();
+    assert.deepEqual([entry.status, entry.error, entry.message], ['failed', label, scripted.message]);
+    server.calls.length = 0;
+    assert.deepEqual(await sync.flush(), { sent: 0, failed: 0, stopped: null });
+    assert.deepEqual(sentIds(server), []);                              // 不自動重送；使用者按「重試」才會再送
+  });
+}
+
+test('retrying an unsendable message sends it again with the same id', async () => {
+  const { server, store, sync } = await setup();
+  server.script.push({ beforeProcessing: DAILY_QUOTA() });
+  await sync.enqueue('c1', '甲', 'm1');
+  await sync.flush();
+  await sync.retryFailed('m1');
+  assert.deepEqual(await sync.flush(), { sent: 1, failed: 0, stopped: null });
+  assert.deepEqual(sentIds(server), ['m1', 'm1']);
+  assert.deepEqual(await store.listPending(), []);
+});
+
+test('a full conversation list: creating one is refused, nothing is left behind, and the reason reaches the caller', async () => {
+  const { server, store, sync } = await setup();
+  server.createError = CONVERSATION_LIMIT();
+  await assert.rejects(sync.createConversation('client-9'), (error) => error.code === 'conversation_limit_reached' && /對話數已達上限/.test(error.message));
+  assert.deepEqual((await store.listConversations()).map((c) => c.key), ['c1']);      // 沒有留下永遠「待建立」的對話
+});
+
+test('creating a conversation still survives other failures by staying an offline conversation', async () => {
+  const { server, store, sync } = await setup();
+  server.createError = failure('server', 503, 'service_unavailable');
+  const local = await sync.createConversation('client-8');
+  assert.equal(local.key, 'new:client-8');
+  assert.ok(await store.getConversation('new:client-8'));
+});
+
+test('an offline conversation that can never be created is dropped with its pending messages when the list turns out to be full', async () => {
+  const { server, store, sync } = await setup();
+  server.offline = true;
+  const local = await sync.createConversation('client-7');
+  await sync.enqueue(local.key, '離線時打的', 'm1');
+  server.offline = false;
+  server.createError = CONVERSATION_LIMIT();
+  const result = await sync.flush();
+  assert.equal(result.limited, '對話數已達上限，請先刪除不需要的對話。');
+  assert.equal(result.sent, 0);
+  assert.deepEqual((await store.listConversations()).map((c) => c.key), ['c1']);
+  assert.deepEqual(await store.listPending(), []);
+});
+
+test('the usage call goes to /api/cs/usage and carries its error description like the other calls', async () => {
+  const requests = [];
+  const axios = {
+    get: (url, config) => {
+      requests.push([url, config]);
+      if (requests.length === 2) { return Promise.reject({ response: { status: 401, data: { error: { code: 'unauthorized', message: '請先登入。' } } } }); }
+      return Promise.resolve({ data: { usage: { daily: { used: 3, limit: 30 } } } });
+    }
+  };
+  const describeError = (error) => ({ kind: 'server', status: error.response.status, code: error.response.data.error.code, message: error.response.data.error.message });
+  const adapter = Sync.createAxiosApi(axios, describeError, { sendTimeoutMs: 45000 });
+  const controller = new AbortController();
+  assert.deepEqual(await adapter.getUsage({ signal: controller.signal }), { usage: { daily: { used: 3, limit: 30 } } });
+  assert.equal(requests[0][0], '/api/cs/usage');
+  assert.equal(requests[0][1].signal, controller.signal);
+  await assert.rejects(adapter.getUsage(), (error) => error.status === 401 && error.code === 'unauthorized');
 });

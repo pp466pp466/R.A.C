@@ -44,6 +44,7 @@ class LlmCallLog(Base):
     __table_args__ = (
         Index("ix_llm_call_logs_user_id_created_at", "user_id", "created_at"),      # 每位使用者的用量與額度
         Index("ix_llm_call_logs_model_status_created_at", "model", "status", "created_at"),   # 斷路查詢
+        Index("ix_llm_call_logs_created_at", "created_at"),                                    # 全站每日用量的彙總（C-4a）
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

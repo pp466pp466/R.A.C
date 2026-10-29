@@ -323,3 +323,75 @@ def test_hostile_text_in_the_folded_round_stays_inside_the_json_data_part(member
     request = provider.calls[0]
     assert hostile not in request.system_instruction
     assert json.loads(request.contents[0].parts[0].split("\n", 1)[1])["round"]["user"] == hostile
+
+
+# ---- 全站用量達上限時延後（global-usage-budget 規格）--------------------------------------------------
+
+
+def make_summary_with_budget(session, provider, exhausted):
+    return SummaryService(
+        chats=ChatRepository(session), llm=build(session, provider), summary_model=SUMMARY, commit=session.commit,
+        marker=MARKER, budget_exhausted=lambda: exhausted(),
+    )
+
+
+def test_an_exhausted_site_budget_defers_the_fold_without_calling_the_model(member_session):
+    user_id, public_id = new_conversation(member_session, rounds=12)
+    provider = provider_with()
+    assert make_summary_with_budget(member_session, provider, lambda: True).compact(user_id, public_id) == 0
+    conversation = row(member_session, public_id)
+    assert provider.calls == [] and ledger(member_session) == []
+    assert (conversation.summary, conversation.summary_upto_seq) == (None, 0)               # 標記不動
+
+
+def test_the_deferred_rounds_are_caught_up_once_the_budget_is_available_again(member_session):
+    user_id, public_id = new_conversation(member_session, rounds=12)
+    state = {"exhausted": True}
+    provider = provider_with(summary_json("第一輪的摘要。"), summary_json("第二輪的摘要。"))
+    service = make_summary_with_budget(member_session, provider, lambda: state["exhausted"])
+    assert service.compact(user_id, public_id) == 0
+    state["exhausted"] = False
+    assert service.compact(user_id, public_id) == 2                                       # 12 輪：補做落後的兩輪
+    assert (row(member_session, public_id).summary, row(member_session, public_id).summary_upto_seq) == ("第二輪的摘要。", 4)
+
+
+def test_the_budget_is_not_even_asked_when_there_is_nothing_to_fold(member_session):
+    user_id, public_id = new_conversation(member_session, rounds=10)
+    asked = []
+    service = make_summary_with_budget(member_session, provider_with(), lambda: asked.append(1) or True)
+    assert service.compact(user_id, public_id) == 0 and asked == []                        # 沒有工作就不多查一次全站彙總
+
+
+def test_the_budget_running_out_in_the_middle_stops_the_remaining_folds(member_session):
+    user_id, public_id = new_conversation(member_session, rounds=13)
+    answers = iter([False, True])
+    provider = provider_with(summary_json("只折疊了一輪。"))
+    service = make_summary_with_budget(member_session, provider, lambda: next(answers))
+    assert service.compact(user_id, public_id) == 1
+    assert (row(member_session, public_id).summary, row(member_session, public_id).summary_upto_seq) == ("只折疊了一輪。", 2)
+
+
+def test_without_a_budget_check_the_service_behaves_as_before(member_session):
+    user_id, public_id = new_conversation(member_session, rounds=11)
+    assert make_summary(member_session, provider_with()).compact(user_id, public_id) == 1
+
+
+def test_the_registry_wires_the_site_budget_into_the_background_summary(member_session):
+    """背景摘要用的服務由 registry 建構：給了 `usage` 設定，全站用量達上限時就不呼叫模型。"""
+    from app.config import UsageSettings
+    from app.repositories.llm_call_log_repository import LlmCallLogRepository
+    from app.services.registry import build_summary_service
+    from app.config import LlmSettings
+
+    user_id, public_id = new_conversation(member_session, rounds=11)
+    LlmCallLogRepository(member_session).add(
+        user_id=None, conversation_id=None, kind="chat", provider="fake", model="m", attempt=1, status="ok", counted=False,
+        latency_ms=1, created_at=NOW, prompt_tokens=500,
+    )
+    member_session.commit()
+    provider = provider_with()
+    service = build_summary_service(
+        member_session, provider=provider, settings=LlmSettings(), clock=lambda: NOW, marker=MARKER,
+        usage=UsageSettings(daily_token_limit=500, daily_call_limit=1000),
+    )
+    assert service.compact(user_id, public_id) == 0 and provider.calls == []

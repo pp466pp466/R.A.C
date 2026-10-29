@@ -32,6 +32,7 @@
           </span>
         </li>
       </ul>
+      <p v-if="usageText" class="cs-sidebar__usage" role="status">{{ usageText }}</p>
     </aside>
   </transition>
 
@@ -102,5 +103,6 @@
   <script src="{{ url_for('static', filename='js/cs/cs-sidebar.js') }}"></script>
   <script src="{{ url_for('static', filename='js/cs/cs-store.js') }}"></script>
   <script src="{{ url_for('static', filename='js/cs/cs-sync.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/cs/cs-usage.js') }}"></script>
   <script src="{{ url_for('static', filename='js/cs/chat.js') }}"></script>
 {% endblock %}

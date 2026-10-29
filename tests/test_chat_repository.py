@@ -342,3 +342,61 @@ def test_only_one_of_eight_parallel_state_writes_wins_and_the_version_goes_up_on
     assert sorted(run_in_threads(concurrent_engine, worker)) == [False] * 7 + [True]
     with Session(concurrent_engine) as s:
         assert s.get(ChatConversation, conversation_id).state_version == 2
+
+
+# ---- 用量限制的計數（usage-limits）-------------------------------------------------------------
+
+def test_conversations_are_counted_per_user(repo, member_session, alice, bob):
+    for n in (1, 2, 3):
+        new_conversation(repo, alice, n)
+    new_conversation(repo, bob, 1)
+    assert (repo.count_conversations(alice), repo.count_conversations(bob)) == (3, 1)
+
+
+def test_deleting_a_conversation_frees_its_slot(repo, alice):
+    first = new_conversation(repo, alice, 1)
+    new_conversation(repo, alice, 2)
+    assert repo.delete_conversation(alice, first) is True
+    assert repo.count_conversations(alice) == 1
+
+
+def test_a_user_without_conversations_has_zero(repo, alice):
+    assert repo.count_conversations(alice) == 0
+
+
+def test_processing_counts_only_fresh_markers_and_can_exclude_one_conversation(repo, member_session, alice, bob):
+    now = T0 + timedelta(minutes=10)
+    fresh_since = now - timedelta(seconds=60)
+    mine, other, stale, idle = (new_conversation(repo, alice, n) for n in (1, 2, 3, 4))
+    theirs = new_conversation(repo, bob, 1)
+    assert repo.acquire_processing(alice, mine, now=now, stale_before=fresh_since)
+    assert repo.acquire_processing(alice, other, now=now - timedelta(seconds=30), stale_before=fresh_since)
+    assert repo.acquire_processing(alice, stale, now=now - timedelta(seconds=61), stale_before=now - timedelta(seconds=120))
+    assert repo.acquire_processing(bob, theirs, now=now, stale_before=fresh_since)
+    assert idle.processing_since is None
+    assert repo.count_processing(alice, fresh_since=fresh_since) == 2                           # 過期的與別人的不算
+    assert repo.count_processing(alice, fresh_since=fresh_since, exclude_conversation_id=mine.id) == 1
+
+
+def test_recent_user_message_times_return_only_accepted_user_messages_of_that_user_newest_first(repo, member_session, alice, bob):
+    first, second = new_conversation(repo, alice, 1), new_conversation(repo, alice, 2)
+    theirs = new_conversation(repo, bob, 1)
+    base = T0 + timedelta(minutes=5)
+    say(repo, alice, first, uuid_like(11), now=base)
+    say(repo, alice, first, uuid_like(12), role="assistant", now=base + timedelta(seconds=2))      # 助理訊息不算
+    say(repo, alice, second, uuid_like(13), now=base + timedelta(seconds=10))                        # 不同對話也算
+    say(repo, bob, theirs, uuid_like(14), now=base + timedelta(seconds=11))                          # 別人的不算
+    say(repo, alice, first, uuid_like(15), now=base - timedelta(minutes=5))                          # 視窗之前
+    times = repo.recent_user_message_times(alice, since=base - timedelta(seconds=1), limit=10)
+    assert times == [base + timedelta(seconds=10), base]
+
+
+def test_recent_user_message_times_respect_the_limit_and_the_inclusive_start(repo, alice):
+    conversation = new_conversation(repo, alice)
+    base = T0 + timedelta(minutes=5)
+    for n in range(8):
+        say(repo, alice, conversation, uuid_like(20 + n), now=base + timedelta(seconds=n))
+    newest_three = repo.recent_user_message_times(alice, since=base, limit=3)
+    assert newest_three == [base + timedelta(seconds=n) for n in (7, 6, 5)]
+    assert repo.recent_user_message_times(alice, since=base + timedelta(seconds=7), limit=3) == [base + timedelta(seconds=7)]
+    assert repo.recent_user_message_times(alice, since=base + timedelta(seconds=8), limit=3) == []

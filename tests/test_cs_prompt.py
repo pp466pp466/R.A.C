@@ -10,6 +10,7 @@ import pytest
 from app.config import PROJECT_ROOT
 from app.services import cs_intents, cs_prompt
 from app.services.cs_intents import ENTITY_ENUMS, INTENTS, RESPONSE_SCHEMA, semantic_rules
+from app.services.quota_policy import tier_facts
 from app.services.cs_prompt import (
     DATA_NOTE, DEGRADED_BLOCKED_TEXT, DEGRADED_BUSY_TEXT, DEGRADED_VALIDATION_TEXT, MESSAGE_LABEL, build_system_instruction,
     build_user_contents, degraded_text, leak_marker,
@@ -145,6 +146,17 @@ def test_the_platform_facts_follow_the_real_constants():
 def test_the_initial_quotas_match_agents_md_section_7():
     for fact in ("free 30、plus 100、vip 300", "free 6、plus 10、vip 20", "free 20、plus 100、vip 500", "1000 字"):
         assert fact in INSTRUCTION
+
+
+def test_the_quotas_in_the_instruction_come_from_the_same_table_the_limits_use(monkeypatch):
+    """cs-usage-limits 規格：客服所述的額度與實際限制一致——改動限制表，提示詞跟著改。"""
+    from app.services.quota_policy import TIER_LIMITS, TierLimits
+
+    assert tier_facts() in INSTRUCTION
+    monkeypatch.setitem(TIER_LIMITS, "free", TierLimits(daily_turns=77, per_minute=3, conversations=9))
+    changed = build_system_instruction(MARKER)
+    assert "free 77、plus 100、vip 300" in changed and "free 3、plus 10、vip 20" in changed and "free 9、plus 100、vip 500" in changed
+    assert "free 30" not in changed
 
 
 def test_intents_in_the_schema_the_validator_and_the_prompt_are_identical(monkeypatch):

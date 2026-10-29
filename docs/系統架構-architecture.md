@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-10-29 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core ｜ 規範依據：AGENTS.md 第 3、4、9 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 3、4、9 節
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -40,7 +40,7 @@ flowchart TD
     Pages["controllers：MVC 頁面<br/>只回 HTML 外殼與初始狀態"]
     Api["controllers：Web API<br/>只回 JSON"]
     Sec["security：HTTP 安全輔助<br/>session、CSRF、cookie、重新導向"]
-    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、LlmService…"]
+    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、UsageService、LlmService…"]
     Llm["llm：供應商中立型別與轉接器"]
     Repo["repositories：ORM 存取<br/>條件式 UPDATE、擁有者條件"]
     Model["models：SQLAlchemy 資料模型"]
@@ -67,16 +67,16 @@ flowchart TD
 
 `tests/architecture/test_layering.py` 以 AST 檢查「各層禁止匯入」，違反就失敗：
 
-| 層 | 禁止匯入 | 原因 |
-|---|---|---|
-| controllers | repositories、db、models、sqlalchemy | 端點只呼叫 Service，不碰資料庫 |
-| security | repositories、db、models、sqlalchemy | HTTP 輔助不直接存取資料 |
-| services | controllers、flask | Service 不知道 HTTP |
-| repositories | services、controllers、flask | 資料存取不依賴業務邏輯 |
-| models | services、repositories、controllers、flask | 模型是最底層 |
-| db | services、repositories、controllers | 資料庫基礎不依賴上層 |
-| observability | services、repositories、controllers | 日誌可被任何層使用 |
-| llm | services、repositories、controllers、models、flask | 供應商轉接器不依賴業務層，換供應商只動這一層 |
+| 層            | 禁止匯入                                           | 原因                                         |
+| ------------- | -------------------------------------------------- | -------------------------------------------- |
+| controllers   | repositories、db、models、sqlalchemy               | 端點只呼叫 Service，不碰資料庫               |
+| security      | repositories、db、models、sqlalchemy               | HTTP 輔助不直接存取資料                      |
+| services      | controllers、flask                                 | Service 不知道 HTTP                          |
+| repositories  | services、controllers、flask                       | 資料存取不依賴業務邏輯                       |
+| models        | services、repositories、controllers、flask         | 模型是最底層                                 |
+| db            | services、repositories、controllers                | 資料庫基礎不依賴上層                         |
+| observability | services、repositories、controllers                | 日誌可被任何層使用                           |
+| llm           | services、repositories、controllers、models、flask | 供應商轉接器不依賴業務層，換供應商只動這一層 |
 
 另有兩項架構測試：業務程式碼（services、controllers、repositories、models、security、observability、db）不得含供應商的 SDK、網域與金鑰標頭名稱（`test_no_vendor_in_business_code.py`）；每個指向 `users.id` 的外鍵必須是 `CASCADE` 或可為空的 `SET NULL`（`test_user_foreign_keys.py`）。
 
@@ -111,6 +111,7 @@ sequenceDiagram
 ```
 
 重點：
+
 - **Session 只在狀態碼小於 400 時提交**；需要在失敗回應後仍保留的寫入（登入失敗計數）明確呼叫 `keep_changes_on_error()`；需要在呼叫模型前後落地的寫入（客服）由 Service 注入的 `commit` 明確提交。
 - **延後動作**（`defer_until_commit`）在提交之後、回應送出之後執行，用自己綁好的資料（寄信、摘要折疊使用自己的 Session）。
 - Service 錯誤（`ServiceError` 的子類）統一由 `controllers/errors.py` 轉成狀態碼與 JSON，不含堆疊、SQL 或機密。
@@ -134,25 +135,25 @@ flowchart LR
 
 ## 5. 模組與規格、文件對照
 
-| 能力（`openspec/specs/`） | 主要程式 | 設計文件 |
-|---|---|---|
-| application-layering、database-access、app-configuration | `app/__init__.py`、`app/config.py`、`app/db/`、`app/controllers/errors.py` | 本文、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
-| member-registration、session-authentication、email-token-flows、google-sign-in、csrf-protection、access-control、age-confirmation、account-retention | `app/services/auth_service.py`、`access_policy.py`、`email_flow_service.py`、`google_*`、`app/security/` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
-| cs-conversations、cs-conversation-memory、cs-nlp-contract | `app/services/chat_service.py`、`cs_*.py`、`summary_service.py`、`app/repositories/chat_repository.py` | [客服對話-chat-service.md](客服對話-chat-service.md) |
-| llm-provider、llm-structured-calls | `app/llm/`、`app/services/llm_service.py`、`llm_output.py` | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
-| offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui | `app/static/`、`app/templates/` | [前端結構-frontend.md](前端結構-frontend.md) |
-| service-observability、container-runtime | `app/observability/`、`Dockerfile`、`gunicorn.conf.py` | [營運與部署-operations.md](營運與部署-operations.md) |
+| 能力（`openspec/specs/`）                                                                                                                          | 主要程式                                                                                                           | 設計文件                                                                                                   |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------- |
+| application-layering、database-access、app-configuration                                                                                             | `app/__init__.py`、`app/config.py`、`app/db/`、`app/controllers/errors.py`                                 | 本文、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
+| member-registration、session-authentication、email-token-flows、google-sign-in、csrf-protection、access-control、age-confirmation、account-retention | `app/services/auth_service.py`、`access_policy.py`、`email_flow_service.py`、`google_*`、`app/security/` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)                                                  |
+| cs-conversations、cs-conversation-memory、cs-nlp-contract                                                                                            | `app/services/chat_service.py`、`cs_*.py`、`summary_service.py`、`app/repositories/chat_repository.py`     | [客服對話-chat-service.md](客服對話-chat-service.md)                                                        |
+| llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
+| offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |
+| service-observability、container-runtime                                                                                                             | `app/observability/`、`Dockerfile`、`gunicorn.conf.py`                                                       | [營運與部署-operations.md](營運與部署-operations.md)                                                        |
 
 ## 6. 關鍵技術決策
 
-| 決策 | 內容 | 原因 |
-|---|---|---|
-| 純 ORM、雙軌資料庫 | 不寫原生 SQL；SQLite 與 SQL Server 行為一致 | 本機開發用 SQLite、正式用 SQL Server；JSON 欄位不做內容查詢 |
-| 狀態都在資料庫 | 不依賴行程內記憶體（限流、處理標記、斷路、摘要標記） | 多 worker 與重啟後行為一致 |
-| 不引入 LLM SDK | 以標準函式庫 `urllib` 呼叫 REST | 減少相依、供應商型別不滲入呼叫端、逾時可控 |
-| 前端不打包 | Vue 3 全域變數模式、不使用 `.vue` 與 Vite | AGENTS.md 第 2 節；資產全部本地化 |
-| 擁有者條件寫進簽名 | 對話相關的 Repository 方法第一個參數都是 `user_id` | 避免只憑識別碼取資料；AST 測試守住 |
-| 非擁有者一律 404 | 他人的資源與不存在的回應逐字相同 | 不洩漏資源是否存在 |
+| 決策               | 內容                                                 | 原因                                                        |
+| ------------------ | ---------------------------------------------------- | ----------------------------------------------------------- |
+| 純 ORM、雙軌資料庫 | 不寫原生 SQL；SQLite 與 SQL Server 行為一致          | 本機開發用 SQLite、正式用 SQL Server；JSON 欄位不做內容查詢 |
+| 狀態都在資料庫     | 不依賴行程內記憶體（限流、處理標記、斷路、摘要標記） | 多 worker 與重啟後行為一致                                  |
+| 不引入 LLM SDK     | 以標準函式庫 `urllib` 呼叫 REST                    | 減少相依、供應商型別不滲入呼叫端、逾時可控                  |
+| 前端不打包         | Vue 3 全域變數模式、不使用 `.vue` 與 Vite          | AGENTS.md 第 2 節；資產全部本地化                           |
+| 擁有者條件寫進簽名 | 對話相關的 Repository 方法第一個參數都是 `user_id` | 避免只憑識別碼取資料；AST 測試守住                          |
+| 非擁有者一律 404   | 他人的資源與不存在的回應逐字相同                     | 不洩漏資源是否存在                                          |
 
 ## 7. 規劃中的 RPG 模組
 

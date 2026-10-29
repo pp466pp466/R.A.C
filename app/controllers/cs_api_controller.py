@@ -9,7 +9,7 @@ from flask import Blueprint, jsonify, request
 from app.controllers.request_helpers import read_json_object
 from app.security.session import require_login
 from app.services.errors import ValidationError
-from app.services.registry import get_chat_service
+from app.services.registry import get_chat_service, get_usage_service
 
 cs_api_bp = Blueprint("cs_api", __name__, url_prefix="/api/cs")
 
@@ -22,6 +22,14 @@ def _int_arg(name: str, default: int) -> int:
         return int(raw)
     except ValueError:
         raise ValidationError(fields={name: "必須是整數。"}) from None
+
+
+@cs_api_bp.get("/usage")
+def usage():
+    """呼叫者自己的用量（今日輪數、每分鐘上限、對話數、暫停截止時間）。只需登入，不過閘門：被停權或尚未完成年齡確認的
+    使用者仍能看到頁面上的說明。不含全站用量、token 數或其他使用者的資料。"""
+    user = require_login()
+    return jsonify(usage=get_usage_service().snapshot(user).to_dict())
 
 
 @cs_api_bp.post("/conversations")

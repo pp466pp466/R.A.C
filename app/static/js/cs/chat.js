@@ -4,6 +4,8 @@
  * - Sidebar、Modal、Toast 的顯示完全由 Vue 的響應式變數接管（v-show／v-if），不使用 Bootstrap 的 JavaScript。
  * - 所有文字（使用者與助理）都以 {{ }} 插值當作純文字顯示，保留換行（CSS pre-wrap）；不使用 v-html。
  * - 送出訊息的請求逾時只讀伺服器放進初始狀態的 request_timeout_ms（總預算 + 5 秒），這裡不寫死任何逾時數字。
+ * - 用量：Sidebar 底部顯示今日剩餘輪數、暫停期間鎖住輸入並顯示恢復時間（資料取自 GET /api/cs/usage，邏輯在 cs-usage.js）；
+ *   取得失敗就隱藏，真正的拒絕永遠在後端。對話數已滿時說明原因，輸入的文字留在輸入框。
  * - 取消、切換對話、離開頁面時以 AbortController 中止請求；無論成功、失敗或中斷，finally 都會恢復介面。
  *   前端中止不代表後端中止：後端仍會完成並寫入結果，之後以 since_seq 補齊。
  */
@@ -57,8 +59,14 @@
       var scroller = Vue.ref(null);
       var input = Vue.ref(null);
 
+      // 用量（GET /api/cs/usage）：只用於顯示剩餘輪數與暫停提示；取得失敗時為 null，整行隱藏。真正的限制永遠在後端。
+      var usage = Vue.ref(null);
+      var nowMs = Vue.ref(Date.now());
+
       var store = null;
       var sync = null;
+      var usageApi = null;
+      var suspensionTimer = null;
       var controller = null;
       var knownSeq = 0;            // 這個對話已經「看過」的最大序號：比它大的新助理訊息才會用打字機顯示
       var typewriter = null;
@@ -99,6 +107,9 @@
         return (last.suggested_actions || []).slice(0, 4);
       });
 
+      var suspension = Vue.computed(function () { return CS.usage.suspension(usage.value, nowMs.value); });
+      var usageText = Vue.computed(function () { return CS.usage.remainingText(usage.value); });
+
       var gateNotice = Vue.computed(function () {
         if (gate.value === 'age_confirmation_required') {
           return { text: '請先到帳號設定填寫生日並選擇年齡區間，才能使用客服。', link: '/account', linkText: '前往帳號設定' };
@@ -107,10 +118,35 @@
         if (gate.value === 'forbidden') {
           return { text: '您的帳號目前無法使用客服，請確認信箱已完成驗證。', link: '/account', linkText: '前往帳號設定' };
         }
+        if (suspension.value) { return { text: suspension.value.text }; }
         if (serviceDown.value) { return { text: '客服暫時無法使用，請稍後再試。已輸入的文字會保留。' }; }
         return null;
       });
-      var composerLocked = Vue.computed(function () { return gate.value !== null || !ready.value; });
+      var composerLocked = Vue.computed(function () { return gate.value !== null || !ready.value || suspension.value !== null; });
+
+      // ---- 用量 -----------------------------------------------------------------------------
+
+      /* 暫停到期的那一刻讓畫面自動恢復（不必重新整理）；暫停期間 nowMs 只在這一刻更新。 */
+      function armSuspensionTimer() {
+        if (suspensionTimer !== null) { window.clearTimeout(suspensionTimer); suspensionTimer = null; }
+        nowMs.value = Date.now();
+        var active = CS.usage.suspension(usage.value, nowMs.value);
+        if (!active) { return; }
+        var wait = Math.min(active.untilMs - nowMs.value + 500, 2147483647);
+        suspensionTimer = window.setTimeout(function () { suspensionTimer = null; nowMs.value = Date.now(); }, wait);
+      }
+
+      function refreshUsage() {
+        if (!usageApi || !online.value) { usage.value = null; return Promise.resolve(); }
+        return usageApi.getUsage().then(function (data) {
+          usage.value = data && data.usage ? data.usage : null;
+          armSuspensionTimer();
+        }, function (error) {
+          usage.value = null;                                 // 取得失敗：隱藏這一行，其他功能照常
+          armSuspensionTimer();
+          if (error && error.status === 401) { onAuthLost(); }
+        });
+      }
 
       function scrollToEnd() {
         Vue.nextTick(function () { if (scroller.value) { scroller.value.scrollTop = scroller.value.scrollHeight; } });
@@ -177,10 +213,13 @@
           var failed = entries.filter(function (entry) { return entry.status === 'failed'; });
           failed.forEach(function (entry) { if (GATE_CODES[entry.error]) { gate.value = entry.error; } });
           var queued = entries.filter(function (entry) { return entry.status === 'queued' && entry.error; })[0];
+          if (result.limited) { notifyOnce(typeof result.limited === 'string' ? result.limited : '對話數已達上限，請先刪除不需要的對話。'); }
           if (result.stopped === 'network') {
             if (queued && queued.error === 'service_unavailable') {
               serviceDown.value = true;
               notifyOnce('客服暫時無法使用，訊息已保留。');
+            } else if (queued && CS.usage.queuedNotice(queued.error)) {          // 每分鐘限制、全站忙碌：不是斷線，說明原因
+              notifyOnce(CS.usage.queuedNotice(queued.error));
             } else {
               notifyOnce('目前無法連線到伺服器，訊息已保留，連線恢復後會自動送出。');
             }
@@ -207,6 +246,8 @@
             if (result.sent > 0) { serviceDown.value = false; }
             return refreshAll(true).then(function () { return describeStop(result); }).then(function () {
               if (result.stopped === 'network' || result.stopped === 'busy') { scheduleRetry(); }
+              // 有訊息得到回覆或被拒絕：用量（剩餘輪數、暫停）可能變了，重新讀取；失敗時 refreshUsage 自己處理
+              return (result.sent > 0 || result.failed > 0) ? refreshUsage() : undefined;
             });
           })
           .catch(function () {
@@ -229,6 +270,13 @@
         });
       }
 
+      /* 建立對話被拒絕（對話數已滿）：說明原因，輸入的文字留在輸入框。回傳是否已處理。 */
+      function explainCreateRefusal(error) {
+        if (!error || error.code !== 'conversation_limit_reached') { return false; }
+        notifyOnce(error.message || '對話數已達上限，請先刪除不需要的對話。');
+        return true;
+      }
+
       function sendText(text) {
         var content = String(text || '').trim();
         if (!content || sending.value || composerLocked.value) { return Promise.resolve(); }
@@ -238,7 +286,10 @@
           draft.value = '';
           autosize();
           return refreshMessages(false);
-        }).then(runFlush);
+        }).then(runFlush, function (error) {
+          if (explainCreateRefusal(error)) { return undefined; }
+          throw error;
+        });
       }
 
       function submit() { return sendText(draft.value); }
@@ -298,6 +349,9 @@
         return sync.createConversation().then(function (created) {
           sidebar.afterSelect();
           return refreshConversations().then(function () { return loadConversation(created.key); });
+        }, function (error) {
+          if (explainCreateRefusal(error)) { return undefined; }
+          throw error;
         });
       }
 
@@ -356,10 +410,12 @@
           store = opened;
           if (store.mode === 'memory') { storageMode.value = 'memory'; }
           var api = CS.sync.createAxiosApi(window.axios, Auth.describeError, { sendTimeoutMs: state.request_timeout_ms });
+          usageApi = api;
           sync = CS.sync.createSync({ api: api, store: store, storeApi: CS.store, newId: newId, onAuthLost: onAuthLost });
           return refreshConversations();
         }).then(function () {
           ready.value = true;
+          refreshUsage();                           // 不等它：剩餘輪數晚一點出現沒關係，失敗就不顯示
           var first = conversations.value[0];
           return loadConversation(first ? first.key : null).then(function () {
             if (!online.value) { return undefined; }
@@ -374,10 +430,15 @@
         online.value = true;
         if (!sync) { return; }
         sync.refreshConversations().then(refreshConversations).catch(function () {});
+        refreshUsage();
         runFlush();
       });
       window.addEventListener('offline', function () { online.value = false; });
-      window.addEventListener('pagehide', function () { abortInflight(); if (retryTimer !== null) { window.clearTimeout(retryTimer); retryTimer = null; } });          // 離開頁面：中止等待中的請求（後端仍會完成，之後補齊）
+      window.addEventListener('pagehide', function () {          // 離開頁面：中止等待中的請求（後端仍會完成，之後補齊）
+        abortInflight();
+        if (retryTimer !== null) { window.clearTimeout(retryTimer); retryTimer = null; }
+        if (suspensionTimer !== null) { window.clearTimeout(suspensionTimer); suspensionTimer = null; }
+      });
       document.addEventListener('keydown', function (event) {
         if (event.key === 'Escape') { sidebar.dismissOverlay(); }
       });
@@ -392,7 +453,7 @@
       return {
         sidebar: sidebar.state, ready: ready, storageMode: storageMode, online: online, conversations: conversations,
         activeKey: activeKey, activeTitle: activeTitle, tierLabel: tierLabel, timeline: timeline, chips: chips,
-        gateNotice: gateNotice, composerLocked: composerLocked, draft: draft, sending: sending, maxChars: maxChars,
+        gateNotice: gateNotice, composerLocked: composerLocked, usageText: usageText, draft: draft, sending: sending, maxChars: maxChars,
         renameOpen: renameOpen, renameValue: renameValue, renameError: renameError, deleteOpen: deleteOpen,
         targetTitle: targetTitle, scroller: scroller, input: input,
         submit: submit, onEnter: onEnter, autosize: autosize, useChip: useChip, skipTyping: skipTyping,

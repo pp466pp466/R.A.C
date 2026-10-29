@@ -104,8 +104,59 @@ class TooManyRequests(ServiceError):
     default_message = "操作太頻繁，請稍後再試。"
 
 
+class RateLimited(TooManyRequests):
+    """最近 60 秒內送出的訊息已達等級的每分鐘上限（429）。`retry_after` 是最早可再送出的秒數。"""
+
+    code = "rate_limited"
+    default_message = "您傳送訊息的速度太快了，請稍候幾秒再試。"
+
+    def __init__(self, retry_after: int = 1, message: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))
+
+
+class DailyQuotaExceeded(TooManyRequests):
+    """今日的對話輪數已達等級的上限（429）。`retry_after` 是距離明日 00:00（台灣時間）的秒數。"""
+
+    code = "daily_quota_exceeded"
+    default_message = "您今日的對話額度已用完，將於明日 00:00（台灣時間）重置。"
+
+    def __init__(self, retry_after: int = 1, message: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))
+
+
+class ConversationLimitReached(Conflict):
+    """對話數已達等級的上限，須先刪除不需要的對話（409）。"""
+
+    code = "conversation_limit_reached"
+    default_message = "對話數已達上限，請先刪除不需要的對話。"
+
+
+class ChatSuspended(Forbidden):
+    """客服對話因反覆被內容安全過濾阻擋而暫停（403）。`until` 是恢復的時間（帶時區）；訊息以台灣時間說明。
+
+    不是「閘門」代碼：補填年齡或換帳號都沒有幫助，只能等到期，所以前端不引導去帳號設定。
+    """
+
+    code = "chat_suspended"
+    default_message = "由於多次觸發內容安全限制，客服對話已暫停一段時間，請稍後再試。"
+
+    def __init__(self, until=None, message: str | None = None) -> None:
+        super().__init__(message)
+        self.until = until
+
+
 class ServiceUnavailable(ServiceError):
     """服務暫時無法使用（503）：例如沒有設定模型供應商（本機開發沒有金鑰）。發生時不得寫入任何資料。"""
 
     code = "service_unavailable"
     default_message = "服務暫時無法使用，請稍後再試。"
+
+
+class SystemBusy(ServiceUnavailable):
+    """全站今日的用量上限已到（503）。文案不透露上限或用量的數字；`retry_after` 是建議的重試間隔（秒）。"""
+
+    code = "system_busy"
+    default_message = "目前使用人數較多，請稍後再試。"
+    retry_after = 60

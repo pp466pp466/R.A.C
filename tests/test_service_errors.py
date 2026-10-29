@@ -5,9 +5,11 @@ from flask import jsonify
 from app import create_app
 from app.config import load_config
 from app.controllers.request_helpers import read_json_object
+from datetime import datetime, timezone
+
 from app.services.errors import (
-    AgeConfirmationRequired, AgeRestricted, Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests,
-    Unauthenticated, ValidationError,
+    AgeConfirmationRequired, AgeRestricted, ChatSuspended, Conflict, ConversationLimitReached, DailyQuotaExceeded, Forbidden,
+    NotFound, RateLimited, ServiceError, ServiceUnavailable, SystemBusy, TooManyRequests, Unauthenticated, ValidationError,
 )
 
 TRACE_MARKERS = ("Traceback", 'File "', "app\\", "app/", "sqlalchemy", "SELECT ")
@@ -35,6 +37,11 @@ def app():
         "conflict": Conflict(),
         "toomany": TooManyRequests(),
         "unavailable": ServiceUnavailable(),
+        "rate-limited": RateLimited(retry_after=17),
+        "daily-quota": DailyQuotaExceeded(retry_after=3600),
+        "conversation-limit": ConversationLimitReached(),
+        "suspended": ChatSuspended(until=datetime(2026, 10, 29, 9, 30, tzinfo=timezone.utc), message="暫停至 17:30（台灣時間）。"),
+        "system-busy": SystemBusy(),
         "custom": Unauthenticated("信箱或密碼不正確。", code="invalid_credentials"),
         "unknown-subclass": type("Odd", (ServiceError,), {})("特殊錯誤"),
     }
@@ -139,9 +146,59 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "ValidationError": 400, "Unauthenticated": 401, "Forbidden": 403, "AgeConfirmationRequired": 403, "AgeRestricted": 403,
         "NotFound": 404, "Conflict": 409, "ConversationBusy": 409, "MessageIdReused": 409, "VersionConflict": 409,
         "TooManyRequests": 429, "ServiceUnavailable": 503,
+        "RateLimited": 429, "DailyQuotaExceeded": 429, "ConversationLimitReached": 409, "ChatSuspended": 403, "SystemBusy": 503,
     }
     made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
     assert made == expected
+
+
+# ---- 用量限制的錯誤（cs-usage-limits、global-usage-budget、cs-safety-suspension）---------------
+
+@pytest.mark.parametrize(
+    ("name", "status", "code", "message", "retry_after"),
+    [
+        ("rate-limited", 429, "rate_limited", "您傳送訊息的速度太快了，請稍候幾秒再試。", "17"),
+        ("daily-quota", 429, "daily_quota_exceeded", "您今日的對話額度已用完，將於明日 00:00（台灣時間）重置。", "3600"),
+        ("conversation-limit", 409, "conversation_limit_reached", "對話數已達上限，請先刪除不需要的對話。", None),
+        ("system-busy", 503, "system_busy", "目前使用人數較多，請稍後再試。", "60"),
+    ],
+)
+def test_usage_errors_have_their_status_code_message_and_retry_after(client, name, status, code, message, retry_after):
+    response = client.get(f"/api/_t/{name}")
+    assert response.status_code == status
+    assert response.get_json()["error"] == {"code": code, "message": message}
+    assert response.headers.get("Retry-After") == retry_after
+
+
+def test_a_suspension_is_a_403_with_the_resume_time_and_no_retry_after(client):
+    response = client.get("/api/_t/suspended")
+    assert response.status_code == 403
+    body = response.get_json()
+    assert body["error"] == {"code": "chat_suspended", "message": "暫停至 17:30（台灣時間）。"}
+    assert body["suspended_until"] == "2026-10-29T09:30:00+00:00"
+    assert "Retry-After" not in response.headers
+
+
+def test_a_retry_after_is_never_below_one_second():
+    assert RateLimited(retry_after=0).retry_after == 1 and DailyQuotaExceeded(retry_after=-5).retry_after == 1
+
+
+@pytest.mark.parametrize("name", ["rate-limited", "daily-quota", "conversation-limit", "suspended", "system-busy"])
+def test_usage_error_responses_never_leak_internals_or_numbers(client, name):
+    text = client.get(f"/api/_t/{name}").get_data(as_text=True)
+    for marker in TRACE_MARKERS:
+        assert marker not in text
+
+
+def test_system_busy_does_not_reveal_a_limit_or_a_usage_figure(client):
+    message = client.get("/api/_t/system-busy").get_json()["error"]["message"]
+    assert not any(ch.isdigit() for ch in message) and not any(word in message for word in ("token", "上限", "額度"))
+
+
+def test_usage_errors_keep_their_places_in_the_error_hierarchy():
+    assert issubclass(RateLimited, TooManyRequests) and issubclass(DailyQuotaExceeded, TooManyRequests)
+    assert issubclass(ChatSuspended, Forbidden) and issubclass(SystemBusy, ServiceUnavailable)
+    assert not issubclass(ChatSuspended, (AgeConfirmationRequired, AgeRestricted))       # 不是年齡閘門：前端不引導去補填
 
 
 # ---- API 請求本文 --------------------------------------------------------------

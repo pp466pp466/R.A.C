@@ -78,6 +78,19 @@ def member_session(db_engine):
 
 
 @pytest.fixture()
+def generous_free_limits(monkeypatch):
+    """讓 free 等級幾乎沒有用量限制。
+
+    測對話流程的檔案常在同一個（假）時間點連發很多則訊息，會撞到每分鐘 6 則的限制；那不是它們要測的事。
+    用量限制本身在 `test_usage_service.py`（單元）與 `test_chat_usage_limits.py`（整合）逐項測試，那兩個檔案不使用它。
+    用法：測試檔加上 `pytestmark = pytest.mark.usefixtures("generous_free_limits")`。
+    """
+    from app.services.quota_policy import TIER_LIMITS, TierLimits
+
+    monkeypatch.setitem(TIER_LIMITS, "free", TierLimits(daily_turns=10_000, per_minute=10_000, conversations=10_000))
+
+
+@pytest.fixture()
 def log_lines():
     """把 JSON 日誌導到記憶體，回傳讀取已解析日誌行的函式（`read.raw()` 取得原始文字，供掃描敏感資料用）。"""
     from app.observability.json_logging import JsonFormatter, RequestContextFilter

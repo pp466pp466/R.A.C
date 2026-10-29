@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（正式部署、入口層、告警與備份演練由 C-5 與 C-4 實作） ｜ 最後更新：2026-10-29 ｜ 對應 change：platform-foundation、member-auth、age-verification-birthdate、cs-chat-core ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（正式部署、入口層與備份演練由 C-5、告警由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 9、11 節
 
 本文件說明設定如何依環境載入、容器如何建置與執行、migration 的部署步驟、日誌與事件的規則、維運指令，以及測試與驗收的分層。逐項的環境變數說明在 README 的「環境變數與機密」與 `.env.example`。
 
@@ -71,12 +71,14 @@ flowchart LR
     Req["請求日誌<br/>request_id、路徑規則（不含查詢字串）、方法、狀態碼、延遲"] --> Fmt
     Sec["安全事件<br/>auth.*、security.*、account.*"] --> Fmt
     Llm["模型事件<br/>llm.call、llm.breaker_opened、cs.reply"] --> Fmt
+    Use["用量事件<br/>usage.denied、usage.global_budget_warning、cs.chat_suspended"] --> Fmt
     Fmt["JsonFormatter<br/>白名單欄位 + 訊息遮罩 + 例外只留類型與位置"] --> Out["標準輸出（單行 JSON）"]
 ```
 
-- **白名單**：只輸出固定的基本欄位與 `ALLOWED_FIELDS`（`request_id`、`path`、`method`、`status`、`latency_ms`、`user_id`、`conversation_id`、`intent`、`model`、`attempt`、`prompt_tokens`、`completion_tokens`、`finish_reason`、`error_type`、`error_location`、`event`，以及模型呼叫的 `kind`、`provider`、`outcome`、`thinking_tokens`、`reason`、`provider_status`），其餘一律丟棄。
+- **白名單**：只輸出固定的基本欄位與 `ALLOWED_FIELDS`（`request_id`、`path`、`method`、`status`、`latency_ms`、`user_id`、`conversation_id`、`intent`、`model`、`attempt`、`prompt_tokens`、`completion_tokens`、`finish_reason`、`error_type`、`error_location`、`event`，以及模型呼叫的 `kind`、`provider`、`outcome`、`thinking_tokens`、`reason`、`provider_status`，以及用量事件的整數 `used`、`limit`），其餘一律丟棄。
 - **絕不記錄**：密碼與雜湊、cookie、CSRF 與驗證／重設權杖、OAuth code、Authorization 標頭、完整金鑰、email、生日與年齡區間、使用者訊息、`reply_text`、模型原始輸出、含權杖的網址。事件名稱是固定列舉，失敗原因寫在名稱最後一段，所以日誌裡不可能夾帶自由文字。
 - 模型呼叫的函式（`app/observability/llm_events.py`）根本沒有接收文字內容的參數；`tests/test_log_scan_full_flow.py` 走完整個流程後掃描整段日誌，找不到任何測試用的敏感字串。
+- 用量事件（`app/observability/usage_events.py`）同樣只有分類與整數，原因是固定列舉（拒絕：`rate_limited`、`daily_quota`、`conversation_limit`、`suspended`、`global_budget`；預算警告：`tokens`、`calls`；暫停：`safety_blocks`），傳入列舉以外的值會立刻出錯。`usage.global_budget_warning` 在全站今日的 token 或呼叫次數越過上限的 80% 後，每個請求都記一筆（沒有跨 worker 的共享狀態可「每日只記一次」），由告警層（C-4c）以時間窗去重；`cs.chat_suspended` 供管理員之後在後台查看（C-4b）。
 - 層級：設定錯誤（400、403）為錯誤層級；驗證失敗與暫時性錯誤為警告；主要模型因逾時或伺服器錯誤將被暫時跳過時，在導致斷路的那次失敗記一筆 `llm.breaker_opened`。
 - 健康檢查：`/healthz`（存活，不碰資料庫）與 `/readyz`（確認資料庫），回應不含內部細節且 `no-store`。
 
@@ -91,11 +93,13 @@ flowchart LR
 | 資料 | 保存期限 | 狀態 |
 |---|---|---|
 | 帳號（含生日與年齡區間） | 連續 12 個月未登入即刪除 | 已實作 |
-| 對話與訊息 | 最後一則訊息後 12 個月，或使用者主動刪除 | 主動刪除已實作；期滿清除（C-4） |
-| `llm_call_logs` | 12 個月（不含對話全文） | C-4 |
-| 失敗的模型原文（`error_detail`） | 14 天，僅管理員可讀 | C-4 |
-| `auth_tokens` | 到期後 7 天 | C-4 |
-| 應用程式日誌、管理稽核、備份 | 30 天、24 個月、30 天 | 平台設定（C-4、C-5） |
+| 對話與訊息 | 最後一則訊息後 12 個月，或使用者主動刪除 | 主動刪除已實作；期滿清除（C-4c） |
+| `llm_call_logs` | 12 個月（不含對話全文） | C-4c（期滿清除；用量彙總依賴它，見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)） |
+| 失敗的模型原文（`error_detail`） | 14 天，僅管理員可讀 | C-4c |
+| `auth_tokens` | 到期後 7 天 | C-4c |
+| 應用程式日誌、管理稽核、備份 | 30 天、24 個月、30 天 | 平台設定（C-4b、C-4c、C-5） |
+
+全站每日用量上限由環境變數設定（逐項說明在 README 與 `.env.example`）：`USAGE_DAILY_TOKEN_LIMIT`（預設 1,000,000）與 `USAGE_DAILY_CALL_LIMIT`（預設 450）。預設值依目前使用的 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、每日 500 次請求），**換模型或換供應商（例如正式環境改用 OpenAI）時必須重設**；部署時須確認它們與供應商的實際配額一致。
 
 ## 6. 測試與驗收分層
 
@@ -110,7 +114,7 @@ flowchart BT
     U --> A --> J --> B --> C --> R
 ```
 
-最近一次的數字（2026-10-29）：pytest 3532 項、Node 125 項、瀏覽器驗收 64 項、容器驗收 95 項；細節與已知限制記在 README 的「客服對話（C-3）」。真實的 Gemini 呼叫只在人工驗收進行，且每次都需要使用者當下同意（免費方案的資料可能被用於改進產品，只用合成文字）。
+最近一次的數字（2026-10-30，C-4a）：pytest 3782 項、Node 142 項、瀏覽器驗收 C-3 的 64 項加 C-4a 的 30 項；容器驗收 95 項是 C-3 時的結果，C-4a 沒有重跑。細節與已知限制記在 README 的「客服對話（C-3）」與「用量限制（C-4a）」。真實的 Gemini 呼叫只在人工驗收進行，且每次都需要使用者當下同意（免費方案的資料可能被用於改進產品，只用合成文字）。
 
 ---
 

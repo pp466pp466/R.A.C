@@ -4,6 +4,7 @@
 - 找出「已摘要序號之後」的正常輪；超過 10 輪就把最舊的一輪併入累積摘要，最多折疊 3 輪（限制延遲）。
 - 每一輪：呼叫摘要模型（用途 `summary`，走 `LlmService`，所以重試、備援、斷路與帳本都一樣）→ 驗證（非空、≤800 字、
   不含洩漏標記）→ 以「已摘要序號」為條件寫入。條件不符（別的請求先完成了）就丟棄，序號不會倒退。
+- 全站今日的用量（token 或呼叫次數）已達上限時延後：不呼叫模型、標記不動，等用量恢復後的下一次請求補做。
 - 失敗（模型降級、驗證失敗）只留下帳本紀錄，標記不動；任何一次成功的回覆之後都會再登記動作，所以落後的輪數會在下一次請求補上。
   標記與摘要都在資料庫，worker 重啟不遺失任何東西。
 - 折疊單位是「輪」：標記推進到該輪助理訊息的序號，途中被越過的降級輪次不進摘要（它們本來就不進上下文）。
@@ -12,7 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
+from typing import Any, Callable
 
 from app.llm.types import LLMContent
 from app.models.chat import MSG_STATUS_OK, ROLE_ASSISTANT, ROLE_USER, ChatMessage
@@ -87,12 +88,16 @@ def _rounds(messages: list[ChatMessage]) -> list[tuple[ChatMessage, ChatMessage]
 
 
 class SummaryService:
-    def __init__(self, *, chats: ChatRepository, llm: LlmService, summary_model: str, commit, marker: str) -> None:
+    def __init__(
+        self, *, chats: ChatRepository, llm: LlmService, summary_model: str, commit, marker: str,
+        budget_exhausted: Callable[[], bool] | None = None,
+    ) -> None:
         self._chats = chats
         self._llm = llm
         self._summary_model = summary_model
         self._commit = commit
         self._marker = marker
+        self._budget_exhausted = budget_exhausted        # 全站今日用量已達上限時為真；摘要也是模型呼叫，此時延後
 
     def compact(self, user_id: int, public_id: str) -> int:
         """最多折疊 3 輪，回傳實際寫入的輪數。模型失敗或條件不符時停止，下次再補。"""
@@ -122,6 +127,9 @@ class SummaryService:
         rounds = self._unsummarized_rounds(user_id, conversation)
         if len(rounds) <= HISTORY_ROUNDS:
             self._commit()
+            return False
+        if self._budget_exhausted is not None and self._budget_exhausted():
+            self._commit()                                          # 不呼叫模型、已摘要序號不動；之後的請求會補做（補償式）
             return False
         user_message, assistant_message = rounds[0]
         previous, upto, conversation_id = conversation.summary, conversation.summary_upto_seq, conversation.id

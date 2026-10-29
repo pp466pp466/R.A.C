@@ -13,8 +13,8 @@ from werkzeug.exceptions import HTTPException
 from app.observability.errors import describe_exception
 from app.security.errors import HttpSecurityError
 from app.services.errors import (
-    Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated, ValidationError,
-    VersionConflict,
+    ChatSuspended, Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated,
+    ValidationError, VersionConflict,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,8 +92,16 @@ def register_error_handlers(app: Flask) -> None:
     @app.errorhandler(ServiceError)
     def _service_error(exc: ServiceError):
         fields = exc.fields if isinstance(exc, ValidationError) else None
-        extra = {"conversation": exc.conversation} if isinstance(exc, VersionConflict) else None
-        return respond_with_error(_status_for(exc), exc.code, exc.message, fields, extra)
+        extra: dict[str, object] | None = None
+        if isinstance(exc, VersionConflict):
+            extra = {"conversation": exc.conversation}
+        elif isinstance(exc, ChatSuspended) and exc.until is not None:
+            extra = {"suspended_until": exc.until.isoformat(timespec="seconds")}      # 前端據此停用輸入並顯示恢復時間
+        response = respond_with_error(_status_for(exc), exc.code, exc.message, fields, extra)
+        retry_after = getattr(exc, "retry_after", None)
+        if retry_after and hasattr(response, "headers"):                              # 429／503：告訴呼叫端多久後再試
+            response.headers["Retry-After"] = str(int(retry_after))
+        return response
 
     @app.errorhandler(Exception)
     def _unexpected_error(exc: Exception):

@@ -60,6 +60,15 @@
 
 .cs-conversations { list-style: none; margin: 0; padding: 0.25rem 0; overflow-y: auto; flex: 1; }
 
+/* 今日剩餘輪數：貼在 Sidebar 底部（列表為空時用 margin-top: auto 推到底） */
+.cs-sidebar__usage {
+  margin: auto 0 0;
+  padding: 0.625rem 0.75rem;
+  border-top: var(--border-hairline);
+  color: var(--color-text-muted);
+  font-size: 0.8125rem;
+}
+
 .cs-conversation {
   display: flex;
   align-items: center;
