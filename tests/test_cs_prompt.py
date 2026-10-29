@@ -119,6 +119,12 @@ def test_the_instruction_asks_for_a_precise_answer_and_sets_no_length_target():
     assert "稱呼使用者一律用「您」" in INSTRUCTION
 
 
+def test_the_instruction_does_not_promise_outcomes_or_repeat_the_scope_after_thanks():
+    """第三次真實驗收的兩個小偏差：意見回饋說了「改善」；致謝那則重複了服務範圍。"""
+    assert "也不要說「改善」「修正」「處理」這類讓人以為問題一定會被解決的話" in INSTRUCTION
+    assert "使用者道謝或結束對話時，只需簡短回應；不要再重複說明服務範圍" in INSTRUCTION
+
+
 def test_the_instruction_defines_the_scope_and_the_special_cases():
     for phrase in ("登入與帳號", "會員等級與額度", "意見回饋", "訂單", "退款"):
         assert phrase in INSTRUCTION
