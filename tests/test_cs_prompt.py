@@ -109,6 +109,15 @@ def test_the_instruction_states_the_length_goal_and_the_no_fabrication_rule():
     assert "絕對不可超過 1000 字" in INSTRUCTION
 
 
+def test_the_instruction_asks_for_a_structured_substantive_answer_without_padding_or_fabrication():
+    """真實驗收（2026-10-29）顯示只說「目標 350 至 1000 字」不夠：實質回答只有 140 至 320 字。指令改為要求固定的結構。"""
+    for step in ("開場", "直接回答", "詳細說明", "注意事項", "下一步"):
+        assert step in INSTRUCTION, step
+    assert "絕不為了湊字數而編造" in INSTRUCTION and "引用「平台資料」中的具體事實與數字" in INSTRUCTION
+    assert "寧可寫短" not in INSTRUCTION                                      # 這句話把長度壓低了，已拿掉
+    assert "稱呼使用者一律用「您」" in INSTRUCTION
+
+
 def test_the_instruction_defines_the_scope_and_the_special_cases():
     for phrase in ("登入與帳號", "會員等級與額度", "意見回饋", "訂單", "退款"):
         assert phrase in INSTRUCTION
