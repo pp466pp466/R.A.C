@@ -23,6 +23,7 @@ BIRTHDATE_COLUMNS = ("birth_date", "age_range", "is_adult_at_confirmation")
 TOMBSTONE_TABLE = "deletion_tombstones"
 CHAT_TABLES = ("chat_conversations", "chat_messages", "llm_call_logs")
 ADMIN_TABLES = ("admin_audit_logs",)
+ALERT_TABLES = ("alert_states",)
 
 
 def alembic_config(url: str) -> Config:
@@ -44,7 +45,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -271,6 +272,44 @@ def test_0008_adds_two_nullable_user_columns_and_one_index_and_keeps_every_row(t
     engine.dispose()
 
 
+def test_0009_adds_only_the_alert_state_table_without_foreign_keys_and_keeps_every_row(tmp_path):
+    """ops-alerting：只新增 `alert_states`（expand）；沒有外鍵、`alert_key` 唯一；回復只移除這張表。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'alerts.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0009_alert_states")
+    assert revision.down_revision == "0008_privacy_lifecycle" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0008_privacy_lifecycle")
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        conn.execute(users.insert().values(
+            public_id="00000000-0000-4000-8000-000000000009", email="old@example.com", email_canonical="old@example.com",
+            display_name="舊帳號", role="user", member_tier="free", status="active", failed_login_count=0, token_version=1,
+            created_at=utcnow().replace(tzinfo=None), updated_at=utcnow().replace(tzinfo=None),
+        ))
+    before_tables = set(inspect(engine).get_table_names())
+    before_columns = {t: {c["name"] for c in inspect(engine).get_columns(t)} for t in (*MEMBER_TABLES, *CHAT_TABLES, *ADMIN_TABLES)}
+    assert not set(ALERT_TABLES) & before_tables
+
+    command.upgrade(cfg, "0009_alert_states")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(ALERT_TABLES)
+    assert {t: {c["name"] for c in inspector.get_columns(t)} for t in before_columns} == before_columns
+    columns = {c["name"]: c for c in inspector.get_columns("alert_states")}
+    assert set(columns) == {"id", "alert_key", "state", "severity", "changed_at", "last_notified_at", "last_value", "updated_at"}
+    assert columns["severity"]["nullable"] and columns["last_notified_at"]["nullable"] and columns["last_value"]["nullable"]
+    assert not columns["alert_key"]["nullable"] and not columns["state"]["nullable"]
+    assert inspector.get_foreign_keys("alert_states") == []
+    assert [sorted(u["column_names"]) for u in inspector.get_unique_constraints("alert_states")] == [["alert_key"]]
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 1
+
+    command.downgrade(cfg, "0008_privacy_lifecycle")
+    assert set(inspect(engine).get_table_names()) == before_tables
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -309,7 +348,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):

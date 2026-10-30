@@ -247,6 +247,30 @@ def test_readme_privacy_lifecycle_section_documents_the_commands_the_periods_and
         assert (PROJECT_ROOT / path).is_file(), path
 
 
+def test_readme_alerts_section_matches_the_real_rules_constants_codes_and_events():
+    """營運告警章節的告警代碼、門檻與事件必須與程式一致（改了常數卻忘了改文件會失敗）。"""
+    from app.models.alert_state import ALERT_KEYS
+    from app.observability import alert_events
+    from app.services import alert_rules as rules
+
+    section = readme_section("營運告警（C-4d）")
+    for key in ALERT_KEYS:
+        assert f"`{key}`" in section, f"README 沒有記載告警代碼：{key}"
+    for event in (alert_events.EVENT_FIRING, alert_events.EVENT_RESOLVED, alert_events.EVENT_DELIVERY_FAILED, alert_events.EVENT_CHECK_FAILED):
+        assert f"`{event}`" in section, event
+    for phrase in ("flask --app wsgi check-alerts", "--dry-run", "ALERT_EMAIL_TO", "每 5 分鐘", "非零代碼", "6 小時", "搶佔", "alert_states",
+                   "`0009`", "已知限制", "超過 10%", "5 個", "樣本不足就維持原狀", "5xx", "不再是通知來源", "沒有 webhook"):
+        assert phrase in section, phrase
+    # 門檻：文件寫的數字就是程式裡的常數
+    assert int(rules.ERROR_RATE_THRESHOLD * 100) == 10 and rules.LATENCY_P95_THRESHOLD_MS == 10_000 and rules.LOCKOUT_THRESHOLD == 5
+    assert rules.REMINDER_INTERVAL.total_seconds() == 6 * 3600 and rules.ERROR_WINDOW.total_seconds() == 5 * 60 and rules.LATENCY_WINDOW.total_seconds() == 15 * 60
+    assert (rules.ERROR_MIN_SAMPLE, rules.LATENCY_MIN_SAMPLE) == (10, 20) and rules.USAGE_WARNING_RATIO * 100 == 80
+    for sample in ("| 10 次 |", "| 20 次 |", "近 5 分鐘", "近 15 分鐘", "80%"):
+        assert sample in section, sample
+    for path in ("app/services/alert_rules.py", "app/services/alert_service.py", "tests/test_alert_service.py", "tests/test_alerting_flow.py"):
+        assert (PROJECT_ROOT / path).is_file(), path
+
+
 def test_readme_cs_section_states_the_limits_the_models_and_the_numbers_that_matter():
     section = readme_section("客服對話（C-3）")
     for phrase in ("C-4 之前不得對公開網路開放", "gemini-3.5-flash-lite", "35000", "no-store", "意圖、實體、信心、摘要與狀態都不離開伺服器"):

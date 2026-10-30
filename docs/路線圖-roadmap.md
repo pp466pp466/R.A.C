@@ -16,7 +16,7 @@ flowchart LR
     C4A["C-4a usage-limits<br/>額度、限流、全站用量上限、安全過濾暫停"]:::done
     C4B["C-4b admin-console<br/>/admin、停權、調整等級、稽核"]:::done
     C4C["C-4c privacy-lifecycle<br/>刪除帳號、匯出、保留期限清理"]:::done
-    C4D["C-4d ops-alerting<br/>監控與告警管道"]:::plan
+    C4D["C-4d ops-alerting<br/>監控與告警管道"]:::active
     OC["openai-compatible-provider<br/>RPG 用途的 OpenAI 相容端點、等級 3 環境開關"]:::done
     C5["C-5 production-launch<br/>部署、入口層、備份演練、營運手冊"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
@@ -53,7 +53,7 @@ flowchart LR
 | admin-console（C-4b） | 已封存 | 2026-10-30（實作 `221585b`；封存時新增 4 個主規格 `admin-console`、`admin-user-management`、`admin-content-review`、`admin-audit-log`，補充 `access-control`、`application-layering`、`service-observability`） | `/admin` 與 `/api/admin/*`（12 個端點）：總覽與今日警告、被標記對話與意見回饋（可讀範圍只有這兩類，意見回饋含 `human_handoff`、不含只有 `unknown` 的對話）、停權與解除、調整會員等級、刪除違規對話、模型失敗原文、`admin_audit_logs`（migration `0007`）、高風險操作重新輸入密碼（與登入共用失敗鎖定）。分層由 AST 測試守住：`AdminService` 每個公開方法先 `require_admin`、後台專用 Repository 只被 `AdminService` 使用。pytest 4508、Node 160、瀏覽器驗收 100 項（桌面 1280 與手機 360），本機資料庫已升級到 `0007`。當時仍缺的稽核與失敗原文的期限清除、刪除帳號、匯出已由 C-4c 實作並封存，告警改為 C-4d |
 | openai-compatible-provider | 已封存（與 C-4c 無相依） | 2026-10-30（實作 `65cacb3`；封存時新增主規格 `llm-openai-compatible`，補充 `llm-provider`、`age-confirmation`；16 項任務全部完成；pytest 4715、Node 160；對真實 OpenRouter 的端到端驗收通過；繁體中文以 `nvidia/nemotron-3.5-lightning:free` 最好（結構化 3/3 通過，但推理型、延遲 7 至 19 秒）；**尚未評估成熟內容的許可度**，也未評估 Dolphin：免費版已下架、付費版未呼叫） | 為 RPG 用途新增 OpenAI 相容端點（目前是 OpenRouter 的免費模型，換付費只改環境變數）；客服與摘要維持 Gemini。`sexual_content_level 3` 改為環境開關（預設關閉；staging 與 production 在成年驗證完成前開啟會啟動失敗；開啟時須列出許可涵蓋的模型）。新增開發用的 `flask llm-probe`。**不產生任何露骨內容的入口（RPG 尚未實作）**；任何入口出現之前，仍須先完成**自家審查層**（擋未成年、性暴力與非自願、真人名義）與**強化成年驗證**（方式未定，比較見本文待決定事項） |
 | privacy-lifecycle（C-4c） | 已封存 | 2026-10-30（實作 `33a684b`；封存時新增主規格 `account-deletion`、`personal-data-export`、`data-retention`，補充 `account-retention`、`session-authentication`、`google-sign-in`、`access-control`、`auth-pages`、`service-observability`；23 項任務全部完成；pytest 5015、Node 175；瀏覽器驗收 48 / 48；本機資料庫已升級到 `0008`） | 使用者自助刪除帳號（`deletion_pending`、7 天寬限；寬限期內登入只得到「只能撤銷」的**受限登入狀態**，在入口層預設拒絕並由掃描全部路由的測試守住；有密碼者重新輸入密碼、只用 Google 者輸入確認文字）、匯出個人資料（JSON；CSV 為 zip，公式字元被中和）、期限清除（`purge-expired-data`：對話與帳本 12 個月、失敗原文 14 天、權杖到期後 7 天、稽核 24 個月）、排程執行刪除（`execute-account-deletions`）。閒置清除與自助刪除共用單一「抹除一個人」的出口，順便補上閒置清除沒有匿名化帳本對話編號的缺口。隱私權政策頁改為描述實際行為。依使用者決定，**告警拆出為 C-4d**。仍待：兩個指令的排程與備份還原後重新執行刪除的演練（C-5） |
-| ops-alerting（C-4d） | 已提案（下一個實作） | 2026-10-30 提案（9 項任務） | 排程指令 `flask check-alerts`：只算資料庫量得到的五項告警——全站用量 80%／100%、模型錯誤率（> 10%）、模型設定錯誤、對話延遲 p95（> 10 秒）、登入失敗激增（5 個帳號被鎖定）；有狀態（新資料表 `alert_states`，進入、升級、每 6 小時提醒、恢復各寄一封，不隨檢查頻率重複寄），管道只做電子郵件（`ALERT_EMAIL_TO`，沿用 SMTP）。依使用者決定：5xx 比率、服務存活、寄信失敗由平台負責（C-5 設定，條件寫進營運文件）；不做 webhook。`usage.global_budget_warning` 不再是通知來源 |
+| ops-alerting（C-4d） | 實作完成，待檢視與封存 | 2026-10-30（11 項任務全部完成；pytest 5241、Node 175；本機資料庫已升級到 `0009`；以真實 SMTP 與真實 SQL Server 驗收寄信） | 排程指令 `flask check-alerts`：只算資料庫量得到的五項告警——全站用量 80%／100%、模型錯誤率（> 10%）、模型設定錯誤、對話延遲 p95（> 10 秒）、登入失敗激增（5 個帳號被鎖定）；有狀態（新資料表 `alert_states`，進入、升級、每 6 小時提醒、恢復各寄一封，先搶佔再寄信、不隨檢查頻率重複寄），管道只做電子郵件（`ALERT_EMAIL_TO`，staging 與 production 必填）。依使用者決定：5xx 比率、服務存活、寄信失敗由平台負責（C-5 設定，條件寫進營運文件）；不做 webhook。`usage.global_budget_warning` 不再是通知來源。仍待：排程設定與平台告警（C-5） |
 | production-launch（C-5） | 規劃中 | — | 入口層、HTTPS、備份與還原演練、營運手冊；上線前要重新確認供應商條款與年齡規則 |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流 |

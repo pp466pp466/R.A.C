@@ -4,7 +4,7 @@ import logging
 import pytest
 
 from app.config import AppConfig, ConfigError, Secret, load_config
-from tests.support.config_env import AUTH_ENV, FAKE_GEMINI_KEY, FAKE_SMTP_PASSWORD
+from tests.support.config_env import ALERT_ENV, AUTH_ENV, FAKE_GEMINI_KEY, FAKE_SMTP_PASSWORD
 
 FAKE_PASSWORD = "S3cretPw-for-tests"
 FAKE_GOOGLE_SECRET = "GOCSPX-fake-secret-for-tests"
@@ -19,7 +19,7 @@ TRUST_URL = GOOD_URL + "&TrustServerCertificate=yes"
 def prod_env(**overrides: str | None) -> dict[str, str]:
     """能通過驗證的 production 環境變數；值為 None 的覆寫代表「移除這個變數」。"""
     env: dict[str, str | None] = {
-        "APP_ENV": "production", "SECRET_KEY": "k" * 32, "DATABASE_URL": GOOD_URL, "GEMINI_API_KEY": FAKE_GEMINI_KEY, **AUTH_ENV,
+        "APP_ENV": "production", "SECRET_KEY": "k" * 32, "DATABASE_URL": GOOD_URL, "GEMINI_API_KEY": FAKE_GEMINI_KEY, **AUTH_ENV, **ALERT_ENV,
     }
     env.update(overrides)
     return {k: v for k, v in env.items() if v is not None}
@@ -242,15 +242,12 @@ def test_production_with_verification_off_refuses_to_start():
     assert "信箱驗證" in str(exc.value) and "production" in str(exc.value)
 
 
-def test_staging_can_explicitly_turn_verification_off_without_any_mail_settings():
-    env = prod_env(
-        APP_ENV="staging", EMAIL_VERIFICATION_REQUIRED="false",
-        BASE_URL=None, MAIL_SMTP_HOST=None, MAIL_SMTP_PORT=None, MAIL_FROM=None,
-        MAIL_SMTP_USER=None, MAIL_SMTP_PASSWORD=None,
-    )
+def test_staging_can_explicitly_turn_verification_off_without_a_base_url():
+    """關閉信箱驗證就不需要對外網址；但 staging 一定要有告警收件人，所以寄信設定仍然需要（見 test_config_alerts.py）。"""
+    env = prod_env(APP_ENV="staging", EMAIL_VERIFICATION_REQUIRED="false", BASE_URL=None)
     cfg = load_config(environ=env)
     assert cfg.email_verification_required is False
-    assert cfg.mail is None
+    assert cfg.base_url is None and cfg.mail is not None and cfg.alerts.recipients == ("ops@example.com",)
 
 
 def test_development_without_the_variable_means_off_and_needs_no_mail_settings(tmp_path):

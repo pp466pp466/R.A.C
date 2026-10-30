@@ -60,6 +60,7 @@ node --test "tests/js/**/*.test.js"
 | `MAIL_SMTP_USER` | 否 | 寄信帳號；須與 `MAIL_SMTP_PASSWORD` 同時設定或同時省略 |
 | `MAIL_SMTP_PASSWORD` | 否 | 寄信密碼（機密） |
 | `MAIL_FROM` | 信箱驗證開啟時 | 寄件者地址（單純的電子郵件地址） |
+| `ALERT_EMAIL_TO` | staging 與 production | 營運告警信的收件人：逗號分隔的電子郵件地址，至多 5 個（去除空白與重複）。development 與 testing 可省略（此時 `flask check-alerts` 只評估並顯示結果）。設定後寄信設定（`MAIL_SMTP_HOST`、`MAIL_SMTP_PORT`、`MAIL_FROM`）也必須完整，即使信箱驗證是關閉的 |
 | `GOOGLE_OAUTH_CLIENT_ID` | 否 | Google 登入的用戶端識別碼；與密鑰須同時設定才會啟用 |
 | `GOOGLE_OAUTH_CLIENT_SECRET` | 否 | Google 登入的用戶端密鑰（機密） |
 | `GEMINI_API_KEY` | staging、production | Gemini API 金鑰（機密）；development 缺漏時應用程式仍可啟動，但客服功能不可用（回應 503） |
@@ -532,6 +533,60 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 | 本機資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`project_pre_0008_20261030_131713.bak`，`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔存在），再 `alembic upgrade head`：`0007_admin_audit_logs` → `0008_privacy_lifecycle`；升級後兩個新欄位可為空、索引存在、`/healthz` 與 `/readyz` 回 200，既有資料筆數不變（`users` 1 筆，其餘 0 筆） |
 | 真實 Gemini | 本 change 沒有任何模型呼叫 |
 
+## 營運告警（C-4d）
+
+change `ops-alerting`。讓營運上的異常在使用者抱怨之前被人知道：**排程指令 `flask check-alerts`** 評估五項**只靠資料庫就量得到**的告警，狀態有變化時寄電子郵件。規格見 `openspec/specs/`（`operational-alerts`，以及 `app-configuration`、`service-observability` 的告警條款）；設計與平台負責的三項見 `docs/營運與部署-operations.md`。依使用者決定，管道只做電子郵件（沒有 webhook）。
+
+### 指令與設定
+
+| 項目 | 說明 |
+|---|---|
+| `flask --app wsgi check-alerts [--dry-run]` | 由平台排程器**每 5 分鐘**觸發（C-5 設定；不使用行程內計時器）。`--dry-run` 只評估並顯示「正式執行會做什麼」，不寄信、不建立或改變任何狀態、不記事件。沒有設定收件人時（development 與 testing）同樣只評估、不改狀態。輸出只有告警名稱、狀態與數值；寄信失敗或某項評估失敗時以**非零代碼**結束並標明項目，排程器應把它接到平台自己的告警 |
+| `ALERT_EMAIL_TO` | 收件人：逗號分隔的電子郵件地址，至多 5 個（去除空白與重複）。**staging 與 production 必填**（缺漏時啟動失敗，訊息只列變數名稱）；設定了它，`MAIL_SMTP_HOST`、`MAIL_SMTP_PORT`、`MAIL_FROM` 也必須完整，即使信箱驗證是關閉的。沿用現有的 SMTP 寄信器 |
+
+### 五項告警與門檻
+
+門檻是 `app/services/alert_rules.py` 的常數，不是環境變數：它們是規範的**建議初值**，要依實際流量調整，調整就是一次有測試的程式變更。比例以分數比較，所以「剛好 10%」不會被浮點誤差判錯。
+
+| 代碼 | 告警 | 條件（窗口） | 嚴重度 | 樣本下限 |
+|---|---|---|---|---|
+| `usage_budget` | 全站用量 | 今日（台灣日界）token 或呼叫次數達上限的 80%；達 100% | 警告；嚴重 | 無 |
+| `llm_error_rate` | 模型錯誤率 | 近 5 分鐘對話呼叫的（429＋逾時＋伺服器錯誤＋網路錯誤）／全部**超過 10%**；安全過濾阻擋與設定錯誤不計入分子 | 警告 | 10 次 |
+| `llm_config_error` | 模型設定錯誤 | 近 5 分鐘出現**任何一次**設定錯誤（400、403，多半是金鑰被撤銷） | 嚴重 | 無 |
+| `llm_latency_p95` | 對話延遲 | 近 15 分鐘完成的對話呼叫（成功或輸出驗證失敗）的 p95 **超過 10 秒**（最近排名法） | 警告 | 20 次 |
+| `login_lockouts` | 登入失敗激增 | 目前被鎖定的帳號達 **5 個**（鎖定 15 分鐘，等同近 15 分鐘新增的鎖定；同一帳號只算一個） | 警告 | 無 |
+
+**樣本不足就維持原狀**：不憑少數樣本宣告告警，也不因為沒有流量就宣告恢復（所以流量停止後，錯誤率告警要等下一批有足夠樣本的資料才會恢復；仍在告警中的項目由 6 小時提醒負責）。
+
+### 狀態與通知（不隨檢查頻率重複寄信）
+
+| 轉換 | 寄信 |
+|---|---|
+| 正常 → 告警 | 一封「進入告警」 |
+| 嚴重度升高（警告 → 嚴重） | 一封「升級」；降級只更新狀態、不寄信，之後再升高才會再通知 |
+| 持續告警，距上次通知滿 **6 小時** | 一封「提醒」 |
+| 告警 → 正常 | 一封「已恢復」（含開始與恢復時間） |
+| 其餘 | 不寄 |
+
+狀態存在 `alert_states`（migration `0009`，至多 5 列、沒有外鍵、不含個資）。檢查行程可能重疊，所以**先以條件式 UPDATE 搶佔、再寄信**：只有搶到的行程負責寄信（`tests/test_alert_service.py` 的並行測試）。每位收件人各寄一封；至少一位成功就算已通知（已收到的人不會重複收到），全部失敗則還原成搶佔之前的狀態、下次檢查再試。信件內容只有告警名稱、種類、嚴重度、數值與門檻、開始時間（台灣時間）與一句處理建議，**沒有任何使用者資料、對話內容或機密**。日誌事件：`alert.firing`（進入、升級、提醒）、`alert.resolved`、`alert.delivery_failed`、`alert.check_failed`，欄位只有告警代碼、嚴重度與整數。
+
+### 已知限制
+
+- ①**登入失敗激增用「被鎖定的帳號數」代理**：慢速、分散、每個帳號少於 5 次的嘗試看不到；規範的「單一 IP」沒有資料（資料庫沒有 IP），由入口層限流與平台日誌補足（C-5）。
+- ②**至多一次的通知**：行程在「搶佔之後、寄信之前」被殺掉，這一封會遺失；6 小時的提醒是安全網。
+- ③**這個指令依賴資料庫與寄信**：資料庫不通時它也跑不動，寄信服務掛掉時告警寄不出去。所以 **5xx 比率、服務存活（`/healthz`、`/readyz` 的外部探測）與寄信失敗（`mail.send_failed`）必須由平台負責**（C-5 設定，條件見營運文件）；指令的非零結束代碼也要接到平台告警。
+- ④門檻是初值，未經真實流量驗證；上線後第一週檢視告警頻率再調整。⑤`usage.global_budget_warning` 日誌事件維持原樣（每個請求一筆），但**不再是通知來源**，通知由 `usage_budget` 的狀態去重負責。⑥沒有 webhook、後台的告警頁面與可由環境變數調整的門檻（刻意不做）。⑦排程尚未設定（C-5）；容器驗收沒有為這個 change 重跑。
+
+### 驗收紀錄（C-4d，2026-10-30）
+
+| 項目 | 結果 |
+|---|---|
+| pytest | **5241 項通過**（上次是 5015，新增 226 項）（含真實 SQL Server `project_test`，沒有略過）。新增：五項規則的每個邊界與每個狀態轉換（表格式）、唯讀彙總查詢（窗口邊界、p95 與手算相同、鎖定到期不計）、狀態 Repository（並行搶佔只有一個成功、還原不蓋掉別人的狀態）、信件內容與事件、告警服務（進入只寄一封、升級、剛好 6 小時的提醒、恢復、寄信全部失敗後重試、部分失敗不重寄、單項失敗隔離、唯讀模式）、設定、指令，以及用真正的客服對話與登入走完整條生命週期並掃描日誌 |
+| `openspec validate ops-alerting --strict` | 通過 |
+| 真實寄信（本機 SMTP 擷取伺服器） | 以真實的 `SmtpMailSender` 與真實的 SQL Server（暫存資料庫 `project_test`）：5 個帳號被鎖定 → `check-alerts` 寄出 1 封「進入告警」→ 狀態沒變的第二次檢查**沒有寄信** → 解除鎖定後寄出 1 封「已恢復」。信件為 UTF-8、base64 傳輸編碼，標題與內文的繁體中文、數值與門檻、台灣時間正確，收件人只在標頭、內文沒有連結與使用者資料 |
+| 本機資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`project_pre_0009_20261030_142032.bak`，`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔存在），再 `alembic upgrade head`：`0008_privacy_lifecycle` → `0009_alert_states`；升級後 `alert_states` 存在（`alert_key` 唯一、沒有外鍵）、其餘資料表筆數不變（`users` 1 筆，其餘 0 筆）、`/healthz` 與 `/readyz` 回 200，`flask check-alerts --dry-run` 在這個資料庫上可執行 |
+| 真實 Gemini | 本 change 沒有任何模型呼叫 |
+
 ## RPG 用途的模型端點與等級 3 開關（openai-compatible-provider）
 
 change `openai-compatible-provider`。為 RPG 敘事新增 OpenAI 相容端點（目前是 OpenRouter 上的開放模型，也可指向本機模型）；客服與摘要**永遠走 Gemini，完全不受影響**。規格見 `openspec/changes/openai-compatible-provider/specs/`（`llm-openai-compatible`、`llm-provider`、`age-confirmation`）；設計見 `docs/模型呼叫層-llm-layer.md` 第 10 節與 `docs/帳號與安全-auth-security.md` 第 5 節。環境變數見「環境變數與機密」。
@@ -654,7 +709,8 @@ check_endpoint(app, spec, owner=alice, intruder=bob)
 | `provider_status` | 供應商回應的 HTTP 狀態碼（僅失敗且有回應時） |
 | `used` | 全站今日已用量（整數；只出現在 `usage.global_budget_warning`） |
 | `limit` | 全站今日用量上限（整數；只出現在 `usage.global_budget_warning`） |
-| `count` | 期限清除某一類的筆數（整數；只出現在 `retention.purged`） |
+| `count` | 期限清除某一類的筆數（整數；`retention.purged`），或營運告警當下的整數數值（比例為百分比、延遲為毫秒、其餘為筆數；`alert.firing`、`alert.resolved`） |
+| `severity` | 營運告警的嚴重度（固定列舉 `warning`、`critical`；只出現在 `alert.firing`） |
 
 **模型呼叫日誌**（`app/observability/llm_events.py`）每次呼叫一筆，函式沒有接收任何文字內容的參數，所以提示詞、使用者訊息、回覆與金鑰「放不進來」。層級：成功與被安全過濾阻擋為資訊；驗證失敗與暫時性錯誤為警告；供應商回應設定錯誤（請求不合法、無權限）為**錯誤**，需要人工處理（多半是金鑰被撤銷或設定錯誤）。`llm.breaker_opened` 在主要模型因逾時或伺服器錯誤而將被暫時跳過時記一筆警告（只有模型名稱與分類），窗口內被跳過的請求不再記錄。驗證失敗的模型原文**不在日誌**，只存在用量帳本 `llm_call_logs.error_detail`（截斷至 2000 字、保存 14 天、僅管理員可讀）。
 

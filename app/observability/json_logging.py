@@ -47,8 +47,10 @@ ALLOWED_FIELDS = (
     # 用量事件（usage_events.py）：只有整數，沒有任何文字內容
     "used",
     "limit",
-    # 期限清除（lifecycle_events.py）：每一類清除的筆數（整數）
+    # 期限清除（lifecycle_events.py）與營運告警（alert_events.py）：筆數或數值（整數）
     "count",
+    # 營運告警的嚴重度（固定列舉：warning、critical）
+    "severity",
 )
 
 MAX_TEXT_LENGTH = 300

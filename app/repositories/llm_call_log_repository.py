@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from sqlalchemy import func, select, true
 from sqlalchemy.orm import Session
 
-from app.models.llm_call_log import BREAKER_STATUSES, KIND_CHAT, STATUS_BLOCKED, LlmCallLog
+from app.models.llm_call_log import BREAKER_STATUSES, KIND_CHAT, STATUS_OK, STATUS_VALIDATION_FAILED, STATUS_BLOCKED, LlmCallLog
 
 ERROR_DETAIL_LIMIT = 2000
 
@@ -96,6 +96,53 @@ class LlmCallLogRepository:
             )
         ).one()
         return int(total or 0), int(calls or 0)
+
+    # ---- 營運告警的唯讀彙總（ops-alerting；全站，沒有 `user_id`；窗口起含訖不含）-------------------
+
+    def chat_status_counts(self, *, start: datetime, end: datetime) -> dict[str, int]:
+        """窗口內對話呼叫（`kind = chat`）依結果狀態的筆數（`GROUP BY status`）。"""
+        rows = self._session.execute(
+            select(LlmCallLog.status, func.count(LlmCallLog.id))
+            .where(LlmCallLog.kind == KIND_CHAT, LlmCallLog.created_at >= start, LlmCallLog.created_at < end)
+            .group_by(LlmCallLog.status)
+        ).all()
+        return {status: int(count) for status, count in rows}
+
+    def status_count(self, status: str, *, start: datetime, end: datetime) -> int:
+        """窗口內某個結果狀態的筆數（不分用途：設定錯誤不論是對話或摘要都要知道）。"""
+        return self._session.execute(
+            select(func.count(LlmCallLog.id)).where(
+                LlmCallLog.status == status, LlmCallLog.created_at >= start, LlmCallLog.created_at < end
+            )
+        ).scalar_one()
+
+    @staticmethod
+    def _completed_chat_calls(start: datetime, end: datetime):
+        """「完成的對話呼叫」：結果為成功或輸出驗證失敗（供應商有回應、延遲有意義；逾時與錯誤另算在錯誤率）。"""
+        return (
+            LlmCallLog.kind == KIND_CHAT,
+            LlmCallLog.status.in_((STATUS_OK, STATUS_VALIDATION_FAILED)),
+            LlmCallLog.created_at >= start,
+            LlmCallLog.created_at < end,
+        )
+
+    def completed_chat_call_count(self, *, start: datetime, end: datetime) -> int:
+        return self._session.execute(
+            select(func.count(LlmCallLog.id)).where(*self._completed_chat_calls(start, end))
+        ).scalar_one()
+
+    def completed_chat_latency_at(self, offset: int, *, start: datetime, end: datetime) -> int | None:
+        """窗口內完成的對話呼叫，依延遲由小到大排序後第 `offset`（由 0 起算）筆的延遲毫秒；只讀一列。
+
+        百分位數不用資料庫的函式（SQLite 沒有）：呼叫端先取筆數，再以最近排名法算出位置（`alert_rules.percentile_offset`）。
+        """
+        return self._session.scalar(
+            select(LlmCallLog.latency_ms)
+            .where(*self._completed_chat_calls(start, end))
+            .order_by(LlmCallLog.latency_ms.asc(), LlmCallLog.id.asc())
+            .offset(offset)
+            .limit(1)
+        )
 
     def model_unhealthy_since(self, model: str, since: datetime) -> bool:
         """這個模型自 `since` 起是否有逾時或伺服器錯誤的紀錄（斷路用）。

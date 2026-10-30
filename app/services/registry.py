@@ -20,6 +20,7 @@ from app.repositories.chat_repository import ChatRepository
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.health_repository import HealthRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
+from app.repositories.alert_state_repository import AlertStateRepository
 from app.repositories.retention_repository import RetentionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
@@ -34,6 +35,7 @@ from app.services.account_deletion_executor import AccountDeletionExecutor
 from app.services.account_deletion_service import AccountDeletionService
 from app.services.account_erasure_service import AccountErasureService
 from app.services.account_retention_service import AccountRetentionService
+from app.services.alert_service import AlertService
 from app.services.data_retention_service import DataRetentionService
 from app.services.personal_export_service import PersonalExportService
 from app.services.age_stats_service import AgeStatsService
@@ -263,6 +265,17 @@ def get_personal_export_service() -> PersonalExportService:
     session = get_session()
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session), clock=get_clock()
+    )
+
+
+def build_alert_service(
+    session: Session, *, config: AppConfig, clock: Callable[[], datetime], mail_sender: MailSender | None
+) -> AlertService:
+    """命令列用：每項告警的狀態搶佔與還原都立刻提交；沒有設定收件人時只評估、不寄信。"""
+    return AlertService(
+        states=AlertStateRepository(session), ledger=LlmCallLogRepository(session), users=UserRepository(session),
+        usage_settings=config.usage, recipients=config.alerts.recipients, mail_sender=mail_sender,
+        clock=clock, commit=session.commit, rollback=session.rollback,
     )
 
 

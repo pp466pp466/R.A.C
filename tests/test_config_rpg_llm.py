@@ -7,7 +7,7 @@ age-confirmation（等級 3 預設關閉且只能以環境設定開啟、須記�
 import pytest
 
 from app.config import ConfigError, load_config
-from tests.support.config_env import AUTH_ENV, FAKE_GEMINI_KEY
+from tests.support.config_env import ALERT_ENV, AUTH_ENV, FAKE_GEMINI_KEY
 
 FAKE_OPENROUTER_KEY = "sk-or-v1-fake-key-for-tests-0123456789"
 FREE_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
@@ -19,7 +19,7 @@ LEVEL3_ON = {"SEXUAL_CONTENT_LEVEL3_ENABLED": "true", "SEXUAL_CONTENT_LEVEL3_MOD
 def prod_env(**overrides: str) -> dict[str, str]:
     env = {
         "APP_ENV": "production", "SECRET_KEY": "k" * 32, "DATABASE_URL": "sqlite+pysqlite:///:memory:",
-        "GEMINI_API_KEY": FAKE_GEMINI_KEY, **AUTH_ENV,
+        "GEMINI_API_KEY": FAKE_GEMINI_KEY, **AUTH_ENV, **ALERT_ENV,
     }
     env.update(overrides)
     return env

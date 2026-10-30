@@ -1,6 +1,6 @@
 """`flask` 自訂指令（見 AGENTS.md 第 10、11 節：維運工作以指令實作，不用行程內計時器）。
 
-六個指令：
+七個指令：
 - `llm-probe`：開發用，不屬於維運。呼叫 RPG 敘事用途的模型端點一次，印出回覆、模型、延遲、token 與結束原因，
   讓人在 RPG 實作之前先評估端點好不好用（含結構化輸出的穩定度）。只能在 development 與 testing 執行；**不寫帳本與任何資料表**，
   不顯示金鑰，也不印供應商的錯誤本文。
@@ -9,6 +9,9 @@
   （例如容器的一次性工作）用 `--password-stdin` 從標準輸入讀取。信箱與密碼都不會寫入日誌或輸出。
 - `purge-inactive-accounts`：由平台排程器觸發（不使用行程內計時器），刪除連續 12 個月未登入的一般帳號；
   `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
+- `check-alerts`：由平台排程器每 5 分鐘觸發，評估五項只靠資料庫量得到的營運告警（全站用量、模型錯誤率、模型設定錯誤、
+  對話延遲 p95、登入失敗激增），狀態變化時寄電子郵件給 `ALERT_EMAIL_TO`（進入、升級、每 6 小時提醒、恢復各一封）；
+  `--dry-run` 與沒有設定收件人時只評估並顯示結果，不寄信也不改變狀態。輸出只有告警名稱、狀態與數值；寄信失敗或某項評估失敗時以非零代碼結束。
 - `purge-expired-data`：由平台排程器觸發，清除超過保存期限的資料（對話與訊息 12 個月、用量帳本 12 個月、失敗的模型原文 14 天、
   驗證權杖到期後 7 天、管理稽核 24 個月）；`--dry-run` 只列出各類筆數。輸出只有各類的筆數，不含任何內容；有任一類失敗時以非零代碼結束。
 - `execute-account-deletions`：由平台排程器觸發，刪除「申請刪除、寬限期（7 天）已滿」的帳號（與閒置清除共用同一個抹除出口）；
@@ -24,13 +27,14 @@ from flask import Flask, current_app
 
 from app.config import DEV_TOOL_ENVS
 from app.llm.types import LLMBlockedError, LLMConfigError, LLMContent, LLMRequest, LLMTransientError, LLMValidationError
-from app.runtime import get_clock, get_config, get_rpg_llm_provider
+from app.runtime import get_clock, get_config, get_mail_sender, get_rpg_llm_provider
 from app.services.errors import ServiceError, ValidationError
 from app.runtime import get_age_policy
+from app.services.alert_messages import ALERT_NAMES, SEVERITY_LABELS, format_threshold, format_value
 from app.services.llm_output import parse_llm_json
 from app.services.registry import (
     build_account_deletion_executor, build_account_retention_service, build_age_stats_service, build_auth_service,
-    build_data_retention_service,
+    build_alert_service, build_data_retention_service,
 )
 
 # ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
@@ -59,6 +63,35 @@ def _describe(error: ServiceError) -> str:
     if isinstance(error, ValidationError) and error.fields:
         return "；".join(error.fields.values())
     return error.message
+
+
+ALERT_ACTION_LABELS = {
+    "firing": "進入告警", "escalate": "升級", "remind": "提醒", "resolve": "已恢復", "lower": "降級（不寄信）", "none": "沒有動作",
+}
+ALERT_OUTCOME_LABELS = {
+    "notified": "已通知", "delivery_failed": "通知失敗", "quiet": "已更新狀態（不寄信）", "unchanged": "狀態不變",
+    "lost_race": "已由另一個檢查處理", "check_failed": "評估失敗",
+}
+
+
+def describe_alert_result(result, *, preview: bool) -> str:
+    """一項告警的一行輸出：名稱、狀態、數值與門檻，以及（預覽時）正式執行會做的動作或（正式執行時）實際結果。沒有任何個資。"""
+    name = ALERT_NAMES[result.key]
+    evaluation = result.evaluation
+    if evaluation is None:
+        return f"{name}：{ALERT_OUTCOME_LABELS[result.outcome]}"
+    if evaluation.hold:
+        state = "樣本不足，維持原狀"
+    elif evaluation.severity is None:
+        state = "正常"
+    else:
+        state = f"{SEVERITY_LABELS[evaluation.severity]}（目前 {format_value(result.key, evaluation.value)}，門檻 {format_threshold(result.key, evaluation.threshold)}）"
+    if preview:
+        return f"{name}：{state}；正式執行會：{ALERT_ACTION_LABELS[result.action]}"
+    tail = ALERT_OUTCOME_LABELS[result.outcome]
+    if result.action in ("firing", "escalate", "remind", "resolve"):
+        tail = f"{ALERT_ACTION_LABELS[result.action]}，{tail}"
+    return f"{name}：{state}；{tail}"
 
 
 def _count(value: int | None) -> str:
@@ -175,6 +208,24 @@ def register_cli(app: Flask) -> None:
             click.echo(f"預覽：寬限期已滿、待刪除的帳號 {result.matched} 個（未刪除任何資料）。")
         else:
             click.echo(f"已刪除 {result.deleted} 個寬限期已滿的帳號。")
+
+    @app.cli.command("check-alerts")
+    @click.option("--dry-run", is_flag=True, help="只評估並顯示結果（含正式執行時會做的動作），不寄信、不建立或改變任何狀態。")
+    def check_alerts(dry_run: bool) -> None:
+        """評估營運告警並在狀態變化時寄信。可重複執行：狀態沒變就不會重複寄信。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            report = build_alert_service(session, config=get_config(), clock=get_clock(), mail_sender=get_mail_sender()).run(dry_run=dry_run)
+        if dry_run:
+            click.echo("預覽（沒有寄信，也沒有改變任何狀態）：")
+        elif not report.recipients_configured:
+            click.echo("沒有設定告警收件人（ALERT_EMAIL_TO），只評估並顯示結果，不寄信也不改變狀態：")
+        else:
+            click.echo("告警檢查結果：")
+        for result in report.results:
+            click.echo(f"  {describe_alert_result(result, preview=report.read_only)}")
+        if report.failed:
+            raise click.ClickException("以下告警失敗：" + "、".join(ALERT_NAMES[key] for key in report.failed))
 
     @app.cli.command("purge-expired-data")
     @click.option("--dry-run", is_flag=True, help="只列出各類符合條件的筆數，不刪除或改變任何資料。")

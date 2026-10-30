@@ -178,6 +178,12 @@ class UserRepository(BaseRepository[User]):
         )
         return result.rowcount == 1
 
+    def count_locked(self, now: datetime) -> int:
+        """目前被鎖定（鎖定期間尚未結束）的帳號數；營運告警「登入失敗激增」的指標。同一個帳號只算一個。"""
+        return self._session.execute(
+            select(func.count(User.id)).where(User.locked_until.is_not(None), User.locked_until > now)
+        ).scalar_one()
+
     # ---- 抹除（account-deletion 與 account-retention 規格；流程見 AccountErasureService）----------
 
     def clear_ledger_conversation_refs(self, user_id: int) -> int:

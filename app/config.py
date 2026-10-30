@@ -115,6 +115,13 @@ class MailSettings:
 
 
 @dataclass(frozen=True)
+class AlertSettings:
+    """營運告警（ops-alerting）：收件人。沒有設定收件人時（development 與 testing 可以）告警檢查只評估、不寄信。"""
+
+    recipients: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class GoogleSettings:
     """Google 登入（OAuth 用戶端）設定；識別碼與密鑰兩者都設定時才存在。"""
 
@@ -199,6 +206,8 @@ class AppConfig:
     # ---- RPG 用途的 OpenAI 相容端點與內容分級（openai-compatible-provider）----
     rpg_llm: OpenAICompatibleSettings | None = None
     content: ContentSettings = ContentSettings()
+    # ---- 營運告警（ops-alerting）----
+    alerts: AlertSettings = AlertSettings()
 
     @property
     def is_production_like(self) -> bool:
@@ -340,12 +349,36 @@ def _resolve_base_url(env: str, values: Mapping[str, str]) -> str | None:
     return f"{parts.scheme}://{parts.netloc}"
 
 
-def _resolve_mail(env: str, values: Mapping[str, str]) -> MailSettings:
-    """寄信設定；呼叫端只在信箱驗證開啟時才需要它。"""
+MAX_ALERT_RECIPIENTS = 5
+
+
+def _resolve_alerts(env: str, values: Mapping[str, str]) -> AlertSettings:
+    """告警收件人 `ALERT_EMAIL_TO`：逗號分隔、去除空白與重複（不分大小寫）、至多 5 個、每個都是單純的電子郵件地址。
+
+    staging 與 production 必須設定（缺漏時訊息只列變數名稱）；development 與 testing 可以省略。錯誤訊息不回顯設定的值。
+    """
+    parts = [part.strip() for part in _get(values, "ALERT_EMAIL_TO").split(",") if part.strip()]
+    if not parts:
+        if env in PRODUCTION_LIKE_ENVS:
+            raise ConfigError(f"{env} 環境缺少必要的環境變數：ALERT_EMAIL_TO。請由平台機密功能注入。")
+        return AlertSettings()
+    recipients: list[str] = []
+    for address in parts:
+        if not _PLAIN_ADDRESS.fullmatch(address) or "\x00" in address:
+            raise ConfigError("ALERT_EMAIL_TO 的每個地址都必須是單純的電子郵件地址（例如 ops@example.com），多個以逗號分隔。")
+        if address.lower() not in {existing.lower() for existing in recipients}:
+            recipients.append(address)
+    if len(recipients) > MAX_ALERT_RECIPIENTS:
+        raise ConfigError(f"ALERT_EMAIL_TO 最多只能設定 {MAX_ALERT_RECIPIENTS} 個地址。")
+    return AlertSettings(recipients=tuple(recipients))
+
+
+def _resolve_mail(env: str, values: Mapping[str, str], *, reason: str = "信箱驗證已開啟") -> MailSettings:
+    """寄信設定；呼叫端只在信箱驗證開啟、或設定了告警收件人時才需要它。"""
     required = ("MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_FROM")
     missing = [name for name in required if not _get(values, name)]
     if missing:
-        raise ConfigError("信箱驗證已開啟，但缺少寄信設定：" + "、".join(missing) + "。")
+        raise ConfigError(f"{reason}，但缺少寄信設定：" + "、".join(missing) + "。")
 
     try:
         port = int(_get(values, "MAIL_SMTP_PORT"))
@@ -633,7 +666,13 @@ def load_config(
     email_verification_required = _resolve_email_verification(env, values)
     base_url = _resolve_base_url(env, values)
     google = _resolve_google(values)
-    mail = _resolve_mail(env, values) if email_verification_required else None
+    alerts = _resolve_alerts(env, values)
+    if email_verification_required:
+        mail = _resolve_mail(env, values)
+    elif alerts.recipients:
+        mail = _resolve_mail(env, values, reason="已設定告警收件人（ALERT_EMAIL_TO）")
+    else:
+        mail = None
     if (email_verification_required or google) and not base_url:
         reason = "信箱驗證已開啟" if email_verification_required else "Google 登入已啟用"
         raise ConfigError(f"{reason}，但缺少對外網址 BASE_URL（用於信件連結與 OAuth 回呼）。")
@@ -658,4 +697,5 @@ def load_config(
         usage=_resolve_usage(values),
         rpg_llm=rpg_llm,
         content=content,
+        alerts=alerts,
     )
