@@ -24,7 +24,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: 模型名稱由環境變數決定
-系統 SHALL 以環境變數指定主要模型、備援模型與摘要模型。主要模型預設為 `gemini-3.8-flash`，備援模型預設為 `gemini-3.5-flash-lite`，摘要模型未指定時使用主要模型。Gemini 的模型名稱 SHALL 只含英文字母、數字、點、底線與連字號，且長度不超過 64。OpenAI 相容端點（RPG 用途）的模型以 `OPENROUTER_MODEL` 與選用的 `OPENROUTER_FALLBACK_MODEL` 指定，沒有預設值；其名稱另允許斜線與冒號（供應商的識別碼含供應商與變體，例如 `vendor/model:free`），長度不超過 100。
+系統 SHALL 以環境變數指定主要模型、備援模型與摘要模型。主要模型預設為 `gemini-3.8-flash`，備援模型預設為 `gemini-3.5-flash-lite`，摘要模型未指定時使用主要模型。Gemini 的模型名稱 SHALL 只含英文字母、數字、點、底線與連字號，且長度不超過 64。OpenAI 相容端點（RPG 用途）的模型以 `OPENROUTER_MODEL` 與選用的 `OPENROUTER_FALLBACK_MODEL` 指定，沒有預設值；其名稱另允許斜線與冒號（供應商的識別碼含供應商與變體，例如 `vendor/model:free`），長度同樣不超過 64（帳本記錄模型名稱的欄位只有 64 字元，設定接受的名稱必須寫得進帳本）。
 
 #### Scenario: 未設定模型
 - **WHEN** 沒有設定任何模型環境變數
@@ -43,7 +43,7 @@
 - **THEN** 名稱合法，應用程式可啟動
 
 #### Scenario: OpenAI 相容端點的模型名稱不合法
-- **WHEN** `OPENROUTER_MODEL` 含有空白、引號或超過 100 個字元
+- **WHEN** `OPENROUTER_MODEL` 含有空白、引號或超過 64 個字元
 - **THEN** 應用程式啟動失敗，訊息指出變數名稱而不含其值
 
 ### Requirement: 金鑰只由後端讀取且不外洩

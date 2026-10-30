@@ -73,6 +73,14 @@ node --test "tests/js/**/*.test.js"
 | `GEMINI_THINKING_BUDGET` | 否 | 思考 token 預算（0 或正整數）；不設定則使用供應商預設 |
 | `USAGE_DAILY_TOKEN_LIMIT` | 否 | 全站每日 token 上限（正整數，台灣時間 00:00 為日界），預設 1000000；以 `llm_call_logs` 彙總全部呼叫（含摘要與失敗的嘗試），達 80% 記錄警告、達 100% 停止呼叫模型並回覆「目前使用人數較多，請稍後再試。」 |
 | `USAGE_DAILY_CALL_LIMIT` | 否 | 全站每日模型呼叫次數上限（正整數），預設 450（`gemini-3.5-flash-lite` 免費層每日 500 次請求的 90%）；每次請求不論大小都耗用供應商的每日請求數，單靠 token 上限擋不住，所以兩者並用，任一項達上限即停止。**換模型或換供應商時必須依新方案重設這兩個變數**（該層另有 15 RPM、25 萬 TPM，是整個專案共用） |
+| `OPENROUTER_API_KEY` | 否（與 `OPENROUTER_MODEL` 同時設定或同時省略） | RPG 敘事用途的 OpenAI 相容端點（目前是 OpenRouter）金鑰（機密）；客服與摘要永遠使用 Gemini，不受它影響。不是 staging 與 production 的必要機密（RPG 尚未實作） |
+| `OPENROUTER_MODEL` | 否（與 `OPENROUTER_API_KEY` 同時設定或同時省略） | RPG 用途的主要模型識別碼，沒有預設值；允許英文字母、數字、點、底線、連字號、斜線與冒號，最長 64 字（與帳本的模型欄位一致；例如 `vendor/model:free`）。**免費換付費只改這個值** |
+| `OPENROUTER_FALLBACK_MODEL` | 否 | RPG 用途的備援模型（格式同上）；未設定時等於主要模型，暫時性錯誤直接降級 |
+| `OPENROUTER_BASE_URL` | 否 | OpenAI 相容端點的基底網址，預設為 OpenRouter 官方網址；必須是 `https`（development 與 testing 另允許回送位址的 `http`，供本機模型使用），不得含帳號、密碼或查詢字串 |
+| `OPENROUTER_ZDR` | 否 | `true` 或 `false`，預設 `false`。要求只路由到不保存提示的端點；免費端點通常沒有，要求了卻沒有符合的端點時呼叫失敗，不會改成不帶偏好重送 |
+| `OPENROUTER_JSON_SCHEMA` | 否 | `true` 或 `false`，預設 `false`。該模型支援結構描述輸出參數時才開啟；預設改在系統指令附結構描述 |
+| `SEXUAL_CONTENT_LEVEL3_ENABLED` | 否 | `true` 或 `false`，預設 `false`。是否開啟 `sexual_content_level 3`；development 與 testing 可開啟，**staging 與 production 在強化的成年驗證完成之前設為 `true` 會啟動失敗** |
+| `SEXUAL_CONTENT_LEVEL3_MODELS` | 開啟等級 3 時 | 取得書面許可所涵蓋的模型識別碼（以逗號分隔）；開啟時 RPG 用途的主要與備援模型都必須在清單內，否則啟動失敗。關閉時完全不影響行為 |
 
 規則：
 
@@ -84,6 +92,8 @@ node --test "tests/js/**/*.test.js"
 - **信箱驗證**：本機與預備環境可以關閉（註冊後直接啟用、不寄信、忘記密碼一併停用）；`production` 必須開啟並完成寄信設定與 `BASE_URL`。關閉期間註冊的帳號信箱驗證時間為空，之後以 Google 登入同信箱時，依合併規則會清除其未驗證的密碼憑證。
 - **Google 登入為選用**：識別碼與密鑰兩者都設定才啟用，只設定一個會啟動失敗；啟用時必須設定 `BASE_URL`。在 Google Cloud Console 把「已授權的重新導向 URI」設為 `<BASE_URL>/auth/google/callback`，本機瀏覽器請一律使用 `BASE_URL` 的主機名稱（例如 `http://localhost:5000`），不要改用 `127.0.0.1`。
 - Gemini 金鑰（`GEMINI_API_KEY`）由客服對話 change（C-3）接上，目前只需存在於本機 `.env`。
+- **RPG 用途的 OpenAI 相容端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：客服與摘要永遠走 Gemini，沒有設定這組變數時只有 RPG 用途不可用。測試階段先用免費模型（識別碼以 `:free` 結尾）確認好不好用；免費端點的上游可能保存或拿去訓練提示，**只用無害的合成文字、不輸入真實個資**。換成付費模型只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`），程式不用動。金鑰一樣只放 `.env` 或平台機密功能。
+- **等級 3 的環境開關**：`sexual_content_level 3` 預設關閉，不能在程式裡寫死為開啟（AGENTS.md 第 7 節）。development 與 testing 可開啟供個人測試；staging 與 production 在強化的成年驗證完成之前開啟會啟動失敗。開啟時必須設定 RPG 用途，並在 `SEXUAL_CONTENT_LEVEL3_MODELS` 列出許可涵蓋的模型。**這只是開關：RPG 尚未實作，所以目前沒有任何送出露骨內容的入口；任何入口出現之前，仍須先完成自家審查層與強化成年驗證。**
 
 ## 建立首位管理員
 
@@ -466,6 +476,35 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 | 修正（截圖發現） | 同一行的標籤、識別碼與晶片黏在一起（改為固定間距）；頂欄與分頁列靠左而內容置中（改為與內容區對齊）；360px 對話全文的三個按鈕文字斷成兩行（按鈕整顆換行）；360px 今日警告的三個計數排成 2＋1（改為同一列）。驗收中也修正了自己的驗收資料（預期 token 用量漏算一筆驗證失敗的帳本列），不是程式缺陷 |
 | 本機資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`project_pre_0007_20261030_091458.bak`，`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔真的存在），再 `alembic upgrade head`：`0006_usage_indexes` → `0007_admin_audit_logs`；升級後 `alembic current` 為 `0007_admin_audit_logs (head)`、`admin_audit_logs` 與兩個索引存在、外鍵 `admin_user_id → users.id` 為 `SET NULL`、`/healthz` 與 `/readyz` 回 200，既有資料筆數不變（`users` 1 筆，其餘 0 筆）。**備份的陷阱**：用 SQLAlchemy 的 `execute` 直接跑 `BACKUP` 時，驅動程式在讀完進度訊息之前就關閉游標，伺服器會中止作業而**不報錯**（印出「已寫入」、檔案卻不存在，隨後的 `RESTORE VERIFYONLY` 才失敗）；備份腳本須讀完所有結果集，並向伺服器確認檔案存在 |
 | 真實 Gemini | 本 change 沒有任何模型呼叫 |
+
+## RPG 用途的模型端點與等級 3 開關（openai-compatible-provider）
+
+change `openai-compatible-provider`。為 RPG 敘事新增 OpenAI 相容端點（目前是 OpenRouter 上的開放模型，也可指向本機模型）；客服與摘要**永遠走 Gemini，完全不受影響**。規格見 `openspec/changes/openai-compatible-provider/specs/`（`llm-openai-compatible`、`llm-provider`、`age-confirmation`）；設計見 `docs/模型呼叫層-llm-layer.md` 第 10 節與 `docs/帳號與安全-auth-security.md` 第 5 節。環境變數見「環境變數與機密」。
+
+- **只有基礎**：RPG 尚未實作，所以**目前沒有任何送出露骨內容的入口**。`sexual_content_level 3` 只是環境開關（預設關閉；staging 與 production 在強化的成年驗證完成前開啟會啟動失敗；開啟時須在 `SEXUAL_CONTENT_LEVEL3_MODELS` 列出許可涵蓋的模型）。任何入口出現之前，仍須先完成自家審查層與強化成年驗證。
+- **免費換付費只改 `OPENROUTER_MODEL`**（與選用的 `OPENROUTER_ZDR`），程式沒有任何依 `:free` 判斷的分支。零保存只有付費端點才有；要求了卻沒有符合的端點時呼叫失敗，**不會改成不帶偏好重送**。
+- **評估端點好不好用**（RPG 出現之前）：`flask llm-probe` 只在 development 與 testing 可用，不寫帳本與任何資料表，不顯示金鑰。`APP_ENV` 必須由行程環境變數提供（不會從 `.env` 讀）：
+
+```powershell
+$env:APP_ENV = "development"
+.\.venv\Scripts\python.exe -m flask --app wsgi llm-probe                  # 固定的無害文字
+.\.venv\Scripts\python.exe -m flask --app wsgi llm-probe --structured     # 評估 JSON 穩定度
+.\.venv\Scripts\python.exe -m flask --app wsgi llm-probe --text "請說一個很短的笑話"
+```
+
+### 已知限制
+
+- ①**免費模型的清單變動很快，而且常下架**：`.env` 裡原本的 `cognitivecomputations/dolphin-mistral-24b-venice-edition:free` 在 2026-10-30 已不在 OpenRouter 的目錄（呼叫回 404，被正確歸為設定錯誤），目錄裡只剩付費版 `cognitivecomputations/dolphin-mistral-24b-venice-edition`。**請在使用前自行把 `OPENROUTER_MODEL` 改成目錄上存在的識別碼。**②模型名稱最長 64 字（帳本欄位的長度），更長的識別碼要先另開 change 擴大欄位。③沒有串流（留給 RPG 的回合引擎）。④全站每日用量上限仍把所有帳本列加總，RPG 與客服沒有分開計算（RPG 呼叫出現時才有意義）；免費端點每分鐘 20 次、整個帳號共用。⑤內容審核的回應碼未驗證：沒有刻意送出可能被審核擋下的內容，所以「被審核擋下的輸入回 403 時是否應歸為輸入被阻擋」仍待驗證（目前歸為設定錯誤）。⑥「許可涵蓋的供應商、模型與日期」尚未提供，清單只是護欄、不是許可的證明。⑦容器驗收沒有為這個 change 重跑。
+
+### 驗收紀錄（openai-compatible-provider，2026-10-30）
+
+| 項目 | 結果 |
+|---|---|
+| pytest | **4715 項通過**（含真實 SQL Server `project_test`，沒有略過；上次是 4508，新增 207 項）。新增：轉接器的請求、回應、錯誤對應、結構化退化、零保存與免費付費同一路徑（`test_openai_compatible_provider.py`）；設定驗證與基底網址安全（`test_config_rpg_llm.py`）；依用途組裝、金鑰互不混用、帳本記錄實際供應商、RPG 失敗不影響客服（`test_llm_providers_by_purpose.py`）；內容上限的年齡乘開關乘角色組合與端到端（`test_content_ceiling_switch.py`）；`llm-probe`（`test_cli_llm_probe.py`）。**每一組新測試都以故意破壞程式的方式驗證過會失敗**（轉接器 5 項、設定 6 項、內容上限 4 項、組裝 5 項、探測指令 5 項） |
+| Node | **160 項通過**（沒有變動） |
+| `openspec validate openai-compatible-provider --strict` | 通過 |
+| 真實呼叫（使用者同意，只用無害的繁體中文文字、免費端點，第一輪共 8 次請求） | 轉接器對真實的 OpenRouter 端到端正常：驗證標頭、請求格式、回應解析、token 用量、結束原因都正確。**① 原本設定的 `:free` Dolphin 回 404**（已下架，見已知限制①）。② 改用使用者指定的 `poolside/laguna-s-2.1:free`：**一般文字 3 次、延遲 3.6／5.9／8.3 秒；第 1 次回覆是拼音亂碼而不是繁體中文，第 2、3 次是繁體中文但有生造詞、夾雜簡體字與英文**，這是這個模型的表現而非轉接器的問題。**結構化 3 次：2 次通過驗證（合法 JSON 且符合結構描述）、1 次 429**（歸為暫時性錯誤，只回報狀態碼與耗時，沒有供應商本文）。③ **要求零保存：回 404（設定錯誤），沒有重送**；同一個模型不帶偏好的呼叫成功，所以偏好確實被端點遵守，沒有被靜默放寬。**沒有評估使用者真正要用的 Dolphin**（免費版已不存在，付費版未呼叫），所以「這個模型好不好用」尚未有結論。公開的模型目錄顯示付費版輸入每百萬 token 0.20 美元、輸出 0.90 美元、未經額外審核、支援 `response_format` 但沒有列出結構描述輸出，因此 `OPENROUTER_JSON_SCHEMA` 應維持關閉 |
+| 真實呼叫的第二輪（使用者改指定 `nvidia/nemotron-3.5-lightning:free`，同樣只用無害文字，6 次請求，`.env` 未修改） | **繁體中文明顯較好**：一般文字 3 次都通順，用語在地（油條、豆漿），沒有亂碼、簡體字或英文；**結構化 3 次全部通過驗證**。這是推理型模型：每次約 740 至 1,360 個思考 token（轉接器正確回報了 `thinking_tokens`，第一次用真實資料驗證這條路徑），**延遲 7.0 至 19.2 秒**（一般文字 12.6、13.1、19.2 秒），已接近預設的單次逾時 20 秒；RPG 的敘事更長，屆時要靠串流與另訂的逾時，不能直接沿用客服的 20 秒。目錄顯示它支援 `reasoning`、不支援 `response_format`，所以預設的「在系統指令附結構描述」做法正好適用。**沒有測它對成熟內容的反應**（免費端點不得送成熟內容，AGENTS.md 第 11 節）：這是一般的通用模型，不是去審查模型，**成熟內容的許可度可能與先前的 Dolphin 不同，採用前須以付費端點另行評估** |
 
 ## 撰寫新端點：權限與 IDOR 測試
 

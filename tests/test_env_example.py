@@ -39,7 +39,8 @@ def test_lists_every_member_auth_variable():
 def test_every_variable_the_config_reads_is_listed():
     """app/config.py 讀取的每個環境變數名稱，都必須出現在 .env.example（避免新增設定卻忘了列出）。"""
     source = (PROJECT_ROOT / "app" / "config.py").read_text(encoding="utf-8-sig")
-    read_by_config = set(re.findall(r'(?:_get\(values, |values\.get\(|environ\.get\()"([A-Z][A-Z0-9_]+)"', source))
+    # 任何「函式(values, "NAME"」的形式都算（_get、_model_name、_seconds、_bool_setting、_openai_model_name…），避免新的解析函式漏掃
+    read_by_config = set(re.findall(r'(?:\w+\(values, |values\.get\(|environ\.get\()"([A-Z][A-Z0-9_]+)"', source))
     read_by_config -= {"APP_ENV"}  # 由行程環境提供，.env.example 另有說明
     assert read_by_config, "沒有掃到任何變數，掃描規則需要更新"
     missing = read_by_config - set(parse_assignments())

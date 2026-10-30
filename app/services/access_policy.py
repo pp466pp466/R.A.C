@@ -6,8 +6,9 @@
 - 會員等級（free、plus、vip）只影響額度，**不參與任何權限判斷**——這個類別刻意不讀 `member_tier`；
 - 會呼叫 Gemini 的功能一律先問 `require_chat_access`：帳號可用、已完成年齡確認、且年齡不低於最低使用年齡
   （管理員與各等級都不豁免）；
-- 內容上限由 `content_ceiling` 依「當下」的年齡決定：未滿成年門檻一律是安全模式，成年者最高到 2（3 維持鎖定）。
-  年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，這裡不內嵌任何年齡數字。
+- 內容上限由 `content_ceiling` 依「當下」的年齡決定：未滿成年門檻（或尚未完成年齡確認）一律是安全模式；成年者最高到 2，
+  只有組裝時以環境設定開啟等級 3（`SEXUAL_CONTENT_LEVEL3_ENABLED`，預設關閉，見 AGENTS.md 第 7 節）才是 3。
+  年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，這裡不內嵌任何年齡數字；開關不影響未成年者。
 管理員存取他人資料必須走專用的 Repository 方法並寫入稽核紀錄（`AdminService`，見 admin-console 規格），不是用這裡繞過擁有者檢查；
 `require_admin` 是後台功能的唯一入口，非管理員得到與「不存在」相同的 404。
 """
@@ -24,10 +25,13 @@ from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, age_on, taipe
 from app.services.current_user import CurrentUser
 from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound
 
-# 成年者的內容上限：sexual_content_level 3（成年角色之間合意的露骨內容）在取得模型供應商的書面許可與法務意見之前，
-# 程式上不得開啟（AGENTS.md 第 7 節），所以上限是 2。要開啟 3 必須同時修改規範與這個常數。
+# 成年者的內容上限。預設是 2（浪漫、曖昧與感官但不露骨）；sexual_content_level 3（成年角色之間合意的露骨內容）
+# 只能以環境設定開啟（AGENTS.md 第 7 節：預設關閉、須已取得書面許可、staging 與 production 在強化的成年驗證完成前不得開啟），
+# 由組裝處依設定傳入 `adult_ceiling`；這裡不依任何設定自行放寬，也不把 3 寫死為預設。
 MAX_ADULT_SEXUAL_CONTENT_LEVEL = 2
+LEVEL3_SEXUAL_CONTENT_LEVEL = 3
 SAFE_MODE_SEXUAL_CONTENT_LEVEL = 0
+_ALLOWED_ADULT_CEILINGS = (MAX_ADULT_SEXUAL_CONTENT_LEVEL, LEVEL3_SEXUAL_CONTENT_LEVEL)
 
 
 @dataclass(frozen=True)
@@ -45,10 +49,14 @@ class AccessPolicy:
         email_verification_required: bool,
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
         clock: Callable[[], datetime] = utcnow,
+        adult_ceiling: int = MAX_ADULT_SEXUAL_CONTENT_LEVEL,
     ) -> None:
+        if adult_ceiling not in _ALLOWED_ADULT_CEILINGS:
+            raise ValueError("成年者的內容上限只能是 2 或 3。")
         self._verification_required = email_verification_required
         self._age_policy = age_policy
         self._clock = clock
+        self._adult_ceiling = adult_ceiling
 
     def is_admin(self, user: CurrentUser) -> bool:
         """只有角色為 admin 且帳號啟用中才是管理員。"""
@@ -81,11 +89,12 @@ class AccessPolicy:
         return age_on(user.birth_date, taipei_today(self._clock()))
 
     def content_ceiling(self, user: CurrentUser) -> ContentCeiling:
-        """內容上限。尚未完成年齡確認者保守地視為安全模式（他們本來也不能使用 AI 功能）。"""
+        """內容上限。尚未完成年齡確認者保守地視為安全模式（他們本來也不能使用 AI 功能）；
+        未成年者不論等級 3 開關為何都是安全模式，管理員與各會員等級都不豁免。"""
         age = self._age(user)
         if age is None or age < self._age_policy.adult_age:
             return ContentCeiling(SAFE_MODE_SEXUAL_CONTENT_LEVEL, safe_mode=True)
-        return ContentCeiling(MAX_ADULT_SEXUAL_CONTENT_LEVEL, safe_mode=False)
+        return ContentCeiling(self._adult_ceiling, safe_mode=False)
 
     # ---- 是否可使用 AI 功能 -------------------------------------------------
 

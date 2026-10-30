@@ -7,18 +7,14 @@
 - 失敗只回報分類與延遲，**不保留供應商的回應本文**：本文可能含請求內容的回聲，也不該進日誌或帳本。
 - 安全設定使用供應商預設值：不自建關鍵字過濾（AGENTS.md 第 10 節）。
 - 結構描述只送 Gemini 支援的鍵；長度與格式一律由呼叫端驗證，不假設供應商保證它們。
-- 傳輸層可注入（`HttpTransport`），測試不必連網。
+- 傳輸層可注入（`HttpTransport`，與其他轉接器共用，見 `transport.py`），測試不必連網。
 """
 from __future__ import annotations
 
-import json
-import socket
-import ssl
 import time
-import urllib.error
-import urllib.request
-from typing import Any, Callable, Protocol
+from typing import Any, Callable
 
+from app.llm.transport import HttpTransport, UrllibTransport  # noqa: F401  (UrllibTransport 供既有的匯入路徑使用)
 from app.llm.types import (
     BLOCKED_INPUT, BLOCKED_OUTPUT, FINISH_LENGTH, FINISH_OTHER, FINISH_STOP, TRANSIENT_NETWORK, TRANSIENT_RATE_LIMITED,
     TRANSIENT_SERVER_ERROR, TRANSIENT_TIMEOUT, LLMBlockedError, LLMConfigError, LLMRequest, LLMResponse, LLMTransientError,
@@ -31,42 +27,6 @@ KEY_HEADER = "x-goog-api-key"
 _SCHEMA_KEYS = ("enum", "required", "nullable", "minItems", "maxItems", "description", "minimum", "maximum")
 # 輸出被擋下的結束原因（有內容也不能用）
 _BLOCKED_FINISH = {"SAFETY", "BLOCKLIST", "PROHIBITED_CONTENT", "SPII", "IMAGE_SAFETY"}
-
-
-class HttpTransport(Protocol):
-    """送出一個 JSON POST。回傳（狀態碼, 解析後的 JSON 或 None）；逾時拋出 `TimeoutError`，其他連線問題拋出 `OSError`。"""
-
-    def post_json(self, url: str, headers: dict[str, str], body: dict[str, Any], timeout: float) -> tuple[int, Any]: ...
-
-
-class UrllibTransport:
-    """真實的傳輸：`urllib`，驗證伺服器憑證。供應商回了錯誤狀態碼仍是「有回應」，交給轉接器判斷。"""
-
-    def post_json(self, url: str, headers: dict[str, str], body: dict[str, Any], timeout: float) -> tuple[int, Any]:
-        request = urllib.request.Request(
-            url, data=json.dumps(body, ensure_ascii=False).encode("utf-8"), headers=headers, method="POST"
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=timeout, context=ssl.create_default_context()) as response:
-                return response.status, _parse_json(response.read())
-        except urllib.error.HTTPError as error:
-            try:
-                return error.code, _parse_json(error.read())
-            finally:
-                error.close()
-        except urllib.error.URLError as error:
-            if isinstance(error.reason, (socket.timeout, TimeoutError)):
-                raise TimeoutError from None
-            raise OSError("連線失敗") from None            # 不帶原始訊息：它可能含網址與主機資訊
-        except (socket.timeout, TimeoutError):
-            raise TimeoutError from None
-
-
-def _parse_json(raw: bytes) -> Any:
-    try:
-        return json.loads(raw.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return None
 
 
 def to_gemini_schema(schema: dict[str, Any]) -> dict[str, Any]:

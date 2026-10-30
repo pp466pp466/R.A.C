@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（正式部署、入口層與備份演練由 C-5、告警與保存期限清除由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（正式部署、入口層與備份演練由 C-5、告警與保存期限清除由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider ｜ 規範依據：AGENTS.md 第 9、11 節
 
 本文件說明設定如何依環境載入、容器如何建置與執行、migration 的部署步驟、日誌與事件的規則、維運指令，以及測試與驗收的分層。逐項的環境變數說明在 README 的「環境變數與機密」與 `.env.example`。
 
@@ -91,6 +91,7 @@ flowchart LR
 | `flask --app wsgi create-admin` | 一次性建立首位管理員（密碼只能互動輸入或從標準輸入讀取，不接受命令列參數） |
 | `flask --app wsgi purge-inactive-accounts [--dry-run]` | 刪除連續 12 個月未登入的帳號（管理員不納入），每個帳號在同一交易寫入 `deletion_tombstones` |
 | `flask --app wsgi age-stats` | 各年齡區間的人數，沒有任何個別使用者的資料 |
+| `flask --app wsgi llm-probe [--text 短文字] [--structured]` | **開發用**（不是維運工作，不由排程器觸發）：呼叫 RPG 敘事用途的端點一次，印出回覆、模型、延遲、token 與結束原因；`--structured` 評估 JSON 穩定度。只在 development 與 testing 執行，staging 與 production 拒絕；不寫帳本與任何資料表，不顯示金鑰 |
 
 | 資料 | 保存期限 | 狀態 |
 |---|---|---|
@@ -101,6 +102,8 @@ flowchart LR
 | `auth_tokens` | 到期後 7 天 | C-4c |
 | 管理稽核（`admin_audit_logs`） | 24 個月 | 寫入與檢視已實作（C-4b）；期滿清除 C-4c |
 | 應用程式日誌、備份 | 30 天、30 天 | 平台設定（C-4c、C-5） |
+
+**RPG 敘事用途的模型端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：不是 staging 與 production 的必要機密（RPG 尚未實作），沒有設定時只有該用途不可用；金鑰與主要模型只設一個會啟動失敗。基底網址只允許 https（development 與 testing 另允許回送位址的 http，供本機模型）。免費換付費只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`）。**`SEXUAL_CONTENT_LEVEL3_ENABLED` 在 staging 與 production 設為 `true` 會啟動失敗**（強化的成年驗證尚未完成），development 與 testing 可開啟，且須設定 `SEXUAL_CONTENT_LEVEL3_MODELS`；細節見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節與 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 10 節。換成不同模型或供應商時，也要依新方案重設下面的全站用量上限。
 
 全站每日用量上限由環境變數設定（逐項說明在 README 與 `.env.example`）：`USAGE_DAILY_TOKEN_LIMIT`（預設 1,000,000）與 `USAGE_DAILY_CALL_LIMIT`（預設 450）。預設值依目前使用的 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、每日 500 次請求），**換模型或換供應商（例如正式環境改用 OpenAI）時必須重設**；部署時須確認它們與供應商的實際配額一致。
 
@@ -121,4 +124,4 @@ flowchart BT
 
 ---
 
-**何時更新本文**：環境與必要機密、容器與 gunicorn 設定、migration 的部署步驟、日誌白名單或事件、維運指令、保存期限的實作狀態、測試分層與驗收數字改變時。`tests/test_design_docs.py` 會檢查四種環境名稱與三個 flask 指令都出現在本文。
+**何時更新本文**：環境與必要機密、容器與 gunicorn 設定、migration 的部署步驟、日誌白名單或事件、維運指令、保存期限的實作狀態、測試分層與驗收數字改變時。`tests/test_design_docs.py` 會檢查四種環境名稱與每個 flask 指令都出現在本文。

@@ -13,7 +13,7 @@ import logging
 import os
 import re
 import secrets
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Mapping
 from urllib.parse import urlsplit
@@ -45,6 +45,11 @@ DEFAULT_BREAKER_SECONDS = 60.0            # 主要模型逾時或伺服器錯誤
 DEFAULT_MAX_OUTPUT_TOKENS = 4096          # 含供應商計入的思考 token
 MIN_OUTPUT_TOKENS, MAX_OUTPUT_TOKENS = 256, 32768
 _MODEL_NAME = re.compile(r"[A-Za-z0-9._-]{1,64}")
+# OpenAI 相容端點的模型識別碼含供應商與變體（例如 vendor/model:free），所以另允許斜線與冒號。
+# 長度上限與 Gemini 相同（64），因為帳本 `llm_call_logs.model` 欄位只有 64 字元：設定接受的名稱必須寫得進帳本，
+# 否則 SQL Server 會截斷或出錯，斷路（以模型名稱查帳本）也會悄悄失效。
+_OPENAI_MODEL_NAME = re.compile(r"[A-Za-z0-9._:/-]{1,64}")
+_LOOPBACK_HOSTS = ("localhost", "127.0.0.1", "::1")
 
 # ---- 全站每日用量上限（C-4a）：預設值依 gemini-3.5-flash-lite 免費層（15 RPM、25 萬 TPM、每日 500 次請求）----
 # 呼叫次數取 RPD 的 90%（留給進行中的請求）；token 取一般對話約 330 輪。換模型或供應商時須重設這兩個變數。
@@ -142,6 +147,28 @@ class LlmSettings:
 
 
 @dataclass(frozen=True)
+class OpenAICompatibleSettings:
+    """RPG 敘事用途的 OpenAI 相容端點設定（見 openai-compatible-provider）。
+
+    `llm` 只用到金鑰與主要、備援模型；逾時、預算與輸出上限沿用客服的 `LLM_*`（一個地方調整），思考預算是 Gemini 專屬所以為空。
+    `base_url` 為 None 表示使用轉接器的預設網址（供應商網域只出現在 `app/llm/`，不寫在設定裡）。
+    """
+
+    llm: LlmSettings
+    base_url: str | None = None
+    zero_retention: bool = False            # 要求只路由到不保存提示的端點（付費模型才有；免費端點通常沒有）
+    supports_json_schema: bool = False      # 該模型支援結構描述輸出參數時才開啟；預設以系統指令附結構描述
+
+
+@dataclass(frozen=True)
+class ContentSettings:
+    """內容分級的環境設定（AGENTS.md 第 7 節）。等級 3 預設關閉，只能以環境設定開啟。"""
+
+    level3_enabled: bool = False
+    level3_models: tuple[str, ...] = ()     # 取得書面許可所涵蓋的模型識別碼；開啟時 RPG 用途的模型必須都在裡面
+
+
+@dataclass(frozen=True)
 class UsageSettings:
     """全站每日用量上限（以 Asia/Taipei 的日界計）；每位使用者依等級的限制是程式常數，見 `quota_policy`。"""
 
@@ -169,6 +196,9 @@ class AppConfig:
     llm: LlmSettings = LlmSettings()
     # ---- 用量限制（C-4a）----
     usage: UsageSettings = UsageSettings()
+    # ---- RPG 用途的 OpenAI 相容端點與內容分級（openai-compatible-provider）----
+    rpg_llm: OpenAICompatibleSettings | None = None
+    content: ContentSettings = ContentSettings()
 
     @property
     def is_production_like(self) -> bool:
@@ -425,6 +455,99 @@ def _resolve_llm(values: Mapping[str, str]) -> LlmSettings:
     )
 
 
+def _bool_setting(values: Mapping[str, str], name: str) -> bool:
+    """布林開關：只接受 true、false（不分大小寫）；沒設定為 false。錯誤訊息只含變數名稱，不含它的值。"""
+    raw = _get(values, name).lower()
+    if not raw:
+        return False
+    if raw not in ("true", "false"):
+        raise ConfigError(f"{name} 的值不合法。合法值為：true、false。")
+    return raw == "true"
+
+
+def _openai_model_name(values: Mapping[str, str], name: str) -> str | None:
+    raw = _get(values, name)
+    if not raw:
+        return None
+    if not _OPENAI_MODEL_NAME.fullmatch(raw):
+        raise ConfigError(f"{name} 不是合法的模型名稱（只允許英文字母、數字、點、底線、連字號、斜線與冒號，最長 64 字）。")
+    return raw
+
+
+def _resolve_openai_base_url(env: str, values: Mapping[str, str]) -> str | None:
+    """OpenAI 相容端點的基底網址。金鑰會隨它一起送出，所以只允許 https；development 與 testing 另允許回送位址的 http
+    （本機模型）。不得含帳號、密碼、查詢字串或片段。錯誤訊息只指出變數名稱，不含網址的內容。"""
+    raw = _get(values, "OPENROUTER_BASE_URL")
+    if not raw:
+        return None
+    message = "OPENROUTER_BASE_URL 必須是不含帳號、密碼、查詢與片段的絕對網址，且使用 https（本機模型只限 development 與 testing 的回送位址可用 http）。"
+    try:
+        parts = urlsplit(raw)
+        _ = parts.port
+    except ValueError as exc:
+        raise ConfigError(message) from exc
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.query
+        or parts.fragment
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        raise ConfigError(message)
+    if parts.scheme == "http" and not (env in DEV_TOOL_ENVS and parts.hostname.lower() in _LOOPBACK_HOSTS):
+        raise ConfigError(message)
+    return raw.rstrip("/")
+
+
+def _resolve_rpg_llm(env: str, values: Mapping[str, str], base: LlmSettings) -> OpenAICompatibleSettings | None:
+    """RPG 敘事用途的供應商設定。要嘛完整（金鑰與主要模型）要嘛完全沒有：只有一個就啟動失敗。
+    備援模型未設定時等於主要模型（既有流程對「主要與備援相同」的處理是暫時性錯誤直接降級）。"""
+    key = _get(values, "OPENROUTER_API_KEY")
+    primary = _openai_model_name(values, "OPENROUTER_MODEL")
+    if not key and primary is None:
+        return None
+    if not key or primary is None:
+        missing = "OPENROUTER_API_KEY" if not key else "OPENROUTER_MODEL"
+        raise ConfigError(f"RPG 用途的模型設定不完整：缺少 {missing}（金鑰與主要模型須同時設定或同時省略）。")
+    fallback = _openai_model_name(values, "OPENROUTER_FALLBACK_MODEL") or primary
+    return OpenAICompatibleSettings(
+        llm=replace(base, api_key=Secret(key), primary_model=primary, fallback_model=fallback, summary_model=primary, thinking_budget=None),
+        base_url=_resolve_openai_base_url(env, values),
+        zero_retention=_bool_setting(values, "OPENROUTER_ZDR"),
+        supports_json_schema=_bool_setting(values, "OPENROUTER_JSON_SCHEMA"),
+    )
+
+
+def _resolve_content(env: str, values: Mapping[str, str], rpg: OpenAICompatibleSettings | None) -> ContentSettings:
+    """內容分級的環境設定。等級 3 預設關閉；開啟必須同時滿足（AGENTS.md 第 7 節）：
+    - 不得在 staging 或 production（強化的成年驗證完成之前不得對一般會員開啟）；
+    - RPG 用途已設定，且 `SEXUAL_CONTENT_LEVEL3_MODELS`（許可涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型。
+    清單只在開關開啟時才驗證與生效：關閉時不影響任何行為。錯誤訊息只含變數名稱。"""
+    enabled = _bool_setting(values, "SEXUAL_CONTENT_LEVEL3_ENABLED")
+    models = tuple(part.strip() for part in _get(values, "SEXUAL_CONTENT_LEVEL3_MODELS").split(",") if part.strip())
+    if not enabled:
+        return ContentSettings(level3_enabled=False, level3_models=models)
+    if env in PRODUCTION_LIKE_ENVS:
+        raise ConfigError(
+            f"{env} 環境不得開啟 SEXUAL_CONTENT_LEVEL3_ENABLED：強化的成年驗證尚未完成，不得對一般會員開啟。"
+        )
+    if rpg is None:
+        raise ConfigError("SEXUAL_CONTENT_LEVEL3_ENABLED 已開啟，但 RPG 用途尚未設定（OPENROUTER_API_KEY 與 OPENROUTER_MODEL）。")
+    if not models:
+        raise ConfigError("SEXUAL_CONTENT_LEVEL3_ENABLED 已開啟，但 SEXUAL_CONTENT_LEVEL3_MODELS 沒有設定（須列出許可涵蓋的模型）。")
+    if any(not _OPENAI_MODEL_NAME.fullmatch(name) for name in models):
+        raise ConfigError("SEXUAL_CONTENT_LEVEL3_MODELS 含有不合法的模型名稱。")
+    uncovered = [
+        variable
+        for variable, name in (("OPENROUTER_MODEL", rpg.llm.primary_model), ("OPENROUTER_FALLBACK_MODEL", rpg.llm.fallback_model))
+        if name not in models
+    ]
+    if uncovered:
+        raise ConfigError("SEXUAL_CONTENT_LEVEL3_MODELS 沒有涵蓋 RPG 用途使用的模型：" + "、".join(dict.fromkeys(uncovered)) + "。")
+    return ContentSettings(level3_enabled=True, level3_models=models)
+
+
 def _positive_int(values: Mapping[str, str], name: str, default: int, maximum: int) -> int:
     raw = _get(values, name)
     if not raw:
@@ -515,6 +638,10 @@ def load_config(
         reason = "信箱驗證已開啟" if email_verification_required else "Google 登入已啟用"
         raise ConfigError(f"{reason}，但缺少對外網址 BASE_URL（用於信件連結與 OAuth 回呼）。")
 
+    llm = _resolve_llm(values)
+    rpg_llm = _resolve_rpg_llm(env, values, llm)
+    content = _resolve_content(env, values, rpg_llm)
+
     return AppConfig(
         env=env,
         debug=debug,
@@ -527,6 +654,8 @@ def load_config(
         mail=mail,
         google=google,
         secret_key_fallbacks=_resolve_secret_key_fallbacks(values),
-        llm=_resolve_llm(values),
+        llm=llm,
         usage=_resolve_usage(values),
+        rpg_llm=rpg_llm,
+        content=content,
     )

@@ -15,7 +15,10 @@ BUSINESS_PACKAGES = ("services", "controllers", "repositories", "models", "secur
 # 模型供應商的 SDK（匯入）
 VENDOR_MODULES = ("google.genai", "google.generativeai", "openai", "anthropic", "mistralai", "cohere", "vertexai")
 # 模型供應商的識別字串（網域、標頭）：大小寫不分
-VENDOR_STRINGS = ("generativelanguage.googleapis.com", "x-goog-api-key", "api.openai.com", "api.anthropic.com", "api.mistral.ai")
+VENDOR_STRINGS = (
+    "generativelanguage.googleapis.com", "x-goog-api-key", "api.openai.com", "api.anthropic.com", "api.mistral.ai",
+    "openrouter.ai",            # RPG 用途的 OpenAI 相容端點（openai-compatible-provider）：網域只屬於 app/llm/openai_compatible.py
+)
 
 
 def vendor_problems(source: str) -> list[str]:
@@ -56,5 +59,6 @@ def test_the_check_really_catches_each_kind_of_vendor_dependency():
     assert vendor_problems("import openai\n") and vendor_problems("from anthropic import Anthropic\n")
     assert vendor_problems("URL = 'https://generativelanguage.googleapis.com/v1beta/x'\n")
     assert vendor_problems("headers = {'X-Goog-Api-Key': key}\n")
+    assert vendor_problems("BASE = 'https://OpenRouter.AI/api/v1'\n")                 # 大小寫不分
     assert vendor_problems("import json\nfrom app.llm.types import LLMRequest\n") == []
     assert re.search("openai", "import openai")                      # 防呆：VENDOR_MODULES 的寫法與 AST 比對一致

@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -134,15 +134,16 @@ sequenceDiagram
 flowchart LR
     Env["環境變數 / .env"] --> Load["load_config()<br/>依 APP_ENV 選設定類別"]
     Load --> Cfg["AppConfig（含 LlmSettings）"]
-    Cfg --> Factory["create_app(config, *, mail_sender,<br/>identity_provider, clock, age_policy, llm_provider)"]
-    Test["測試注入<br/>假寄信器、假 Google、假時鐘、假供應商"] -.-> Factory
-    Factory --> Ext["app.extensions<br/>app_config、clock、age_policy、mail_sender、<br/>identity_provider、llm_provider、db_session_factory"]
-    Ext --> Runtime["runtime.py<br/>get_config()、get_clock()、get_llm_provider()…"]
+    Cfg --> Factory["create_app(config, *, mail_sender,<br/>identity_provider, clock, age_policy, llm_provider, rpg_llm_provider)"]
+    Test["測試注入<br/>假寄信器、假 Google、假時鐘、假供應商（客服與 RPG 各一）"] -.-> Factory
+    Factory --> Ext["app.extensions<br/>app_config、clock、age_policy、mail_sender、<br/>identity_provider、llm_provider、rpg_llm_provider、db_session_factory"]
+    Ext --> Runtime["runtime.py<br/>get_config()、get_clock()、get_llm_provider()、get_rpg_llm_provider()…"]
     Runtime --> Registry["services/registry.py<br/>get_*_service()、build_*_service()"]
     Registry --> Services["Service 實例（每個請求一份）"]
 ```
 
 - 外部依賴（寄信、Google、模型、時鐘、年齡規則）都由 `create_app` 的關鍵字參數注入；沒有注入時依設定建立真實的實作，沒有設定時為空（對應功能回 404 或 503）。
+- **模型供應商依用途分開存放**：`llm_provider`（客服與摘要，Gemini）與 `rpg_llm_provider`（RPG 敘事，OpenAI 相容端點）互相獨立；沒有設定 RPG 用途時只有它自己是空的，客服不受影響。`registry.get_llm_service()` 與 `get_rpg_llm_service()` 組出同一個 `LlmService`，只是供應商與設定不同（見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 10 節）。
 - Service 本身不匯入 flask，也不讀環境變數；命令列指令沒有請求，改用 `build_*` 函式明確傳入 Session。
 
 ## 5. 模組與規格、文件對照

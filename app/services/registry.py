@@ -24,9 +24,9 @@ from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.runtime import (
     current_request_id, get_age_policy, get_clock, get_config, get_identity_provider, get_llm_provider, get_mail_sender,
-    get_session_factory,
+    get_rpg_llm_provider, get_session_factory,
 )
-from app.services.access_policy import AccessPolicy
+from app.services.access_policy import LEVEL3_SEXUAL_CONTENT_LEVEL, MAX_ADULT_SEXUAL_CONTENT_LEVEL, AccessPolicy
 from app.services.admin_service import AdminService
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.account_retention_service import AccountRetentionService
@@ -82,10 +82,13 @@ def get_google_sign_in_service() -> GoogleSignInService:
 
 
 def get_access_policy() -> AccessPolicy:
+    config = get_config()
     return AccessPolicy(
-        email_verification_required=get_config().email_verification_required,
+        email_verification_required=config.email_verification_required,
         age_policy=get_age_policy(),
         clock=get_clock(),
+        # 等級 3 只能以環境設定開啟（預設關閉）；啟動時已驗證過條件（見 app/config.py）
+        adult_ceiling=LEVEL3_SEXUAL_CONTENT_LEVEL if config.content.level3_enabled else MAX_ADULT_SEXUAL_CONTENT_LEVEL,
     )
 
 
@@ -151,6 +154,20 @@ def get_llm_service() -> LlmService | None:
     if provider is None:
         return None
     return build_llm_service(get_session(), provider=provider, settings=get_config().llm, clock=get_clock())
+
+
+def get_rpg_llm_service() -> LlmService | None:
+    """RPG 敘事用途的 LlmService；沒有設定這個用途的供應商時為 None（只有 RPG 的功能回 503，客服完全不受影響）。
+
+    與 `get_llm_service()` 是同一個流程（預算、備援、斷路、帳本），只是供應商與模型設定不同。帳本與斷路都以模型名稱為鍵，
+    兩個用途的模型名稱不同，所以彼此的失敗不會互相影響。
+    """
+    provider = get_rpg_llm_provider()
+    if provider is None:
+        return None
+    config = get_config()
+    settings = config.rpg_llm.llm if config.rpg_llm else config.llm        # 沒有設定卻注入了假供應商（測試）時沿用客服的設定
+    return build_llm_service(get_session(), provider=provider, settings=settings, clock=get_clock())
 
 
 def build_usage_service(session: Session, *, settings: UsageSettings, clock: Callable[[], datetime]) -> UsageService:

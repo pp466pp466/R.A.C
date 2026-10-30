@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關） ｜ 規範依據：AGENTS.md 第 10、11 節
 
 本文件說明會員如何註冊、驗證、登入，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -121,12 +121,24 @@ flowchart TD
     Old -->|"是"| Pass["通過"]
     Pass --> Ceiling{"年齡 ≥ 18？"}
     Ceiling -->|"否"| Safe["content_ceiling：安全模式<br/>sexual_content_level = 0"]
-    Ceiling -->|"是"| Adult["content_ceiling：最高 2<br/>（3 在取得供應商書面許可與法務意見前鎖定）"]
+    Ceiling -->|"是"| Switch{"等級 3 開關開啟？<br/>SEXUAL_CONTENT_LEVEL3_ENABLED"}
+    Switch -->|"否（預設）"| Adult2["content_ceiling：最高 2"]
+    Switch -->|"是（只限 development 與 testing）"| Adult3["content_ceiling：最高 3"]
 ```
 
 - `chat_gate` 是純查詢（不拋例外、不記錄事件）；`require_chat_access` 以它判斷並對年齡拒絕記錄一筆事件，兩者不會分歧（測試逐一比對）。
 - 管理員與各會員等級都不豁免年齡閘門。管理員帳號由指令建立，沒有生日，第一次登入後須到 `/account` 補填。
 - 13 至 17 歲可以使用（含 AI 功能）但固定安全模式；此設定以供應商同意為前提，換供應商時只需換 `AgePolicy` 並提高版本（見 [路線圖-roadmap.md](路線圖-roadmap.md) 的待決定事項）。
+
+**等級 3 的環境開關**（AGENTS.md 第 7 節，change `openai-compatible-provider`）：成年者的上限預設是 2，`sexual_content_level 3` 只能以環境設定開啟，**不能在程式裡寫死**。`AccessPolicy` 的建構子接收 `adult_ceiling`（2 或 3，預設 2），由組裝處依 `SEXUAL_CONTENT_LEVEL3_ENABLED` 傳入；未成年者、尚未完成年齡確認者、管理員與各會員等級都不受開關影響（未成年永遠是安全模式）。
+
+| 環境 | 開關 | 條件 |
+|---|---|---|
+| development、testing | 可開啟 | 必須已設定 RPG 用途，且 `SEXUAL_CONTENT_LEVEL3_MODELS`（取得書面許可所涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型，否則啟動失敗 |
+| staging、production | **開啟即啟動失敗** | 強化的成年驗證尚未完成（AGENTS.md：第 10 節訂定驗證做法之前不得對一般會員開啟）；之後做成年驗證的 change 才放寬這個檢查 |
+
+- 清單只在開關開啟時才驗證，關閉時完全不影響行為；它是「防止換了模型卻忘了許可範圍」的護欄，不是許可本身的證明。**許可涵蓋的供應商與日期須由人另外記錄**（使用者尚未提供，見 [路線圖-roadmap.md](路線圖-roadmap.md)）。
+- **這只是開關**：RPG 尚未實作，目前沒有任何送出露骨內容的入口。任何入口出現之前，仍須先完成**自家審查層**（擋未成年、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕）與**強化成年驗證**（方式尚未選定）。
 
 ## 6. 權限規則與端點清單
 

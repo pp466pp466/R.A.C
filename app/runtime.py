@@ -53,5 +53,10 @@ def get_session_factory() -> Any:
 
 
 def get_llm_provider() -> Any | None:
-    """模型供應商；沒有金鑰（本機開發）且沒有注入時為 None，此時需要模型的功能回 503。"""
+    """客服與摘要的模型供應商（Gemini）；沒有金鑰（本機開發）且沒有注入時為 None，此時需要模型的功能回 503。"""
     return current_app.extensions.get("llm_provider")
+
+
+def get_rpg_llm_provider() -> Any | None:
+    """RPG 敘事用途的模型供應商（OpenAI 相容端點）；沒有設定 `OPENROUTER_*` 且沒有注入時為 None，只有該用途回 503。"""
+    return current_app.extensions.get("rpg_llm_provider")

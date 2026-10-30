@@ -26,6 +26,7 @@ from app.controllers.site_controller import site_bp
 from app.db.dialect import create_engine_for
 from app.db.session import init_session
 from app.llm.gemini import GeminiProvider
+from app.llm.openai_compatible import OpenAICompatibleProvider
 from app.models.base import utcnow
 from app.observability.json_logging import configure_logging
 from app.observability.request_logging import init_request_logging
@@ -50,11 +51,12 @@ def create_app(
     clock: Clock | None = None,
     age_policy: AgePolicy | None = None,
     llm_provider: Any | None = None,
+    rpg_llm_provider: Any | None = None,
 ) -> Flask:
     """建立應用程式實例。
 
-    後五個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘、不同的年齡規則、假的模型供應商）；
-    正式執行時省略即可，由設定建立真實的實作（年齡規則用 `DEFAULT_AGE_POLICY`）。
+    後六個關鍵字參數只供注入（測試用假寄信器、假的 Google 供應商、假時鐘、不同的年齡規則、假的模型供應商，
+    以及 RPG 用途的假模型供應商）；正式執行時省略即可，由設定建立真實的實作（年齡規則用 `DEFAULT_AGE_POLICY`）。
     """
     cfg = config or load_config()
     configure_logging(cfg.log_level)
@@ -74,6 +76,17 @@ def create_app(
     )
     # 模型供應商：測試可注入假的；否則在設定了 GEMINI_API_KEY 時建立 Gemini 轉接器；兩者皆無則為空（需要模型的功能回 503）
     app.extensions["llm_provider"] = llm_provider or (GeminiProvider(cfg.llm.api_key.reveal()) if cfg.llm.enabled else None)
+    # RPG 敘事用途的供應商（OpenAI 相容端點）：與客服、摘要的 Gemini 互相獨立；沒有設定且沒有注入時為空（只有該用途回 503）
+    app.extensions["rpg_llm_provider"] = rpg_llm_provider or (
+        OpenAICompatibleProvider(
+            cfg.rpg_llm.llm.api_key.reveal(),
+            **({"base_url": cfg.rpg_llm.base_url} if cfg.rpg_llm.base_url else {}),
+            supports_json_schema=cfg.rpg_llm.supports_json_schema,
+            zero_retention=cfg.rpg_llm.zero_retention,
+        )
+        if cfg.rpg_llm
+        else None
+    )
     app.extensions["signed_cookies"] = SignedCookies(cfg, app.extensions["clock"])
     init_login_session(app)
 

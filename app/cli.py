@@ -1,6 +1,9 @@
 """`flask` 自訂指令（見 AGENTS.md 第 10、11 節：維運工作以指令實作，不用行程內計時器）。
 
-三個指令：
+四個指令：
+- `llm-probe`：開發用，不屬於維運。呼叫 RPG 敘事用途的模型端點一次，印出回覆、模型、延遲、token 與結束原因，
+  讓人在 RPG 實作之前先評估端點好不好用（含結構化輸出的穩定度）。只能在 development 與 testing 執行；**不寫帳本與任何資料表**，
+  不顯示金鑰，也不印供應商的錯誤本文。
 - `create-admin`：由部署者執行一次，建立首位管理員。網頁註冊與任何 API 都無法建立管理員或提升角色。
   密碼**不接受命令列參數**（會留在 shell 歷史與行程清單中）：互動時以不回顯的方式輸入，非互動環境
   （例如容器的一次性工作）用 `--password-stdin` 從標準輸入讀取。信箱與密碼都不會寫入日誌或輸出。
@@ -15,10 +18,25 @@ import sys
 import click
 from flask import Flask, current_app
 
-from app.runtime import get_clock, get_config
+from app.config import DEV_TOOL_ENVS
+from app.llm.types import LLMBlockedError, LLMConfigError, LLMContent, LLMRequest, LLMTransientError, LLMValidationError
+from app.runtime import get_clock, get_config, get_rpg_llm_provider
 from app.services.errors import ServiceError, ValidationError
 from app.runtime import get_age_policy
+from app.services.llm_output import parse_llm_json
 from app.services.registry import build_account_retention_service, build_age_stats_service, build_auth_service
+
+# ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
+PROBE_SYSTEM = "你是一位說書人。請一律使用繁體中文（台灣用語）回答，內容保持輕鬆無害。"
+PROBE_TEXT = "請用兩三句話，描寫一座清晨剛醒來的海邊小鎮。"
+PROBE_STRUCTURED_SYSTEM = "你是一位說書人。請一律使用繁體中文（台灣用語），並嚴格依指定的 JSON 格式回覆。"
+PROBE_STRUCTURED_TEXT = "請為一座清晨的海邊小鎮取一個標題，並選出它的氣氛。"
+PROBE_SCHEMA = {
+    "type": "object",
+    "properties": {"title": {"type": "string"}, "mood": {"type": "string", "enum": ["calm", "tense", "joyful"]}},
+    "required": ["title", "mood"],
+}
+PROBE_MAX_TEXT_CHARS = 500
 
 
 def _describe(error: ServiceError) -> str:
@@ -27,7 +45,64 @@ def _describe(error: ServiceError) -> str:
     return error.message
 
 
+def _count(value: int | None) -> str:
+    """供應商沒有提供的用量顯示為「未提供」，不是 0。"""
+    return "未提供" if value is None else str(value)
+
+
 def register_cli(app: Flask) -> None:
+    @app.cli.command("llm-probe")
+    @click.option("--text", default=None, help=f"送給模型的短文字（最多 {PROBE_MAX_TEXT_CHARS} 字）；省略時使用固定的無害文字。")
+    @click.option("--structured", is_flag=True, help="改以固定的結構描述呼叫，並回報輸出是否通過驗證（評估 JSON 穩定度）。")
+    def llm_probe(text: str | None, structured: bool) -> None:
+        """（開發用）呼叫 RPG 敘事用途的模型端點一次，印出回覆與用量；不寫帳本與任何資料表。"""
+        config = get_config()
+        if config.env not in DEV_TOOL_ENVS:
+            raise click.ClickException("這個指令只能在 development 與 testing 執行。")
+        if text is not None and not 0 < len(text) <= PROBE_MAX_TEXT_CHARS:
+            raise click.UsageError(f"--text 必須是 1 至 {PROBE_MAX_TEXT_CHARS} 個字元。")
+        provider = get_rpg_llm_provider()
+        if provider is None:
+            raise click.ClickException("RPG 用途尚未設定：請在 .env 設定 OPENROUTER_API_KEY 與 OPENROUTER_MODEL。")
+
+        settings = config.rpg_llm.llm if config.rpg_llm else config.llm
+        request = LLMRequest(
+            model=settings.primary_model,
+            system_instruction=PROBE_STRUCTURED_SYSTEM if structured else PROBE_SYSTEM,
+            contents=(LLMContent("user", (text or (PROBE_STRUCTURED_TEXT if structured else PROBE_TEXT),)),),
+            response_schema=PROBE_SCHEMA if structured else None,
+            timeout_seconds=settings.call_timeout_seconds,
+            max_output_tokens=settings.max_output_tokens,
+        )
+        try:
+            response = provider.generate(request)
+        # 失敗只印分類與狀態碼：轉接器本來就不保留供應商的回應本文，這裡也不猜測或轉述它
+        except LLMTransientError as exc:
+            raise click.ClickException(f"呼叫失敗（暫時性錯誤：{exc.kind}，狀態碼 {exc.http_status or '無'}，耗時 {exc.latency_ms} 毫秒）。") from None
+        except LLMBlockedError as exc:
+            raise click.ClickException(f"呼叫被內容安全過濾阻擋（{exc.phase}）。") from None
+        except LLMConfigError as exc:
+            raise click.ClickException(
+                f"設定錯誤（狀態碼 {exc.http_status or '無'}）：請檢查金鑰、模型名稱與餘額；模型可能已下架或沒有可用的端點。"
+            ) from None
+
+        click.echo(f"模型：{response.model}")
+        click.echo(f"延遲：{response.latency_ms} 毫秒")
+        click.echo(
+            f"token：輸入 {_count(response.prompt_tokens)}、輸出 {_count(response.completion_tokens)}、思考 {_count(response.thinking_tokens)}"
+        )
+        click.echo(f"結束原因：{response.finish_reason}")
+        click.echo("--- 回覆 ---")
+        click.echo(response.text)
+        if structured:
+            click.echo("--- 結構化驗證 ---")
+            try:
+                parse_llm_json(response.text, PROBE_SCHEMA)
+            except LLMValidationError as exc:
+                click.echo(f"未通過（原因分類：{exc.reason}）")
+                raise click.exceptions.Exit(1) from None
+            click.echo("通過")
+
     @app.cli.command("create-admin")
     @click.option("--email", help="管理員的電子郵件；省略時會詢問。")
     @click.option("--display-name", help="管理員的顯示名稱；省略時會詢問。")
