@@ -47,14 +47,19 @@ class AccountErasureService:
         reason: str,
         now: datetime,
         on_erased: Callable[[int], None] = lambda _user_id: None,
+        write_tombstone: bool = True,
     ) -> bool:
-        """抹除一個帳號；`delete` 是條件式刪除，回傳是否真的刪到。回傳是否抹除成功（條件不成立則不留任何痕跡）。"""
+        """抹除一個帳號；`delete` 是條件式刪除，回傳是否真的刪到。回傳是否抹除成功（條件不成立則不留任何痕跡）。
+
+        `write_tombstone=False` 只用於備份還原後的重新抹除：該編號已有不早於這次的刪除紀錄，不必再寫一筆（見 deletion-replay 規格）。
+        """
         try:
             self._users.clear_ledger_conversation_refs(user_id)
             if not delete(user_id):
                 self._rollback()
                 return False
-            self._tombstones.record(user_id=user_id, reason=reason, deleted_at=now)
+            if write_tombstone:
+                self._tombstones.record(user_id=user_id, reason=reason, deleted_at=now)
             self._commit()
         except Exception:
             self._rollback()

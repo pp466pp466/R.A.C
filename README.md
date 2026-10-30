@@ -510,6 +510,12 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 
 `deletion_tombstones`（只含內部編號、時間與原因）**不納入**清除。失敗原文排在帳本之前：同時符合兩者的舊紀錄先清原文、再刪整筆，預覽與實際的筆數才一致。以上期限與 `/privacy` 的保存期限表由 `tests/test_legal_pages.py` 比對。
 
+### 還原後重新抹除（C-5a）
+
+`flask --app wsgi replay-deletions [--dry-run] [--ids-file 檔案]`（**人工類，不得排程**）：備份還原後、對外開放流量之前執行，依 `deletion_tombstones`（與日誌取出的「編號,時間」檔案，涵蓋備份之後才發生的刪除）重新抹除復活的帳號，走同一個單一抹除出口。只抹除建立時間不晚於刪除時間且非管理員的帳號（防止還原後被重新發出的編號誤刪別人）；檔案先整體驗證，格式錯誤時在抹除任何帳號之前失敗，只指出行號；輸出只有筆數。順序、日誌取出方式與演練見 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 的「資料庫還原與重新抹除」。
+
+**還原演練驗收（C-5a，2026-10-30，本機 SQL Server，暫存資料庫 `project_test`）**：建立「復活者、一般使用者、管理員、編號被重新發出的使用者」四人與對話、帳本 → `BACKUP DATABASE … COPY_ONLY, CHECKSUM`（`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔存在）→ 備份之後以單一抹除出口抹除復活者，並用**真正的 JSON 日誌格式**記下 `account.deleted_by_request` → `scripts/restore_drill.py logs-to-ids`（日誌行只剩 `編號,時間`，其餘欄位全部丟棄；另加入管理員與被重新發出的編號各一筆）→ `restore_drill.py drill`：還原成 `project_test_restore_drill`、結構版本 `0009_alert_states` 為程式認得的版本、預覽將抹除 1 個、實際抹除 1 個（與預覽相同；管理員與編號被重新發出者被略過）、第二次執行抹除 0 個、所有已刪除者不存在，約 6 秒，暫存資料庫已刪除，**輸出只有筆數與通過／失敗**。開發資料庫 `project` 全程沒有被動到（前後都是 10 張表、2 列）。另外確認了一個負面情境：沒有 alembic 版本紀錄的資料庫會被判為「結構版本不認得」而失敗。
+
 ### 設計重點與已知限制
 
 - **單一抹除出口**（`AccountErasureService`）：閒置 12 個月與自助刪除共用。每個帳號在**一個交易**內依序「把帳本的對話編號清為空值 → 條件式刪除 → 寫刪除紀錄 → 提交」，條件不成立時**整個回復**（使用者還活著，不能讓他的帳本失去對話連結）。順序不能反過來：使用者一刪，帳本的 `user_id` 就變空，找不到要清的列。這同時補上了先前閒置清除沒有匿名化帳本對話編號的缺口（SQLite 重用整數編號時會錯指別人的新對話）。`tests/architecture/test_account_erasure_coverage.py` 要求每張指向使用者或對話的資料表都登記在清單內，新增資料表漏掉就失敗。
@@ -532,6 +538,31 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 | 修正（驗收發現） | 寬限期已過、排程還沒執行時，頁面仍顯示注定失敗的「撤銷刪除」按鈕：改由伺服器判斷，期限已過就不顯示並說明「帳號即將刪除」；頁面開著時剛好過期的情形仍由前端處理 `grace_expired`。驗收腳本自己的問題（下載路徑需為 Windows 原生路徑、等待頁面渲染、`about:blank` 不是外部網域）不是程式缺陷 |
 | 本機資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`project_pre_0008_20261030_131713.bak`，`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔存在），再 `alembic upgrade head`：`0007_admin_audit_logs` → `0008_privacy_lifecycle`；升級後兩個新欄位可為空、索引存在、`/healthz` 與 `/readyz` 回 200，既有資料筆數不變（`users` 1 筆，其餘 0 筆） |
 | 真實 Gemini | 本 change 沒有任何模型呼叫 |
+
+## 負載測試（C-5a）
+
+change `launch-readiness`。`loadtest/`：Locust 情境（註冊、登入、開對話、每 30 至 45 秒送訊息）、可設定延遲與錯誤率的假模型入口（`python -m flask --app loadtest.fake_app run`，**staging 與 production 載入即失敗**，預設關閉信箱驗證）、位址守門（預設只對本機；其他位址需 `--confirm-remote`；正式環境一律拒絕）、通過標準判定腳本（`python loadtest/evaluate.py`：p95 小於 8 秒、錯誤率小於 1%、無資料庫鎖定錯誤、CPU 低於 70% 由平台量測，未提供則標為「未驗證」）。Locust 只在 `requirements-dev.txt`，不進映像。用法、判定與限制見 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 的「負載測試」。
+
+**本機冒煙驗收（2026-10-30）**：假模型入口（`APP_ENV=testing`、SQLite 檔案、`LOADTEST_ERROR_RATES=rate_limited=0.05,server_error=0.05`、種子 42）加 Locust 20 位虛擬使用者、60 秒。結果：20 位使用者全部註冊、登入並開了對話，送出 28 則訊息；p95 約 2 秒；**6 則訊息得到降級文案（HTTP 200）被標為失敗，錯誤率 4.29%，判定腳本正確判為「未通過」**（假模型刻意注入了約 10% 的模型錯誤）；無資料庫鎖定錯誤；CPU 標為「未驗證」（結束代碼 1，若錯誤率達標則為 2）；帳本記錄了預期的 `rate_limited` 與 `server_error`；應用程式日誌沒有任何寄信事件。**這是本機 Flask threaded 伺服器的數字，不是容量依據，gunicorn 參數留待 C-5b 在預備環境依實測決定。**測試也抓到一個設計上的細節：降級回覆的 HTTP 狀態是 200，不特別處理的話 Locust 的錯誤率會漏算模型錯誤，所以情境把它標為失敗（`tests/test_loadtest_harness.py` 守住）。
+
+## 驗收紀錄（C-5a launch-readiness，2026-10-30）
+
+| 項目 | 結果 |
+|---|---|
+| pytest | **5522 項通過**（含真實 SQL Server `project_test`，沒有略過；上次 5241，新增 281 項）。新增：安全標頭（五種路徑、錯誤回應、四個環境）、指令分類、部署計畫（設定歸類、順序、排程、環境隔離、輪替）、部署腳本（預設預覽、逐步確認、失敗即停止、機密不外洩）、平台告警（門檻、來源事件真實存在、文件比對）、重新抹除（Repository 在 SQLite 與 SQL Server、服務、指令、日誌掃描）、還原演練與日誌轉檔、負載測試（假模型、錯誤率、位址守門、不在映像內、降級回覆算失敗、判定標準）、營運手冊（引用的指令存在、關卡、還原與輪替順序） |
+| Node | 175 項通過（沒有前端變動） |
+| `openspec validate launch-readiness --strict` | 通過 |
+| 還原演練 | 本機 SQL Server 實跑通過（見「還原後重新抹除（C-5a）」） |
+| 負載測試 | 本機冒煙驗收（見「負載測試（C-5a）」）；**本機數字不是容量依據** |
+| 容器驗收 | 沒有為這個 change 重跑（沒有改動映像內容；`loadtest/` 與 Locust 不在映像內） |
+| 警告 | 1 個，來自 `tests/test_assets_manifest.py` 的既有警告（子行程輸出的編碼），不是這個 change 引入的 |
+| 真實 Gemini 與真實雲端 | 這個 change 沒有任何模型呼叫，也沒有對雲端執行任何指令 |
+
+**沒有驗證的事（誠實揭露）**：`scripts/gcp_launch.py` 與平台告警定義只在預覽輸出與測試中驗證過，**沒有對真實的 `gcloud` 與 Google Cloud 專案執行過**；`gcloud` 的旗標會隨版本變動，第一次實際執行在 C-5b 的預備環境。**入口層 IP 限流依使用者決定先不做**，AGENTS.md 第 9 節因此尚未滿足，列為上線前關卡（見營運文件「未滿足的規範項目」）。
+
+## 部署計畫腳本（C-5a）
+
+change `launch-readiness`。`scripts/gcp_launch.py`（Python 加 `gcloud`）把雲端部署寫成可檢視、可測試的步驟：`python scripts/gcp_launch.py plan --project <專案> --region asia-east1 --env staging --sql-instance cs-sql-staging --image-tag <標籤> --vars-file staging.vars`。**預設只印出將執行的指令**，加 `--execute` 才逐步執行並在每一步前確認；子命令 `secrets`、`build`、`migrate`、`deploy`、`schedule`、`alerts` 可單獨預覽或執行，順序固定，migration 失敗即停止。機密的值只從標準輸入餵給 `gcloud`，一般設定檔（`--vars-file`，已列入 `.gitignore`）含機密名稱會被拒絕。腳本**沒有對真實 gcloud 與雲端專案驗證過**（C-5b 才實際執行）。完整步驟、回復與限制見 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 的「部署與回復」。
 
 ## 營運告警（C-4d）
 
@@ -574,7 +605,7 @@ change `ops-alerting`。讓營運上的異常在使用者抱怨之前被人知�
 
 - ①**登入失敗激增用「被鎖定的帳號數」代理**：慢速、分散、每個帳號少於 5 次的嘗試看不到；規範的「單一 IP」沒有資料（資料庫沒有 IP），由入口層限流與平台日誌補足（C-5）。
 - ②**至多一次的通知**：行程在「搶佔之後、寄信之前」被殺掉，這一封會遺失；6 小時的提醒是安全網。
-- ③**這個指令依賴資料庫與寄信**：資料庫不通時它也跑不動，寄信服務掛掉時告警寄不出去。所以 **5xx 比率、服務存活（`/healthz`、`/readyz` 的外部探測）與寄信失敗（`mail.send_failed`）必須由平台負責**（C-5 設定，條件見營運文件）；指令的非零結束代碼也要接到平台告警。
+- ③**這個指令依賴資料庫與寄信**：資料庫不通時它也跑不動，寄信服務掛掉時告警寄不出去。所以 **5xx 比率、服務存活與就緒（`/healthz`、`/readyz` 的外部探測）、寄信失敗（`mail.send_failed`）、排程工作失敗與 `check-alerts` 停擺（15 分鐘沒有 `alert.check_completed` 心跳）必須由平台負責**。C-5a 已把這些寫成 `python scripts/gcp_launch.py alerts ... --notify-email <收件人>` 產生的告警定義（預設只預覽，條件見營運文件「告警條件一覽」，由 `tests/test_platform_alerts.py` 比對；尚未對真實雲端執行，C-5b 才實際建立）。
 - ④門檻是初值，未經真實流量驗證；上線後第一週檢視告警頻率再調整。⑤`usage.global_budget_warning` 日誌事件維持原樣（每個請求一筆），但**不再是通知來源**，通知由 `usage_budget` 的狀態去重負責。⑥沒有 webhook、後台的告警頁面與可由環境變數調整的門檻（刻意不做）。⑦排程尚未設定（C-5）；容器驗收沒有為這個 change 重跑。
 
 ### 驗收紀錄（C-4d，2026-10-30）

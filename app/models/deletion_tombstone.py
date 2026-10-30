@@ -19,7 +19,8 @@ from app.models.base import Base, UTCDateTime, utcnow
 
 REASON_INACTIVE_12_MONTHS = "inactive_12_months"
 REASON_USER_REQUESTED = "user_requested"
-DELETION_REASONS = (REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED)
+REASON_RESTORE_REPLAY = "restore_replay"   # 備份還原後依日誌取出的紀錄補上的刪除（原因已不可考，見 deletion-replay 規格）
+DELETION_REASONS = (REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED, REASON_RESTORE_REPLAY)
 
 
 class DeletionTombstone(Base):

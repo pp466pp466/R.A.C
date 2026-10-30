@@ -50,3 +50,11 @@ def test_a_value_outside_the_enumeration_fails_immediately(call):
 
 def test_the_severity_field_is_in_the_log_whitelist():
     assert "severity" in ALLOWED_FIELDS and "count" in ALLOWED_FIELDS
+
+
+def test_the_heartbeat_has_no_field_other_than_the_event_name(log_lines):
+    alert_events.log_check_completed()
+    (line,) = events(log_lines, "alert.check_completed")
+    assert line["level"] == "INFO"
+    assert set(line) <= {"time", "level", "logger", "message", "request_id", "event"}
+    assert not {"reason", "severity", "count", "user_id"} & set(line)

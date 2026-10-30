@@ -17,6 +17,7 @@ node_modules
 
 tests
 scripts
+loadtest
 docs
 openspec
 .claude

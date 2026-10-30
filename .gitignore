@@ -35,3 +35,11 @@ Desktop.ini
 
 # Claude Code 本機設定
 .claude/settings.local.json
+
+# 部署用的一般設定檔（scripts/gcp_launch.py 的 --vars-file；不含機密，但含環境專屬的設定，不進版本庫）
+*.vars
+
+# 負載測試的輸出（loadtest/）
+loadtest/result*
+loadtest/*.db
+loadtest/*.log

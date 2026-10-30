@@ -34,6 +34,7 @@ from app.observability.request_logging import init_request_logging
 from app.runtime import Clock
 from app.security.cookies import SignedCookies, flask_session_settings
 from app.security.cache_headers import init_no_store
+from app.security.security_headers import init_security_headers
 from app.security.csrf import init_csrf
 from app.security.session import init_login_session
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
@@ -101,6 +102,7 @@ def create_app(
     init_session(app, create_engine_for(cfg.database_url.reveal()))
     init_csrf(app)  # 在 init_session 之後：被拒絕的請求仍會走完 after_request，日誌才記得到最終狀態碼
     init_no_store(app)
+    init_security_headers(app, hsts=cfg.trust_proxy)  # HSTS 只在 staging 與 production（有 HTTPS 的入口層）送出
 
     app.register_blueprint(page_bp)
     app.register_blueprint(auth_pages_bp)

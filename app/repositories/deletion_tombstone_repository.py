@@ -22,3 +22,14 @@ class DeletionTombstoneRepository(BaseRepository[DeletionTombstone]):
     def deleted_user_ids(self) -> set[int]:
         """所有已被刪除的使用者編號。"""
         return set(self._session.scalars(select(DeletionTombstone.user_id)))
+
+    def records(self) -> list[tuple[int, datetime]]:
+        """所有刪除紀錄的（使用者編號, 刪除時間），由編號小到大；備份還原後重新抹除用（deletion-replay 規格）。只有編號與時間。"""
+        rows = self._session.execute(select(DeletionTombstone.user_id, DeletionTombstone.deleted_at).order_by(DeletionTombstone.user_id, DeletionTombstone.deleted_at))
+        return [(user_id, deleted_at) for user_id, deleted_at in rows]
+
+    def has_record_not_before(self, user_id: int, deleted_at: datetime) -> bool:
+        """這個編號是否已有一筆「刪除時間不早於 `deleted_at`」的紀錄；有的話重新抹除時不必再寫一筆。"""
+        return self._session.execute(
+            select(DeletionTombstone.id).where(DeletionTombstone.user_id == user_id, DeletionTombstone.deleted_at >= deleted_at).limit(1)
+        ).first() is not None

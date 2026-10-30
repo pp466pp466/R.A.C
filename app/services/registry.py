@@ -34,6 +34,7 @@ from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.account_deletion_executor import AccountDeletionExecutor
 from app.services.account_deletion_service import AccountDeletionService
 from app.services.account_erasure_service import AccountErasureService
+from app.services.deletion_replay_service import DeletionReplayService
 from app.services.account_retention_service import AccountRetentionService
 from app.services.alert_service import AlertService
 from app.services.data_retention_service import DataRetentionService
@@ -293,6 +294,14 @@ def build_account_deletion_executor(session: Session, *, clock: Callable[[], dat
         users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
     )
     return AccountDeletionExecutor(users=users, erasure=erasure, clock=clock)
+
+
+def build_deletion_replay_service(session: Session) -> DeletionReplayService:
+    """命令列用：備份還原後依刪除紀錄重新抹除；走同一個單一抹除出口，每個帳號一個交易。"""
+    users = UserRepository(session)
+    tombstones = DeletionTombstoneRepository(session)
+    erasure = AccountErasureService(users=users, tombstones=tombstones, commit=session.commit, rollback=session.rollback)
+    return DeletionReplayService(users=users, tombstones=tombstones, erasure=erasure)
 
 
 def build_account_retention_service(session: Session, *, clock: Callable[[], datetime]) -> AccountRetentionService:

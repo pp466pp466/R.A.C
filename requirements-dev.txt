@@ -3,3 +3,5 @@
 pytest==9.1.1
 # 本機 SMTP 擷取與寄信整合測試（C-2）
 aiosmtpd==1.4.6
+# 負載測試（C-5a）：僅開發用，不進映像（requirements.txt 與 Dockerfile 都沒有）
+locust==2.47.0

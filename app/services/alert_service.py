@@ -127,6 +127,8 @@ class AlertService:
                 self._rollback()
                 alert_events.log_check_failed(alert=key)
                 results.append(AlertResult(key, OUTCOME_CHECK_FAILED, evaluation))
+        if not read_only and all(r.outcome != OUTCOME_CHECK_FAILED for r in results):
+            alert_events.log_check_completed()  # 心跳：平台以它偵測「告警檢查停擺」（預覽、唯讀與有評估失敗的執行都不記）
         return AlertReport(tuple(results), dry_run, bool(self._recipients))
 
     # ---- 狀態轉換與通知 ----------------------------------------------------------------------

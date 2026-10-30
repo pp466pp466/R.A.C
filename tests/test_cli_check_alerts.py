@@ -145,3 +145,46 @@ def test_the_command_is_registered_and_documented_in_the_cli_module_docstring(wo
 
     app, _, _, runner = world
     assert "check-alerts" in app.cli.commands and "check-alerts" in (cli.__doc__ or "")
+
+
+def heartbeats(log_lines) -> int:
+    return sum(1 for line in log_lines() if line.get("event") == "alert.check_completed")
+
+
+def test_a_successful_real_run_logs_exactly_one_heartbeat_with_only_the_event_name(world, log_lines):
+    app, clock, sender, runner = world
+    assert runner.invoke(args=["check-alerts"]).exit_code == 0
+    assert heartbeats(log_lines) == 1
+    (line,) = [line for line in log_lines() if line.get("event") == "alert.check_completed"]
+    assert not {"reason", "severity", "count", "user_id"} & set(line)
+    clock.advance(minutes=5)
+    runner.invoke(args=["check-alerts"])
+    assert heartbeats(log_lines) == 2
+
+
+def test_a_delivery_failure_still_logs_the_heartbeat_because_the_check_itself_ran(world, log_lines):
+    app, clock, sender, runner = world
+    lock_five(app, clock)
+    sender.fail = True
+    assert runner.invoke(args=["check-alerts"]).exit_code != 0
+    assert heartbeats(log_lines) == 1
+
+
+def test_the_preview_the_read_only_mode_and_a_failed_evaluation_log_no_heartbeat(world, log_lines, monkeypatch):
+    app, clock, sender, runner = world
+    runner.invoke(args=["check-alerts", "--dry-run"])
+    assert heartbeats(log_lines) == 0
+
+    def broken(self, *, start, end):
+        raise RuntimeError("資料庫暫時失敗")
+
+    monkeypatch.setattr(LlmCallLogRepository, "chat_status_counts", broken)
+    assert runner.invoke(args=["check-alerts"]).exit_code != 0
+    assert heartbeats(log_lines) == 0
+
+
+def test_without_recipients_there_is_no_heartbeat(log_lines):
+    clock = FakeClock()
+    app = make_app(recipient=None, clock=clock)
+    assert app.test_cli_runner().invoke(args=["check-alerts"]).exit_code == 0
+    assert heartbeats(log_lines) == 0

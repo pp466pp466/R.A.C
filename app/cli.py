@@ -1,6 +1,6 @@
 """`flask` 自訂指令（見 AGENTS.md 第 10、11 節：維運工作以指令實作，不用行程內計時器）。
 
-七個指令：
+八個指令：
 - `llm-probe`：開發用，不屬於維運。呼叫 RPG 敘事用途的模型端點一次，印出回覆、模型、延遲、token 與結束原因，
   讓人在 RPG 實作之前先評估端點好不好用（含結構化輸出的穩定度）。只能在 development 與 testing 執行；**不寫帳本與任何資料表**，
   不顯示金鑰，也不印供應商的錯誤本文。
@@ -17,6 +17,9 @@
 - `execute-account-deletions`：由平台排程器觸發，刪除「申請刪除、寬限期（7 天）已滿」的帳號（與閒置清除共用同一個抹除出口）；
   `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
 - `age-stats`：各年齡區間的人數（供定期察看用戶群），只有計數，沒有任何個別使用者的資料。
+- `replay-deletions`：**備份還原後、對外開放流量之前**手動執行（不得排程），依 `deletion_tombstones`（以及由日誌取出的
+  `使用者編號,刪除時間` 檔案，`--ids-file`）重新抹除復活的帳號；只抹除建立時間不晚於刪除時間且不是管理員的帳號，
+  `--dry-run` 只列筆數。檔案先整體驗證，格式錯誤時在抹除任何帳號之前失敗，只指出行號；輸出只有筆數，不含檔案路徑與內容。
 """
 from __future__ import annotations
 
@@ -34,8 +37,22 @@ from app.services.alert_messages import ALERT_NAMES, SEVERITY_LABELS, format_thr
 from app.services.llm_output import parse_llm_json
 from app.services.registry import (
     build_account_deletion_executor, build_account_retention_service, build_age_stats_service, build_auth_service,
-    build_alert_service, build_data_retention_service,
+    build_alert_service, build_data_retention_service, build_deletion_replay_service,
 )
+from app.services.deletion_replay_service import ReplayFileError, parse_replay_file
+
+# ---- 指令分類（見 deployment-plan 規格「排程指令的頻率與失敗處理」）----
+# 由平台排程器觸發的指令與頻率（cron，時區 Asia/Taipei）。部署計畫（scripts/launch_plan.py）從這裡產生排程，
+# 一致性測試（tests/test_scheduled_commands.py）要求每個註冊的指令不是排程類就是人工操作類：新增指令而兩邊都沒登記會失敗。
+# 每日的三個錯開時間，避免同時佔用資料庫連線；check-alerts 的窗口刻意重疊（見營運文件）。
+SCHEDULED_COMMANDS: dict[str, str] = {
+    "check-alerts": "*/5 * * * *",
+    "purge-inactive-accounts": "0 3 * * *",
+    "execute-account-deletions": "20 3 * * *",
+    "purge-expired-data": "40 3 * * *",
+}
+# 人工操作的指令：開發用、一次性或還原時才執行，不得排程。
+MANUAL_COMMANDS: tuple[str, ...] = ("llm-probe", "create-admin", "age-stats", "replay-deletions")
 
 # ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
 PROBE_SYSTEM = "你是一位說書人。請一律使用繁體中文（台灣用語）回答，內容保持輕鬆無害。"
@@ -240,6 +257,31 @@ def register_cli(app: Flask) -> None:
             click.echo(f"  {label}：{'失敗' if result.failed else str(result.matched) + ' 筆'}")
         if report.failed:
             raise click.ClickException("以下類別清除失敗：" + "、".join(RETENTION_LABELS[c] for c in report.failed))
+
+    @app.cli.command("replay-deletions")
+    @click.option("--dry-run", is_flag=True, help="只列出將抹除與略過的筆數，不改變任何資料。")
+    @click.option("--ids-file", type=click.Path(dir_okay=False), help="由日誌取出的檔案，每行「使用者編號,刪除時間（ISO 8601）」，涵蓋備份之後才發生的刪除。")
+    def replay_deletions(dry_run: bool, ids_file: str | None) -> None:
+        """備份還原後依刪除紀錄重新抹除復活的帳號。**必須在還原後、對外開放流量之前執行**；可重複執行，結果相同。"""
+        extra = []
+        if ids_file:
+            try:
+                with open(ids_file, encoding="utf-8-sig") as handle:   # 讀取一律 utf-8-sig（自動去除 BOM）
+                    text = handle.read()
+            except (OSError, UnicodeDecodeError):
+                raise click.ClickException("無法讀取指定的檔案（找不到、沒有權限或不是 UTF-8 文字）。") from None
+            try:
+                extra = parse_replay_file(text)   # 整份先驗證：格式錯誤時在抹除任何帳號之前失敗
+            except ReplayFileError as error:
+                raise click.ClickException(str(error)) from None
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            report = build_deletion_replay_service(session).run(extra, dry_run=dry_run)
+        click.echo("預覽（未改變任何資料）：" if dry_run else "重新抹除結果：")
+        click.echo(f"  {'將抹除' if dry_run else '已抹除'}：{report.erased} 個帳號")
+        click.echo(f"  略過（編號已被還原後的新使用者重新使用）：{report.reissued} 個")
+        click.echo(f"  略過（管理員）：{report.admin} 個")
+        click.echo(f"  已經不存在：{report.absent} 個")
 
     @app.cli.command("age-stats")
     def age_stats() -> None:

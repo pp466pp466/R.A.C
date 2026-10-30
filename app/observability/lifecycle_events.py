@@ -3,6 +3,7 @@
 欄位限於白名單內的「事件名稱、內部使用者編號、固定列舉的原因、整數筆數」：
 - `account.deletion_requested`、`account.deletion_cancelled`、`account.deleted_by_request`：使用者申請、撤銷與被抹除。
 - `account.exported`：匯出個人資料，`reason` 是格式（`json` 或 `csv`）。
+- `account.deletion_replayed`：備份還原後重新抹除了這個帳號（只有內部編號；預覽不記）。
 - `retention.purged`：期限清除某一類完成，`reason` 是類別、`count` 是筆數；`retention.purge_failed`：某一類失敗（警告層級）。
 **絕不含** email、名稱、生日、年齡區間、密碼、確認文字、任何對話或模型原文——函式根本沒有接收這些的參數。
 列舉以外的值會立刻出錯，所以日誌裡不會出現自由文字。（既有的閒置清除事件 `account.inactive_purged` 在 `security_events.py`。）
@@ -17,6 +18,7 @@ EVENT_DELETION_REQUESTED = "account.deletion_requested"
 EVENT_DELETION_CANCELLED = "account.deletion_cancelled"
 EVENT_DELETED_BY_REQUEST = "account.deleted_by_request"
 EVENT_EXPORTED = "account.exported"
+EVENT_DELETION_REPLAYED = "account.deletion_replayed"
 EVENT_RETENTION_PURGED = "retention.purged"
 EVENT_RETENTION_FAILED = "retention.purge_failed"
 
@@ -42,6 +44,10 @@ def log_deletion_cancelled(*, user_id: int) -> None:
 
 def log_deleted_by_request(*, user_id: int) -> None:
     logger.info("帳號：寬限期滿，已抹除", extra={"event": EVENT_DELETED_BY_REQUEST, "user_id": user_id})
+
+
+def log_deletion_replayed(*, user_id: int) -> None:
+    logger.info("帳號：還原後重新抹除", extra={"event": EVENT_DELETION_REPLAYED, "user_id": user_id})
 
 
 def log_exported(*, user_id: int, fmt: str) -> None:

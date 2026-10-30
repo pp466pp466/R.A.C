@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting ｜ 資料庫版本：`0009_alert_states` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness ｜ 資料庫版本：`0009_alert_states` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
@@ -178,7 +178,7 @@ flowchart TD
     Pend -->|"7 天內登入並撤銷"| Acc
     Pend -->|"寬限期滿（execute-account-deletions）"| Era
     Era --> Wipe["刪除使用者；對話、訊息、第三方身分、驗證權杖串聯刪除；帳本與稽核的使用者欄位變空值"]
-    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months 或 user_requested），不納入期限清除"]
+    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months、user_requested，或備份還原後補上的 restore_replay），不納入期限清除"]
     Err["error_detail（失敗原文）"] -->|"14 天（purge-expired-data）"| Del4["清為空值，帳本那一筆保留；僅管理員可讀"]
     Log["llm_call_logs"] -->|"365 天（purge-expired-data）"| Del3["刪除"]
     Tok["auth_tokens"] -->|"到期後 7 天（purge-expired-data）"| Del5["刪除，不論是否已使用"]
@@ -187,7 +187,7 @@ flowchart TD
 
 三個排程指令都已實作（`flask purge-inactive-accounts`、`execute-account-deletions`、`purge-expired-data`），設定排程屬 C-5。**抹除一個人只有一個出口**：每個帳號在一個交易內依序「把帳本的對話編號清為空值 → 條件式刪除（當下再確認一次條件）→ 寫刪除紀錄 → 提交」，條件不成立時整個回復。順序不能反過來：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列；帳本的 `conversation_id` 沒有外鍵，不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。管理員在後台刪除違規對話、使用者自己刪除對話與期限清除對話，都是同一個原則：先清帳本的對話編號再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
 
-期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。
+期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。重新抹除（`flask replay-deletions`）只抹除「建立時間不晚於刪除時間」且非管理員的帳號：SQL Server 的 IDENTITY 在還原後從備份時的種子繼續，備份之後註冊再被刪除的編號會被還原後的新使用者沿用，只憑編號刪除會刪到別人；同一個編號有多筆紀錄時只看最晚的刪除時間。紀錄本身沒有外鍵、也不唯一，重新抹除時若該編號已有不早於這次的紀錄就不再寫入。
 
 ---
 

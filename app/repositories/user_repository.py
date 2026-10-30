@@ -20,6 +20,12 @@ from app.models.user import (
 from app.repositories.base import BaseRepository
 from app.repositories.errors import DuplicateUserError
 
+# `replay_status` 的結果（備份還原後重新抹除）
+REPLAY_MISSING = "missing"
+REPLAY_ADMIN = "admin"
+REPLAY_REISSUED = "reissued"
+REPLAY_ELIGIBLE = "eligible"
+
 
 class UserRepository(BaseRepository[User]):
     model = User
@@ -174,6 +180,36 @@ class UserRepository(BaseRepository[User]):
             .where(User.id == user_id)
             .where(User.role != ROLE_ADMIN)
             .where(self._last_seen() < cutoff)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
+    # ---- 備份還原後的重新抹除（deletion-replay 規格）-------------------------------------------
+
+    def replay_status(self, user_id: int, deleted_at: datetime) -> str:
+        """這個編號現在對應的帳號，相對於一筆刪除紀錄是什麼狀況（只讀角色與建立時間，不載入任何個資）。
+
+        - `missing`：沒有這個帳號（已經不存在，重複執行時的正常結果）；
+        - `admin`：管理員，絕不抹除；
+        - `reissued`：帳號建立得比刪除時間晚——還原後新註冊的使用者沿用了先前已刪除帳號的編號，不是同一個人；
+        - `eligible`：帳號在刪除時間之前就存在，應該被抹除。
+        """
+        row = self._session.execute(select(User.role, User.created_at).where(User.id == user_id)).first()
+        if row is None:
+            return REPLAY_MISSING
+        role, created_at = row
+        if role == ROLE_ADMIN:
+            return REPLAY_ADMIN
+        return REPLAY_REISSUED if created_at > deleted_at else REPLAY_ELIGIBLE
+
+    def delete_if_created_not_after(self, user_id: int, deleted_at: datetime) -> bool:
+        """條件式 DELETE：只刪「建立時間不晚於 `deleted_at`」且不是管理員的帳號，條件在刪除當下再確認一次。回傳是否真的刪除。
+
+        串聯與不同步 Session 的注意事項同 `delete_inactive`。
+        """
+        result = self._session.execute(
+            delete(User)
+            .where(User.id == user_id, User.role != ROLE_ADMIN, User.created_at <= deleted_at)
             .execution_options(synchronize_session=False)
         )
         return result.rowcount == 1

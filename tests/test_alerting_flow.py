@@ -167,7 +167,9 @@ def test_the_whole_alert_lifecycle_with_real_traffic_and_no_leak(log_lines):
     for line in lines:
         assert set(line) <= BASE_KEYS | set(ALLOWED_FIELDS), f"出現不允許的欄位：{set(line) - BASE_KEYS - set(ALLOWED_FIELDS)}"
     events = [line for line in lines if line.get("event", "").startswith("alert.")]
-    assert {e["event"] for e in events} == {"alert.firing", "alert.resolved", "alert.delivery_failed"}
+    assert {e["event"] for e in events} == {"alert.firing", "alert.resolved", "alert.delivery_failed", "alert.check_completed"}
     assert sum(e["event"] == "alert.firing" for e in events) == 6 and sum(e["event"] == "alert.resolved" for e in events) == 4
-    assert all(e["reason"] in {"usage_budget", "llm_error_rate", "llm_config_error", "login_lockouts"} for e in events)
+    heartbeats = [e for e in events if e["event"] == "alert.check_completed"]
+    assert len(heartbeats) == len(outputs) and all(not {"reason", "severity", "count"} & set(e) for e in heartbeats)   # 每次檢查都跑完（寄信失敗那次也是）
+    assert all(e["reason"] in {"usage_budget", "llm_error_rate", "llm_config_error", "login_lockouts"} for e in events if e not in heartbeats)
     json.dumps(lines)
