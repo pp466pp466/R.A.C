@@ -61,6 +61,8 @@ SYNCED_RULES = [
     (7, "RPG 記事簿容量 2000 / 5000 / 10000 字（見第 6 節）", "references/business-encoding.md"),
     (10, "記事簿內容，含由玩家文字抓取的重點，亦同", "references/auth-security.md"),
     (11, "RPG 記事簿：內容由玩家文字衍生，視為個資", "references/privacy-observability.md"),
+    (11, "RPG 模型供應商（OpenAI 相容端點，目前為 OpenRouter）與個資：免費模型的輸入輸出可能被供應商留存或用於改進產品", "references/privacy-observability.md"),
+    (5, "RPG 的 OpenAI 相容端點依 OPENROUTER_JSON_SCHEMA 是否支援 JSON schema 決定", "references/llm-streaming.md"),
 ]
 
 

@@ -58,7 +58,7 @@ flowchart LR
 | launch-readiness（C-5a） | 規劃完成，待實作 | 2026-10-30（24 項任務；`openspec validate --strict` 通過） | 依使用者決定把 C-5 拆成兩個：本 change 只做程式庫內的部分，不碰雲端帳號、不產生費用。安全標頭（HSTS 一年、不含子網域與預載入；不做 CSP）、Python 加 `gcloud` 的部署計畫腳本（預設只預覽）、平台告警定義（5xx 比率、`/healthz` 與 `/readyz` 探測、`mail.send_failed`、排程失敗與 `check-alerts` 停擺）、**`flask replay-deletions`（備份還原後重新抹除，補上目前沒有的指令）**與還原演練腳本、Locust 負載測試與假模型入口、營運手冊與上線前關卡。**IP 限流依使用者決定先不做**，AGENTS.md 第 9 節因此尚未滿足，列為上線前關卡 |
 | production-launch（C-5b） | 規劃中 | — | 在使用者的 Google Cloud 專案建立預備環境、壓測與調整 gunicorn、實際還原演練、正式上線；需要使用者提供雲端專案與計費、網域、寄信服務、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter），並決定入口層 IP 限流是否補做；上線前要重新確認供應商條款與年齡規則 |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
-| RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板） |
+| RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |
 
 ## 2. 待決定與待辦
 

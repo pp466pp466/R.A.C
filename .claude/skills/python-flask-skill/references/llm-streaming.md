@@ -18,7 +18,7 @@
 
 - 結構化輸出 (Structured Outputs)：客服模組進行意圖與實體解析時，必須以非串流請求強制約束 Gemini API 輸出標準 JSON 格式（至少包含 intent, confidence, entities, reply_text, suggested_actions），並使用 Gemini 的 response schema 強制格式；Service 層仍須重新驗證，不信任模型輸出。嚴禁將 JSON 原文以串流方式送達前端。
 - 客服模組因採非串流，前端直接取得完整 reply_text，再由打字機緩衝區逐字渲染。
-- LLM JSON 解析：解析前須去除 Markdown 程式碼區塊標記（如 ```json）；使用 Gemini 結構化輸出模式降低發生率。解析統一由單一 Service 層函式處理，依序做 JSON 解析、schema 驗證與語意驗證。失敗時最多重試 1 次（總共最多 2 次呼叫；JSON 解析或驗證失敗時以同一模型重試；暫時性錯誤 429、5xx、逾時則改為切換到備援模型，這次切換視為該次重試，不受「已耗時小於 15 秒」的限制；內容被安全過濾阻擋時不重試，RPG 劇情的被擋回合另見第 10 節）。仍失敗則回覆繁體中文降級文案，該訊息標記為 fallback 且不計入每日配額；失敗的模型原文截斷至 2000 字，記錄於 llm_call_logs.error_detail，保存 14 天，僅管理員可讀。
+- LLM JSON 解析：解析前須去除 Markdown 程式碼區塊標記（如 ```json）；客服使用 Gemini 結構化輸出模式降低發生率，RPG 的 OpenAI 相容端點依 OPENROUTER_JSON_SCHEMA 是否支援 JSON schema 決定（不支援時以提示詞約束，仍由本函式驗證）。解析統一由單一 Service 層函式處理，依序做 JSON 解析、schema 驗證與語意驗證。失敗時最多重試 1 次（總共最多 2 次呼叫；JSON 解析或驗證失敗時以同一模型重試；暫時性錯誤 429、5xx、逾時則改為切換到備援模型，這次切換視為該次重試，不受「已耗時小於 15 秒」的限制；內容被安全過濾阻擋時不重試，RPG 劇情的被擋回合另見第 10 節）。仍失敗則回覆繁體中文降級文案，該訊息標記為 fallback 且不計入每日配額；失敗的模型原文截斷至 2000 字，記錄於 llm_call_logs.error_detail，保存 14 天，僅管理員可讀。
 - 非串流請求逾時與中斷（客服適用）：Gemini 單次呼叫逾時 20 秒（逾時即切換備援模型），後端單次請求總預算（含重試與切換備援）30 秒；前端 axios 逾時 35 秒（略大於後端總預算），並以 AbortController 於使用者取消、切換對話或離開頁面時中止；無論成功、失敗或中斷，皆須在 finally 中恢復 UI 狀態。前端中止不代表後端中止，後端仍會完成並寫入結果，由 since_seq 同步補齊。
 
 ## 打字機特效
