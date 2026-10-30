@@ -17,11 +17,11 @@
 - RPG 核心邏輯
 - 強約束事件錨點 (Milestones) 驗證
 - 客服 NLP 意圖解析 (Intent/Entity)
-- 對話摘要壓縮
+- 客服對話摘要壓縮與 RPG 記事簿重點抓取
 - Gemini API 呼叫
 - 身分驗證與資料存取政策檢查 (AccessPolicy，見 [auth-security.md](auth-security.md))
 
-兩個模組共用的 Service 工具（Gemini 封裝、JSON 解析、滑動視窗與摘要、用量限制）應放在共用位置，避免客服與 RPG 各自實作。
+兩個模組共用的 Service 工具（Gemini 封裝、JSON 解析、滑動視窗與長期記憶（客服摘要、RPG 記事簿）、用量限制）應放在共用位置，避免客服與 RPG 各自實作。
 
 ## Repository 層
 

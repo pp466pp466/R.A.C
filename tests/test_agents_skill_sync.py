@@ -23,7 +23,7 @@ SYNCED_RULES = [
     (8, "內含繁體中文或其他非 ASCII 字元的 .ps1 須存成 UTF-8 with BOM", "references/business-encoding.md"),
     (8, "一律以 Python 撰寫（UTF-8、參數以清單傳遞）；.ps1 只作為純 ASCII 的薄包裝", "references/business-encoding.md"),
     # 2026-10-28：備援模型、NPC 角色卡、內容分級、年齡確認與草案個資
-    (5, "備援模型：主要模型發生 429、5xx 或單次呼叫逾時 20 秒時，一律切換到備援模型 gemini-3.5-flash-lite", "references/llm-streaming.md"),
+    (5, "備援模型：主要模型發生 429、5xx 或單次呼叫逾時 20 秒時，一律切換到備援模型：客服為 gemini-3.5-flash-lite（GEMINI_FALLBACK_MODEL），RPG 為 OPENROUTER_FALLBACK_MODEL（RPG 不切換到 Gemini）", "references/llm-streaming.md"),
     (5, "暫時性錯誤 429、5xx、逾時則改為切換到備援模型，這次切換視為該次重試，不受「已耗時小於 15 秒」的限制", "references/llm-streaming.md"),
     (5, "後端單次請求總預算（含重試與切換備援）30 秒", "references/llm-streaming.md"),
     (6, "RPG 的「當前世界狀態」包含在場 NPC 的角色卡切片", "references/llm-streaming.md"),
@@ -46,6 +46,21 @@ SYNCED_RULES = [
     (10, "玩家撰寫的個性、角色與世界文字同樣視為使用者文字", "references/auth-security.md"),
     (10, "待審的性格原型草案（僅含去識別後的草案內容，不含對話全文）", "references/auth-security.md"),
     (11, "性格原型草案：草案含玩家衍生文字，視為個資", "references/privacy-observability.md"),
+    # 2026-10-30：RPG 以記事簿取代摘要（free 2000、plus 5000、vip 10000 字），AI 溢出可用預備空間，玩家編輯不得超過容量
+    (6, "RPG 的長期記憶是記事簿（見下方），**RPG 不使用摘要**：「記事簿 + 最近 10 輪原文 + 當前世界狀態」", "references/llm-streaming.md"),
+    (6, "容量依會員等級為 free 2000、plus 5000、vip 10000 字（Unicode 字元，NFC 正規化後計），另有容量 25% 的預備空間（500 / 1250 / 2500 字），預備空間只供 AI 寫入", "references/llm-streaming.md"),
+    (6, "每完成 10 輪（第 10、20、30… 輪，中斷的回合不計）", "references/llm-streaming.md"),
+    (6, "新條目超過剩餘空間時仍完整寫入，但總長不得超過容量加預備空間", "references/llm-streaming.md"),
+    (6, "記事簿長度已超過容量時為「已滿」：不呼叫模型、不補抓被跳過的輪次", "references/llm-streaming.md"),
+    (6, "儲存後的長度不得超過容量，沒有預備空間", "references/llm-streaming.md"),
+    (5, "只有客服使用 GEMINI_MODEL", "references/llm-streaming.md"),
+    (9, "變數名稱 GEMINI_API_KEY（只有客服使用）；RPG 用途使用 OpenAI 相容端點，變數名稱 OPENROUTER_API_KEY", "references/deployment.md"),
+    (9, "所有機密（Gemini 金鑰、OpenRouter 金鑰、SECRET_KEY", "references/deployment.md"),
+    (5, "模型為環境變數 OPENROUTER_MODEL（備援為 OPENROUTER_FALLBACK_MODEL），不使用 Gemini", "references/llm-streaming.md"),
+    (6, "OPENROUTER_MODEL，備援 OPENROUTER_FALLBACK_MODEL，不使用 Gemini", "references/llm-streaming.md"),
+    (7, "RPG 記事簿容量 2000 / 5000 / 10000 字（見第 6 節）", "references/business-encoding.md"),
+    (10, "記事簿內容，含由玩家文字抓取的重點，亦同", "references/auth-security.md"),
+    (11, "RPG 記事簿：內容由玩家文字衍生，視為個資", "references/privacy-observability.md"),
 ]
 
 
@@ -126,6 +141,17 @@ def test_every_ps1_script_is_ascii_or_has_a_utf8_bom():
             continue
         raw = script.read_bytes()
         assert raw.isascii() or raw.startswith(b"\xef\xbb\xbf"), f"{script.name} 含非 ASCII 字元卻沒有 UTF-8 BOM"
+
+
+def test_rpg_notebook_rules_in_agents_and_rpg_design_doc_state_the_same_numbers():
+    """記事簿的數字（容量、預備空間、每 10 輪）同時出現在 AGENTS.md 第 6 節、第 7 節與 docs/RPG.md，且 RPG 上下文不再含摘要。"""
+    rpg = (PROJECT_ROOT / "docs" / "RPG.md").read_text(encoding="utf-8-sig")
+    for text in (agents_section(6), rpg):
+        assert "2000" in text and "5000" in text and "10000" in text
+        assert "500 / 1250 / 2500" in text and "25%" in text
+    assert "記事簿 + 最近 10 輪原文 + 當前世界狀態" in agents_section(6) and "記事簿 + 最近 10 輪原文 + 當前世界狀態" in rpg
+    assert "RPG 不使用摘要" in agents_section(6) and "RPG 不使用摘要" in rpg
+    assert "notebook_text" in rpg and "string memory_summary" not in rpg, "資料模型應改用記事簿欄位、不再有摘要欄位"
 
 
 def test_agents_new_rules_use_the_existing_bullet_structure():

@@ -21,11 +21,11 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 5. 業務與 Repository 層禁止 Raw SQL；唯一例外為 SQLite 的連線初始化事件。
 6. 全系統預設模型為 gemini-3.8-flash，備援為 gemini-3.5-flash-lite（429、5xx、單次呼叫逾時 20 秒即切換）。
 7. SSE 僅用於 RPG 劇情；客服意圖解析必須非串流輸出 JSON。
-8. 上下文 = 摘要 + 最近 10 輪原文 + 當前世界狀態；一輪 = 玩家訊息 + AI 回應。
+8. 上下文 = 長期記憶 + 最近 10 輪原文 + 當前世界狀態（客服的長期記憶是摘要；RPG 不用摘要，改用依會員等級 2000 / 5000 / 10000 字的記事簿）；一輪 = 玩家訊息 + AI 回應。
 9. 全系統使用繁體中文（zh-TW）。
 10. 檔案讀取用 utf-8-sig，寫入 JSON 用 utf-8，給 Excel 的 CSV 用 utf-8-sig。
 11. 正式環境禁止 Flask 開發伺服器；SSE 須運行於支援長連線並發的正式配置。
-12. Gemini API Key 只從環境變數讀取，嚴禁寫入程式碼或版本庫。
+12. 模型 API Key 只從環境變數讀取，嚴禁寫入程式碼或版本庫：客服用 GEMINI_API_KEY，RPG 用 OPENROUTER_API_KEY。
 13. 驗證採簽章 session cookie 加 CSRF，密碼用 Argon2id；一組 email 只能對應一個帳號。
 14. 對話相關的 Repository 方法必須帶 user_id，非擁有者一律回 404。
 15. 限流與鎖定計數不得放行程內記憶體，須存資料庫或入口層。
@@ -59,7 +59,7 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 - [ ] 資源引入是否一律使用 `{{ url_for('static', filename='...') }}`？
 - [ ] 是否沒有 Raw SQL（連線初始化事件除外），且 PRAGMA 僅在 `engine.dialect.name == "sqlite"` 時於 connect 事件中執行？
 - [ ] 是否所有 LLM 呼叫都使用模型設定（主要 gemini-3.8-flash、備援 gemini-3.5-flash-lite），且 SSE 只用於 RPG 劇情、客服為非串流 JSON？
-- [ ] 送進 Gemini 的 Context 是否為「摘要 + 最近 10 輪原文 + 當前世界狀態」？會呼叫 Gemini 的端點是否先經 AccessPolicy（含年齡確認與依年齡決定的內容上限），且玩家文字沒有進入 system_instruction？
+- [ ] 送進 Gemini 的 Context 是否為「摘要（RPG 為記事簿）+ 最近 10 輪原文 + 當前世界狀態」？會呼叫 Gemini 的端點是否先經 AccessPolicy（含年齡確認與依年齡決定的內容上限），且玩家文字沒有進入 system_instruction？
 - [ ] UI 文字、Prompt、錯誤訊息、註解是否皆為繁體中文？System Prompt 是否明確約束回傳繁體中文？
 - [ ] 所有 open() 是否明確指定 encoding（讀取 utf-8-sig；寫入 JSON/文字 utf-8；Excel CSV utf-8-sig）？HTML 是否含 `<meta charset="UTF-8">` 與 `<html lang="zh-Hant-TW">`？
 - [ ] 是否沒有使用 app.run 作為正式環境、沒有依賴行程內記憶體保存狀態（含限流計數）、沒有把 API Key 或資料庫密碼寫入程式碼／模板／版本庫？
