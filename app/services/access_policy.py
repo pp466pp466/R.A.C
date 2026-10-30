@@ -8,7 +8,8 @@
   （管理員與各等級都不豁免）；
 - 內容上限由 `content_ceiling` 依「當下」的年齡決定：未滿成年門檻一律是安全模式，成年者最高到 2（3 維持鎖定）。
   年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，這裡不內嵌任何年齡數字。
-管理員存取他人資料必須走專用的 Repository 方法並寫入稽核紀錄（C-4），不是用這裡繞過擁有者檢查。
+管理員存取他人資料必須走專用的 Repository 方法並寫入稽核紀錄（`AdminService`，見 admin-console 規格），不是用這裡繞過擁有者檢查；
+`require_admin` 是後台功能的唯一入口，非管理員得到與「不存在」相同的 404。
 """
 from __future__ import annotations
 
@@ -18,7 +19,7 @@ from typing import Callable
 
 from app.models.base import utcnow
 from app.models.user import ROLE_ADMIN, STATUS_ACTIVE
-from app.observability import security_events
+from app.observability import admin_events, security_events
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, age_on, taipei_today
 from app.services.current_user import CurrentUser
 from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound
@@ -52,6 +53,16 @@ class AccessPolicy:
     def is_admin(self, user: CurrentUser) -> bool:
         """只有角色為 admin 且帳號啟用中才是管理員。"""
         return user.role == ROLE_ADMIN and user.status == STATUS_ACTIVE
+
+    def require_admin(self, user: CurrentUser) -> None:
+        """所有後台功能的唯一入口：不是「角色為 `admin` 且帳號為 `active`」就以 `NotFound`（404）拒絕。
+
+        與資源不存在完全相同的回應，不洩漏後台存在（與「非擁有者一律 404」同一個原則），會員等級也不影響。
+        每次被拒絕記錄一筆只含內部使用者編號的事件，可用來察覺有人在試探後台。
+        """
+        if not self.is_admin(user):
+            admin_events.log_access_denied(user_id=user.id)
+            raise NotFound()
 
     def is_owner(self, user: CurrentUser, owner_id: int | None) -> bool:
         return owner_id is not None and user.id == owner_id

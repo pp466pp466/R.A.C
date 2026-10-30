@@ -6,7 +6,7 @@ import pytest
 from app.models.user import MEMBER_TIERS
 from app.services.chat_service import MAX_MESSAGE_CHARS
 from app.services.quota_policy import (
-    RATE_WINDOW, TIER_LIMITS, TierLimits, limits_for, taipei_day_bounds, tier_facts,
+    RATE_WINDOW, TIER_LIMITS, TierLimits, limits_for, suspension_until, taipei_day_bounds, tier_facts,
 )
 
 UTC = timezone.utc
@@ -45,6 +45,38 @@ def test_tier_facts_state_every_number_of_the_table():
         for number in (limits.daily_turns, limits.per_minute, limits.conversations):
             assert f"{tier} {number}" in text
     assert f"{MAX_MESSAGE_CHARS} 字" in text                    # 單則訊息上限與聊天輸入驗證用的是同一個數字
+
+
+# ---- 暫停規則（客服與後台共用）-----------------------------------------------------------------
+
+NOW_UTC = datetime(2026, 10, 29, 4, 0, tzinfo=UTC)
+
+
+def test_fewer_than_three_blocks_never_suspend():
+    for count in (0, 1, 2):
+        assert suspension_until(count, NOW_UTC - timedelta(minutes=1), NOW_UTC) is None
+
+
+def test_three_blocks_suspend_until_one_hour_after_the_latest_one():
+    latest = NOW_UTC - timedelta(minutes=10)
+    assert suspension_until(3, latest, NOW_UTC) == latest + timedelta(hours=1)
+    assert suspension_until(7, latest, NOW_UTC) == latest + timedelta(hours=1)
+
+
+def test_the_suspension_ends_exactly_one_hour_after_the_latest_block():
+    latest = NOW_UTC - timedelta(hours=1)
+    assert suspension_until(3, latest, NOW_UTC) is None                                  # 剛好滿一小時：解除
+    assert suspension_until(3, latest + timedelta(seconds=1), NOW_UTC) == latest + timedelta(hours=1, seconds=1)
+
+
+def test_a_block_after_the_suspension_ended_suspends_again():
+    assert suspension_until(4, NOW_UTC - timedelta(minutes=1), NOW_UTC) == NOW_UTC + timedelta(minutes=59)
+
+
+def test_without_a_latest_time_there_is_no_suspension_and_naive_times_are_utc():
+    assert suspension_until(5, None, NOW_UTC) is None
+    naive_latest = datetime(2026, 10, 29, 3, 50)
+    assert suspension_until(3, naive_latest, NOW_UTC.replace(tzinfo=None)) == datetime(2026, 10, 29, 4, 50, tzinfo=UTC)
 
 
 # ---- 台灣日界 ------------------------------------------------------------------------------

@@ -13,6 +13,8 @@ from sqlalchemy.orm import Session
 from app.config import AppConfig, LlmSettings, UsageSettings
 from app.db.session import defer_until_commit, get_session, keep_changes_on_error
 from app.llm.types import LLMProvider
+from app.repositories.admin_audit_repository import AdminAuditRepository
+from app.repositories.admin_repository import AdminRepository
 from app.repositories.auth_token_repository import AuthTokenRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
@@ -25,6 +27,7 @@ from app.runtime import (
     get_session_factory,
 )
 from app.services.access_policy import AccessPolicy
+from app.services.admin_service import AdminService
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.account_retention_service import AccountRetentionService
 from app.services.age_stats_service import AgeStatsService
@@ -204,6 +207,22 @@ def get_chat_service() -> ChatService:
         chats=ChatRepository(session), llm=llm, policy=get_access_policy(), usage=get_usage_service(), clock=get_clock(),
         commit=session.commit, rollback=session.rollback, marker=marker,
         after_reply=_summary_registrar(marker) if llm is not None else None,
+    )
+
+
+def get_admin_service() -> AdminService:
+    """目前請求的後台 Service。後台專用的 Repository 只在這裡組裝（見 tests/architecture/test_admin_boundaries.py）。
+
+    重新輸入密碼用 `AuthService.confirm_password`（與登入共用失敗計數與鎖定）；`persist_on_error` 讓 4xx 的回應仍保留
+    「密碼失敗的計數」與「`reauth.failed` 稽核」，與登入失敗同一個機制。
+    """
+    session = get_session()
+    config = get_config()
+    return AdminService(
+        policy=get_access_policy(), admins=AdminRepository(session), audit=AdminAuditRepository(session),
+        usage=get_usage_service(), age_stats=build_age_stats_service(session, age_policy=get_age_policy()),
+        usage_settings=config.usage, email_verification_required=config.email_verification_required,
+        confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
     )
 
 

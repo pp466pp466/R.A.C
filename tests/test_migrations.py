@@ -22,6 +22,7 @@ AGE_COLUMNS = ("age_confirmed_at", "age_policy_version")
 BIRTHDATE_COLUMNS = ("birth_date", "age_range", "is_adult_at_confirmation")
 TOMBSTONE_TABLE = "deletion_tombstones"
 CHAT_TABLES = ("chat_conversations", "chat_messages", "llm_call_logs")
+ADMIN_TABLES = ("admin_audit_logs",)
 
 
 def alembic_config(url: str) -> Config:
@@ -43,7 +44,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -191,6 +192,41 @@ def test_0006_adds_only_two_indexes_and_keeps_every_row(tmp_path):
     engine.dispose()
 
 
+def test_0007_adds_only_the_audit_table_with_one_foreign_key_and_keeps_every_row(tmp_path):
+    """admin-console：只新增 `admin_audit_logs`（expand）；只有 `admin_user_id` 有外鍵（SET NULL），目標只存對外識別碼。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'audit.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0007_admin_audit_logs")
+    assert revision.down_revision == "0006_usage_indexes" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0006_usage_indexes")
+    before_tables = set(inspect(engine).get_table_names())
+    before_columns = {t: {c["name"] for c in inspect(engine).get_columns(t)} for t in (*MEMBER_TABLES, *CHAT_TABLES)}
+    assert not set(ADMIN_TABLES) & before_tables
+
+    command.upgrade(cfg, "0007_admin_audit_logs")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(ADMIN_TABLES)
+    assert {t: {c["name"] for c in inspector.get_columns(t)} for t in before_columns} == before_columns
+    columns = {c["name"]: c for c in inspector.get_columns("admin_audit_logs")}
+    assert set(columns) == {
+        "id", "admin_user_id", "action", "target_user_public_id", "target_conversation_public_id", "reason", "detail_json", "created_at",
+    }
+    assert columns["admin_user_id"]["nullable"] and columns["target_user_public_id"]["nullable"] and not columns["action"]["nullable"]
+    keys = inspector.get_foreign_keys("admin_audit_logs")
+    assert [(k["constrained_columns"], k["referred_table"], (k.get("options") or {}).get("ondelete", "").upper()) for k in keys] == [
+        (["admin_user_id"], "users", "SET NULL")
+    ]
+    assert {i["name"] for i in inspector.get_indexes("admin_audit_logs")} == {
+        "ix_admin_audit_logs_created_at", "ix_admin_audit_logs_admin_user_id_created_at",
+    }
+
+    command.downgrade(cfg, "0006_usage_indexes")
+    assert set(inspect(engine).get_table_names()) == before_tables
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -229,7 +265,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):

@@ -1,0 +1,348 @@
+{% extends "base.html" %}
+{# 管理員後台：Vue 3 全域變數模式。Modal、Toast 的顯示與隱藏完全由 Vue 的響應式變數接管（v-if／v-show）；
+   所有來自使用者或模型的文字以 {{ }} 插值顯示（純文字），不解析任何標記語言。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。 #}
+{% block title %}管理後台{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/admin.css') }}">
+{% endblock %}
+{% block content %}
+<div id="admin-app" class="admin-shell" v-cloak>
+{% raw %}
+  <header class="admin-topbar">
+    <h1 class="admin-topbar__title">管理後台</h1>
+    <span v-if="adminName" class="admin-topbar__who">{{ adminName }}</span>
+    <a class="admin-topbar__link" href="/cs">客服</a>
+    <a class="admin-topbar__link" href="/account">帳號</a>
+  </header>
+
+  <nav class="admin-tabs" role="tablist" aria-label="後台分頁">
+    <button v-for="item in tabs" :key="item.id" type="button" role="tab" class="admin-tab"
+            :class="{ 'admin-tab--active': tab === item.id }" :id="'admin-tab-' + item.id"
+            :aria-selected="tab === item.id ? 'true' : 'false'" aria-controls="admin-panel"
+            @click="selectTab(item.id)">{{ item.label }}</button>
+  </nav>
+
+  <main class="admin-main" id="admin-panel" role="tabpanel" :aria-labelledby="'admin-tab-' + tab">
+
+    <!-- ===== 總覽 ===== -->
+    <section v-if="tab === 'overview'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">總覽</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reloadOverview" :disabled="overviewState.loading">重新整理</button>
+      </div>
+      <p v-if="overviewState.loading && !overview" class="admin-hint" role="status">載入中…</p>
+      <p v-if="overviewState.error" class="admin-error" role="alert">
+        {{ overviewState.error }}
+        <button type="button" class="admin-link-btn" @click="reloadOverview">重試</button>
+      </p>
+
+      <template v-if="overview">
+        <button type="button" class="admin-card admin-warning" :class="'admin-warning--' + warningLevel" @click="selectTab('flagged')">
+          <span class="admin-card__title">今日警告</span>
+          <span class="admin-stats">
+            <span class="admin-stat">
+              <span class="admin-stat__value">{{ fmt.count(overview.warnings.blocked_calls) }}</span>
+              <span class="admin-stat__label">被安全過濾擋下的呼叫</span>
+            </span>
+            <span class="admin-stat">
+              <span class="admin-stat__value">{{ fmt.count(overview.warnings.blocked_users) }}</span>
+              <span class="admin-stat__label">被擋的使用者</span>
+            </span>
+            <span class="admin-stat">
+              <span class="admin-stat__value">{{ fmt.count(overview.warnings.suspended_users) }}</span>
+              <span class="admin-stat__label">客服對話暫停中</span>
+            </span>
+          </span>
+          <span class="admin-warning__hint">{{ warningHint }}</span>
+        </button>
+
+        <div class="admin-grid">
+          <article class="admin-card" aria-labelledby="admin-usage-title">
+            <h3 class="admin-card__title" id="admin-usage-title">今日全站用量</h3>
+            <div v-for="row in budgetRows" :key="row.key" class="admin-meter">
+              <div class="admin-meter__head">
+                <span>{{ row.label }}</span>
+                <span>{{ fmt.count(row.used) }} / {{ fmt.count(row.limit) }}（{{ fmt.ratioPercent(row.ratio) }}）</span>
+              </div>
+              <div class="admin-bar" role="progressbar" aria-valuemin="0" aria-valuemax="100"
+                   :aria-valuenow="fmt.ratioWidth(row.ratio)" :aria-label="row.label">
+                <div class="admin-bar__fill" :class="'admin-bar__fill--' + fmt.ratioLevel(row.ratio)" :style="{ width: fmt.ratioWidth(row.ratio) + '%' }"></div>
+              </div>
+              <p v-if="levelNote(row.ratio)" class="admin-meter__note">{{ levelNote(row.ratio) }}</p>
+            </div>
+          </article>
+
+          <article class="admin-card" aria-labelledby="admin-users-title">
+            <h3 class="admin-card__title" id="admin-users-title">使用者（共 {{ fmt.count(overview.users.total) }} 位）</h3>
+            <p class="admin-subtitle">依狀態</p>
+            <ul class="admin-kv">
+              <li v-for="(value, key) in overview.users.by_status" :key="key"><span>{{ fmt.statusLabel(key) }}</span><span>{{ fmt.count(value) }}</span></li>
+            </ul>
+            <p class="admin-subtitle">依會員等級</p>
+            <ul class="admin-kv">
+              <li v-for="(value, key) in overview.users.by_tier" :key="key"><span>{{ fmt.tierLabel(key) }}</span><span>{{ fmt.count(value) }}</span></li>
+            </ul>
+          </article>
+
+          <article class="admin-card" aria-labelledby="admin-ages-title">
+            <h3 class="admin-card__title" id="admin-ages-title">年齡區間人數</h3>
+            <p class="admin-subtitle">僅有各區間的人數彙總，後台看不到任何個別使用者的生日或年齡。</p>
+            <ul class="admin-kv">
+              <li v-for="item in overview.ages.by_range" :key="item.label"><span>{{ item.label }}</span><span>{{ fmt.count(item.count) }}</span></li>
+              <li><span>尚未完成年齡確認</span><span>{{ fmt.count(overview.ages.not_completed) }}</span></li>
+            </ul>
+          </article>
+        </div>
+
+        <article class="admin-card" aria-labelledby="admin-days-title">
+          <h3 class="admin-card__title" id="admin-days-title">近 7 日用量</h3>
+          <div class="admin-table-wrap">
+            <table class="admin-table">
+              <thead>
+                <tr><th scope="col">日期</th><th scope="col">Token</th><th scope="col">呼叫</th><th scope="col">對話輪數</th><th scope="col">被擋</th></tr>
+              </thead>
+              <tbody>
+                <tr v-for="(day, index) in overview.usage.days" :key="day.date">
+                  <th scope="row">{{ fmt.shortDate(day.date) }}<span v-if="index === overview.usage.days.length - 1" class="admin-today">今天</span></th>
+                  <td>
+                    <span class="admin-minibar" aria-hidden="true"><span class="admin-minibar__fill" :style="{ width: tokenWidth(day) + '%' }"></span></span>
+                    {{ fmt.count(day.tokens) }}
+                  </td>
+                  <td>{{ fmt.count(day.calls) }}</td>
+                  <td>{{ fmt.count(day.turns) }}</td>
+                  <td>{{ fmt.count(day.blocked_calls) }}</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="admin-subtitle">日期以台灣時間計算。</p>
+        </article>
+      </template>
+    </section>
+
+    <!-- ===== 被標記對話 ===== -->
+    <section v-if="tab === 'flagged'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">被標記對話</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reload('flagged')" :disabled="lists.flagged.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">這些對話曾被內容安全過濾擋下。先讀對話，再決定是否刪除內容或停權；每次讀取都會留下稽核紀錄。</p>
+      <ul class="admin-rows" v-if="lists.flagged.items.length">
+        <li v-for="row in lists.flagged.items" :key="row.conversation" class="admin-row" :class="{ 'admin-row--critical': suspensionNote(row.user_chat_suspended_until) }">
+          <div class="admin-row__main">
+            <p class="admin-row__line">
+              <span class="admin-chip">此對話被擋 {{ row.blocked_count }} 次</span>
+              <span class="admin-row__muted">最近 {{ fmt.taipeiDateTime(row.latest_at) }}</span>
+            </p>
+            <p class="admin-row__line">
+              <span class="admin-row__muted">對話</span> <code :title="row.conversation">{{ fmt.shortId(row.conversation) }}</code>
+              <span class="admin-row__muted">使用者</span> <code :title="row.user">{{ fmt.shortId(row.user) }}</code>
+            </p>
+            <p class="admin-row__line">
+              <span>該使用者今日共被擋 {{ row.user_blocked_today }} 次</span>
+              <span v-if="suspensionNote(row.user_chat_suspended_until)" class="admin-chip admin-chip--alert">{{ suspensionNote(row.user_chat_suspended_until) }}</span>
+            </p>
+          </div>
+          <div class="admin-row__actions">
+            <button type="button" class="ui-btn admin-btn-sm" @click="openConversation(row.conversation)">看對話</button>
+            <button type="button" class="ui-btn admin-btn-sm" @click="openUserById(row.user)">看使用者</button>
+          </div>
+        </li>
+      </ul>
+      <admin-list-foot :list="lists.flagged" empty-text="目前沒有被標記的對話。" @retry="reload('flagged')" @more="loadMore('flagged')"></admin-list-foot>
+    </section>
+
+    <!-- ===== 意見回饋 ===== -->
+    <section v-if="tab === 'feedback'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">意見回饋</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reload('feedback')" :disabled="lists.feedback.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">客服告訴使用者「管理員會看到」的對話（意見回饋，或使用者要求真人客服）。清單只有次數與時間，讀取全文才會留下稽核紀錄。</p>
+      <ul class="admin-rows" v-if="lists.feedback.items.length">
+        <li v-for="row in lists.feedback.items" :key="row.conversation" class="admin-row">
+          <div class="admin-row__main">
+            <p class="admin-row__line">
+              <span class="admin-chip">{{ row.count }} 則回饋回覆</span>
+              <span class="admin-row__muted">最近 {{ fmt.taipeiDateTime(row.latest_at) }}</span>
+            </p>
+            <p class="admin-row__line">
+              <span class="admin-row__muted">對話</span> <code :title="row.conversation">{{ fmt.shortId(row.conversation) }}</code>
+              <span class="admin-row__muted">使用者</span> <code :title="row.user">{{ fmt.shortId(row.user) }}</code>
+            </p>
+          </div>
+          <div class="admin-row__actions">
+            <button type="button" class="ui-btn admin-btn-sm" @click="openConversation(row.conversation)">看對話</button>
+            <button type="button" class="ui-btn admin-btn-sm" @click="openUserById(row.user)">看使用者</button>
+          </div>
+        </li>
+      </ul>
+      <admin-list-foot :list="lists.feedback" empty-text="目前沒有意見回饋對話。" @retry="reload('feedback')" @more="loadMore('feedback')"></admin-list-foot>
+    </section>
+
+    <!-- ===== 使用者 ===== -->
+    <section v-if="tab === 'users'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">使用者</h2>
+      </div>
+      <div class="admin-card">
+        <h3 class="admin-card__title">以信箱查詢（供客服反應時使用）</h3>
+        <p class="admin-hint">例如使用者來信要求調整會員等級。平常請從「被標記對話」或「意見回饋」進入。每次查詢都會留下稽核紀錄；後台不提供使用者清單。</p>
+        <form class="admin-lookup" @submit.prevent="lookupUser" novalidate>
+          <label for="admin-lookup-email" class="admin-visually-hidden">使用者的電子郵件</label>
+          <input id="admin-lookup-email" class="admin-input" type="text" inputmode="email" autocomplete="off" maxlength="254"
+                 v-model="lookup.email" placeholder="使用者的電子郵件">
+          <button type="submit" class="ui-btn ui-btn--primary" :disabled="lookup.loading || !lookup.email.trim()">查詢</button>
+        </form>
+        <p v-if="lookup.error" class="admin-field-error" role="alert">{{ lookup.error }}</p>
+      </div>
+      <p v-if="lookup.loading" class="admin-hint" role="status">載入中…</p>
+
+      <article v-if="user" class="admin-card admin-user" aria-labelledby="admin-user-title">
+        <div class="admin-section-head">
+          <h3 class="admin-card__title" id="admin-user-title">{{ user.display_name }}</h3>
+          <button type="button" class="ui-btn admin-btn-sm" @click="refreshUser" :disabled="lookup.loading">重新整理</button>
+        </div>
+        <dl class="admin-facts">
+          <div class="admin-fact"><dt>識別碼</dt><dd><code>{{ user.public_id }}</code></dd></div>
+          <div class="admin-fact"><dt>電子郵件</dt><dd>{{ user.email }}<span v-if="!user.email_verified" class="admin-row__muted">（未驗證）</span></dd></div>
+          <div class="admin-fact"><dt>角色</dt><dd>{{ fmt.roleLabel(user.role) }}</dd></div>
+          <div class="admin-fact"><dt>狀態</dt><dd><span class="admin-chip" :class="{ 'admin-chip--alert': user.status === 'suspended' }">{{ fmt.statusLabel(user.status) }}</span></dd></div>
+          <div class="admin-fact"><dt>會員等級</dt><dd>{{ fmt.tierLabel(user.tier) }}</dd></div>
+          <div class="admin-fact"><dt>建立時間</dt><dd>{{ fmt.taipeiDateTime(user.created_at) }}</dd></div>
+          <div class="admin-fact"><dt>最後登入</dt><dd>{{ fmt.taipeiDateTime(user.last_login_at) }}</dd></div>
+          <div class="admin-fact"><dt>今日對話</dt><dd>{{ user.usage.daily.used }} / {{ user.usage.daily.limit }} 輪</dd></div>
+          <div class="admin-fact"><dt>對話數</dt><dd>{{ user.usage.conversations.count }} / {{ user.usage.conversations.limit }}</dd></div>
+        </dl>
+        <p v-if="suspensionNote(user.usage.suspended_until)" class="admin-chip admin-chip--alert">{{ suspensionNote(user.usage.suspended_until) }}</p>
+
+        <p v-if="userNote" class="admin-hint">{{ userNote }}</p>
+        <div class="admin-actions">
+          <button v-if="userActions.suspend" type="button" class="ui-btn admin-btn--danger" @click="askSuspend">停權</button>
+          <button v-if="userActions.unsuspend" type="button" class="ui-btn" @click="askUnsuspend">解除停權</button>
+          <button v-if="userActions.tier" type="button" class="ui-btn" @click="askTier">調整會員等級</button>
+        </div>
+      </article>
+    </section>
+
+    <!-- ===== 模型失敗 ===== -->
+    <section v-if="tab === 'failures'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">模型失敗</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reload('failures')" :disabled="lists.failures.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">最近 14 天模型輸出驗證失敗的原文（最多 100 筆）。每次讀取都會寫入稽核紀錄，請只在需要時查看。</p>
+      <ul class="admin-rows" v-if="lists.failures.items.length">
+        <li v-for="(item, index) in lists.failures.items" :key="index" class="admin-row admin-row--block">
+          <p class="admin-row__line">
+            <span class="admin-chip">{{ fmt.kindLabel(item.kind) }}</span>
+            <span class="admin-row__muted">{{ fmt.taipeiDateTime(item.created_at) }}</span>
+            <span class="admin-row__muted">模型 {{ item.model || '—' }}</span>
+          </p>
+          <pre class="admin-pre">{{ item.detail }}</pre>
+        </li>
+      </ul>
+      <admin-list-foot :list="lists.failures" empty-text="最近 14 天沒有模型輸出驗證失敗的紀錄。" @retry="reload('failures')" @more="loadMore('failures')"></admin-list-foot>
+    </section>
+
+    <!-- ===== 稽核 ===== -->
+    <section v-if="tab === 'audit'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">稽核紀錄</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reload('audit')" :disabled="lists.audit.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">由新到舊。稽核紀錄只能新增與檢視，無法修改或刪除；不記錄信箱與訊息內容。</p>
+      <ul class="admin-rows" v-if="lists.audit.items.length">
+        <li v-for="entry in lists.audit.items" :key="entry.id" class="admin-row admin-row--block">
+          <p class="admin-row__line">
+            <span class="admin-chip">{{ fmt.actionLabel(entry.action) }}</span>
+            <span class="admin-row__muted">{{ fmt.taipeiDateTime(entry.created_at) }}</span>
+            <span class="admin-row__muted">管理員：{{ entry.admin || '（已刪除的管理員）' }}</span>
+          </p>
+          <p v-if="entry.target_user || entry.target_conversation" class="admin-row__line">
+            <template v-if="entry.target_user"><span class="admin-row__muted">使用者</span> <code :title="entry.target_user">{{ fmt.shortId(entry.target_user) }}</code></template>
+            <template v-if="entry.target_conversation"><span class="admin-row__muted">對話</span> <code :title="entry.target_conversation">{{ fmt.shortId(entry.target_conversation) }}</code></template>
+          </p>
+          <p v-if="fmt.auditDetailText(entry.action, entry.detail)" class="admin-row__line">{{ fmt.auditDetailText(entry.action, entry.detail) }}</p>
+          <p v-if="entry.reason" class="admin-row__line"><span class="admin-row__muted">原因</span> {{ entry.reason }}</p>
+        </li>
+      </ul>
+      <admin-list-foot :list="lists.audit" empty-text="還沒有稽核紀錄。" @retry="reload('audit')" @more="loadMore('audit')"></admin-list-foot>
+    </section>
+  </main>
+
+  <!-- 對話全文（純文字）-->
+  <ui-modal v-model="convOpen" title="對話內容" status-code="ADMIN_READ_CONVERSATION">
+    <div class="admin-conv">
+      <p v-if="conv.loading" class="admin-hint" role="status">載入中…</p>
+      <p v-if="conv.error" class="admin-field-error" role="alert">{{ conv.error }}</p>
+      <template v-if="conv.data">
+        <p class="admin-row__line">
+          <span v-if="conv.data.conversation.is_flagged" class="admin-chip admin-chip--alert">被標記</span>
+          <span v-if="conv.data.conversation.is_feedback" class="admin-chip">意見回饋</span>
+          <span class="admin-row__muted">對話</span> <code :title="conv.data.conversation.id">{{ fmt.shortId(conv.data.conversation.id) }}</code>
+          <span class="admin-row__muted">使用者</span> <code :title="conv.data.conversation.user">{{ fmt.shortId(conv.data.conversation.user) }}</code>
+        </p>
+        <div class="admin-conv__messages" role="log" aria-label="對話訊息">
+          <article v-for="message in conv.data.messages" :key="message.seq" class="admin-msg" :class="'admin-msg--' + message.role">
+            <p class="admin-msg__meta">
+              {{ fmt.messageRoleLabel(message.role) }} · {{ fmt.taipeiDateTime(message.created_at) }}
+              <span v-if="message.msg_status !== 'ok'">· {{ fmt.messageStatusLabel(message.msg_status) }}</span>
+            </p>
+            <p class="admin-msg__text">{{ message.content }}</p>
+          </article>
+        </div>
+        <p v-if="conv.data.has_more" class="admin-hint">只顯示前 {{ conv.data.messages.length }} 則訊息。</p>
+      </template>
+    </div>
+    <template #actions>
+      <button v-if="conv.data" type="button" class="ui-btn" @click="viewConversationUser">看使用者</button>
+      <button v-if="conv.data" type="button" class="ui-btn admin-btn--danger" @click="askDeleteConversation">刪除對話</button>
+      <button type="button" class="ui-btn ui-btn--primary" @click="convOpen = false">關閉</button>
+    </template>
+  </ui-modal>
+
+  <!-- 危險操作共用的確認視窗：原因（需要時）與密碼；密碼送出或取消後立即清空，不存進任何儲存體 -->
+  <ui-modal v-model="confirmOpen" :title="confirmSpec.title" :status-code="confirmSpec.code" :confirm-text="confirmSpec.confirmText"
+            :close-on-confirm="false" @confirm="submitConfirm">
+    <p>{{ confirmSpec.intro }}</p>
+    <p class="admin-target">對象：{{ confirmState.targetLabel }}</p>
+
+    <div v-if="confirmSpec.needsTier" class="admin-field">
+      <label for="admin-confirm-tier" class="admin-label">新的會員等級</label>
+      <select id="admin-confirm-tier" class="admin-input" v-model="confirmState.tier">
+        <option v-for="option in tierOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+      </select>
+      <p v-if="confirmState.error.tier" class="admin-field-error" role="alert">{{ confirmState.error.tier }}</p>
+    </div>
+
+    <div v-if="confirmSpec.needsReason" class="admin-field">
+      <label for="admin-confirm-reason" class="admin-label">原因（必填，最多 {{ maxReason }} 字，請勿填寫個人資料）</label>
+      <input id="admin-confirm-reason" class="admin-input" type="text" :maxlength="maxReason" autocomplete="off"
+             v-model="confirmState.reason" @keydown.enter="onConfirmEnter">
+      <p class="admin-counter">{{ confirmState.reason.length }} / {{ maxReason }}</p>
+      <p v-if="confirmState.error.reason" class="admin-field-error" role="alert">{{ confirmState.error.reason }}</p>
+    </div>
+
+    <div class="admin-field">
+      <label for="admin-confirm-password" class="admin-label">請輸入您的密碼以確認</label>
+      <input id="admin-confirm-password" class="admin-input" type="password" autocomplete="off"
+             v-model="confirmState.password" @keydown.enter="onConfirmEnter">
+      <p v-if="confirmState.error.password" class="admin-field-error" role="alert">{{ confirmState.error.password }}</p>
+    </div>
+
+    <p v-if="confirmState.error.general" class="admin-field-error" role="alert">{{ confirmState.error.general }}</p>
+    <p v-if="confirmState.busy" class="admin-hint" role="status">處理中…</p>
+  </ui-modal>
+
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
+</div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取。只有管理員自己的顯示名稱。 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/admin/admin-format.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/admin/admin.js') }}"></script>
+{% endblock %}

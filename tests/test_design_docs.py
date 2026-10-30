@@ -154,7 +154,10 @@ def test_the_entity_relationship_diagram_declares_every_table():
 # ---- 端點 --------------------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("prefix, doc", [("/api/auth/", "帳號與安全-auth-security.md"), ("/api/cs/", "客服對話-chat-service.md")])
+@pytest.mark.parametrize(
+    "prefix, doc",
+    [("/api/auth/", "帳號與安全-auth-security.md"), ("/api/cs/", "客服對話-chat-service.md"), ("/api/admin/", "帳號與安全-auth-security.md")],
+)
 def test_every_api_route_appears_in_its_design_doc(app, prefix, doc):
     text = read(doc)
     rules = [rule for rule in app.url_map.iter_rules() if rule.rule.startswith(prefix)]
@@ -165,7 +168,7 @@ def test_every_api_route_appears_in_its_design_doc(app, prefix, doc):
 def test_the_pages_are_mentioned_in_the_docs(app):
     text = all_design_text()
     for rule in app.url_map.iter_rules():
-        if rule.endpoint.startswith(("auth_pages.", "cs_pages.")):
+        if rule.endpoint.startswith(("auth_pages.", "cs_pages.", "admin_pages.")):
             assert rule.rule in text, f"設計文件沒有提到頁面 {rule.rule}"
 
 
@@ -217,10 +220,11 @@ def test_the_operations_doc_covers_every_environment_and_every_maintenance_comma
 # ---- 前端 --------------------------------------------------------------------------------------
 
 
-def test_the_frontend_doc_names_every_client_module_of_the_chat_page_and_the_shared_components():
+def test_the_frontend_doc_names_every_client_module_of_the_chat_page_the_admin_console_and_the_shared_components():
     text = read("前端結構-frontend.md")
-    files = sorted(path.name for folder in ("cs", "ui") for path in (APP / "static" / "js" / folder).glob("*.js"))
-    assert len(files) >= 7
+    files = sorted(path.name for folder in ("cs", "ui", "admin") for path in (APP / "static" / "js" / folder).glob("*.js"))
+    assert len(files) >= 9
+    assert {"admin.js", "admin-format.js"} <= set(files)
     assert [name for name in files if name not in text] == [], "前端結構-frontend.md 沒有提到前端檔案"
 
 

@@ -38,8 +38,8 @@ description: 在 OpenSpec 的 propose、apply、archive 之後，或修改架構
 |---|---|
 | 分層、禁止匯入、`create_app` 注入參數、請求生命週期 | `系統架構-architecture.md` |
 | 資料表、欄位、約束、migration、保存與刪除 | `資料模型-data-model.md`（保存期限的實作狀態同步 `營運與部署-operations.md`） |
-| 註冊、登入、session、CSRF、Google、年齡規則、權限、`/api/auth/*` | `帳號與安全-auth-security.md` |
-| `/api/cs/*`、送出流程、冪等、上下文、摘要、降級文案 | `客服對話-chat-service.md` |
+| 註冊、登入、session、CSRF、Google、年齡規則、權限、`/api/auth/*`、`/api/admin/*`、後台的可讀範圍與重新輸入密碼 | `帳號與安全-auth-security.md` |
+| `/api/cs/*`、送出流程、冪等、上下文、摘要、降級文案、管理員可讀的對話範圍 | `客服對話-chat-service.md` |
 | `LlmService`、轉接器、斷路、預算、帳本、提示詞結構、`GEMINI_*`、`LLM_*` | `模型呼叫層-llm-layer.md` |
 | 前端模組、載入順序、Sidebar、暫存與同步 | `前端結構-frontend.md` |
 | 環境、容器、日誌白名單與事件、維運指令、測試與驗收分層 | `營運與部署-operations.md` |

@@ -1,8 +1,8 @@
 # 前端架構
 
-> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-29 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits ｜ 規範依據：AGENTS.md 第 1、2、5、6、7 節
+> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 
-本文件說明前端的資產載入、共用元件、會員頁面與客服頁面的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md)。
+本文件說明前端的資產載入、共用元件、會員頁面、客服頁面與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
 ## 1. 資產與載入順序
 
@@ -15,6 +15,7 @@ flowchart TD
     Ui --> Page{"頁面"}
     Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → 各頁腳本<br/>（login、register、account…）"]
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
+    Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
 ```
 
 - 第三方資產（Vue、Bootstrap CSS、axios、字型）全部在 `static/vendor`、`static/fonts`，**不使用 CDN**；字型為 Noto Sans TC（108 個 `unicode-range` 切片的 woff2）。
@@ -55,6 +56,26 @@ flowchart LR
 - **閘門與 503**：`chat_gate` 不是 `null` 時顯示說明（需補填年齡時附前往帳號設定的連結）並停用輸入；服務暫時無法使用時保留已輸入的文字為待送。
 - **用量**（`GET /api/cs/usage`，邏輯在 `cs-usage.js`）：Sidebar 底部一行顯示「今日剩餘 N 輪」（用完時「今日額度已用完」），每則回覆或被拒絕之後重新讀取；**取得失敗或離線就整行隱藏**，其他功能不受影響，因為真正的限制永遠在後端。暫停期間橫幅顯示恢復時間（台灣時間，固定 UTC+8，不依賴 `Intl`）並停用輸入與「新對話」，到點由計時器自動恢復，不必重新整理。
 - **用量類的拒絕**：每分鐘限制（`rate_limited`）與全站忙碌（`system_busy`）是暫時的，訊息保留為待送、稍後自動重送，並以 toast 說明原因（不是「無法連線」）；今日額度用完、對話暫停、對話數已滿（`daily_quota_exceeded`、`chat_suspended`、`conversation_limit_reached`）短時間內不會成功，訊息標記為無法送出、**不自動重送**並顯示伺服器的說明，使用者可以重試或移除。對話數已滿時，離線建立的對話不可能建立成功，會連同其中的待送一起移除，原因以 toast 說明，輸入的文字留在輸入框。
+
+## 3a. 管理員後台（`/admin`）的模組關係
+
+```mermaid
+flowchart LR
+    Html["templates/admin/console.html<br/>外殼 + initial-state JSON（只有管理員的顯示名稱）"] --> Admin
+    Admin["admin.js<br/>Vue 3 應用：六個分頁、確認視窗、對話全文視窗"]
+    Admin --> Fmt["admin-format.js<br/>台灣時間、中文標籤、用量百分比與警示等級（純函式）"]
+    Admin --> Ui["ui-components.js<br/>Modal 與 Toast"]
+    Admin --> Common["auth-common.js<br/>CSRF 標頭、describeError、登入導向"]
+    Admin --> Api["axios → /api/admin/*"]
+    Admin -.->|"401"| Login["導向 /login?next=/admin"]
+```
+
+- **六個分頁**（依管理員的使用順序）：總覽、被標記對話、意見回饋、使用者、模型失敗、稽核。總覽最上面是可點擊的「今日警告」，點它切到被標記對話；被標記對話與意見回饋的每一列有「看對話」與「看使用者」；「使用者」分頁只有標明「供客服反應時使用」的信箱查詢，沒有使用者清單。
+- **只有純文字**：使用者、模型與管理員填寫的原因一律以 `{{ }}` 輸出，對話內容以 `white-space: pre-wrap` 保留換行；`<script>` 與 `<img onerror>` 字樣逐字顯示，不被解析。
+- **確認視窗共用一個**：停權與刪除對話顯示原因欄位（必填、200 字、提醒勿填個人資料），解除停權與調整等級只有密碼（調整等級另有等級選單，不含目前的等級）。密碼欄位 `type=password`、`autocomplete="off"`，**送出的當下與視窗關閉時立即清空**，不存進任何儲存體；密碼錯誤的訊息顯示在密碼欄位下方。同時只開一個視窗：從對話全文按「刪除對話」會先關掉全文視窗，視窗關閉時全文也從記憶體丟掉。
+- **載入策略**：進入分頁時才載入一次，「重新整理」才重讀；做了會改變資料的操作後，相關分頁標記為過期、下次進入才重新載入。模型失敗每次讀取都會寫稽核，所以不因切換分頁而重複讀取。清單以 `limit=50` 分頁，「載入更多」依已載入的筆數作為起始位置。
+- **錯誤處理**：`Auth.describeError` 整理後端的錯誤；401 導向登入；欄位錯誤（`password`、`reason`、`tier`）顯示在對應欄位，其餘顯示在視窗內；視窗已被關掉時改用 Toast。
+- **版面**：頂欄與分頁列與內容區左右對齊（最大寬度 64rem）；手機寬度時分頁列自己橫向捲動、頁面不會；清單的每一列改為直向排列；用量以長條加百分比與文字說明呈現，**不單靠顏色**（達 80% 長條為琥珀橙並寫明「已達 80% 告警線」）。
 
 ## 4. 暫存、待送與同步
 
@@ -108,10 +129,10 @@ sequenceDiagram
 
 | 層級 | 內容 |
 |---|---|
-| Node 單元測試 | `tests/js/*.test.js`：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式 |
-| 架構掃描 | `tests/architecture/test_frontend_rules.py`、`tests/test_cs_pages.py`：離線規則、逾時不寫死、`v-cloak`、純文字、自製 Modal 與 Toast |
-| 瀏覽器驗收 | Edge 無頭模式（CDP）的整頁驗收，結果與截圖摘要記在 README 的「瀏覽器驗收」 |
+| Node 單元測試 | `tests/js/*.test.js`：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式、後台的顯示邏輯（`admin-format.test.js`：每個列舉值都有標籤、日界、比例邊界）；`tests/test_admin_format_labels.py` 比對前端標籤與後端的列舉 |
+| 架構掃描 | `tests/architecture/test_frontend_rules.py`、`tests/test_cs_pages.py`、`tests/test_admin_page.py`：離線規則、逾時不寫死、`v-cloak`、純文字、自製 Modal 與 Toast；`/admin` 只有外殼與管理員的顯示名稱 |
+| 瀏覽器驗收 | Edge 無頭模式（CDP）的整頁驗收，結果與截圖摘要記在 README 的「瀏覽器驗收」與「管理員後台（C-4b）」 |
 
 ---
 
-**何時更新本文**：新增或改名前端模組與頁面、載入順序、共用元件 API、Sidebar 規則、暫存資料集、同步引擎的停止與重試規則、前端規範改變時。`tests/test_design_docs.py` 會檢查 `static/js/cs/`、`static/js/ui/` 的每個檔案都出現在本文。
+**何時更新本文**：新增或改名前端模組與頁面、載入順序、共用元件 API、Sidebar 規則、暫存資料集、同步引擎的停止與重試規則、前端規範改變時。`tests/test_design_docs.py` 會檢查 `static/js/cs/`、`static/js/ui/`、`static/js/admin/` 的每個檔案都出現在本文。

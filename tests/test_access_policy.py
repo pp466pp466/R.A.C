@@ -295,3 +295,50 @@ def test_not_owner_is_not_found_and_never_forbidden_and_looks_exactly_like_a_mis
 def test_even_an_admin_does_not_bypass_the_owner_check():
     with pytest.raises(NotFound):
         ON.require_owner(member(id=2, role=ROLE_ADMIN), 1)
+
+
+# ---- 後台入口：require_admin（admin-console）------------------------------------------------
+
+ADMIN_EVENT = "admin.access_denied"
+
+
+def test_an_active_admin_passes_the_admin_check_in_both_modes(log_lines):
+    for policy in (ON, OFF):
+        policy.require_admin(member(role=ROLE_ADMIN))
+    assert log_lines() == []
+
+
+@pytest.mark.parametrize("tier", MEMBER_TIERS)
+def test_no_member_tier_makes_a_non_admin_an_admin(tier, log_lines):
+    with pytest.raises(NotFound):
+        ON.require_admin(member(member_tier=tier))
+    assert [line["event"] for line in log_lines()] == [ADMIN_EVENT]
+
+
+@pytest.mark.parametrize("status", [s for s in USER_STATUSES if s != STATUS_ACTIVE])
+def test_an_admin_who_is_not_active_is_refused_like_a_stranger(status):
+    with pytest.raises(NotFound):
+        ON.require_admin(member(role=ROLE_ADMIN, status=status))
+
+
+def test_the_refusal_is_the_same_not_found_as_a_missing_resource():
+    with pytest.raises(NotFound) as refused:
+        ON.require_admin(member())
+    missing = NotFound()
+    assert (refused.value.code, refused.value.message) == (missing.code, missing.message)
+    assert type(refused.value) is NotFound                      # 不是 Forbidden 或其子類別：不能讓後台的存在洩漏出去
+
+
+def test_a_refusal_logs_one_event_with_only_the_internal_id_and_a_fixed_reason(log_lines):
+    with pytest.raises(NotFound):
+        ON.require_admin(member(id=42, email="secret.person@example.com", display_name="秘密人物"))
+    [line] = log_lines()
+    assert {k: v for k, v in line.items() if k not in {"time", "level", "logger", "message"}} == {
+        "event": ADMIN_EVENT, "user_id": 42, "reason": "not_admin",
+    }
+    assert "secret.person" not in str(line) and "秘密人物" not in str(line)
+
+
+def test_the_age_gate_does_not_apply_to_the_admin_check():
+    """後台不呼叫模型：沒有完成年齡確認的管理員仍可使用後台（年齡閘門只擋會呼叫模型的功能）。"""
+    ON.require_admin(member(role=ROLE_ADMIN, age=None))

@@ -6,6 +6,8 @@ from typing import Any
 from flask import request
 from werkzeug.exceptions import BadRequest, UnsupportedMediaType
 
+from app.services.errors import ValidationError
+
 
 def read_json_object() -> dict[str, Any]:
     """讀取請求本文，要求是 JSON 且最外層為物件。
@@ -21,3 +23,14 @@ def read_json_object() -> dict[str, Any]:
     if not isinstance(data, dict):
         raise BadRequest()
     return data
+
+
+def int_arg(name: str, default: int) -> int:
+    """讀取查詢參數的整數；沒給或空字串用預設值，不是整數回 400 並指出是哪個欄位。範圍由 Service 驗證。"""
+    raw = request.args.get(name)
+    if raw is None or raw == "":
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        raise ValidationError(fields={name: "必須是整數。"}) from None

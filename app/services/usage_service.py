@@ -26,9 +26,7 @@ from app.services.current_user import CurrentUser
 from app.services.errors import (
     ChatSuspended, ConversationLimitReached, DailyQuotaExceeded, RateLimited, SystemBusy,
 )
-from app.services.quota_policy import (
-    BUDGET_WARNING_RATIO, RATE_WINDOW, SAFETY_BLOCK_LIMIT, SAFETY_SUSPENSION, limits_for, taipei_day_bounds,
-)
+from app.services.quota_policy import BUDGET_WARNING_RATIO, RATE_WINDOW, limits_for, suspension_until, taipei_day_bounds
 
 
 @dataclass(frozen=True)
@@ -84,16 +82,12 @@ class UsageService:
     def suspended_until(self, user: CurrentUser) -> datetime | None:
         """今日（台灣日）對話呼叫被安全過濾阻擋達 3 次，暫停到最近一次被擋的時間加 1 小時；沒有暫停為 None。
 
-        暫停期間請求在呼叫模型之前就被拒絕，不會再產生新的被擋紀錄，所以「最近一次加 1 小時」到期後自然解除；
-        期滿後若再被擋，最近一次更新，等於再次暫停。摘要呼叫被擋不計入（由 Repository 的條件排除）。
+        規則本身在 `quota_policy.suspension_until`（後台的被標記清單共用同一份）。摘要呼叫被擋不計入（由 Repository 的條件排除）。
         """
         now = self._clock()
         start, end = taipei_day_bounds(now)
         count, latest = self._ledger.blocked_chat_calls(user.id, start=start, end=end)
-        if count < SAFETY_BLOCK_LIMIT or latest is None:
-            return None
-        until = _aware(latest) + SAFETY_SUSPENSION
-        return until if now < until else None
+        return suspension_until(count, latest, now)
 
     def record_block_outcome(self, user: CurrentUser) -> None:
         """一則訊息剛因安全過濾被擋：若因此達到暫停門檻就記錄事件。必須在帳本的那一列提交之後呼叫。"""

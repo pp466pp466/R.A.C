@@ -305,6 +305,39 @@ class AuthService:
         return CurrentUser.from_model(user)
 
     # =========================================================================
+    # 重新輸入密碼（危險操作的二次確認）
+    # =========================================================================
+
+    def confirm_password(self, current: CurrentUser, password: object) -> None:
+        """已登入者以自己的密碼確認一個危險操作（後台的停權、調整等級、刪除對話……）。通過就回傳，否則拋出錯誤。
+
+        - 沒有設定密碼（只靠 Google 的帳號）→ `ValidationError`，代碼 `no_password`。
+        - 缺少或不正確 → `ValidationError`，欄位 `password`。**與登入共用失敗計數與鎖定**（連續 5 次鎖定 15 分鐘），
+          所以這個確認不會成為暴力猜測密碼的捷徑。鎖定中即使密碼正確也一律拒絕，且不洩漏是否被鎖定（同一個訊息）。
+        - 成功**不**重設失敗計數：只有登入成功才重設，否則攻擊者可以交錯一次正確與多次錯誤。
+        - 不改變 `token_version` 與登入狀態。
+        """
+        user = self._require_user(current)
+        if not user.password_hash:
+            raise ValidationError("目前的帳號沒有設定密碼，無法執行這個操作。", code="no_password")
+        if not isinstance(password, str) or not password:
+            raise ValidationError(fields={"password": "請輸入您的密碼。"})
+
+        now = self._clock()
+        if user.locked_until is not None and user.locked_until <= now:
+            self._users.release_expired_lock(user, now=now)           # 鎖定已到期：開啟新的計數週期（與登入相同）
+        locked = user.locked_until is not None and user.locked_until > now
+        matched = (
+            not locked
+            and len(normalize_password(password)) <= MAX_PASSWORD_LENGTH
+            and self._hasher.verify(user.password_hash, password)
+        )
+        if not matched:
+            if not locked:
+                self._count_failure(user, now)
+            raise ValidationError(fields={"password": "密碼不正確，操作未執行。"})
+
+    # =========================================================================
     # 管理員
     # =========================================================================
 

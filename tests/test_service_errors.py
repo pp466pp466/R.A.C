@@ -147,6 +147,7 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "NotFound": 404, "Conflict": 409, "ConversationBusy": 409, "MessageIdReused": 409, "VersionConflict": 409,
         "TooManyRequests": 429, "ServiceUnavailable": 503,
         "RateLimited": 429, "DailyQuotaExceeded": 429, "ConversationLimitReached": 409, "ChatSuspended": 403, "SystemBusy": 503,
+        "AdminTargetForbidden": 403,
     }
     made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
     assert made == expected

@@ -1,8 +1,8 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（帳號刪除與管理員後台由 C-4 實作） ｜ 最後更新：2026-10-29 ｜ 對應 change：member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼） ｜ 規範依據：AGENTS.md 第 10、11 節
 
-本文件說明會員如何註冊、驗證、登入，年齡如何決定能做什麼，以及權限如何集中判斷。端點的完整清單見本文第 6 節；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
+本文件說明會員如何註冊、驗證、登入，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
 ## 1. 帳號狀態
 
@@ -11,8 +11,9 @@ stateDiagram-v2
     [*] --> pending_verification : 註冊（信箱驗證開啟）
     [*] --> active : 註冊（信箱驗證關閉）或 flask create-admin
     pending_verification --> active : 信箱驗證完成
-    active --> suspended : 管理員停權（C-4）
-    suspended --> active : 管理員解除（C-4）
+    active --> suspended : 管理員停權（token_version 加 1）
+    pending_verification --> suspended : 管理員停權
+    suspended --> active : 管理員解除（信箱驗證開啟而從未驗證者回 pending_verification）
     active --> deletion_pending : 使用者申請刪除（C-4）
     deletion_pending --> active : 7 天內撤銷
     deletion_pending --> [*] : 期滿由排程刪除
@@ -135,7 +136,8 @@ flowchart TD
 |---|---|
 | 非擁有者存取資源 | 一律 `NotFound`（404），與不存在的回應逐字相同 |
 | 會員等級 | 只影響額度，不參與任何權限判斷 |
-| 管理員存取他人資料 | 一般端點與一般使用者相同（404）；將來走專用 Repository 方法並寫稽核紀錄（C-4） |
+| 管理員存取他人資料 | 一般端點與一般使用者相同（404）；只有 `/api/admin/*` 能讀他人的內容，走後台專用的 Repository、每次都寫稽核（見第 7 節） |
+| 是否為管理員 | `AccessPolicy.require_admin(user)`：不是 `admin` 或帳號不是 `active` 就記錄 `admin.access_denied` 並拋出 `NotFound`（404）；後台的唯一入口 |
 | 權限測試 | `tests/support/idor.py` 依序以「他人、不存在、未登入、擁有者」檢查每個帶識別碼的端點 |
 
 `/api/auth/*` 端點（全部需 CSRF；「登入」欄指是否需要已登入）：
@@ -157,12 +159,60 @@ flowchart TD
 
 頁面：`/login`、`/register`、`/forgot-password`、`/reset-password`、`/verify-email`、`/account`、`/terms`、`/privacy`、`/auth/google/callback`。
 
-## 7. 個資與保存
+## 7. 管理員後台的存取（C-4b）
 
-- 生日與年齡區間：不進 API 回應、日誌與模型；管理員只看年齡區間的彙總統計（`flask age-stats`）。
+後台是高權限的攻擊面，所以重點是**可讀範圍小、每個操作可追溯、危險操作要重新輸入密碼**。業務邏輯在 `AdminService`，控制器只呼叫它（分層規則見 [系統架構-architecture.md](系統架構-architecture.md) 的第 2 節）。
+
+```mermaid
+flowchart TD
+    Req["請求 /admin 或 /api/admin/*"] --> Login{"已登入？"}
+    Login -->|"否"| L401["API：401<br/>頁面：導向 /login?next=/admin"]
+    Login -->|"是"| Admin{"require_admin<br/>角色 admin 且帳號 active？"}
+    Admin -->|"否"| N404["404（與不存在的路徑逐字相同）<br/>記錄 admin.access_denied（只有內部編號）"]
+    Admin -->|"是"| Kind{"操作種類"}
+    Kind -->|"讀取：總覽、清單、查詢、對話全文、失敗原文"| Read["先寫稽核再回傳內容<br/>稽核寫入失敗就不回傳"]
+    Kind -->|"危險：停權、解除、調整等級、刪除對話"| Pw["confirm_password<br/>管理員自己的密碼"]
+    Pw -->|"錯誤或鎖定"| Fail["400，欄位 password<br/>寫 reauth.failed 並保存"]
+    Pw -->|"通過"| Do["條件式 UPDATE 或刪除<br/>稽核與動作同一個交易"]
+```
+
+| 規則 | 行為 |
+|---|---|
+| 非管理員 | 一律 404，不是 403（否則會告訴一般使用者後台存在）；順序是「登入 → 管理員檢查 → 才解析請求本文」，所以格式錯誤的本文也只得到 404 |
+| 可讀範圍 | 清單沒有訊息內容；只有「意見回饋」（助理回覆的意圖是 `complaint_feedback` 或 `human_handoff`）與「被內容安全過濾標記」兩類對話可讀全文，不符資格與不存在得到同一個 404；使用者資料沒有任何個別的年齡資料，年齡只有總覽的區間人數 |
+| 找使用者 | 主要入口是警告（總覽的今日警告 → 被標記對話 → 看使用者）；信箱精確查詢是次要入口、供客服反應時使用；沒有使用者清單與模糊搜尋 |
+| 重新輸入密碼 | `AuthService.confirm_password`：與登入共用失敗計數與鎖定（連續 5 次鎖定 15 分鐘），鎖定中即使正確也拒絕且訊息相同；成功不重設計數；沒有設定密碼的管理員不能執行（`no_password`） |
+| 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
+| 稽核 | `admin_audit_logs`：8 個固定動作，只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
+| 回應 | `/admin` 與 `/api/admin/` 一律 `Cache-Control: no-store`；非 GET 須通過 CSRF |
+
+`/api/admin/*` 端點（全部需要登入且是管理員；`POST` 另需 CSRF）：
+
+| 端點 | 方法 | 用途 |
+|---|---|---|
+| `/api/admin/overview` | GET | 總覽與今日警告的三個計數（只有彙總） |
+| `/api/admin/audit` | GET | 稽核紀錄，由新到舊 |
+| `/api/admin/users/lookup` | POST | 以信箱查詢使用者（次要入口，信箱在本文） |
+| `/api/admin/users/<public_id>` | GET | 以對外識別碼檢視使用者 |
+| `/api/admin/users/<public_id>/suspend` | POST | 停權（原因與密碼） |
+| `/api/admin/users/<public_id>/unsuspend` | POST | 解除停權（密碼） |
+| `/api/admin/users/<public_id>/tier` | POST | 調整會員等級（密碼） |
+| `/api/admin/feedback` | GET | 意見回饋對話清單 |
+| `/api/admin/flagged` | GET | 被標記對話清單（帶今日被擋次數與暫停截止時間） |
+| `/api/admin/conversations/<public_id>` | GET | 讀取可讀對話的全文（最多 200 則） |
+| `/api/admin/conversations/<public_id>/delete` | POST | 刪除整個對話（原因與密碼） |
+| `/api/admin/failures` | GET | 最近 14 天模型輸出驗證失敗的原文 |
+
+頁面：`/admin`（只有管理員的顯示名稱，所有資料經由 API 取得；前端見 [前端結構-frontend.md](前端結構-frontend.md)）。
+
+已知取捨：被盜用的管理員登入狀態可以不輸入密碼讀取兩類對話（每次都有稽核，要加強只需讓「讀全文」也要求密碼）；管理員輸入錯誤密碼也累積登入的失敗計數，連續 5 次會把自己鎖定 15 分鐘（刻意，讓後台不成為暴力猜測的捷徑）。完整清單見 README 的「管理員後台（C-4b）」。
+
+## 8. 個資與保存
+
+- 生日與年齡區間：不進 API 回應、日誌與模型；管理員只看年齡區間的彙總統計（`flask age-stats` 與後台總覽），後台看不到任何個別使用者的生日、年齡區間或年齡群組。
 - 連續 12 個月未登入的帳號由 `flask purge-inactive-accounts` 直接刪除（管理員不納入），並寫入只含內部編號與日期的 `deletion_tombstones`（見 [資料模型-data-model.md](資料模型-data-model.md)）。
 - 日誌只記錄白名單欄位，絕不記錄 email、密碼、權杖、生日、訊息全文與模型輸出（見 [營運與部署-operations.md](營運與部署-operations.md)）。
 
 ---
 
-**何時更新本文**：註冊、登入、驗證、Google 登入、session、CSRF、年齡規則、權限政策、`/api/auth/*` 端點、帳號狀態或保存期限改變時。`tests/test_design_docs.py` 會檢查每個 `/api/auth/` 路由都出現在本文。
+**何時更新本文**：註冊、登入、驗證、Google 登入、session、CSRF、年齡規則、權限政策、`/api/auth/*` 與 `/api/admin/*` 端點、後台的可讀範圍與重新輸入密碼規則、帳號狀態或保存期限改變時。`tests/test_design_docs.py` 會檢查每個 `/api/auth/` 與 `/api/admin/` 路由都出現在本文。

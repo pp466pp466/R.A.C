@@ -61,6 +61,19 @@ def _as_utc(moment: datetime) -> datetime:
     return moment.replace(tzinfo=timezone.utc) if moment.tzinfo is None else moment.astimezone(timezone.utc)
 
 
+def suspension_until(blocked_count: int, latest_blocked_at: datetime | None, now: datetime) -> datetime | None:
+    """客服對話暫停到什麼時候；沒有暫停為 None。**客服與後台共用的唯一規則**（見 cs-safety-suspension 規格）。
+
+    今日（台灣日）對話呼叫被安全過濾擋下達 `SAFETY_BLOCK_LIMIT` 次，暫停到「最近一次被擋的時間 + `SAFETY_SUSPENSION`」。
+    暫停期間請求在呼叫模型之前就被拒絕，不會再產生新的被擋紀錄，所以到期自然解除；期滿後再被擋，最近一次更新，等於再次暫停。
+    `latest_blocked_at` 沒有時區資訊時視為 UTC。
+    """
+    if blocked_count < SAFETY_BLOCK_LIMIT or latest_blocked_at is None:
+        return None
+    until = _as_utc(latest_blocked_at) + SAFETY_SUSPENSION
+    return until if _as_utc(now) < until else None
+
+
 def taipei_day_bounds(now: datetime) -> tuple[datetime, datetime]:
     """`now` 所在的台灣日的起訖（含起、不含訖），以帶時區的 UTC 表示；前一台灣日的 16:00 UTC 是台灣 00:00。"""
     local = _as_utc(now).astimezone(TAIPEI)

@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-10-29 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits ｜ 資料庫版本：`0006_usage_indexes` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console ｜ 資料庫版本：`0007_admin_audit_logs` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
@@ -15,6 +15,8 @@ erDiagram
     users |o--o{ llm_call_logs : "產生 SET NULL 匿名化"
     chat_conversations ||..o{ llm_call_logs : "只存編號 無外鍵"
     users ||..o{ deletion_tombstones : "只存內部編號 無外鍵"
+    users |o--o{ admin_audit_logs : "管理員操作 SET NULL 紀錄保留"
+    users ||..o{ admin_audit_logs : "目標只存對外識別碼 無外鍵"
 
     users {
         int id PK
@@ -101,6 +103,16 @@ erDiagram
         string finish_reason
         text error_detail "驗證失敗的模型原文 截斷 2000 字"
     }
+    admin_audit_logs {
+        int id PK
+        int admin_user_id FK "可為空 SET NULL"
+        string action "8 個固定動作"
+        string target_user_public_id "對外識別碼 無外鍵"
+        string target_conversation_public_id "對外識別碼 無外鍵"
+        string reason "管理員填寫 至多 200 字"
+        json detail_json "只放列舉值與整數"
+        datetime created_at
+    }
 ```
 
 ## 2. 約束與設計理由
@@ -114,6 +126,8 @@ erDiagram
 | 冪等 | `(user_id, client_id)`、`(conversation_id, client_msg_id)`、`(conversation_id, seq)` 唯一 | 重送不重複；助理訊息的識別碼由使用者訊息決定性推得，一則使用者訊息至多一則回覆 |
 | JSON 欄位 | `state_json`、`entities_json`、`suggested_actions_json` 由 Repository 序列化 | 不依內容查詢（兩種資料庫的 JSON 語法不同）；需要統計的 `intent` 獨立成欄位並建索引 |
 | 用量計數不另設計數器 | 每日輪數、全站用量與暫停都從 `llm_call_logs` 彙總，每分鐘訊息數從 `chat_messages` 計數；為此新增 `ix_llm_call_logs_created_at` 與 `ix_chat_messages_created_at` | 沒有「計數器與真相不一致」的問題；索引只加不改，舊版程式不受影響（`0006`） |
+| 稽核只有一個外鍵 | `admin_audit_logs.admin_user_id → users.id`（`SET NULL`）；目標使用者與對話只存對外識別碼（UUID，不是個資），不設外鍵 | SQL Server 不允許同一張表有兩個指向同一個父表且帶動作的外鍵（錯誤 1785）；管理員或目標被刪除後，「誰對誰做了什麼」仍然成立，這正是稽核該有的性質 |
+| 稽核不可變 | 動作是固定列舉；`detail_json` 只放列舉值與整數；`AdminAuditRepository` 只有 `add` 與 `list`（測試以反射守住） | 紀錄不能被改寫；不記錄 email、訊息、模型原文與密碼 |
 | 字串型別 | 一律 `Unicode` 與 `UnicodeText` | SQL Server 對應 NVARCHAR，中文不亂碼 |
 | 時間 | 資料庫存 UTC（`UTCDateTime`）；日界與年齡以 Asia/Taipei 計 | 兩種資料庫的時區行為一致 |
 | 不設軟刪除 | 使用者刪除對話即永久刪除；帳號刪除靠 `CASCADE` | 不留下內容殘影；`deletion_tombstones` 只存內部編號與日期，備份還原後可重新執行刪除 |
@@ -128,6 +142,7 @@ flowchart LR
     M3 --> M4["0004 生日與年齡區間<br/>birth_date、age_range、deletion_tombstones"]
     M4 --> M5["0005 chat_core<br/>對話、訊息與模型用量帳本"]
     M5 --> M6["0006 usage_indexes<br/>llm_call_logs.created_at、chat_messages.created_at 索引"]
+    M6 --> M7["0007 admin_audit_logs<br/>管理員稽核紀錄與兩個索引"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -142,11 +157,12 @@ flowchart TD
     Acc["帳號（含生日與年齡區間）"] -->|"連續 12 個月未登入（已實作，管理員不納入）"| Del2["直接刪除 + 寫入 deletion_tombstones"]
     Acc -->|"使用者申請刪除（C-4）"| Pend["deletion_pending：立即停用，7 天寬限期"] --> Del2
     Log["llm_call_logs"] -->|"12 個月（C-4）"| Del3["清除"]
-    Err["error_detail（失敗原文）"] -->|"14 天（C-4）"| Del4["清空，僅管理員可讀"]
-    Tok["auth_tokens"] -->|"到期後 7 天（C-4）"| Del5["清除"]
+    Err["error_detail（失敗原文）"] -->|"14 天（C-4c）"| Del4["清空，僅管理員可讀（讀取端已由查詢限制 14 天）"]
+    Tok["auth_tokens"] -->|"到期後 7 天（C-4c）"| Del5["清除"]
+    Aud["admin_audit_logs"] -->|"24 個月（C-4c）"| Del6["清除"]
 ```
 
-已實作的只有「閒置 12 個月帳號清除」（`flask purge-inactive-accounts`）；其餘由 C-4（`usage-safety-ops`）實作，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。帳號刪除時，C-4 的流程必須先清除帳本的對話編號（它沒有外鍵），再刪使用者。
+已實作的只有「閒置 12 個月帳號清除」（`flask purge-inactive-accounts`）與使用者主動刪除對話；其餘清除由 C-4c（`privacy-lifecycle`）實作，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。管理員在後台刪除違規對話與使用者自己刪除相同：先把帳本的對話編號清為空值（它沒有外鍵）再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。帳號刪除時，C-4c 的流程同樣必須先清除帳本的對話編號，再刪使用者；稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
 
 ---
 

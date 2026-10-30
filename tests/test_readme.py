@@ -170,6 +170,44 @@ def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 
+def test_readme_admin_endpoint_tables_list_exactly_the_registered_routes():
+    """後台的端點與頁面表格必須與實際註冊的路由完全一致；同一路徑的不同方法各佔一列。"""
+    from app import create_app
+    from app.config import load_config
+
+    section = readme_section("管理員後台（C-4b）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/[^`]*`(、`/[^`]*`)*", cells[0]):
+            methods = {m.strip() for m in cells[1].split("、")} if re.fullmatch(r"[A-Z]+(、[A-Z]+)*", cells[1]) else {"GET"}
+            for path in re.findall(r"`(/[^`]*)`", cells[0]):
+                documented.update((path, method) for method in methods)
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/admin/") or rule.endpoint.startswith("admin_pages."):
+            actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
+    assert len(actual) == 13, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+
+
+def test_readme_admin_section_documents_the_real_audit_actions_error_codes_and_the_limits():
+    from app.models.admin_audit_log import AUDIT_ACTIONS
+
+    section = readme_section("管理員後台（C-4b）")
+    for action in AUDIT_ACTIONS:
+        assert f"`{action}`" in section, f"README 沒有記載稽核動作：{action}"
+    for code in ("admin_target_forbidden", "target_pending_deletion", "already_suspended", "not_suspended", "tier_unchanged", "state_changed", "no_password"):
+        assert code in section, code
+    for phrase in ("非管理員一律 404", "no-store", "連續 5 次鎖定 15 分鐘", "沒有更新與刪除", "已知限制", "C-4c", "只有 `unknown` 的對話**不算**"):
+        assert phrase in section, phrase
+    # 文件提到的前端檔案必須真的存在
+    for path in ("app/static/js/admin/admin-format.js", "app/static/js/admin/admin.js", "app/static/css/admin.css", "tests/js/admin-format.test.js"):
+        assert (PROJECT_ROOT / path).is_file(), path
+
+
 def test_readme_cs_section_states_the_limits_the_models_and_the_numbers_that_matter():
     section = readme_section("客服對話（C-3）")
     for phrase in ("C-4 之前不得對公開網路開放", "gemini-3.5-flash-lite", "35000", "no-store", "意圖、實體、信心、摘要與狀態都不離開伺服器"):

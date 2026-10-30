@@ -126,6 +126,13 @@ class DailyQuotaExceeded(TooManyRequests):
         self.retry_after = max(1, int(retry_after))
 
 
+class AdminTargetForbidden(Forbidden):
+    """後台的停權、解除與調整等級只適用於一般使用者；對管理員帳號（含管理員自己）的操作一律拒絕（403）。"""
+
+    code = "admin_target_forbidden"
+    default_message = "不能對管理員帳號執行這個操作。"
+
+
 class ConversationLimitReached(Conflict):
     """對話數已達等級的上限，須先刪除不需要的對話（409）。"""
 

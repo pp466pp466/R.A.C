@@ -1,6 +1,7 @@
 """認證相關回應禁止被快取（見 session-authentication 規格「認證回應不可被快取」）。
 
-- `/api/auth/` 與 `/api/cs/` 底下的所有回應（含錯誤）：內容是使用者本人的資料（帳號、對話與訊息）或一次性的結果；
+- `/api/auth/`、`/api/cs/` 與 `/api/admin/` 底下的所有回應（含錯誤）：內容是使用者本人的資料（帳號、對話與訊息）、
+  管理員才看得到的他人資料，或一次性的結果；
 - 所有 HTML 頁面：每一頁都內嵌 CSRF 權杖，帳號頁與確認頁更含有使用者資料或一次性流程，
   被瀏覽器或中介快取後可能顯示過期的權杖，或在登出後仍看得到內容。
 靜態資源（CSS、JavaScript、字型）不受影響，仍可正常快取。
@@ -11,7 +12,8 @@ from flask import Flask, Response, request
 
 AUTH_API_PREFIX = "/api/auth/"
 CS_API_PREFIX = "/api/cs/"
-NO_STORE_API_PREFIXES = (AUTH_API_PREFIX, CS_API_PREFIX)
+ADMIN_API_PREFIX = "/api/admin/"
+NO_STORE_API_PREFIXES = (AUTH_API_PREFIX, CS_API_PREFIX, ADMIN_API_PREFIX)
 
 
 def init_no_store(app: Flask) -> None:
