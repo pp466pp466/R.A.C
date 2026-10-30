@@ -10,11 +10,12 @@ from flask import Blueprint, Response, abort, redirect, render_template, request
 from app.runtime import get_age_policy, get_clock, get_config, get_identity_provider
 from app.security.oauth_cookie import clear_transaction, read_transaction
 from app.security.redirects import DEFAULT_AFTER_LOGIN, safe_next
-from app.security.session import current_user, login_required_page, login_user
+from app.security.session import ACCOUNT_PATH, current_user, login_required_page, login_user
 from app.services.age_policy import EARLIEST_BIRTH_DATE, taipei_today
 from app.services.google_sign_in_service import (
     ERROR_AGE, ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
 )
+from app.services.account_deletion_service import CONFIRM_TEXT
 from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.registry import get_auth_service, get_google_sign_in_service
 
@@ -28,6 +29,12 @@ LOGIN_ERROR_MESSAGES = {
     ERROR_TERMS: "第一次使用 Google 註冊時，請先勾選同意服務條款與隱私權政策。",
     ERROR_AGE: "請先完成年齡確認：填寫生日並選擇年齡區間。",
     ERROR_DISABLED: "此帳號已停用，無法登入。",
+}
+
+
+# /login?notice=<代碼> 的說明文字（不是錯誤）：代碼是固定列舉，文字都在這裡
+LOGIN_INFO_MESSAGES = {
+    "deletion_requested": "我們已收到刪除申請，帳號已停用。若要保留，請在 7 天內重新登入並到帳號設定撤銷刪除。",
 }
 
 
@@ -80,7 +87,10 @@ def login_page():
     if current_user() is not None:
         return redirect("/account")
     notice = LOGIN_ERROR_MESSAGES.get(request.args.get("error", ""))
-    return render_template("auth/login.html", initial_state=_state(next=safe_next(request.args.get("next")), notice=notice))
+    info = LOGIN_INFO_MESSAGES.get(request.args.get("notice", ""))
+    return render_template(
+        "auth/login.html", initial_state=_state(next=safe_next(request.args.get("next")), notice=notice, info=info)
+    )
 
 
 @auth_pages_bp.get("/register")
@@ -114,10 +124,19 @@ def verify_email_page():
 # ---- 帳號設定 -----------------------------------------------------------------
 
 @auth_pages_bp.get("/account")
-@login_required_page
+@login_required_page(allow_pending_deletion=True)         # 等待刪除的人在這裡撤銷；頁面只顯示撤銷區塊
 def account_page():
+    """等待刪除的帳號與管理員看到的是不同的頁面：多餘的區塊（匯出、刪除）不會出現在 HTML 裡，不只是用 v-if 藏起來。"""
     user = current_user()
-    return render_template("auth/account.html", initial_state=_state(user=get_auth_service().profile(user)))
+    scheduled = user.deletion_scheduled_at
+    return render_template(
+        "auth/account.html",
+        initial_state=_state(user=get_auth_service().profile(user), deletion={"confirmText": CONFIRM_TEXT}),
+        awaiting_deletion=user.awaiting_deletion,
+        # 撤銷期限已過、排程還沒執行：不顯示注定失敗的撤銷按鈕（頁面開著時剛好過期的情形由前端處理 grace_expired）
+        grace_over=scheduled is not None and scheduled <= get_clock()(),
+        show_delete=user.may_delete_account,
+    )
 
 
 # ---- 服務條款與隱私權政策（不需登入）---------------------------------------------
@@ -152,7 +171,8 @@ def google_callback() -> Response:
         clear_transaction(response)
         return response
     login_user(result.user)
-    destination = safe_next((transaction or {}).get("x"), DEFAULT_AFTER_LOGIN)
+    # 等待刪除的帳號只能撤銷刪除，一律去帳號頁，不依 next
+    destination = ACCOUNT_PATH if result.user.awaiting_deletion else safe_next((transaction or {}).get("x"), DEFAULT_AFTER_LOGIN)
     response = redirect(destination)
     clear_transaction(response)
     return response

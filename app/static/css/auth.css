@@ -240,6 +240,18 @@ a.ui-btn {
   font-weight: 500;
 }
 
+.account-danger {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.account-bullets {
+  margin: 0 0 0.75rem;
+  padding-left: 1.25rem;
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+
 .tier-badge {
   display: inline-block;
   padding: 0.0625rem 0.625rem;

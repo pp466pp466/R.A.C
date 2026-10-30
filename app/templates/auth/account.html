@@ -3,6 +3,45 @@
 {% block status_code %}ACCOUNT{% endblock %}
 {% block heading %}帳號設定{% endblock %}
 {% block page_body %}
+{% if awaiting_deletion %}
+{% raw %}
+<div id="app" v-cloak>
+  <p v-if="actions.state.formError" class="auth-form-error" role="alert">{{ actions.state.formError }}</p>
+
+{% endraw %}
+{% if grace_over %}
+{% raw %}
+  <section class="auth-notice" aria-labelledby="pending-title" role="status">
+    <h2 id="pending-title" class="account-notice-title">帳號即將刪除</h2>
+    <p>撤銷期限（申請後 7 天）已過，您的帳號將在近期的排程中被永久刪除，包含您的對話與個人資料，刪除後無法復原，也無法再撤銷。</p>
+  </section>
+
+  <div class="auth-actions">
+    <button type="button" class="ui-btn" :disabled="actions.state.submitting" @click="logout">登出</button>
+  </div>
+{% endraw %}
+{% else %}
+{% raw %}
+  <section class="auth-notice" aria-labelledby="pending-title" role="status">
+    <h2 id="pending-title" class="account-notice-title">帳號正在等待刪除</h2>
+    <p>您的帳號已停用，將於 <strong>{{ scheduledText }}</strong> 之後永久刪除，包含您的對話與個人資料，刪除後無法復原。</p>
+    <p>在這之前，您可以撤銷刪除，帳號會恢復成申請前的狀態。</p>
+  </section>
+
+  <div class="auth-actions">
+    <button type="button" class="ui-btn ui-btn--primary" :disabled="actions.state.submitting" :aria-busy="actions.state.submitting ? 'true' : 'false'" @click="cancelDeletion">
+      {{ actions.state.submitting ? '處理中…' : '撤銷刪除' }}
+    </button>
+    <button type="button" class="ui-btn" :disabled="actions.state.submitting" @click="logout">登出</button>
+  </div>
+{% endraw %}
+{% endif %}
+{% raw %}
+
+  <ui-toast-region></ui-toast-region>
+</div>
+{% endraw %}
+{% else %}
 {% raw %}
 <div id="app" v-cloak>
   <p v-if="actions.state.formError" class="auth-form-error" role="alert">{{ actions.state.formError }}</p>
@@ -71,6 +110,29 @@
     <p v-if="!user.has_password" class="auth-hint">目前只使用 Google 登入，沒有設定密碼。<span v-if="verificationRequired">如需改用密碼登入，請在登入頁使用「忘記密碼」設定。</span></p>
   </section>
 
+  <section class="account-section" aria-labelledby="export-title">
+    <h2 id="export-title">匯出我的資料</h2>
+    <p class="auth-hint">下載您的帳號資料（含生日與年齡區間）與全部對話，格式為 JSON 或 CSV。</p>
+    <div class="auth-actions">
+      <button type="button" class="ui-btn" :disabled="exportForm.state.submitting" :aria-busy="exportingFormat === 'json' ? 'true' : 'false'" @click="downloadExport('json')">
+        {{ exportingFormat === 'json' ? '匯出中…' : '下載 JSON' }}
+      </button>
+      <button type="button" class="ui-btn" :disabled="exportForm.state.submitting" :aria-busy="exportingFormat === 'csv' ? 'true' : 'false'" @click="downloadExport('csv')">
+        {{ exportingFormat === 'csv' ? '匯出中…' : '下載 CSV（zip）' }}
+      </button>
+    </div>
+    <p v-if="exportForm.state.formError" class="auth-form-error" role="alert">{{ exportForm.state.formError }}</p>
+  </section>
+{% endraw %}{% if show_delete %}{% raw %}
+  <section class="account-section" aria-labelledby="delete-title">
+    <h2 id="delete-title">刪除帳號</h2>
+    <p class="auth-hint">申請後帳號會立即停用，並有 7 天的寬限期可以撤銷；期滿後您的資料會被永久刪除。</p>
+    <div class="auth-actions">
+      <button type="button" class="ui-btn account-danger" @click="deleteOpen = true">刪除帳號</button>
+    </div>
+  </section>
+{% endraw %}{% endif %}{% raw %}
+
   <ui-modal v-model="logoutAllOpen" title="登出所有裝置" status-code="CONFIRM_REQUIRED" confirm-text="登出所有裝置" @confirm="logoutAll">
     <p>這會讓您在所有裝置（包含目前這一台）上的登入全部失效，之後需要重新登入。</p>
   </ui-modal>
@@ -99,10 +161,44 @@
     </form>
   </ui-modal>
 
+{% endraw %}{% if show_delete %}{% raw %}
+  <ui-modal v-model="deleteOpen" title="刪除帳號" status-code="DELETE_ACCOUNT" confirm-text="確認刪除帳號"
+            :close-on-confirm="false" @confirm="deleteAccount" @close="resetDeleteForm">
+    <form @submit.prevent="deleteAccount" novalidate>
+      <p v-if="deleteForm.state.formError" class="auth-form-error" role="alert">{{ deleteForm.state.formError }}</p>
+      <p>刪除帳號之後：</p>
+      <ul class="account-bullets">
+        <li>帳號會立即停用，所有裝置都會登出。</li>
+        <li>有 7 天的寬限期：期間內重新登入，就能在帳號設定頁撤銷刪除。</li>
+        <li>寬限期滿後，您的信箱、名稱、密碼、生日與年齡區間、Google 登入識別與全部對話會被永久刪除，無法復原。</li>
+        <li>用量紀錄只會保留不含個人資料的統計。</li>
+      </ul>
+      <p>需要留存資料的話，請先使用「匯出我的資料」。</p>
+      <div v-if="user.has_password" class="auth-field">
+        <label class="auth-label" for="delete_password">輸入您的密碼以確認</label>
+        <input id="delete_password" name="password" type="password" class="auth-input" autocomplete="current-password" required
+               v-model="deleteForm.values.password" :disabled="deleteForm.state.submitting"
+               :aria-invalid="deleteForm.fieldErrors.password ? 'true' : 'false'" :aria-describedby="deleteForm.fieldErrors.password ? 'delete_password-error' : null">
+        <p v-if="deleteForm.fieldErrors.password" id="delete_password-error" class="auth-error" role="alert">{{ deleteForm.fieldErrors.password }}</p>
+      </div>
+      <div v-else class="auth-field">
+        <label class="auth-label" for="delete_confirm_text">請輸入「{{ confirmText }}」以確認</label>
+        <input id="delete_confirm_text" name="confirm_text" type="text" class="auth-input" autocomplete="off" required
+               v-model="deleteForm.values.confirm_text" :disabled="deleteForm.state.submitting"
+               :aria-invalid="deleteForm.fieldErrors.confirm_text ? 'true' : 'false'" :aria-describedby="deleteForm.fieldErrors.confirm_text ? 'delete_confirm_text-error' : null">
+        <p v-if="deleteForm.fieldErrors.confirm_text" id="delete_confirm_text-error" class="auth-error" role="alert">{{ deleteForm.fieldErrors.confirm_text }}</p>
+      </div>
+      <button type="submit" hidden tabindex="-1" aria-hidden="true"></button>
+    </form>
+  </ui-modal>
+{% endraw %}{% endif %}{% raw %}
+
   <ui-toast-region></ui-toast-region>
 </div>
 {% endraw %}
+{% endif %}
 {% endblock %}
 {% block page_script %}
+  <script src="{{ url_for('static', filename='js/auth/account-lifecycle.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account.js') }}"></script>
 {% endblock %}

@@ -47,6 +47,8 @@ ALLOWED_FIELDS = (
     # 用量事件（usage_events.py）：只有整數，沒有任何文字內容
     "used",
     "limit",
+    # 期限清除（lifecycle_events.py）：每一類清除的筆數（整數）
+    "count",
 )
 
 MAX_TEXT_LENGTH = 300

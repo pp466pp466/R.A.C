@@ -35,6 +35,8 @@ class ChatConversation(Base, PublicIdMixin, TimestampMixin):
         UniqueConstraint("user_id", "client_id", name="uq_chat_conversations_user_client"),
         # 「我的對話」依最後活動時間由新到舊
         Index("ix_chat_conversations_user_id_updated_at", "user_id", "updated_at"),
+        # 期限清除（data-retention）：全表依最後活動時間找出 12 個月前的對話，上一個索引以 user_id 開頭，用不上
+        Index("ix_chat_conversations_updated_at", "updated_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)

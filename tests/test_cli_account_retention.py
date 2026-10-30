@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app import create_app
 from app.config import load_config
-from app.models import Base, DeletionTombstone, User, UserIdentity
+from app.models import Base, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User, UserIdentity
 from app.models.user import AuthToken, PROVIDER_GOOGLE, TOKEN_VERIFY_EMAIL
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.user_repository import UserRepository
@@ -114,6 +114,30 @@ def test_the_output_and_the_logs_carry_no_personal_data(app, runner, log_lines):
     everything = dry.output + real.output + log_lines.raw()
     for secret in (SECRET_EMAIL, SECRET_NAME, "sub-secret-1", birth_date_for_age(40).isoformat(), birth_date_for_age(30).isoformat(), "35_44"):
         assert secret not in everything, secret
+
+
+def test_inactive_accounts_conversations_are_deleted_and_the_ledger_is_anonymised(app, runner):
+    """閒置清除與自助刪除共用抹除出口：對話與訊息一併刪除，帳本保留但使用者與對話編號都清為空值。"""
+    ids = seed(app)
+    with Session(app.extensions["db_engine"]) as s:
+        for key, client in (("stale", "00000000-0000-4000-8000-000000000001"), ("recent", "00000000-0000-4000-8000-000000000002")):
+            conv = ChatConversation(user_id=ids[key], client_id=client, state_json={})
+            s.add(conv)
+            s.flush()
+            s.add(ChatMessage(conversation_id=conv.id, client_msg_id=f"m-{key}", seq=1, role="user", content="哈囉"))
+            s.add(LlmCallLog(
+                user_id=ids[key], conversation_id=conv.id, kind="chat", provider="gemini", model="m", attempt=1,
+                status="ok", counted=True, prompt_tokens=5, completion_tokens=3, latency_ms=100, created_at=START,
+            ))
+        s.commit()
+
+    assert runner.invoke(args=["purge-inactive-accounts"]).exit_code == 0
+
+    with Session(app.extensions["db_engine"]) as s:
+        assert [c.user_id for c in s.scalars(select(ChatConversation))] == [ids["recent"]]
+        assert s.query(ChatMessage).count() == 1
+        by_user = {row.user_id: row.conversation_id for row in s.scalars(select(LlmCallLog))}
+        assert set(by_user) == {None, ids["recent"]} and by_user[None] is None and by_user[ids["recent"]] is not None
 
 
 def test_an_empty_database_is_fine(app, runner):

@@ -70,7 +70,7 @@ def logout_all():
 
 @auth_api_bp.get("/me")
 def me():
-    user = require_login()
+    user = require_login(allow_pending_deletion=True)        # 等待刪除的人要靠它得知預定刪除的時間
     return jsonify(user=get_auth_service().profile(user))
 
 

@@ -20,6 +20,7 @@ from app.repositories.chat_repository import ChatRepository
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.health_repository import HealthRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
+from app.repositories.retention_repository import RetentionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.runtime import (
@@ -29,7 +30,12 @@ from app.runtime import (
 from app.services.access_policy import LEVEL3_SEXUAL_CONTENT_LEVEL, MAX_ADULT_SEXUAL_CONTENT_LEVEL, AccessPolicy
 from app.services.admin_service import AdminService
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
+from app.services.account_deletion_executor import AccountDeletionExecutor
+from app.services.account_deletion_service import AccountDeletionService
+from app.services.account_erasure_service import AccountErasureService
 from app.services.account_retention_service import AccountRetentionService
+from app.services.data_retention_service import DataRetentionService
+from app.services.personal_export_service import PersonalExportService
 from app.services.age_stats_service import AgeStatsService
 from app.services.auth_service import AccountMailer, AuthService
 from app.services.chat_service import PROCESSING_STALE_AFTER, ChatService
@@ -243,10 +249,44 @@ def get_admin_service() -> AdminService:
     )
 
 
+def get_account_deletion_service() -> AccountDeletionService:
+    """目前請求的自助刪除帳號服務；信箱驗證開啟時，申請成功後寄通知信。"""
+    config = get_config()
+    return AccountDeletionService(
+        users=UserRepository(get_session()), confirm_password=get_auth_service().confirm_password, clock=get_clock(),
+        mailer=get_email_flow_service() if config.email_verification_required else None,
+    )
+
+
+def get_personal_export_service() -> PersonalExportService:
+    """目前請求的匯出服務：只讀取呼叫者本人的帳號與對話（Repository 的方法都以 `user_id` 為第一個參數）。"""
+    session = get_session()
+    return PersonalExportService(
+        users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session), clock=get_clock()
+    )
+
+
+def build_data_retention_service(session: Session, *, clock: Callable[[], datetime]) -> DataRetentionService:
+    """命令列用：每一類、每一批各自提交；某一類失敗時回復該批並繼續其餘類別。"""
+    return DataRetentionService(
+        repository=RetentionRepository(session), clock=clock, commit=session.commit, rollback=session.rollback
+    )
+
+
+def build_account_deletion_executor(session: Session, *, clock: Callable[[], datetime]) -> AccountDeletionExecutor:
+    """命令列用：寬限期已滿的帳號逐一抹除；每個帳號一個交易，條件不成立時整個回復。"""
+    users = UserRepository(session)
+    erasure = AccountErasureService(
+        users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
+    )
+    return AccountDeletionExecutor(users=users, erasure=erasure, clock=clock)
+
+
 def build_account_retention_service(session: Session, *, clock: Callable[[], datetime]) -> AccountRetentionService:
-    """命令列用：每個帳號的「刪除＋刪除紀錄」在同一個交易，立刻提交。"""
+    """命令列用：每個帳號的「清帳本對話參照＋刪除＋刪除紀錄」在同一個交易，立刻提交；條件不成立時整個回復。"""
     return AccountRetentionService(
-        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), clock=clock, commit=session.commit
+        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), clock=clock,
+        commit=session.commit, rollback=session.rollback,
     )
 
 

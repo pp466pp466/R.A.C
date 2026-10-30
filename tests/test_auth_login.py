@@ -159,12 +159,29 @@ def test_a_google_only_account_also_counts_password_attempts(member_session):
 
 # ---- 帳號狀態 -----------------------------------------------------------------
 
-@pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
-def test_a_disabled_account_with_the_right_password_gets_a_403_style_refusal(member_session, status):
-    add_user(member_session, 1, status=status)
+def test_a_suspended_account_with_the_right_password_gets_a_403_style_refusal(member_session):
+    add_user(member_session, 1, status=STATUS_SUSPENDED)
     with pytest.raises(Forbidden) as exc:
         make_auth_service(member_session).login(email="user1@example.com", password=GOOD_PASSWORD)
     assert exc.value.code == "account_disabled" and exc.value.message == ACCOUNT_DISABLED_MESSAGE
+
+
+def test_an_account_awaiting_deletion_can_log_in_and_the_snapshot_says_so(member_session):
+    """account-deletion 規格：寬限期內登入成功，只是得到受限的登入狀態（由入口層限制能做的事）。"""
+    requested = START - timedelta(days=2)
+    user = add_user(member_session, 1, status=STATUS_DELETION_PENDING, deletion_requested_at=requested, status_before_deletion="active")
+    current = make_auth_service(member_session).login(email="user1@example.com", password=GOOD_PASSWORD)
+    assert current.status == STATUS_DELETION_PENDING and current.deletion_scheduled_at == requested + timedelta(days=7)
+    assert reload(member_session, user).last_login_at == START
+    assert current.public_dict(age_group=None)["deletion_scheduled_at"] == "2026-11-01T12:00:00Z"
+
+
+def test_a_wrong_password_for_an_account_awaiting_deletion_fails_and_counts_like_any_other(member_session):
+    user = add_user(member_session, 1, status=STATUS_DELETION_PENDING, deletion_requested_at=START, status_before_deletion="active")
+    fail(make_auth_service(member_session), times=1)
+    assert reload(member_session, user).failed_login_count == 1
+    fail(make_auth_service(member_session), times=4)
+    assert reload(member_session, user).locked_until is not None
 
 
 def test_a_disabled_account_with_a_wrong_password_looks_like_any_other_failure(member_session):

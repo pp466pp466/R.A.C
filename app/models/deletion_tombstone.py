@@ -18,7 +18,8 @@ from sqlalchemy.orm import Mapped, mapped_column
 from app.models.base import Base, UTCDateTime, utcnow
 
 REASON_INACTIVE_12_MONTHS = "inactive_12_months"
-DELETION_REASONS = (REASON_INACTIVE_12_MONTHS,)
+REASON_USER_REQUESTED = "user_requested"
+DELETION_REASONS = (REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED)
 
 
 class DeletionTombstone(Base):

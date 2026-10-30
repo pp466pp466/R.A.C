@@ -208,6 +208,45 @@ def test_readme_admin_section_documents_the_real_audit_actions_error_codes_and_t
         assert (PROJECT_ROOT / path).is_file(), path
 
 
+def test_readme_privacy_lifecycle_endpoint_tables_list_exactly_the_registered_routes():
+    """個資生命週期的端點表格必須與實際註冊的 `/api/account/*` 路由完全一致。"""
+    from app import create_app
+    from app.config import load_config
+
+    section = readme_section("個資生命週期（C-4c）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/[^`]*`", cells[0]) and re.fullmatch(r"[A-Z]+(、[A-Z]+)*", cells[1]):
+            documented.update((cells[0].strip("`"), method) for method in cells[1].split("、"))
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/account/"):
+            actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
+    assert len(actual) == 3, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+
+
+def test_readme_privacy_lifecycle_section_documents_the_commands_the_periods_and_the_limits():
+    from app.cli import RETENTION_LABELS
+    from app.services import data_retention_service as retention
+
+    section = readme_section("個資生命週期（C-4c）")
+    for command in ("execute-account-deletions", "purge-expired-data", "--dry-run"):
+        assert command in section, command
+    for phrase in ("365 天", "14 天", "7 天", "730 天", "account_deletion_pending", "grace_expired", "admin_delete_forbidden",
+                   "受限登入狀態預設拒絕", "單一抹除出口", "已知限制", "C-4d", "recreate=\"never\"", "`0008`"):
+        assert phrase in section, phrase
+    assert (retention.CONVERSATION_RETENTION.days, retention.LEDGER_RETENTION.days, retention.ERROR_DETAIL_RETENTION.days,
+            retention.AUTH_TOKEN_RETENTION.days, retention.ADMIN_AUDIT_RETENTION.days) == (365, 365, 14, 7, 730)
+    assert set(RETENTION_LABELS) == {"conversations", "error_detail", "ledger", "auth_tokens", "admin_audit"}
+    for path in ("app/static/js/auth/account-lifecycle.js", "tests/js/account-lifecycle.test.js", "tests/test_restricted_session.py",
+                 "tests/test_privacy_lifecycle_flow.py", "tests/architecture/test_account_erasure_coverage.py"):
+        assert (PROJECT_ROOT / path).is_file(), path
+
+
 def test_readme_cs_section_states_the_limits_the_models_and_the_numbers_that_matter():
     section = readme_section("客服對話（C-3）")
     for phrase in ("C-4 之前不得對公開網路開放", "gemini-3.5-flash-lite", "35000", "no-store", "意圖、實體、信心、摘要與狀態都不離開伺服器"):

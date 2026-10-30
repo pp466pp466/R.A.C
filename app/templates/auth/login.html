@@ -6,6 +6,7 @@
 {% raw %}
 <div id="app" v-cloak>
   <p v-if="notice" class="auth-form-error" role="alert">{{ notice }}</p>
+  <div v-if="info" class="auth-notice" role="status"><p>{{ info }}</p></div>
 
   <form @submit.prevent="submit" novalidate>
     <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>

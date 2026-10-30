@@ -37,12 +37,16 @@ class RecordingMailer:
     def __init__(self) -> None:
         self.verifications: list[int] = []
         self.notices: list[int] = []
+        self.deletions: list[tuple[int, object]] = []
 
     def send_verification(self, user: User) -> None:
         self.verifications.append(user.id)
 
     def send_password_changed_notice(self, user: User) -> None:
         self.notices.append(user.id)
+
+    def send_deletion_notice(self, user: User, scheduled_at) -> None:
+        self.deletions.append((user.id, scheduled_at))
 
 
 def make_auth_service(

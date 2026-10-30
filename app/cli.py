@@ -1,6 +1,6 @@
 """`flask` 自訂指令（見 AGENTS.md 第 10、11 節：維運工作以指令實作，不用行程內計時器）。
 
-四個指令：
+六個指令：
 - `llm-probe`：開發用，不屬於維運。呼叫 RPG 敘事用途的模型端點一次，印出回覆、模型、延遲、token 與結束原因，
   讓人在 RPG 實作之前先評估端點好不好用（含結構化輸出的穩定度）。只能在 development 與 testing 執行；**不寫帳本與任何資料表**，
   不顯示金鑰，也不印供應商的錯誤本文。
@@ -8,6 +8,10 @@
   密碼**不接受命令列參數**（會留在 shell 歷史與行程清單中）：互動時以不回顯的方式輸入，非互動環境
   （例如容器的一次性工作）用 `--password-stdin` 從標準輸入讀取。信箱與密碼都不會寫入日誌或輸出。
 - `purge-inactive-accounts`：由平台排程器觸發（不使用行程內計時器），刪除連續 12 個月未登入的一般帳號；
+  `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
+- `purge-expired-data`：由平台排程器觸發，清除超過保存期限的資料（對話與訊息 12 個月、用量帳本 12 個月、失敗的模型原文 14 天、
+  驗證權杖到期後 7 天、管理稽核 24 個月）；`--dry-run` 只列出各類筆數。輸出只有各類的筆數，不含任何內容；有任一類失敗時以非零代碼結束。
+- `execute-account-deletions`：由平台排程器觸發，刪除「申請刪除、寬限期（7 天）已滿」的帳號（與閒置清除共用同一個抹除出口）；
   `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
 - `age-stats`：各年齡區間的人數（供定期察看用戶群），只有計數，沒有任何個別使用者的資料。
 """
@@ -24,7 +28,10 @@ from app.runtime import get_clock, get_config, get_rpg_llm_provider
 from app.services.errors import ServiceError, ValidationError
 from app.runtime import get_age_policy
 from app.services.llm_output import parse_llm_json
-from app.services.registry import build_account_retention_service, build_age_stats_service, build_auth_service
+from app.services.registry import (
+    build_account_deletion_executor, build_account_retention_service, build_age_stats_service, build_auth_service,
+    build_data_retention_service,
+)
 
 # ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
 PROBE_SYSTEM = "你是一位說書人。請一律使用繁體中文（台灣用語）回答，內容保持輕鬆無害。"
@@ -37,6 +44,15 @@ PROBE_SCHEMA = {
     "required": ["title", "mood"],
 }
 PROBE_MAX_TEXT_CHARS = 500
+
+# purge-expired-data 輸出的類別名稱（對應 lifecycle_events 的固定列舉）
+RETENTION_LABELS = {
+    "conversations": "對話與訊息",
+    "ledger": "用量帳本",
+    "error_detail": "失敗的模型原文",
+    "auth_tokens": "驗證權杖",
+    "admin_audit": "管理稽核紀錄",
+}
 
 
 def _describe(error: ServiceError) -> str:
@@ -147,6 +163,32 @@ def register_cli(app: Flask) -> None:
             click.echo(f"預覽：符合條件的帳號 {result.matched} 個（未刪除任何資料）。")
         else:
             click.echo(f"已刪除 {result.deleted} 個連續 12 個月未登入的帳號。")
+
+    @app.cli.command("execute-account-deletions")
+    @click.option("--dry-run", is_flag=True, help="只列出寬限期已滿、待刪除的帳號數量，不刪除任何資料。")
+    def execute_account_deletions(dry_run: bool) -> None:
+        """刪除使用者申請刪除、且寬限期（7 天）已滿的帳號。剛撤銷的帳號不會被刪；可重複執行，結果相同。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            result = build_account_deletion_executor(session, clock=get_clock()).execute_due(dry_run=dry_run)
+        if dry_run:
+            click.echo(f"預覽：寬限期已滿、待刪除的帳號 {result.matched} 個（未刪除任何資料）。")
+        else:
+            click.echo(f"已刪除 {result.deleted} 個寬限期已滿的帳號。")
+
+    @app.cli.command("purge-expired-data")
+    @click.option("--dry-run", is_flag=True, help="只列出各類符合條件的筆數，不刪除或改變任何資料。")
+    def purge_expired_data(dry_run: bool) -> None:
+        """清除超過保存期限的資料。各類獨立處理，某一類失敗不影響其他類別（但指令會以非零代碼結束）；可重複執行，結果相同。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            report = build_data_retention_service(session, clock=get_clock()).run(dry_run=dry_run)
+        click.echo("預覽（未改變任何資料）：" if dry_run else "期限清除結果：")
+        for result in report.results:
+            label = RETENTION_LABELS[result.category]
+            click.echo(f"  {label}：{'失敗' if result.failed else str(result.matched) + ' 筆'}")
+        if report.failed:
+            raise click.ClickException("以下類別清除失敗：" + "、".join(RETENTION_LABELS[c] for c in report.failed))
 
     @app.cli.command("age-stats")
     def age_stats() -> None:

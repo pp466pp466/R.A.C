@@ -12,7 +12,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Protocol
 
 from app.models.user import (
-    PROVIDER_GOOGLE, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION,
+    PROVIDER_GOOGLE, ROLE_ADMIN, STATUS_ACTIVE, STATUS_PENDING_VERIFICATION,
     STATUS_SUSPENDED, User,
 )
 from app.observability import security_events
@@ -35,7 +35,8 @@ MAX_DISPLAY_NAME_LENGTH = 50
 INVALID_CREDENTIALS_MESSAGE = "信箱或密碼不正確，或登入嘗試過多而暫時鎖定，請稍後再試。"
 ACCOUNT_DISABLED_MESSAGE = "此帳號已停用，無法登入。"
 
-_DISABLED_STATUSES = (STATUS_SUSPENDED, STATUS_DELETION_PENDING)
+# 停權的帳號不能登入；待刪除的帳號可以登入，但只得到受限的登入狀態（只能撤銷刪除，見 session.require_login）
+_DISABLED_STATUSES = (STATUS_SUSPENDED,)
 
 
 class AccountMailer(Protocol):

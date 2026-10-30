@@ -18,8 +18,10 @@
 
       function submit() {
         return form.run(function () {
-          return axios.post('/api/auth/login', { email: form.values.email, password: form.values.password }).then(function () {
-            window.location.assign(state.next || '/account');     // next 已由伺服器驗證過，只會是站內路徑
+          return axios.post('/api/auth/login', { email: form.values.email, password: form.values.password }).then(function (response) {
+            // 等待刪除的帳號只能撤銷刪除，一律去帳號頁；其餘依 next（已由伺服器驗證過，只會是站內路徑）
+            var awaitingDeletion = response.data && response.data.user && response.data.user.status === 'deletion_pending';
+            window.location.assign(awaitingDeletion ? '/account' : (state.next || '/account'));
           });
         }, { onError: function () { form.values.password = ''; } });
       }
@@ -64,6 +66,7 @@
         form: form,
         google: google,
         notice: state.notice || '',
+        info: state.info || '',
         ageRules: state.ageRules,
         googleEnabled: !!state.googleEnabled,
         verificationRequired: !!state.verificationRequired,

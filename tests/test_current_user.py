@@ -1,6 +1,6 @@
 """CurrentUser 快照：年齡只對外呈現「是否已完成」與年齡群組，生日、區間、時間與政策版本都是內部紀錄。"""
 import json
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 
@@ -48,6 +48,17 @@ def test_the_public_dict_has_the_boolean_and_the_group_but_never_the_birthday_ra
     text = json.dumps(data, default=str)
     for secret in ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult", "1996", "25_34"):
         assert secret not in text
+
+
+def test_only_an_account_awaiting_deletion_reports_when_it_will_be_deleted():
+    requested = datetime(2026, 10, 30, 8, 30, 15, tzinfo=timezone.utc)
+    pending = CurrentUser.from_model(make_model(status="deletion_pending", deletion_requested_at=requested))
+    assert pending.deletion_scheduled_at == requested + timedelta(days=7)
+    assert pending.public_dict(age_group=None)["deletion_scheduled_at"] == "2026-11-06T08:30:15Z"
+    # 其餘狀態即使殘留申請時間也不回報
+    stray = CurrentUser.from_model(make_model(status="active", deletion_requested_at=requested))
+    assert stray.deletion_scheduled_at is None and "deletion_scheduled_at" not in stray.public_dict(age_group=None)
+    assert "deletion_requested_at" not in json.dumps(pending.public_dict(age_group=None))
 
 
 def test_the_age_group_must_be_passed_explicitly():

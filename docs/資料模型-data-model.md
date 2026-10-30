@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console ｜ 資料庫版本：`0007_admin_audit_logs` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle ｜ 資料庫版本：`0008_privacy_lifecycle` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
@@ -40,6 +40,8 @@ erDiagram
         string age_policy_version
         bool is_adult_at_confirmation "僅供紀錄 不用於判斷"
         datetime last_login_at
+        datetime deletion_requested_at "申請刪除的時間 只有待刪除才有值"
+        string status_before_deletion "申請前的狀態 撤銷時還原用"
     }
     user_identities {
         int id PK
@@ -126,6 +128,9 @@ erDiagram
 | 冪等 | `(user_id, client_id)`、`(conversation_id, client_msg_id)`、`(conversation_id, seq)` 唯一 | 重送不重複；助理訊息的識別碼由使用者訊息決定性推得，一則使用者訊息至多一則回覆 |
 | JSON 欄位 | `state_json`、`entities_json`、`suggested_actions_json` 由 Repository 序列化 | 不依內容查詢（兩種資料庫的 JSON 語法不同）；需要統計的 `intent` 獨立成欄位並建索引 |
 | 用量計數不另設計數器 | 每日輪數、全站用量與暫停都從 `llm_call_logs` 彙總，每分鐘訊息數從 `chat_messages` 計數；為此新增 `ix_llm_call_logs_created_at` 與 `ix_chat_messages_created_at` | 沒有「計數器與真相不一致」的問題；索引只加不改，舊版程式不受影響（`0006`） |
+| 待刪除的兩個欄位 | `users.deletion_requested_at`、`status_before_deletion` 皆可為空、不進索引（`0008`） | 待刪除的帳號極少，掃描即可；申請前的狀態只會是 `active` 或 `pending_verification`，撤銷時用來還原，避免待驗證的帳號藉由刪除再撤銷變成已驗證 |
+| 期限清除的索引 | `ix_chat_conversations_updated_at`（`0008`） | 依最後活動時間全表找出 12 個月前的對話；既有索引以 `user_id` 開頭，用不上 |
+| 抹除的涵蓋由測試守住 | 每張指向使用者或對話的資料表都要登記在 `tests/architecture/test_account_erasure_coverage.py`；沒有外鍵的整數參照（`llm_call_logs.conversation_id`）由抹除流程明確清除 | 新增資料表時，漏掉「刪除一個人」會讓測試失敗，而不是默默留下個資 |
 | 稽核只有一個外鍵 | `admin_audit_logs.admin_user_id → users.id`（`SET NULL`）；目標使用者與對話只存對外識別碼（UUID，不是個資），不設外鍵 | SQL Server 不允許同一張表有兩個指向同一個父表且帶動作的外鍵（錯誤 1785）；管理員或目標被刪除後，「誰對誰做了什麼」仍然成立，這正是稽核該有的性質 |
 | 稽核不可變 | 動作是固定列舉；`detail_json` 只放列舉值與整數；`AdminAuditRepository` 只有 `add` 與 `list`（測試以反射守住） | 紀錄不能被改寫；不記錄 email、訊息、模型原文與密碼 |
 | 字串型別 | 一律 `Unicode` 與 `UnicodeText` | SQL Server 對應 NVARCHAR，中文不亂碼 |
@@ -143,9 +148,11 @@ flowchart LR
     M4 --> M5["0005 chat_core<br/>對話、訊息與模型用量帳本"]
     M5 --> M6["0006 usage_indexes<br/>llm_call_logs.created_at、chat_messages.created_at 索引"]
     M6 --> M7["0007 admin_audit_logs<br/>管理員稽核紀錄與兩個索引"]
+    M7 --> M8["0008 privacy_lifecycle<br/>users 的兩個待刪除欄位、對話最後活動的索引"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
+- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。
 
@@ -153,16 +160,22 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Msg["對話與訊息"] -->|"使用者主動刪除 或 最後一則訊息後 12 個月（C-4）"| Del1["永久刪除，帳本的對話編號清為空值"]
-    Acc["帳號（含生日與年齡區間）"] -->|"連續 12 個月未登入（已實作，管理員不納入）"| Del2["直接刪除 + 寫入 deletion_tombstones"]
-    Acc -->|"使用者申請刪除（C-4）"| Pend["deletion_pending：立即停用，7 天寬限期"] --> Del2
-    Log["llm_call_logs"] -->|"12 個月（C-4）"| Del3["清除"]
-    Err["error_detail（失敗原文）"] -->|"14 天（C-4c）"| Del4["清空，僅管理員可讀（讀取端已由查詢限制 14 天）"]
-    Tok["auth_tokens"] -->|"到期後 7 天（C-4c）"| Del5["清除"]
-    Aud["admin_audit_logs"] -->|"24 個月（C-4c）"| Del6["清除"]
+    Msg["對話與訊息"] -->|"使用者主動刪除，或最後活動後 365 天（purge-expired-data）"| Del1["永久刪除，帳本的對話編號先清為空值"]
+    Acc["帳號（含生日與年齡區間）"] -->|"連續 12 個月未登入（purge-inactive-accounts，管理員不納入）"| Era["抹除一個人（AccountErasureService）"]
+    Acc -->|"使用者申請刪除"| Pend["deletion_pending：立即停用，所有裝置登出，7 天寬限期"]
+    Pend -->|"7 天內登入並撤銷"| Acc
+    Pend -->|"寬限期滿（execute-account-deletions）"| Era
+    Era --> Wipe["刪除使用者；對話、訊息、第三方身分、驗證權杖串聯刪除；帳本與稽核的使用者欄位變空值"]
+    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months 或 user_requested），不納入期限清除"]
+    Err["error_detail（失敗原文）"] -->|"14 天（purge-expired-data）"| Del4["清為空值，帳本那一筆保留；僅管理員可讀"]
+    Log["llm_call_logs"] -->|"365 天（purge-expired-data）"| Del3["刪除"]
+    Tok["auth_tokens"] -->|"到期後 7 天（purge-expired-data）"| Del5["刪除，不論是否已使用"]
+    Aud["admin_audit_logs"] -->|"730 天（purge-expired-data）"| Del6["刪除（唯一的清除途徑在 RetentionRepository）"]
 ```
 
-已實作的只有「閒置 12 個月帳號清除」（`flask purge-inactive-accounts`）與使用者主動刪除對話；其餘清除由 C-4c（`privacy-lifecycle`）實作，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。管理員在後台刪除違規對話與使用者自己刪除相同：先把帳本的對話編號清為空值（它沒有外鍵）再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。帳號刪除時，C-4c 的流程同樣必須先清除帳本的對話編號，再刪使用者；稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
+三個排程指令都已實作（`flask purge-inactive-accounts`、`execute-account-deletions`、`purge-expired-data`），設定排程屬 C-5。**抹除一個人只有一個出口**：每個帳號在一個交易內依序「把帳本的對話編號清為空值 → 條件式刪除（當下再確認一次條件）→ 寫刪除紀錄 → 提交」，條件不成立時整個回復。順序不能反過來：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列；帳本的 `conversation_id` 沒有外鍵，不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。管理員在後台刪除違規對話、使用者自己刪除對話與期限清除對話，都是同一個原則：先清帳本的對話編號再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
+
+期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。
 
 ---
 

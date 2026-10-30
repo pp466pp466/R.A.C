@@ -38,14 +38,21 @@ def test_a_stale_token_version_or_an_unknown_member_resolves_to_nothing(member_s
     assert service.resolve_session(999999, 1) is None
 
 
-@pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
-def test_a_session_of_a_disabled_member_stops_working_immediately(member_session, status):
+def test_a_session_of_a_suspended_member_stops_working_immediately(member_session):
     user = add_user(member_session, 1)
     service = make_auth_service(member_session)
     assert service.resolve_session(user.id, 1) is not None
-    user.status = status
+    user.status = STATUS_SUSPENDED
     member_session.commit()
     assert service.resolve_session(user.id, 1) is None
+
+
+def test_a_session_of_a_member_awaiting_deletion_resolves_with_that_status(member_session):
+    """受限登入狀態：辨識得出來（才能撤銷刪除），能做什麼由入口層決定；申請當下 token_version 加 1 讓舊的登入狀態失效。"""
+    user = add_user(member_session, 1, status=STATUS_DELETION_PENDING, deletion_requested_at=START, status_before_deletion="active")
+    resolved = make_auth_service(member_session).resolve_session(user.id, 1)
+    assert resolved is not None and resolved.status == STATUS_DELETION_PENDING
+    assert make_auth_service(member_session).resolve_session(user.id, 2) is None          # 版本不符仍然失效
 
 
 # ---- 登出所有裝置 -------------------------------------------------------------

@@ -1,6 +1,6 @@
 # 前端架構
 
-> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
@@ -13,7 +13,7 @@ flowchart TD
     Base --> Vendor["vendor：vue.global.prod.js → axios.min.js"]
     Base --> Ui["共用：typewriter.js → toast-store.js → ui-components.js"]
     Ui --> Page{"頁面"}
-    Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → 各頁腳本<br/>（login、register、account…）"]
+    Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → 各頁腳本<br/>（login、register、account…；account 另先載入 account-lifecycle.js）"]
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
 ```
@@ -30,6 +30,7 @@ flowchart TD
 | `js/ui/toast-store.js` | Toast 的狀態庫（與框架無關） | `tests/js/toast-store.test.js` |
 | `js/ui/typewriter.js` | 打字機緩衝區：以字素為單位、積壓越多越快、`finish()` 後加速補完、可 `flush()` 與 `cancel()` | `tests/js/typewriter.test.js` |
 | `js/auth/auth-common.js` | CSRF 標頭、初始狀態讀取、錯誤整理（`describeError`）、登入導向 | `tests/js/auth-common.test.js` |
+| `js/auth/account-lifecycle.js` | 帳號頁匯出與刪除的純函式（`Auth.lifecycle`）：確認文字比對、送出條件、檔名、預定刪除時間（台灣時間）、錯誤代碼說明、Blob 錯誤整理 | `tests/js/account-lifecycle.test.js` |
 
 ## 3. 客服頁面（`/cs`）的模組關係
 
@@ -76,6 +77,24 @@ flowchart LR
 - **載入策略**：進入分頁時才載入一次，「重新整理」才重讀；做了會改變資料的操作後，相關分頁標記為過期、下次進入才重新載入。模型失敗每次讀取都會寫稽核，所以不因切換分頁而重複讀取。清單以 `limit=50` 分頁，「載入更多」依已載入的筆數作為起始位置。
 - **錯誤處理**：`Auth.describeError` 整理後端的錯誤；401 導向登入；欄位錯誤（`password`、`reason`、`tier`）顯示在對應欄位，其餘顯示在視窗內；視窗已被關掉時改用 Toast。
 - **版面**：頂欄與分頁列與內容區左右對齊（最大寬度 64rem）；手機寬度時分頁列自己橫向捲動、頁面不會；清單的每一列改為直向排列；用量以長條加百分比與文字說明呈現，**不單靠顏色**（達 80% 長條為琥珀橙並寫明「已達 80% 告警線」）。
+
+## 3b. 帳號頁（`/account`）的匯出、刪除與撤銷（C-4c）
+
+```mermaid
+flowchart LR
+    Html["templates/auth/account.html<br/>兩份 HTML：一般會員／等待刪除的帳號<br/>（伺服器依狀態選擇，多餘的區塊不在頁面裡）"] --> Acc
+    Acc["account.js<br/>Vue 3 應用"] --> Life["account-lifecycle.js<br/>確認文字、送出條件、檔名、台灣時間、錯誤說明（純函式）"]
+    Acc --> Form["auth-form.js<br/>useForm：送出中、欄位錯誤、finally 恢復"]
+    Acc --> Ui["ui-components.js<br/>Modal 與 Toast"]
+    Acc --> Api["axios → /api/account/export、/delete、/cancel-deletion"]
+    Acc -.->|"刪除成功"| Login["導向 /login?notice=deletion_requested"]
+    Acc -.->|"撤銷成功"| Reload["Toast 後重新載入 /account"]
+```
+
+- **匯出**：`POST /api/account/export` 以 `responseType: 'blob'`、逾時 60 秒、`AbortController` 送出（離開頁面時中止），回應轉成物件網址以 `<a download>` 下載；無論成功、失敗或中斷，`finally` 恢復按鈕。失敗時錯誤本文也是 Blob，`unwrapBlobError` 先讀成 JSON 再交給共用的錯誤整理。
+- **刪除**：自製 Modal（Vue 狀態接管）說明 7 天寬限、抹除範圍並建議先匯出；有密碼者輸入密碼，其餘輸入確認文字（文字由伺服器放進初始狀態，前端不寫死第二份）。**確認前不送出請求**；送出後密碼欄位立即清空；成功後所有裝置登出並導向登入頁，登入頁以固定列舉的代碼顯示寬限期說明。
+- **等待刪除**：另一份 HTML 只有預定刪除時間（台灣時間）、撤銷與登出；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕；頁面開著時剛好過期則由前端處理 `grace_expired`（顯示說明、按鈕恢復）。登入頁與 Google 回呼在 `deletion_pending` 時一律去 `/account`，不依 `next`。
+- **管理員**：頁面沒有刪除區塊（HTML 裡完全沒有，不是用 `v-if` 藏起來）；匯出照常提供。
 
 ## 4. 暫存、待送與同步
 

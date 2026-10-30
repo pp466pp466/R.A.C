@@ -125,7 +125,7 @@ node --test "tests/js/**/*.test.js"
 | `/api/auth/login` | POST | 登入（失敗一律是同一則通用訊息） | 否 |
 | `/api/auth/logout` | POST | 登出目前裝置 | 否 |
 | `/api/auth/logout-all` | POST | 登出所有裝置（含目前這一台） | 是 |
-| `/api/auth/me` | GET | 目前登入者本人的資料：`public_id`、`email`、`display_name`、`member_tier`、`role`、`status`、`email_verified`、`has_password`、`age_confirmed`（布林）、`age_group`（`minor`、`adult`，尚未完成為 `null`）、`google_linked`；**生日、年齡區間、確認時間與政策版本一律不對外** | 是 |
+| `/api/auth/me` | GET | 目前登入者本人的資料：`public_id`、`email`、`display_name`、`member_tier`、`role`、`status`、`email_verified`、`has_password`、`age_confirmed`（布林）、`age_group`（`minor`、`adult`，尚未完成為 `null`）、`google_linked`，待刪除的帳號另有 `deletion_scheduled_at`；**生日、年齡區間、確認時間與政策版本一律不對外** | 是 |
 | `/api/auth/verify-age` | POST | 補填生日與年齡區間（請求 `birth_date`、`age_range`，驗證規則同註冊，回應最新的帳號資料；已完成的帳號再次提交一律成功但不改動原紀錄）。取代舊的 `/api/auth/confirm-adult`（已移除） | 是 |
 | `/api/auth/change-password` | POST | 變更密碼（其他裝置被登出，目前裝置維持登入） | 是 |
 | `/api/auth/verify-email` | POST | 以權杖完成信箱驗證（驗證關閉時 404） | 否 |
@@ -138,7 +138,7 @@ node --test "tests/js/**/*.test.js"
 |---|---|
 | `/login`、`/register` | 登入、註冊（已登入者導向 `/account`） |
 | `/forgot-password`、`/reset-password`、`/verify-email` | 信箱驗證開啟時才存在；權杖在網址片段，頁面載入時不會自動完成動作 |
-| `/account` | 帳號設定（需登入）：顯示會員等級標籤與年齡確認狀態（尚未完成時可在此補填生日與年齡區間；13 至 17 歲顯示安全模式提示，**不顯示生日**）、變更密碼、登出、登出所有裝置 |
+| `/account` | 帳號設定（需登入）：顯示會員等級標籤與年齡確認狀態（尚未完成時可在此補填生日與年齡區間；13 至 17 歲顯示安全模式提示，**不顯示生日**）、變更密碼、登出、登出所有裝置、匯出我的資料、刪除帳號（管理員沒有）；帳號等待刪除者只看到撤銷與登出（見「個資生命週期（C-4c）」） |
 | `/terms`、`/privacy` | 服務條款與隱私權政策（**草稿**，待法務覆核） |
 | `/auth/google/callback` | Google 登入的回呼（回傳重新導向，不是 JSON） |
 
@@ -160,6 +160,7 @@ node --test "tests/js/**/*.test.js"
   - **連續 12 個月未登入的帳號直接刪除**（連同生日與年齡區間，不經 7 天寬限期；管理員不納入）：
     - `flask --app wsgi purge-inactive-accounts [--dry-run]`：由平台排程器觸發（C-5 設定），**不使用行程內計時器**。每個被刪帳號在同一個交易留下一筆只含內部編號、時間與原因的 `deletion_tombstones`；可重複執行，輸出與日誌只有筆數與內部編號。
     - `flask --app wsgi age-stats`：各年齡區間的人數（供定期察看用戶群），沒有任何個別使用者的資料。
+    - 使用者自助刪除的 `execute-account-deletions` 與各類資料的 `purge-expired-data` 見「個資生命週期（C-4c）」；閒置清除現在與它們共用同一個抹除出口，也會先把帳本的對話編號清為空值。
     - 之後（C-3、C-4）新增指向 `users.id` 的資料表，外鍵必須是 `ON DELETE CASCADE` 或 `SET NULL`，否則 `tests/architecture/test_user_foreign_keys.py` 會失敗。
 - **預設登入後頁面**是 `/account`（C-3 完成後改為 `/cs`，在 `app/security/redirects.py` 一個常數）。
 - **登入鎖定可被用於阻斷特定帳號**（每 15 分鐘一次）：這是規範指定的行為，緩解靠入口層的 IP 限流（C-5）。
@@ -463,7 +464,7 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 ### 已知限制
 
 - ①**被盜用的管理員登入狀態可以不輸入密碼讀取被標記與意見回饋的對話、查詢使用者**（AGENTS.md 只要求高風險操作重新輸入密碼）；每次讀取都有稽核，登入狀態 7 天到期、改密碼即失效。要加強只需讓「讀全文」也要求密碼（改一個呼叫）。②「意見回饋」依賴模型對意圖的分類：誤判會讓某些一般對話可被讀取、或漏掉某些回饋；使用者沒有要求真人、只直接問一個被歸為 `unknown` 的問題時，管理員讀不到（刻意接受）。③管理員輸入錯誤密碼也累積登入的失敗計數：連續 5 次會把自己鎖定 15 分鐘（唯一的管理員會暫時進不來），這是刻意的，讓後台不成為暴力猜測的捷徑。④原因欄位是自由文字，介面提醒「請勿填寫個人資料」，但無法強制。
-- ⑤**稽核的 24 個月清除、`error_detail` 的 14 天清除、刪除帳號、匯出、告警都是 C-4c，尚未實作**；讀取端不依賴清除排程（失敗原文的 14 天由查詢本身限制）。⑥沒有調整額度數值、角色變更、來源 IP 限制、雙因素驗證與寄信通知被停權者（AGENTS.md 沒有要求或明定 v1 不做）；客服對話暫停不能解除（由帳本推得，1 小時自然到期）。⑦每次「看使用者」與使用者資料的「重新整理」都寫一筆 `user.lookup`，所以稽核會比實際的決策多；這是讀取一律留痕的代價。⑧後台的介面只驗證了 Edge；對話全文的視窗加寬用了 `:has()`，不支援的瀏覽器維持預設寬度、仍可使用。⑨容器驗收沒有為這個 change 重跑。
+- ⑤**稽核的 24 個月清除、`error_detail` 的 14 天清除、刪除帳號與匯出已由 C-4c 實作（見「個資生命週期（C-4c）」），告警改為 C-4d**；讀取端不依賴清除排程（失敗原文的 14 天由查詢本身限制）。⑥沒有調整額度數值、角色變更、來源 IP 限制、雙因素驗證與寄信通知被停權者（AGENTS.md 沒有要求或明定 v1 不做）；客服對話暫停不能解除（由帳本推得，1 小時自然到期）。⑦每次「看使用者」與使用者資料的「重新整理」都寫一筆 `user.lookup`，所以稽核會比實際的決策多；這是讀取一律留痕的代價。⑧後台的介面只驗證了 Edge；對話全文的視窗加寬用了 `:has()`，不支援的瀏覽器維持預設寬度、仍可使用。⑨容器驗收沒有為這個 change 重跑。
 
 ### 驗收紀錄（C-4b，2026-10-30）
 
@@ -475,6 +476,60 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 | 瀏覽器驗收 | Edge 無頭模式 **100 / 100 項**，桌面 1280 與手機 360，19 張截圖逐張檢視（暫時的伺服器：SQLite 檔案資料庫、預先放好被擋 3 次與 1 次的使用者、意見回饋與失敗原文、7 日用量、token 用量 88%）。涵蓋：未登入導向登入並保留 `next`、一般使用者開啟 `/admin` 與 `/api/admin/overview` 得到 404；總覽的今日警告（4 次、2 位、1 位暫停中）與用量長條（88% 為琥珀橙並說明已達 80% 告警線）、沒有個別使用者資料；從今日警告進到被標記清單、暫停中的列以警示樣式標出、讀對話（`<script>`、`<b>`、`<img onerror>` 一律為純文字，沒有執行）並確認寫了稽核、看使用者、停權（空白送出不發請求、密碼錯誤的錯誤顯示在密碼欄位且密碼立即清空、Esc 取消後再開啟欄位為空、密碼不在任何儲存體、成功後狀態更新）、被停權者無法登入、解除停權後可登入、以信箱查詢（大小寫與空白不影響）、調整等級（額度立即改變）、管理員帳號沒有操作按鈕、意見回饋、刪除對話（該列消失、再讀為 404、帳本保留）、模型失敗（14 天外的不顯示）、稽核（八種動作都有中文名稱、整頁沒有 email）、登入狀態失效後導向登入；手機寬度每個分頁都沒有水平捲動、對話全文與確認視窗在視窗內；連續 5 次錯誤密碼後即使第 6 次正確也被拒絕，訊息相同；沒有外部請求與未處理的例外 |
 | 修正（截圖發現） | 同一行的標籤、識別碼與晶片黏在一起（改為固定間距）；頂欄與分頁列靠左而內容置中（改為與內容區對齊）；360px 對話全文的三個按鈕文字斷成兩行（按鈕整顆換行）；360px 今日警告的三個計數排成 2＋1（改為同一列）。驗收中也修正了自己的驗收資料（預期 token 用量漏算一筆驗證失敗的帳本列），不是程式缺陷 |
 | 本機資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`project_pre_0007_20261030_091458.bak`，`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔真的存在），再 `alembic upgrade head`：`0006_usage_indexes` → `0007_admin_audit_logs`；升級後 `alembic current` 為 `0007_admin_audit_logs (head)`、`admin_audit_logs` 與兩個索引存在、外鍵 `admin_user_id → users.id` 為 `SET NULL`、`/healthz` 與 `/readyz` 回 200，既有資料筆數不變（`users` 1 筆，其餘 0 筆）。**備份的陷阱**：用 SQLAlchemy 的 `execute` 直接跑 `BACKUP` 時，驅動程式在讀完進度訊息之前就關閉游標，伺服器會中止作業而**不報錯**（印出「已寫入」、檔案卻不存在，隨後的 `RESTORE VERIFYONLY` 才失敗）；備份腳本須讀完所有結果集，並向伺服器確認檔案存在 |
+| 真實 Gemini | 本 change 沒有任何模型呼叫 |
+
+## 個資生命週期（C-4c）
+
+change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使用者自助刪除帳號**（7 天寬限期內可撤銷）、**匯出個人資料**、**各類資料的保存期限清除**，並把「抹除一個人」收斂成全站唯一的出口。規格見 `openspec/specs/`（`account-deletion`、`personal-data-export`、`data-retention`，以及 `account-retention`、`session-authentication`、`google-sign-in`、`access-control`、`auth-pages`、`service-observability` 的相關條款）；設計見 `docs/帳號與安全-auth-security.md`、`docs/資料模型-data-model.md`、`docs/營運與部署-operations.md`。監控與告警依使用者決定拆為 C-4d，不在這個 change。
+
+### 端點
+
+| 端點 | 方法 | 用途 | 需要登入 |
+|---|---|---|---|
+| `/api/account/delete` | POST | 申請刪除自己的帳號。有密碼的帳號帶 `password`（與登入共用失敗計數與鎖定，連續 5 次鎖定 15 分鐘）；只靠 Google 的帳號帶 `confirm_text`（固定文字「刪除我的帳號」，由伺服器放進頁面狀態，前端不另存一份）。成功後帳號為 `deletion_pending`、`token_version` 加 1（所有裝置登出，這台的 cookie 一併清除）、信箱驗證開啟時於提交後寄通知信。錯誤：400 欄位錯誤、403 `admin_delete_forbidden`（管理員不可自助刪除）、409 `deletion_not_allowed`（已在待刪除，或停權等不允許的狀態） | 是 |
+| `/api/account/cancel-deletion` | POST | 撤銷刪除（只在申請後 7 天內）：還原為申請前的狀態（使用中或待驗證信箱，**不會因為刪除再撤銷就變成已驗證**）。**少數允許受限登入狀態的端點之一**；`token_version` 不變，撤銷後目前的登入狀態直接變成完整的。錯誤：409 `grace_expired`、`not_pending` | 是（含待刪除） |
+| `/api/account/export` | POST | 匯出自己的帳號資料與全部對話。本文 `format`：`json` 或 `csv`（其餘 400）。回應是附件與 `Cache-Control: no-store`：JSON 為 UTF-8（無 BOM）；CSV 為一個 zip，內含 `account.csv` 與 `messages.csv`（UTF-8-sig，Excel 開啟繁體中文不亂碼；以 `=`、`+`、`-`、`@`、Tab 或歸位字元開頭的儲存格前加單引號，避免被當成公式）。用 POST 是為了受 CSRF 與來源檢查保護、不被預取連結觸發；請求夾帶的其他使用者識別碼一律忽略。受限登入狀態不可用 | 是 |
+
+`/api/auth/me` 另有 `deletion_scheduled_at`（UTC，只有待刪除的帳號才有）。頁面：`/account` 多了「匯出我的資料」與「刪除帳號」（管理員沒有刪除）；帳號正在等待刪除的人看到的是**另一份 HTML**（預定刪除時間、撤銷、登出，沒有其他區塊；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕）；`/login?notice=deletion_requested` 顯示寬限期的說明（代碼是固定列舉）。
+
+### 指令（由平台排程器觸發，C-5 設定；不使用行程內計時器）
+
+| 指令 | 說明 |
+|---|---|
+| `flask --app wsgi execute-account-deletions [--dry-run]` | 抹除「申請刪除、寬限期（7 天）已滿」的帳號，原因記為 `user_requested`。判斷在刪除當下再確認一次（剛撤銷的不會被刪），每個帳號一個交易。可重複執行，輸出只有筆數 |
+| `flask --app wsgi purge-expired-data [--dry-run]` | 清除超過保存期限的資料（見下表）。各類獨立、分批（500）、每批各自提交；某一類失敗時回復該批、繼續其餘類別，最後以非零代碼結束並標明類別。輸出與日誌只有各類的筆數 |
+
+| 類別 | 條件 | 處理 |
+|---|---|---|
+| 對話與訊息 | 最後活動（`updated_at`）早於 365 天 | 刪除；帳本指向它的對話編號先清為空值 |
+| 失敗的模型原文 | 建立早於 14 天 | 原文清為空值，帳本那一筆保留 |
+| 用量帳本 | 建立早於 365 天 | 刪除 |
+| 驗證權杖 | 到期早於 7 天（不論是否已使用） | 刪除 |
+| 管理稽核紀錄 | 建立早於 730 天 | 刪除（稽核 Repository 仍然沒有更新與刪除；清除只在 `RetentionRepository`） |
+
+`deletion_tombstones`（只含內部編號、時間與原因）**不納入**清除。失敗原文排在帳本之前：同時符合兩者的舊紀錄先清原文、再刪整筆，預覽與實際的筆數才一致。以上期限與 `/privacy` 的保存期限表由 `tests/test_legal_pages.py` 比對。
+
+### 設計重點與已知限制
+
+- **單一抹除出口**（`AccountErasureService`）：閒置 12 個月與自助刪除共用。每個帳號在**一個交易**內依序「把帳本的對話編號清為空值 → 條件式刪除 → 寫刪除紀錄 → 提交」，條件不成立時**整個回復**（使用者還活著，不能讓他的帳本失去對話連結）。順序不能反過來：使用者一刪，帳本的 `user_id` 就變空，找不到要清的列。這同時補上了先前閒置清除沒有匿名化帳本對話編號的缺口（SQLite 重用整數編號時會錯指別人的新對話）。`tests/architecture/test_account_erasure_coverage.py` 要求每張指向使用者或對話的資料表都登記在清單內，新增資料表漏掉就失敗。
+- **受限登入狀態預設拒絕**：帳號等待刪除的人可以登入（密碼或 Google），但 `require_login()` 與 `login_required_page` 預設拒絕他（API 403 `account_deletion_pending`、頁面導向 `/account`），只有「查詢自己、撤銷刪除、登出、`/account`」明確允許。新增的端點不必記得檢查；`tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則，並有自我驗證（暫時加一個漏檢查的端點必須被抓到）。客服與後台各自還有 `active` 狀態的檢查，是第二道防線。以 Google 登入時，只有「本來就綁定這個 Google 身分」的待刪除帳號放行；以信箱找到、尚未綁定的待刪除帳號仍拒絕（不在即將刪除的帳號上新增綁定）。
+- **確認本人**：有密碼者重新輸入密碼（沿用 `confirm_password`，與登入共用計數與鎖定）；只靠 Google 者輸入固定文字（NFC 正規化並去除前後空白，含全形空白）。沒有採用「Google 重新授權」（使用者決定）。
+- **匯出的範圍**：帳號欄位（含生日與年齡區間）、對話標題與摘要、訊息序號／角色／內容／時間。**不含**密碼雜湊、`token_version`、驗證權杖、Google 識別值、內部整數編號，以及意圖、實體、信心值、建議動作與對話狀態（系統推論的副產品，不是使用者提供的資料）；不含 `llm_call_logs`。訊息以序號為游標每頁 500 則、寫入暫存檔（8 MB 以內留在記憶體），所以記憶體用量不隨總訊息數增加。
+- **刪除通知信**：信箱驗證開啟時，申請成功後於提交之後寄出（預定刪除日以台灣時間表示；不放連結，撤銷要登入後在帳號設定頁進行）；寄信失敗只記事件，不影響申請。
+- **日誌**：新增 `account.deletion_requested`、`account.deletion_cancelled`、`account.deleted_by_request`、`account.exported`（`reason` 為 `json` 或 `csv`）、`retention.purged`（`reason` 為類別、`count` 為筆數）、`retention.purge_failed`；欄位只有內部編號、固定列舉與整數。整段流程（註冊、對話、匯出、申請、撤銷、再申請、排程刪除、期限清除）由 `tests/test_privacy_lifecycle_flow.py` 掃描日誌與指令輸出，找不到信箱、名稱、生日、密碼、確認文字、對話與失敗原文。
+- **migration `0008`**（expand）：`users.deletion_requested_at`、`users.status_before_deletion`（皆可為空）與 `chat_conversations.updated_at` 的索引。降級用 `recreate="never"`（SQLite 預設重建資料表會因串聯刪除清掉子表資料，同 0003、0004）。
+- 已知限制：①**被盜用的登入狀態可以申請刪除**（只靠 Google 的帳號只需輸入固定文字）：緩解靠 7 天寬限、所有裝置登出、通知信（信箱驗證開啟時）與撤銷。②**停權的帳號無法自助刪除**（無法登入），仍由 12 個月閒置清除處理；管理員帳號不可自助刪除。③待刪除期間「忘記密碼」仍停用：有密碼者申請時才輸入過密碼，寬限期內忘記的情形很少，Google 登入或等候期滿都能解決。④匯出是同步的：記憶體有界，但時間與訊息數成正比，沒有非同步匯出；濫用的限流屬入口層（C-5）。⑤兩個指令尚未設定排程（C-5）；備份還原後依刪除紀錄重新執行刪除的流程尚未演練（C-5）。⑥應用程式日誌 30 天與備份 30 天是平台設定，不在這個 change。⑦**告警（C-4d）尚未實作**，包括 `usage.global_budget_warning` 的去重與保存期限清除失敗的告警（目前只有非零結束代碼與 `retention.purge_failed` 日誌）。⑧瀏覽器只驗證了 Edge；容器驗收沒有為這個 change 重跑；這個 change 沒有任何模型呼叫。
+
+### 驗收紀錄（C-4c，2026-10-30）
+
+| 項目 | 結果 |
+|---|---|
+| pytest | **5015 項通過**（上次是 4715，新增 300 項）（含真實 SQL Server `project_test`，沒有略過）。新增：抹除用 Repository 與服務（到期的邊界、串聯、帳本匿名化與回復、編號重用）、申請與撤銷的條件式 UPDATE（含並行只成立一次）、申請與撤銷服務（四種確認組合、鎖定、管理員、通知信、事件）、`/api/account/*` 端到端（CSRF、所有裝置登出、受限狀態只能撤銷、撤銷後立即完整）、受限登入狀態掃描全部路由、匯出（JSON 與 CSV 的編碼往返、公式字元、欄位白名單、分頁邊界、跨使用者隔離）、期限清除（五類邊界、失敗隔離、分批、重跑、近期用量不受影響）、兩個排程指令、帳號頁與政策頁、整段流程的日誌掃描、README 端點表與實際路由逐一比對 |
+| Node | **175 項通過**（新增 15 項：確認文字、送出條件、檔名、預定刪除時間、錯誤說明、Blob 錯誤） |
+| `openspec validate privacy-lifecycle --strict` | 通過 |
+| 瀏覽器驗收 | Edge 無頭模式 **48 / 48 項**，桌面 1280 與手機 360，截圖逐張檢視（暫時伺服器：SQLite 檔案資料庫，另以假的 Google 身分供應商）。涵蓋：匯出 JSON 與 CSV 真的下載（檔名、無 BOM、繁體中文與表情符號、zip 標頭、POST）、刪除 Modal（空白不送出、密碼錯誤的欄位錯誤與清空、Esc 後重開為空、成功後導向登入頁並說明寬限期、所有裝置登出）、重新登入只看到撤銷頁（`/cs` 與 `/admin` 被導回、API 403、不能匯出）、撤銷後立即完整、寬限期已過的頁面與頁面開著時剛好過期、只靠 Google 的確認文字路徑（含全形空白與 Enter 送出）、管理員沒有刪除（HTML 裡完全沒有）、手機版面沒有水平捲動；沒有外部請求與未處理的例外 |
+| 修正（驗收發現） | 寬限期已過、排程還沒執行時，頁面仍顯示注定失敗的「撤銷刪除」按鈕：改由伺服器判斷，期限已過就不顯示並說明「帳號即將刪除」；頁面開著時剛好過期的情形仍由前端處理 `grace_expired`。驗收腳本自己的問題（下載路徑需為 Windows 原生路徑、等待頁面渲染、`about:blank` 不是外部網域）不是程式缺陷 |
+| 本機資料庫 `project` | 先以 `BACKUP DATABASE … COPY_ONLY, CHECKSUM` 備份（`project_pre_0008_20261030_131713.bak`，`RESTORE VERIFYONLY` 通過，並向伺服器確認備份檔存在），再 `alembic upgrade head`：`0007_admin_audit_logs` → `0008_privacy_lifecycle`；升級後兩個新欄位可為空、索引存在、`/healthz` 與 `/readyz` 回 200，既有資料筆數不變（`users` 1 筆，其餘 0 筆） |
 | 真實 Gemini | 本 change 沒有任何模型呼叫 |
 
 ## RPG 用途的模型端點與等級 3 開關（openai-compatible-provider）
@@ -590,15 +645,16 @@ check_endpoint(app, spec, owner=alice, intruder=bob)
 | `finish_reason` | 模型結束原因 |
 | `error_type` | 例外類型 |
 | `error_location` | 例外發生的檔名與行號 |
-| `event` | 認證與安全事件名稱（固定列舉，例如 `auth.login_failed.bad_password`；失敗原因寫在名稱最後一段，因此不會夾帶自由文字）；模型呼叫為 `llm.call` 與 `llm.breaker_opened`，客服回覆完成為 `cs.reply`（只有意圖列舉值與結果）；用量事件為 `usage.denied`、`usage.global_budget_warning` 與 `cs.chat_suspended` |
+| `event` | 認證與安全事件名稱（固定列舉，例如 `auth.login_failed.bad_password`；失敗原因寫在名稱最後一段，因此不會夾帶自由文字）；模型呼叫為 `llm.call` 與 `llm.breaker_opened`，客服回覆完成為 `cs.reply`（只有意圖列舉值與結果）；用量事件為 `usage.denied`、`usage.global_budget_warning` 與 `cs.chat_suspended`；帳號生命週期為 `account.deletion_requested`、`account.deletion_cancelled`、`account.deleted_by_request`、`account.exported`，期限清除為 `retention.purged` 與 `retention.purge_failed` |
 | `kind` | 模型呼叫的用途（`chat` 對話、`summary` 摘要） |
 | `provider` | 模型供應商的轉接器名稱 |
 | `outcome` | 模型呼叫的結果（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`） |
 | `thinking_tokens` | 思考 token 數（供應商沒有提供時省略，不記為 0） |
-| `reason` | 輸出驗證失敗的分類（`not_json`、`schema:<欄位路徑>:<規則>`、`semantic:<規則名>`），不含任何模型文字；用量事件則是固定列舉（拒絕：`rate_limited`、`daily_quota`、`conversation_limit`、`suspended`、`global_budget`；預算警告：`tokens`、`calls`；暫停：`safety_blocks`） |
+| `reason` | 輸出驗證失敗的分類（`not_json`、`schema:<欄位路徑>:<規則>`、`semantic:<規則名>`），不含任何模型文字；用量事件則是固定列舉（拒絕：`rate_limited`、`daily_quota`、`conversation_limit`、`suspended`、`global_budget`；預算警告：`tokens`、`calls`；暫停：`safety_blocks`；匯出格式：`json`、`csv`；期限清除類別：`conversations`、`error_detail`、`ledger`、`auth_tokens`、`admin_audit`） |
 | `provider_status` | 供應商回應的 HTTP 狀態碼（僅失敗且有回應時） |
 | `used` | 全站今日已用量（整數；只出現在 `usage.global_budget_warning`） |
 | `limit` | 全站今日用量上限（整數；只出現在 `usage.global_budget_warning`） |
+| `count` | 期限清除某一類的筆數（整數；只出現在 `retention.purged`） |
 
 **模型呼叫日誌**（`app/observability/llm_events.py`）每次呼叫一筆，函式沒有接收任何文字內容的參數，所以提示詞、使用者訊息、回覆與金鑰「放不進來」。層級：成功與被安全過濾阻擋為資訊；驗證失敗與暫時性錯誤為警告；供應商回應設定錯誤（請求不合法、無權限）為**錯誤**，需要人工處理（多半是金鑰被撤銷或設定錯誤）。`llm.breaker_opened` 在主要模型因逾時或伺服器錯誤而將被暫時跳過時記一筆警告（只有模型名稱與分類），窗口內被跳過的請求不再記錄。驗證失敗的模型原文**不在日誌**，只存在用量帳本 `llm_call_logs.error_detail`（截斷至 2000 字、保存 14 天、僅管理員可讀）。
 

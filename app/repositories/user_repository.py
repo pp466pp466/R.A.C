@@ -10,10 +10,13 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.models.user import ROLE_ADMIN, User
+from app.models.llm_call_log import LlmCallLog
+from app.models.user import (
+    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, User,
+)
 from app.repositories.base import BaseRepository
 from app.repositories.errors import DuplicateUserError
 
@@ -174,3 +177,96 @@ class UserRepository(BaseRepository[User]):
             .execution_options(synchronize_session=False)
         )
         return result.rowcount == 1
+
+    # ---- 抹除（account-deletion 與 account-retention 規格；流程見 AccountErasureService）----------
+
+    def clear_ledger_conversation_refs(self, user_id: int) -> int:
+        """把這位使用者的用量帳本中的對話編號清為空值（單一 UPDATE），回傳受影響的筆數。
+
+        帳本的 `conversation_id` 沒有外鍵（SQL Server 錯誤 1785），不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。
+        必須在刪除使用者**之前**做：使用者一刪，帳本的 `user_id` 就變成空值，再也找不到要清的列。
+        """
+        self._session.flush()
+        result = self._session.execute(
+            update(LlmCallLog)
+            .where(LlmCallLog.user_id == user_id, LlmCallLog.conversation_id.is_not(None))
+            .values(conversation_id=None)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount
+
+    @staticmethod
+    def _pending_due(cutoff: datetime):
+        """寬限期已滿的待刪除帳號。申請時間為空（理論上不會發生）一律視為未到期，保守地不自動刪除。"""
+        return (
+            User.status == STATUS_DELETION_PENDING,
+            User.role != ROLE_ADMIN,
+            User.deletion_requested_at.is_not(None),
+            User.deletion_requested_at <= cutoff,
+        )
+
+    def count_pending_due(self, cutoff: datetime) -> int:
+        """申請刪除的時間不晚於 `cutoff` 的待刪除帳號數量。"""
+        return self._session.execute(select(func.count(User.id)).where(*self._pending_due(cutoff))).scalar_one()
+
+    def find_pending_due_ids(self, cutoff: datetime, *, limit: int = 200) -> list[int]:
+        """寬限期已滿的待刪除帳號的內部編號（由小到大，最多 `limit` 個）。只回編號，不載入任何個資。"""
+        statement = select(User.id).where(*self._pending_due(cutoff)).order_by(User.id).limit(limit)
+        return list(self._session.scalars(statement))
+
+    def delete_if_pending_due(self, user_id: int, cutoff: datetime) -> bool:
+        """條件式 DELETE：條件在刪除當下再確認一次（剛撤銷的帳號不會被刪）。回傳是否真的刪除。
+
+        串聯與不同步 Session 的注意事項同 `delete_inactive`。
+        """
+        result = self._session.execute(
+            delete(User).where(User.id == user_id, *self._pending_due(cutoff)).execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
+    # ---- 自助刪除的申請與撤銷（account-deletion 規格）-----------------------------------------
+
+    def request_deletion(self, user: User, *, now: datetime) -> bool:
+        """條件式 UPDATE：非管理員、狀態為 `active` 或 `pending_verification` 時，轉為待刪除。回傳是否真的轉換。
+
+        同一個語句記下申請時間與申請前的狀態（SET 右邊讀的是更新前的值），並使 `token_version` 加 1，
+        讓所有裝置（含目前這台）的登入狀態失效。兩個並行的申請只有一個會成立，不會加兩次、也不會把申請前的狀態
+        覆蓋成 `deletion_pending`。
+        """
+        changed = self._run_update(
+            user,
+            update(User)
+            .where(User.id == user.id)
+            .where(User.role != ROLE_ADMIN)
+            .where(User.status.in_((STATUS_ACTIVE, STATUS_PENDING_VERIFICATION)))
+            .values(
+                status_before_deletion=User.status,
+                status=STATUS_DELETION_PENDING,
+                deletion_requested_at=now,
+                token_version=User.token_version + 1,
+            ),
+        )
+        return changed == 1
+
+    def cancel_deletion(self, user: User, *, now: datetime) -> bool:
+        """條件式 UPDATE：待刪除且申請未滿寬限期時，還原為申請前的狀態並清除兩個欄位。回傳是否真的還原。
+
+        還原規則：申請前為 `active` → `active`；申請前為 `pending_verification`（或空值）→ 信箱此時已驗證就是 `active`
+        （待刪除期間以 Google 完成了驗證），否則仍是 `pending_verification`，不會因為刪除再撤銷就變成已驗證。
+        不改變 `token_version`：持有受限登入狀態的人撤銷後，目前的登入狀態直接變成完整的。
+        """
+        restored = case(
+            (User.status_before_deletion == STATUS_ACTIVE, STATUS_ACTIVE),
+            (User.email_verified_at.is_not(None), STATUS_ACTIVE),
+            else_=STATUS_PENDING_VERIFICATION,
+        )
+        changed = self._run_update(
+            user,
+            update(User)
+            .where(User.id == user.id)
+            .where(User.status == STATUS_DELETION_PENDING)
+            .where(User.deletion_requested_at.is_not(None))
+            .where(User.deletion_requested_at > now - DELETION_GRACE_PERIOD)
+            .values(status=restored, deletion_requested_at=None, status_before_deletion=None),
+        )
+        return changed == 1

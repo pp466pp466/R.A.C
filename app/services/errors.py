@@ -44,6 +44,13 @@ class Forbidden(ServiceError):
     default_message = "沒有權限執行這個操作。"
 
 
+class AccountDeletionPending(Forbidden):
+    """帳號正在等待刪除（寬限期內），只持有受限的登入狀態：除了撤銷刪除與登出，其餘功能都不可用（403）。"""
+
+    code = "account_deletion_pending"
+    default_message = "您的帳號正在等待刪除。如要保留帳號，請先到帳號設定撤銷刪除。"
+
+
 class AgeConfirmationRequired(Forbidden):
     """尚未完成年齡確認，不得使用會呼叫 Gemini 的功能（403）。前端依 `code` 引導使用者到帳號設定補填生日與年齡區間。"""
 

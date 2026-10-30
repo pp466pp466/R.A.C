@@ -55,6 +55,16 @@ class ChatRepository:
             select(ChatConversation).where(ChatConversation.user_id == user_id, ChatConversation.public_id == public_id)
         )
 
+    def export_conversations(self, user_id: int) -> list[ChatConversation]:
+        """匯出個人資料用：這位使用者的**全部**對話（由舊到新）。訊息另以 `messages_after` 分頁讀取，不在這裡一次載入。"""
+        return list(
+            self._session.scalars(
+                select(ChatConversation)
+                .where(ChatConversation.user_id == user_id)
+                .order_by(ChatConversation.created_at.asc(), ChatConversation.id.asc())
+            )
+        )
+
     def list_conversations(self, user_id: int, *, limit: int, offset: int) -> Sequence[ChatConversation]:
         return self._session.scalars(
             select(ChatConversation)

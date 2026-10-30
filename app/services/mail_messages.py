@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 PRODUCT_NAME = "智能客服"
 IGNORE_NOTICE = "如果這不是您本人的操作，請忽略這封信，您的帳號不會有任何變動。"
@@ -51,6 +52,28 @@ def reset_password_mail(display_name: str, link: str) -> MailContent:
             "{ignore}\n\n"
             "{product}\n"
         ).format(name=display_name, product=PRODUCT_NAME, link=link, ignore=IGNORE_NOTICE),
+    )
+
+
+TAIPEI = timezone(timedelta(hours=8))      # 台灣沒有日光節約時間，固定 UTC+8（與 age_policy 相同，不依賴 tz 資料庫）
+
+
+def taiwan_time_text(moment: datetime) -> str:
+    local = moment.astimezone(TAIPEI)
+    return f"{local.year} 年 {local.month} 月 {local.day} 日 {local.hour:02d}:{local.minute:02d}（台灣時間）"
+
+
+def deletion_notice_mail(display_name: str, scheduled_at: datetime) -> MailContent:
+    return MailContent(
+        subject=f"【{PRODUCT_NAME}】我們已收到您的刪除帳號申請",
+        body=(
+            "{name} 您好：\n\n"
+            "我們已收到刪除您帳號的申請。您的帳號已立即停用，並將於 {when} 之後永久刪除，"
+            "包含您的對話與個人資料，刪除後無法復原。\n\n"
+            "如果您改變主意，請在這個時間之前登入，並在帳號設定頁按下「撤銷刪除」。\n\n"
+            "如果這不是您本人的操作，請立即登入並撤銷刪除，然後變更密碼。\n\n"
+            "{product}\n"
+        ).format(name=display_name, when=taiwan_time_text(scheduled_at), product=PRODUCT_NAME),
     )
 
 

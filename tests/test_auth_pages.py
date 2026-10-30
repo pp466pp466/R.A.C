@@ -503,7 +503,7 @@ def test_the_privacy_policy_discloses_the_birthday_its_purposes_and_its_retentio
     assert "日後若新增生日祝賀等其他用途，我們會先更新本政策" in html
     retention = html.split("<table>", 1)[1].split("</table>", 1)[0]
     assert "含生日與年齡區間" in retention and "連續 12 個月未登入即直接刪除" in retention
-    assert "匯出我的對話與帳號資料（含生日與年齡區間）" in html and "刪除您的信箱、名稱、密碼雜湊、生日與年齡區間" in html
+    assert "匯出我的資料" in html and "您的帳號資料（含生日與年齡區間）" in html and "刪除您的信箱、名稱、密碼雜湊、生日與年齡區間" in html
     assert "草稿" in html and CURRENT_TERMS_VERSION in html
     headings = re.findall(r"<h2>(\d+)\. ", html)
     assert headings == [str(n) for n in range(1, len(headings) + 1)]

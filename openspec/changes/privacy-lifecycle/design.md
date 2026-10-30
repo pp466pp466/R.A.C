@@ -42,13 +42,13 @@
 有密碼的帳號呼叫既有的 `AuthService.confirm_password`（與登入共用失敗計數與鎖定，與後台一致）。沒有密碼的帳號比對固定字串「刪除我的帳號」（NFC 正規化、去除前後空白）。端點依帳號是否有密碼決定要求哪個欄位，忽略另一個。替代方案「Google 帳號重新授權」被使用者否決（OAuth 流程要加 `prompt=login` 與 `auth_time` 驗證，工作量大）；這裡的風險由「7 天寬限＋撤銷＋通知信」承擔，見風險。
 
 **D5　受限登入狀態：在入口層預設拒絕。**
-- `resolve_session` 對 `deletion_pending` 改為回傳使用者（`suspended` 仍回 None）。`login` 與 Google 登入對 `deletion_pending` 不再拒絕，成功後 `status` 為 `deletion_pending`。
+- `resolve_session` 對 `deletion_pending` 改為回傳使用者（`suspended` 仍回 None）。`login` 與 Google 登入對 `deletion_pending` 不再拒絕，成功後 `status` 為 `deletion_pending`。Google 登入只對「本來就綁定這個 Google 身分」的待刪除帳號放行；以信箱找到、尚未綁定的待刪除帳號仍拒絕（不在即將刪除的帳號上新增綁定或改動憑證）。
 - `require_login(*, allow_pending_deletion=False)`：狀態為 `deletion_pending` 且未明確允許時拋出 `Forbidden`（403，代碼 `account_deletion_pending`）。`login_required_page` 同理，被拒絕時導向 `/account`。因此**所有現有端點不必修改**就自動拒絕；只有四個地方傳入 `allow_pending_deletion=True`：`/api/auth/me`、`/api/account/cancel-deletion`、登出（本來就不要求登入）與 `/account` 頁。
 - 架構／整合測試：以受限登入狀態列舉 `app.url_map` 的每個規則，逐一請求（GET 與 POST），除允許清單外一律斷言 403 或導向 `/account`。新增端點若遺漏，測試不用改就會失敗或通過，行為由入口層保證。
 - 否決方案「`current_user()` 對待刪除回傳 None」：呼叫端會把它當成未登入，得到 401 而不是有意義的 403，`/login` 也會誤判而讓人重複登入。
 
 **D6　受限狀態的前端。**
-`login.js` 與 Google 回呼在 `status === 'deletion_pending'` 時一律去 `/account`，不依 `next`。`/account` 的初始狀態含 `deletion_scheduled_at`（`/api/auth/me` 也含），頁面以 `v-if` 只渲染撤銷區塊。撤銷成功後重新載入頁面（以取得正常狀態與新的 CSRF 權杖）。Modal 一律是自製 Vue 元件，沿用既有的 `ui-components.js`。
+`login.js` 與 Google 回呼在 `status === 'deletion_pending'` 時一律去 `/account`，不依 `next`。`/account` 的初始狀態含 `deletion_scheduled_at`（`/api/auth/me` 也含）。等待刪除者與管理員拿到的是**不同的 HTML**（Jinja 依狀態選擇，多餘的區塊不在頁面裡，不只是用 `v-if` 藏起來）；寬限期已過但排程還沒執行時，頁面不顯示注定失敗的撤銷按鈕，只說明「帳號即將刪除」。撤銷成功後重新載入頁面（以取得正常狀態與新的 CSRF 權杖）。Modal 一律是自製 Vue 元件，沿用既有的 `ui-components.js`。
 
 **D7　通知信：`AccountMailer` 增加 `send_deletion_notice`。**
 內容：已收到申請、預定刪除日、撤銷方式（登入後在帳號設定頁）、若非本人請立即登入撤銷並更改密碼。以延後動作在提交後寄出；寄信失敗只記錄、不影響結果（與其他信件相同）。信箱驗證關閉時不寄（沿用 `EMAIL_VERIFICATION_REQUIRED` 的語意）。
@@ -62,10 +62,11 @@
 包含：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間。排除：密碼雜湊、`token_version`、權杖、Google 的 `provider_subject`、內部整數編號，以及 `intent`、`entities_json`、`suggested_actions_json`、`confidence`、`state_json` 這些模型的內部加工結果。排除後者的理由：它們不是使用者提供的資料，而是系統推論的副產品，且 `entities_json` 的內容形狀會隨模型調整；若日後認定須提供，擴充欄位即可，不影響格式相容。`llm_call_logs` 不含對話、不屬於使用者的個人內容（且可能已匿名化），不匯出。
 
 **D10　期限清除：`DataRetentionService`，每類獨立、分批、各自提交。**
-五個方法（對話、帳本、失敗原文、權杖、稽核）各自：以 `select(id) ... LIMIT :batch` 取一批編號（批次 500，也是 SQL Server 參數數量的安全範圍），在**一個交易**內處理這一批並提交，直到沒有為止。純 ORM，不寫原生 SQL。
+五類（依序：對話、失敗原文、帳本、權杖、稽核）各自：以 `select(id) ... LIMIT :batch` 取一批編號（批次 500，也是 SQL Server 參數數量的安全範圍），在**一個交易**內處理這一批並提交，直到沒有為止。純 ORM，不寫原生 SQL。
 - 對話：先把帳本中 `conversation_id IN (ids)` 清為空值，再 `DELETE chat_conversations WHERE id IN (ids)`（訊息串聯）。
 - 帳本：`DELETE ... WHERE id IN (ids)`；失敗原文：`UPDATE ... SET error_detail = NULL WHERE id IN (ids)`（篩選 `error_detail IS NOT NULL AND created_at < 14 天前`，由既有的 `created_at` 索引縮小範圍）。
 - 權杖：`expires_at < now - 7 天`；稽核：`created_at < now - 730 天`。
+失敗原文**排在帳本之前**：同時符合兩者的舊紀錄先清原文、再刪整筆，預覽（各類獨立計數）與實際執行的筆數才一致。
 期限常數集中在 `app/services/data_retention_service.py`（對話與帳本 365 天、失敗原文 14 天、權杖 7 天、稽核 730 天，月以天計與閒置清除一致）；`/privacy` 的保存期限表與這些常數由測試比對，避免文件與實作脫節。
 指令 `flask purge-expired-data [--dry-run]` 依序執行五類；某一類丟出資料庫錯誤時，回復該批、記錄類別名稱（不含內容）、繼續其餘類別，最後以非零代碼結束。預覽只做 `COUNT`。
 

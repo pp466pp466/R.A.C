@@ -45,7 +45,7 @@ from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.normalization import canonical_email, is_valid_email, normalize_email
 
 MAX_DISPLAY_NAME_LENGTH = 50
-_DISABLED = (STATUS_SUSPENDED, STATUS_DELETION_PENDING)
+_DISABLED = (STATUS_SUSPENDED,)
 
 # 回到 /login?error=<代碼> 的固定代碼
 ERROR_STATE = "google_state"
@@ -188,7 +188,8 @@ class GoogleSignInService:
             if user is None:
                 self._refuse(ERROR_REJECTED, security_events.GOOGLE_REJECTED_CONFLICT)
             assert user is not None
-            self._ensure_enabled(user)
+            # 已綁定 Google 的待刪除帳號可以登入（只得到受限登入狀態，讓使用者撤銷刪除）
+            self._ensure_enabled(user, allow_pending_deletion=True)
             return self._finish(user, now, OUTCOME_LOGIN, security_events.GOOGLE_LOGIN)
 
         if not is_valid_email(profile.email):
@@ -233,7 +234,11 @@ class GoogleSignInService:
         self._bind(user, profile.subject)
         return self._finish(user, now, OUTCOME_LINKED, security_events.GOOGLE_LINKED)
 
-    def _ensure_enabled(self, user: User) -> None:
+    def _ensure_enabled(self, user: User, *, allow_pending_deletion: bool = False) -> None:
+        """停權的帳號一律拒絕。待刪除的帳號只有「本來就綁定這個 Google 身分」時才放行；以信箱找到、尚未綁定的待刪除帳號
+        仍拒絕（不在即將刪除的帳號上新增綁定或改動憑證）。"""
+        if user.status == STATUS_DELETION_PENDING and not allow_pending_deletion:
+            self._refuse(ERROR_DISABLED, security_events.GOOGLE_REJECTED_DISABLED, user_id=user.id)
         if user.status in _DISABLED:
             self._refuse(ERROR_DISABLED, security_events.GOOGLE_REJECTED_DISABLED, user_id=user.id)
 

@@ -155,6 +155,10 @@ class EmailFlowService:
     def send_password_changed_notice(self, user: User) -> None:
         self._queue_mail(user.email, mail_messages.password_changed_mail(user.display_name))
 
+    def send_deletion_notice(self, user: User, scheduled_at: datetime) -> None:
+        """申請刪除帳號的通知信（提交成功後才寄；寄信失敗只記錄事件，不影響申請結果）。"""
+        self._queue_mail(user.email, mail_messages.deletion_notice_mail(user.display_name, scheduled_at))
+
     # =========================================================================
     # 內部
     # =========================================================================

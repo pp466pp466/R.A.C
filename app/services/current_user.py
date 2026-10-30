@@ -7,10 +7,17 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime, timezone
 from typing import Any
 
-from app.models.user import User
+from app.models.user import (
+    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, User,
+)
+
+
+def iso_utc(moment: datetime) -> str:
+    """對外回應的時間格式：UTC、秒、結尾 Z（例如 2026-11-06T08:30:15Z）。"""
+    return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 @dataclass(frozen=True)
@@ -26,6 +33,7 @@ class CurrentUser:
     has_password: bool
     birth_date: date | None        # 內部欄位；None = 尚未完成年齡確認
     token_version: int
+    deletion_requested_at: datetime | None = None    # 只有待刪除的帳號有值；用來算出預定刪除的時間
 
     @property
     def age_confirmed(self) -> bool:
@@ -48,7 +56,25 @@ class CurrentUser:
             has_password=bool(user.password_hash),
             birth_date=user.birth_date if complete else None,
             token_version=user.token_version,
+            deletion_requested_at=user.deletion_requested_at,
         )
+
+    @property
+    def may_delete_account(self) -> bool:
+        """帳號頁是否提供「刪除帳號」：一般會員（管理員不可自助刪除），且帳號狀態允許申請（使用中或待驗證信箱）。"""
+        return self.role != ROLE_ADMIN and self.status in (STATUS_ACTIVE, STATUS_PENDING_VERIFICATION)
+
+    @property
+    def awaiting_deletion(self) -> bool:
+        """帳號正在等待刪除（寬限期內）：只持有受限的登入狀態，除了撤銷刪除與登出，其餘功能都不可用。"""
+        return self.status == STATUS_DELETION_PENDING
+
+    @property
+    def deletion_scheduled_at(self) -> datetime | None:
+        """預定刪除的時間（申請時間加寬限期）；只有待刪除的帳號有值。"""
+        if not self.awaiting_deletion or self.deletion_requested_at is None:
+            return None
+        return self.deletion_requested_at + DELETION_GRACE_PERIOD
 
     def public_dict(self, *, age_group: str | None, google_linked: bool | None = None) -> dict[str, Any]:
         """可以回傳給使用者本人的資料。不含內部編號、密碼雜湊、`token_version`、生日與年齡區間。
@@ -70,4 +96,7 @@ class CurrentUser:
         }
         if google_linked is not None:
             data["google_linked"] = google_linked
+        scheduled = self.deletion_scheduled_at
+        if scheduled is not None:
+            data["deletion_scheduled_at"] = iso_utc(scheduled)
         return data

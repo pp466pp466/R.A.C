@@ -11,7 +11,7 @@
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 
 from sqlalchemy import Boolean, Date, ForeignKey, Index, Integer, Unicode, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
@@ -37,6 +37,9 @@ USER_STATUSES = (STATUS_PENDING_VERIFICATION, STATUS_ACTIVE, STATUS_SUSPENDED, S
 
 PROVIDER_GOOGLE = "google"
 IDENTITY_PROVIDERS = (PROVIDER_GOOGLE,)
+
+# 申請刪除後的寬限期：期間內可登入並撤銷，期滿由排程指令抹除（AGENTS.md 第 11 節）
+DELETION_GRACE_PERIOD = timedelta(days=7)
 
 TOKEN_VERIFY_EMAIL = "verify_email"
 TOKEN_RESET_PASSWORD = "reset_password"
@@ -74,6 +77,10 @@ class User(Base, PublicIdMixin, TimestampMixin):
     age_range: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
     is_adult_at_confirmation: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # 自助刪除（account-deletion 規格）：申請時間與申請前的狀態（只會是 active 或 pending_verification，撤銷時用來還原，
+    # 避免待驗證的帳號藉由刪除再撤銷變成 active）。兩欄平時都是空值，不進索引：待刪除的帳號極少，掃描即可。
+    deletion_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    status_before_deletion: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
 
 
 class UserIdentity(Base):

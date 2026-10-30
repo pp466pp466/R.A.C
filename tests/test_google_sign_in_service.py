@@ -187,12 +187,25 @@ def test_a_bound_identity_logs_in_even_after_the_email_changed_at_google(member_
     assert users(member_session)[0].last_login_at == START + timedelta(hours=2)
 
 
-@pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
-def test_a_disabled_account_cannot_sign_in_through_google(member_session, status):
-    user = add_user(member_session, 1, password=None, status=status, email_verified_at=START)
+def test_a_suspended_account_cannot_sign_in_through_google(member_session):
+    user = add_user(member_session, 1, password=None, status=STATUS_SUSPENDED, email_verified_at=START)
     member_session.add(UserIdentity(user_id=user.id, provider="google", provider_subject=SUB))
     member_session.commit()
     assert refusal_of(make_service(member_session)) == ERROR_DISABLED
+
+
+def test_an_account_awaiting_deletion_signs_in_through_google_with_the_restricted_status(member_session):
+    """已綁定 Google 的待刪除帳號可以登入（只得到受限登入狀態），不新增任何綁定、也不改動憑證。"""
+    user = add_user(
+        member_session, 1, password=None, status=STATUS_DELETION_PENDING, email_verified_at=START,
+        deletion_requested_at=START - timedelta(days=1), status_before_deletion="active",
+    )
+    member_session.add(UserIdentity(user_id=user.id, provider="google", provider_subject=SUB))
+    member_session.commit()
+    result = login_with(make_service(member_session))
+    assert result.outcome == OUTCOME_LOGIN and result.user.status == STATUS_DELETION_PENDING
+    assert result.user.deletion_scheduled_at == START + timedelta(days=6)
+    assert len(identities(member_session)) == 1 and users(member_session)[0].last_login_at == START
 
 
 # =============================================================================

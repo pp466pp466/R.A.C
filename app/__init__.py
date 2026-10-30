@@ -12,6 +12,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app.cli import register_cli
 from app.config import DEV_TOOL_ENVS, AppConfig, load_config
+from app.controllers.account_api_controller import account_api_bp
 from app.controllers.admin_api_controller import admin_api_bp
 from app.controllers.admin_page_controller import admin_pages_bp
 from app.controllers.api_controller import api_bp
@@ -105,6 +106,7 @@ def create_app(
     app.register_blueprint(auth_pages_bp)
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_api_bp)
+    app.register_blueprint(account_api_bp)
     app.register_blueprint(cs_api_bp)
     app.register_blueprint(cs_pages_bp)
     app.register_blueprint(admin_api_bp)

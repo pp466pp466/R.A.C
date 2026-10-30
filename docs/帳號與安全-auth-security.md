@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關）、privacy-lifecycle（自助刪除帳號、受限登入狀態） ｜ 規範依據：AGENTS.md 第 10、11 節
 
 本文件說明會員如何註冊、驗證、登入，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -14,13 +14,16 @@ stateDiagram-v2
     active --> suspended : 管理員停權（token_version 加 1）
     pending_verification --> suspended : 管理員停權
     suspended --> active : 管理員解除（信箱驗證開啟而從未驗證者回 pending_verification）
-    active --> deletion_pending : 使用者申請刪除（C-4）
-    deletion_pending --> active : 7 天內撤銷
-    deletion_pending --> [*] : 期滿由排程刪除
+    active --> deletion_pending : 使用者申請刪除（token_version 加 1，所有裝置登出）
+    pending_verification --> deletion_pending : 使用者申請刪除
+    deletion_pending --> active : 7 天內撤銷（申請前為 active）
+    deletion_pending --> pending_verification : 7 天內撤銷（申請前為 pending_verification）
+    deletion_pending --> [*] : 寬限期滿由 execute-account-deletions 抹除
     active --> [*] : 連續 12 個月未登入直接刪除（管理員不納入）
 ```
 
-- 只有 `active` 的帳號能登入；信箱驗證開啟時，信箱必須已驗證才能使用客服。
+- `active` 與 `pending_verification` 的帳號可登入；`suspended` 一律拒絕登入。`deletion_pending` **可以登入，但只得到受限登入狀態**（只能撤銷刪除與登出，見第 7a 節）。信箱驗證開啟時，信箱必須已驗證才能使用客服。
+- 停權的帳號無法登入，所以無法自助刪除（仍由 12 個月閒置清除處理）；管理員帳號不可自助刪除。
 - `EMAIL_VERIFICATION_REQUIRED`：development、testing、staging 可關閉（註冊後直接 `active`、忘記密碼停用）；production 必須開啟並設定寄信服務，否則啟動失敗。
 
 ## 2. 註冊與登入
@@ -169,6 +172,14 @@ flowchart TD
 | `/api/auth/reset-password` | POST | 否 | 以權杖設定新密碼（驗證關閉時 404） |
 | `/api/auth/google/start` | POST | 否 | 發起 Google 登入（未設定時 404） |
 
+`/api/account/*` 端點（C-4c；全部需 CSRF，回應 `no-store`）：
+
+| 端點 | 方法 | 登入 | 用途 |
+|---|---|---|---|
+| `/api/account/delete` | POST | 是 | 申請刪除自己的帳號（有密碼者帶密碼，只靠 Google 者帶確認文字）；成功後所有裝置登出 |
+| `/api/account/cancel-deletion` | POST | 是（含受限狀態） | 寬限期內撤銷刪除，還原為申請前的狀態 |
+| `/api/account/export` | POST | 是 | 匯出自己的帳號資料與全部對話（JSON 或 CSV zip）；受限狀態不可用 |
+
 頁面：`/login`、`/register`、`/forgot-password`、`/reset-password`、`/verify-email`、`/account`、`/terms`、`/privacy`、`/auth/google/callback`。
 
 ## 7. 管理員後台的存取（C-4b）
@@ -219,10 +230,63 @@ flowchart TD
 
 已知取捨：被盜用的管理員登入狀態可以不輸入密碼讀取兩類對話（每次都有稽核，要加強只需讓「讀全文」也要求密碼）；管理員輸入錯誤密碼也累積登入的失敗計數，連續 5 次會把自己鎖定 15 分鐘（刻意，讓後台不成為暴力猜測的捷徑）。完整清單見 README 的「管理員後台（C-4b）」。
 
+## 7a. 受限登入狀態與自助刪除（C-4c）
+
+使用者可以自助刪除帳號，並有 7 天寬限期可以撤銷。難處在「寬限期內帳號已停用，卻還要讓本人能撤銷」：做法是讓待刪除的帳號**可以登入**，但只得到**受限登入狀態**，並在入口層**預設拒絕**。
+
+```mermaid
+sequenceDiagram
+    participant U as 使用者
+    participant A as /api/account
+    participant S as AccountDeletionService
+    participant D as 資料庫
+    participant M as 寄信（延後動作）
+    participant J as 排程指令
+
+    U->>A: POST delete（有密碼：password；只靠 Google：confirm_text）
+    A->>S: request()
+    S->>S: 管理員 403；狀態須為 active 或 pending_verification
+    S->>S: 確認本人（confirm_password，與登入共用失敗計數與鎖定；或固定確認文字）
+    S->>D: 條件式 UPDATE：deletion_pending、申請時間、申請前狀態、token_version 加 1
+    S->>M: 通知信（提交之後才寄，失敗不影響結果）
+    A-->>U: 200，清除這台的 cookie（其他裝置因 token_version 失效）
+    U->>A: POST login（密碼或 Google）
+    A-->>U: 登入成功，狀態為 deletion_pending（受限登入狀態），導向 /account
+    U->>A: POST cancel-deletion
+    A->>S: cancel()
+    S->>D: 條件式 UPDATE：申請未滿 7 天才還原為申請前的狀態
+    A-->>U: 200，目前的登入狀態立刻變成完整的（token_version 不變）
+    J->>D: 寬限期已滿的待刪除帳號 → 抹除（AccountErasureService）
+```
+
+```mermaid
+flowchart TD
+    Req["需要登入的請求"] --> Who{"require_login / login_required_page"}
+    Who -->|"未登入"| A401["API 401；頁面導向 /login"]
+    Who -->|"受限登入狀態（deletion_pending）"| Allowed{"端點明確允許？"}
+    Allowed -->|"否（預設）"| Deny["API 403 account_deletion_pending；頁面導向 /account"]
+    Allowed -->|"是：/api/auth/me、/api/account/cancel-deletion、/account"| Ok["放行"]
+    Who -->|"一般登入狀態"| Ok
+```
+
+| 規則 | 行為 |
+|---|---|
+| 受限登入狀態預設拒絕 | `resolve_session` 對 `deletion_pending` 回傳使用者；`require_login(allow_pending_deletion=False)` 與 `login_required_page` 預設拒絕它。**既有端點不必修改**就自動被擋，新增的端點漏掉檢查也是安全的一邊。`tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則：先以未登入找出需要登入的端點，再以受限登入狀態逐一請求，允許清單以外必須全部被擋，並有自我驗證（暫時加一個只用 `current_user()` 的端點必須被抓到） |
+| 第二道防線 | `AccessPolicy.chat_gate` 與 `is_admin` 各自要求帳號為 `active`，所以即使入口層漏了，客服與後台仍然不可用 |
+| 確認本人 | 有密碼的帳號重新輸入密碼（沿用 `AuthService.confirm_password`，連續 5 次失敗鎖定 15 分鐘）；沒有密碼（只靠 Google）的帳號輸入固定文字「刪除我的帳號」（NFC 正規化並去除前後空白，含全形空白）。伺服器依帳號是否有密碼決定要哪個欄位，另一個欄位被忽略 |
+| 申請 | 單一條件式 `UPDATE`：非管理員、狀態為 `active` 或 `pending_verification`；同一個語句記下申請時間與申請前的狀態並使 `token_version` 加 1。兩個並行的申請只有一個成立 |
+| 撤銷 | 單一條件式 `UPDATE`：狀態為 `deletion_pending` 且申請未滿 7 天；還原為申請前的狀態（待驗證信箱的帳號仍待驗證，除非待刪除期間已經驗證）。超過 7 天回 409 `grace_expired`，帳號維持待刪除 |
+| 期滿的抹除 | `flask execute-account-deletions`：條件在刪除當下再確認一次，剛撤銷的帳號不會被刪；每個帳號一個交易，原因 `user_requested` |
+| Google 登入 | 已綁定 Google 的待刪除帳號可登入（受限狀態，導向 `/account`）；以信箱找到、尚未綁定的待刪除帳號仍拒絕，不在即將刪除的帳號上新增綁定 |
+| 忘記密碼 | 待刪除期間維持停用（`EmailFlowService` 的 `_BLOCKED_FROM_RESET`）：有密碼者申請時才輸入過密碼，Google 登入或等候期滿都能解決 |
+| 帳號頁 | 待刪除者拿到**另一份 HTML**（預定刪除時間、撤銷、登出，沒有其他區塊；寬限期已過就不顯示撤銷按鈕）；管理員的頁面沒有刪除區塊 |
+| 匯出 | 受限狀態不能匯出：請在申請刪除之前匯出。內容與格式見 [資料模型-data-model.md](資料模型-data-model.md) 與 README |
+
 ## 8. 個資與保存
 
 - 生日與年齡區間：不進 API 回應、日誌與模型；管理員只看年齡區間的彙總統計（`flask age-stats` 與後台總覽），後台看不到任何個別使用者的生日、年齡區間或年齡群組。
-- 連續 12 個月未登入的帳號由 `flask purge-inactive-accounts` 直接刪除（管理員不納入），並寫入只含內部編號與日期的 `deletion_tombstones`（見 [資料模型-data-model.md](資料模型-data-model.md)）。
+- 連續 12 個月未登入的帳號由 `flask purge-inactive-accounts` 直接刪除（管理員不納入）；使用者自助刪除寬限期滿後由 `flask execute-account-deletions` 刪除。兩者走同一個抹除出口（先清帳本的對話編號，再刪使用者，並寫入只含內部編號、日期與原因的 `deletion_tombstones`，見 [資料模型-data-model.md](資料模型-data-model.md)）。各類資料的保存期限由 `flask purge-expired-data` 清除。
+- 使用者可在帳號頁匯出自己的帳號資料（含生日與年齡區間）與全部對話；匯出不含密碼雜湊、權杖與模型內部欄位，CSV 的公式字元會被中和。
 - 日誌只記錄白名單欄位，絕不記錄 email、密碼、權杖、生日、訊息全文與模型輸出（見 [營運與部署-operations.md](營運與部署-operations.md)）。
 
 ---

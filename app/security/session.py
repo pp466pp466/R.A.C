@@ -18,7 +18,7 @@ from flask.sessions import SecureCookieSessionInterface, SessionMixin
 
 from app.security.csrf import rotate_csrf_token
 from app.services.current_user import CurrentUser
-from app.services.errors import Unauthenticated
+from app.services.errors import AccountDeletionPending, Unauthenticated
 from app.services.registry import get_auth_service
 
 SESSION_USER_KEY = "uid"
@@ -80,11 +80,18 @@ def current_user() -> CurrentUser | None:
     return user
 
 
-def require_login() -> CurrentUser:
-    """已登入就回傳使用者，否則拋出 `Unauthenticated`（API 回 401 JSON）。"""
+def require_login(*, allow_pending_deletion: bool = False) -> CurrentUser:
+    """已登入就回傳使用者，否則拋出 `Unauthenticated`（API 回 401 JSON）。
+
+    **受限登入狀態預設拒絕**：帳號正在等待刪除（寬限期內）的人可以登入，但只為了撤銷刪除。所以所有透過這裡取得使用者的端點
+    對這類使用者一律回 403 `account_deletion_pending`，只有明確傳入 `allow_pending_deletion=True` 的端點例外
+    （查詢自己、撤銷刪除）。新增的端點不必記得檢查，漏掉也是安全的一邊；`tests/test_restricted_session.py` 掃描全部路由證明這一點。
+    """
     user = current_user()
     if user is None:
         raise Unauthenticated()
+    if user.awaiting_deletion and not allow_pending_deletion:
+        raise AccountDeletionPending()
     return user
 
 
@@ -133,17 +140,30 @@ def login_required_api(view: ViewT) -> ViewT:
     return wrapper  # type: ignore[return-value]
 
 
-def login_required_page(view: ViewT) -> ViewT:
-    """頁面端點：未登入導向登入頁，並以 `next` 保留原本要去的站內位置（登入後由伺服器再驗證一次）。"""
+ACCOUNT_PATH = "/account"
 
-    @wraps(view)
-    def wrapper(*args: Any, **kwargs: Any):
-        if current_user() is None:
-            target = request.path
-            if request.query_string:
-                target += "?" + request.query_string.decode("utf-8", "replace")
-            response: Response = redirect(f"{LOGIN_PATH}?next={quote(target, safe='')}")
-            return response
-        return view(*args, **kwargs)
 
-    return wrapper  # type: ignore[return-value]
+def login_required_page(view: ViewT | None = None, *, allow_pending_deletion: bool = False):
+    """頁面端點：未登入導向登入頁，並以 `next` 保留原本要去的站內位置（登入後由伺服器再驗證一次）。
+
+    與 `require_login` 相同，**受限登入狀態（等待刪除的帳號）預設被導向 `/account`**，只有 `/account` 自己明確允許。
+    可直接當裝飾器用（`@login_required_page`），也可帶參數（`@login_required_page(allow_pending_deletion=True)`）。
+    """
+
+    def decorate(inner: ViewT) -> ViewT:
+        @wraps(inner)
+        def wrapper(*args: Any, **kwargs: Any):
+            user = current_user()
+            if user is None:
+                target = request.path
+                if request.query_string:
+                    target += "?" + request.query_string.decode("utf-8", "replace")
+                response: Response = redirect(f"{LOGIN_PATH}?next={quote(target, safe='')}")
+                return response
+            if user.awaiting_deletion and not allow_pending_deletion:
+                return redirect(ACCOUNT_PATH)
+            return inner(*args, **kwargs)
+
+        return wrapper  # type: ignore[return-value]
+
+    return decorate if view is None else decorate(view)

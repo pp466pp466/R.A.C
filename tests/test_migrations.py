@@ -227,6 +227,50 @@ def test_0007_adds_only_the_audit_table_with_one_foreign_key_and_keeps_every_row
     engine.dispose()
 
 
+def test_0008_adds_two_nullable_user_columns_and_one_index_and_keeps_every_row(tmp_path):
+    """privacy-lifecycle：只新增（expand）兩個可為空的欄位與一個索引，不動任何資料；回復只移除它們。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'privacy.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0008_privacy_lifecycle")
+    assert revision.down_revision == "0007_admin_audit_logs" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0007_admin_audit_logs")
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        conn.execute(users.insert().values(
+            public_id="00000000-0000-4000-8000-000000000008", email="old@example.com", email_canonical="old@example.com",
+            display_name="舊帳號", role="user", member_tier="free", status="active", failed_login_count=0, token_version=1,
+            created_at=utcnow().replace(tzinfo=None), updated_at=utcnow().replace(tzinfo=None),
+        ))
+    inspector = inspect(engine)
+    before_tables = set(inspector.get_table_names())
+    before_user_columns = {c["name"] for c in inspector.get_columns("users")}
+    before_indexes = {i["name"] for i in inspector.get_indexes("chat_conversations")}
+    assert "ix_chat_conversations_updated_at" not in before_indexes
+
+    command.upgrade(cfg, "0008_privacy_lifecycle")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    columns = {c["name"]: c for c in inspector.get_columns("users")}
+    assert set(columns) - before_user_columns == {"deletion_requested_at", "status_before_deletion"}
+    assert columns["deletion_requested_at"]["nullable"] and columns["status_before_deletion"]["nullable"]
+    assert {i["name"] for i in inspector.get_indexes("chat_conversations")} - before_indexes == {"ix_chat_conversations_updated_at"}
+    assert [i["column_names"] for i in inspector.get_indexes("chat_conversations") if i["name"] == "ix_chat_conversations_updated_at"] == [["updated_at"]]
+    with engine.connect() as conn:
+        row = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().one()
+    assert (row["display_name"], row["status"]) == ("舊帳號", "active")
+    assert row["deletion_requested_at"] is None and row["status_before_deletion"] is None
+
+    command.downgrade(cfg, "0007_admin_audit_logs")
+    inspector = inspect(engine)
+    assert {c["name"] for c in inspector.get_columns("users")} == before_user_columns
+    assert {i["name"] for i in inspector.get_indexes("chat_conversations")} == before_indexes
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 1
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
