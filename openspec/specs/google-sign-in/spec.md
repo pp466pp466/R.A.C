@@ -3,6 +3,8 @@
 ## Purpose
 定義以 Google 帳號註冊與登入的行為：授權碼流程的防護、ID token 的驗證、Google 身分與本機帳號共用同一個會員帳號的合併規則，以及 Google 登入為選用功能。
 
+> 注意（2026-11-02）：AGENTS.md 第 10 節已修訂（Google 登入改版），本規格中與登入、註冊、信箱驗證、年齡確認、登入有效期、帳號鎖定有關的部分描述的是目前的實作，待 change ① 與 ② 更新。
+
 ## Requirements
 
 ### Requirement: Google 登入為選用功能

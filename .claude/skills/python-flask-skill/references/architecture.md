@@ -8,7 +8,7 @@
 
 ## Controller 分流
 
-- 【MVC Page Controller】：僅負責渲染基本 HTML 頁面外殼與初始狀態傳遞（包含 /game 與 /cs 兩套視圖，以及 /login、/register 等帳號頁面）。
+- 【MVC Page Controller】：僅負責渲染基本 HTML 頁面外殼與初始狀態傳遞（包含 /game 與 /cs 兩套視圖，以及 /login（Google 登入與條款勾選，登入與註冊合一，沒有 /register）、登入後的年齡確認頁、被鎖定時的申訴頁與 /account 等帳號頁面）。
 - 【Web API Controller】：一律回傳 JSON 格式，專門處理 Ajax 請求與 API 服務（SSE 串流端點除外，見 [llm-streaming.md](llm-streaming.md)）。包含 /api/auth/*、/api/cs/*，以及不需登入的 /healthz（存活）與 /readyz（含資料庫檢查），兩者不得回傳內部細節。
 
 ## Service 層

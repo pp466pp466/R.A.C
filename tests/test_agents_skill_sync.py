@@ -33,8 +33,8 @@ SYNCED_RULES = [
     (7, "未滿 18 歲者一律為安全模式，sexual_content_level 固定為 0", "references/business-encoding.md"),
     (7, "成年者由玩家主動在 sexual_content_level 1（浪漫、曖昧）與 2（感官但不露骨）之間切換，預設從 0 開始", "references/business-encoding.md"),
     (7, "系統只提醒玩家可切換分級，不得自動調高", "references/business-encoding.md"),
-    (10, "年齡確認：註冊（含 Google 首次註冊）須填寫生日，並從下拉式選項選擇年齡區間", "references/auth-security.md"),
-    (10, "未滿 13 歲者不得註冊（不建立帳號，也不保存其填寫的生日）", "references/auth-security.md"),
+    (10, "年齡確認：玩家以 Google 首次登入建立帳號後，須立即填寫生日，並從下拉式選項選擇年齡區間", "references/auth-security.md"),
+    (10, "未滿 13 歲者不得使用本平台，發現時立即抹除該帳號與其全部個資", "references/auth-security.md"),
     (10, "13 至 17 歲者可以使用本平台（含 AI 功能），但只能使用安全模式", "references/auth-security.md"),
     (10, "管理員後台只提供年齡區間的彙總統計，不顯示個別使用者的生日", "references/auth-security.md"),
     (11, "連續 12 個月未登入即直接刪除（不經 7 天寬限期", "references/privacy-observability.md"),
@@ -63,7 +63,66 @@ SYNCED_RULES = [
     (11, "RPG 記事簿：內容由玩家文字衍生，視為個資", "references/privacy-observability.md"),
     (11, "RPG 模型供應商（OpenAI 相容端點，目前為 OpenRouter）與個資：免費模型的輸入輸出可能被供應商留存或用於改進產品", "references/privacy-observability.md"),
     (5, "RPG 的 OpenAI 相容端點依 OPENROUTER_JSON_SCHEMA 是否支援 JSON schema 決定", "references/llm-streaming.md"),
+    # 2026-11-02：玩家只用 Google 登入（畫面只有 Google 與條款，生日登入後才補填，回訪一鍵登入，保持登入），管理員 Google 加密碼；
+    # 未補填年齡的帳號最多保留 24 小時，未滿 13 歲立即抹除，登入有效期改為閒置 30 天、每次使用就續期
+    (10, "有效期為閒置 30 天、每次使用就續期（由框架在每次回應時重新簽章，不另放簽發時間），不設絕對上限", "references/auth-security.md"),
+    (10, "已登入時打開首頁（/）或登入頁，直接導向登入後的預設頁面（單一常數；目前為 /cs，RPG 上線後改為選擇劇本的首頁，不直接進入聊天）", "references/auth-security.md"),
+    (10, "密碼：只有管理員有密碼（玩家不設密碼，只用 Google 登入）", "references/auth-security.md"),
+    (10, "玩家只以 Google 登入，首次登入即註冊（沒有密碼註冊，也沒有信箱驗證信、玩家端的重設密碼信與 EMAIL_VERIFICATION_REQUIRED", "references/auth-security.md"),
+    (10, "新使用者必須勾選，並記錄 terms_version 與 terms_accepted_at；回訪的使用者不必勾選，一鍵登入", "references/auth-security.md"),
+    (10, "除了完成年齡確認與登出之外不得使用任何功能", "references/auth-security.md"),
+    (10, "帳號自建立起最多保留 24 小時，逾時未完成即由排程刪除", "references/auth-security.md"),
+    (10, "管理員通過 Google 之後還須再通過密碼驗證，兩者都通過才建立登入 session", "references/auth-security.md"),
+    (10, "管理員帳號（由部署者以一次性指令建立）不受上述 24 小時與全面禁用的限制", "references/auth-security.md"),
+    (10, "管理員每次登入都先以 Google 登入，第一次以同信箱登入時綁定 Google 身分，通過後再驗證一次密碼", "references/auth-security.md"),
+    (10, "管理員同一帳號的密碼連續失敗 5 次鎖定 15 分鐘", "references/auth-security.md"),
+    (9, "staging 為部署於雲端的預備環境，設定與 production 相同", "references/deployment.md"),
+    (8, "系統寄出的信件（營運告警與管理員的重設密碼信）一律為 UTF-8 編碼與繁體中文內容", "references/business-encoding.md"),
+    (11, "玩家帳號自建立起 24 小時內未完成年齡確認者同樣直接刪除", "references/privacy-observability.md"),
+    (11, "清除逾時未完成年齡確認的帳號", "references/privacy-observability.md"),
+    (11, "逾時帳號的清除每小時執行一次（其餘為每日）", "references/privacy-observability.md"),
+    (11, "年齡確認未在 24 小時內完成、或發現未滿 13 歲時，帳號與這些資料會立即刪除", "references/privacy-observability.md"),
+    # 2026-11-02 稽核後：登入與年齡確認兩個頁面、未完成年齡確認者導向年齡確認頁、staging 的唯一例外、管理員忘記密碼寄信重設
+    (3, "/login（Google 登入與條款勾選，登入與註冊合一，沒有 /register）、登入後的年齡確認頁、被鎖定時的申訴頁與 /account 等帳號頁面", "references/architecture.md"),
+    (10, "尚未完成年齡確認的玩家則一律導向年齡確認頁", "references/auth-security.md"),
+    (9, "唯一的例外是 staging 可設定 GEMINI_BASE_URL，把 Gemini 轉接器指向隔離壓測環境的假模型伺服器", "references/deployment.md"),
+    (9, "TRUST_PROXY_HEADERS（開發環境經 HTTPS 通道時信任轉送標頭）只有 development 可以設定，其餘環境設定了即啟動失敗", "references/deployment.md"),
+    (10, "管理員忘記密碼時，在密碼驗證那一步按「忘記密碼」，系統寄重設信到該管理員的信箱", "references/auth-security.md"),
+    (10, "此按鈕只在管理員通過 Google 之後的那一步出現，不接受匿名請求", "references/auth-security.md"),
+    (10, "重設權杖為 32 位元組隨機值，資料庫只存其 SHA-256 雜湊，單次使用，1 小時失效", "references/auth-security.md"),
+    (5, "客服模組因採非串流，前端直接取得完整 reply_text", "references/llm-streaming.md"),
+    # 2026-11-02：帳號鎖定與申訴（鎖 Google 身分、被鎖定者只進申訴頁、管理員只看得到被鎖定者的申訴）
+    (10, "帳號鎖定：玩家帳號有「鎖定」狀態，由系統自動鎖定、只有管理員能解除（不會自動解除）", "references/auth-security.md"),
+    (10, "同一帳號 15 分鐘內 Google 登入被拒（已辨識出身分但被拒絕，例如帳號停用、年齡資料不符）達 5 次", "references/auth-security.md"),
+    (10, "同一帳號 15 分鐘內被每分鐘訊息數上限擋下達 10 次（客服洗版）", "references/auth-security.md"),
+    (10, "只能進申訴頁向管理員留言（單則上限 1000 字、同一帳號每小時最多 3 則、同一時間最多 1 則待處理），其他頁面與 API 一律回 403 與代碼 account_locked", "references/auth-security.md"),
+    (10, "管理員只能看到被鎖定帳號送出的申訴，仍不得任意讀取其他對話全文", "references/auth-security.md"),
+    (10, "使用者主動提交的意見回饋對話、被鎖定帳號送出的申訴、被內容安全過濾標記的對話", "references/auth-security.md"),
+    (11, "申訴（帳號鎖定）：內容由使用者撰寫，視為個資", "references/privacy-observability.md"),
+    (11, "帳號鎖定激增（Google 登入被拒與洗版造成的鎖定）", "references/privacy-observability.md"),
 ]
+
+
+def test_the_retired_password_registration_and_email_verification_rules_are_gone_from_agents_and_the_skill():
+    """玩家端的密碼註冊、信箱驗證與 7 天絕對期限已被取代；舊文字不得殘留在權威文件或技能裡（避免日後照舊文字實作）。"""
+    retired = (
+        "以信箱加密碼註冊後為 pending_verification",
+        "production 必須為 true 並已設定寄信服務，否則啟動失敗",
+        "存活 7 天",
+        "Google 登入與密碼登入共用同一帳號",
+        "未滿 13 歲者不得註冊（不建立帳號",
+        "除可關閉信箱驗證（見第 10 節）外",
+        "系統寄出的信件（信箱驗證、重設密碼）",
+        "系統寄出的信件（目前只有營運告警）",
+        "管理員忘記密碼的處理另訂",
+        "以及 /login、/register 等帳號頁面",
+        "登入失敗激增",
+    )
+    corpus = {"AGENTS.md": AGENTS}
+    for path in [SKILL_DIR / "SKILL.md", *sorted((SKILL_DIR / "references").glob("*.md"))]:
+        corpus[str(path.relative_to(SKILL_DIR))] = path.read_text(encoding="utf-8-sig")
+    leftovers = [(name, text) for name, body in corpus.items() for text in retired if text in body]
+    assert leftovers == [], f"舊規則文字仍存在：{leftovers}"
 
 
 def agents_section(number: int) -> str:

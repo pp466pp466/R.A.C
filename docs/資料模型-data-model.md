@@ -1,6 +1,7 @@
 # 資料模型
 
 > 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness ｜ 資料庫版本：`0009_alert_states` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。本文件描述的是**目前的實作**，涉及上述的部分尚未更新，待 change ① 與 ② 完成後同步；決定見 [report.md](report.md) 的 U-12 至 U-19 與 [路線圖](路線圖-roadmap.md)。
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 

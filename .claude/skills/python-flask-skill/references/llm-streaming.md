@@ -11,7 +11,7 @@
 
 - 後端 SSE 串流端點（RPG 適用）：針對 LLM 文字生成（開放世界 RPG 劇情），應採用 flask.Response 結合 mimetype='text/event-stream' 進行 Server-Sent Events (SSE) 串流推送。
 - SSE 心跳與斷線偵測（RPG 適用）：後端須定期送出心跳以維持連線；前端以任何收到的位元組重設閒置計時器，逾時即中止；後端偵測到客戶端斷線時須停止生成並關閉上游模型串流（RPG 為 OpenAI 相容端點）。間隔、事件協定與逾時數值依 docs/RPG.md。
-- 前端串流接收：RPG 劇情的 LLM 串流端點改用瀏覽器原生 fetch 搭配 ReadableStream 接收片段文字；其餘一般 API 仍使用離線 axios。
+- 前端串流接收：RPG 劇情的 LLM 串流端點改用瀏覽器原生 fetch 搭配 ReadableStream 接收片段文字；客服模組因採非串流，前端直接取得完整 reply_text；其餘一般 API 仍使用離線 axios。
 - 串流逾時與中斷（RPG 串流適用）：前端串流必須設定逾時，並以 AbortController 中止請求。無論成功、失敗或中斷，皆須在 finally 中恢復 UI 狀態（解除按鈕禁用、清除載入動畫）。後端於串流結束時送出明確的結束標記，前端以此判定已完整接收。
 
 ## 客服結構化輸出（非串流）

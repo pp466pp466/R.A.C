@@ -2,6 +2,8 @@
 
 以 LLM 驅動的雙核心平台。開發規範以根目錄的 [AGENTS.md](AGENTS.md) 為唯一權威來源；設計決策見 [docs/report.md](docs/report.md)，變更提案見 `openspec/changes/`。
 
+> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。本 README 的「會員驗證（C-2）」、「環境變數與機密」（`EMAIL_VERIFICATION_REQUIRED`）、登入狀態存活 7 天、年齡確認與帳號刪除等段落描述的是**目前的實作**，尚未更新，待 change ① 與 ② 完成後同步；決定見 [docs/report.md](docs/report.md) 的 U-12 至 U-19 與[路線圖](docs/路線圖-roadmap.md)。
+
 目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）、`age-gate`（年齡確認閘門，勾選版）與 `age-verification-birthdate`（年齡確認改為生日加年齡區間、閒置帳號清除）都已封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**目前的年齡設定與 Gemini 條款不符**（條款只有 18 歲門檻），僅限個人測試（見「年齡規則與帳號保存期限」）。
 
 ## 環境需求

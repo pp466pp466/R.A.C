@@ -288,7 +288,7 @@ def main() -> int:
                                        "&& ls /app/app/static/fonts/*.woff2 | wc -l")
     check("映像內有前端資產與 108 個字型切片", code == 0 and out.strip() == "108", out.strip())
 
-    expected_python = (PROJECT_ROOT / ".python-version").read_text(encoding="utf-8").strip()
+    expected_python = (PROJECT_ROOT / ".python-version").read_text(encoding="utf-8-sig").strip()
     code, out = run_python_in_image(image, "import sys; print('%d.%d' % sys.version_info[:2])")
     check("映像的 Python 主要與次要版本等於 .python-version", out.strip() == expected_python, f"映像 {out.strip()} / 要求 {expected_python}")
 
@@ -346,8 +346,8 @@ def main() -> int:
                 check(f"[{label}] 開發示範頁是 404（正式環境不提供）", dev.startswith("404"), dev)
 
             code, out = docker("exec", "-i", name, "python", "-",
-                               stdin="d = dict(l.split(':', 1) for l in open('/proc/1/status').read().splitlines() if ':' in l)\n"
-                                     "print('uid', d['Uid'].split()[0]); print('cmd', open('/proc/1/cmdline').read().replace(chr(0), ' '))\n")
+                               stdin="d = dict(l.split(':', 1) for l in open('/proc/1/status', encoding='utf-8-sig').read().splitlines() if ':' in l)\n"
+                                     "print('uid', d['Uid'].split()[0]); print('cmd', open('/proc/1/cmdline', encoding='utf-8-sig').read().replace(chr(0), ' '))\n")
             check(f"[{label}] 主行程是 gunicorn，且不是 root", "gunicorn" in out and re.search(r"uid (?!0\b)\d+", out) is not None, out.strip().replace("\n", " | ")[:160])
 
             code, logs = docker("logs", name)

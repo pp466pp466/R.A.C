@@ -26,7 +26,7 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 10. 檔案讀取用 utf-8-sig，寫入 JSON 用 utf-8，給 Excel 的 CSV 用 utf-8-sig。
 11. 正式環境禁止 Flask 開發伺服器；SSE 須運行於支援長連線並發的正式配置。
 12. 模型 API Key 只從環境變數讀取，嚴禁寫入程式碼或版本庫：客服用 GEMINI_API_KEY，RPG 用 OPENROUTER_API_KEY。
-13. 驗證採簽章 session cookie 加 CSRF，密碼用 Argon2id；一組 email 只能對應一個帳號。
+13. 驗證採簽章 session cookie（閒置 30 天、每次使用就續期）加 CSRF；玩家只用 Google 登入，只有管理員有密碼（Argon2id），管理員每次先 Google 登入再驗證一次密碼；一組 email 只能對應一個帳號。
 14. 對話相關的 Repository 方法必須帶 user_id，非擁有者一律回 404。
 15. 限流與鎖定計數不得放行程內記憶體，須存資料庫或入口層。
 16. 日誌不得記錄密碼、權杖、完整 API Key、email、對話全文。
@@ -35,7 +35,7 @@ description: 開發本專案（Python Flask「開放世界文字 RPG」與「會
 19. SSE、心跳、串流逾時等條文僅適用 RPG；客服為非串流，逾時以 axios 搭配 AbortController 處理。
 20. 可為空的唯一欄位必須用部分唯一索引（unique_when_not_null），不可直接 unique=True（SQL Server 只允許一個 NULL）。
 21. alembic.ini 與 script.py.mako 必須純 ASCII；含中文的 .ps1 須 UTF-8 with BOM，維運與驗收腳本一律用 Python 撰寫。
-22. 年齡確認為生日加年齡區間的自行聲明：未滿 13 歲不得註冊；13 至 17 歲只能使用安全模式（sexual_content_level 0）；尚未完成年齡確認的帳號不得使用任何呼叫 Gemini 的功能（AccessPolicy 判斷，403 與 age_confirmation_required）。
+22. 年齡確認為生日加年齡區間的自行聲明，在 Google 首次登入之後才填：完成前除年齡確認與登出外什麼都不能做，帳號最多保留 24 小時，逾時刪除；未滿 13 歲立即抹除帳號與個資且不保存生日；13 至 17 歲只能使用安全模式（sexual_content_level 0）；管理員帳號未完成年齡確認時不得使用任何呼叫 Gemini 的功能（AccessPolicy 判斷，403 與 age_confirmation_required）。
 
 ## 3. 參考索引（依任務類型讀取）
 

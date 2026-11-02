@@ -1,6 +1,7 @@
 # 系統架構與分層
 
 > 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-02 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。本文件描述的是**目前的實作**，涉及上述的部分尚未更新，待 change ① 與 ② 完成後同步；決定見 [report.md](report.md) 的 U-12 至 U-19 與 [路線圖](路線圖-roadmap.md)。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
