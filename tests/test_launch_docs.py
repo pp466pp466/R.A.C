@@ -136,9 +136,17 @@ def test_the_gates_cover_every_gate_in_the_report_and_the_roadmap_lists_what_the
     for keyword in ("信箱驗證", "方案", "網域", "法務", "成本", "負載測試"):
         assert any(keyword in item for item in report_items), keyword
         assert keyword in table_text, f"營運文件的關卡表漏了：{keyword}"
-    c5b = next(line for line in ROADMAP.split("\n") if line.startswith("| production-launch（C-5b）"))
-    for keyword in ("雲端專案", "網域", "寄信", "法務", "供應商方案", "Cloud SQL", "壓測", "IP 限流"):
-        assert keyword in c5b, f"路線圖的 C-5b 沒有提到：{keyword}"
+    rows = {
+        line.split("|")[1].strip(): line for line in ROADMAP.split("\n")
+        if line.startswith(("| staging-deployment", "| cloud-staging-run", "| production-launch"))
+    }
+    local, cloud, launch = rows["staging-deployment（C-5b）"], rows["cloud-staging-run（C-5c）"], rows["production-launch（C-5d）"]
+    for keyword in ("Brevo", "ngrok", "不花錢", "尚未做"):
+        assert keyword in local, f"路線圖的 C-5b 沒有提到：{keyword}"
+    for keyword in ("可計費的 Google Cloud 專案", "Cloud SQL", "壓測", "還原演練"):
+        assert keyword in cloud, f"路線圖的 C-5c 沒有提到：{keyword}"
+    for keyword in ("網域", "法務", "供應商方案", "IP 限流"):
+        assert keyword in launch, f"路線圖的 C-5d 沒有提到：{keyword}"
 
 
 # ---- 未滿足的規範項目 -------------------------------------------------------------------

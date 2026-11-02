@@ -19,7 +19,9 @@ flowchart LR
     C4D["C-4d ops-alerting<br/>監控與告警管道"]:::done
     OC["openai-compatible-provider<br/>RPG 用途的 OpenAI 相容端點、等級 3 環境開關"]:::done
     C5A["C-5a launch-readiness<br/>安全標頭、部署計畫腳本、平台告警、還原後重新抹除、負載測試、營運手冊"]:::done
-    C5B["C-5b production-launch<br/>預備環境、壓測、還原演練、正式上線"]:::plan
+    C5B["C-5b staging-deployment<br/>本機單人預演、冒煙驗收、假模型伺服器、階梯式加壓"]:::active
+    C5C["C-5c cloud-staging-run<br/>雲端預備環境、平台告警與還原演練、雲端壓測"]:::plan
+    C5D["C-5d production-launch<br/>production 資源與對外開放"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
     RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料"]:::plan
     RC2["RC-2 rpg-turn-engine<br/>回合引擎、SSE、世界狀態"]:::plan
@@ -29,7 +31,7 @@ flowchart LR
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
 
     C1 --> C2 --> AG --> AB --> C3
-    C3 --> C4A --> C4B --> C4C --> C4D --> C5A --> C5B
+    C3 --> C4A --> C4B --> C4C --> C4D --> C5A --> C5B --> C5C --> C5D
     C3 --> C6
     C3 --> OC --> RC2
     C4C --> RC1 --> RC2 --> RC3 --> RC4
@@ -56,7 +58,9 @@ flowchart LR
 | privacy-lifecycle（C-4c） | 已封存 | 2026-10-30（實作 `33a684b`；封存時新增主規格 `account-deletion`、`personal-data-export`、`data-retention`，補充 `account-retention`、`session-authentication`、`google-sign-in`、`access-control`、`auth-pages`、`service-observability`；23 項任務全部完成；pytest 5015、Node 175；瀏覽器驗收 48 / 48；本機資料庫已升級到 `0008`） | 使用者自助刪除帳號（`deletion_pending`、7 天寬限；寬限期內登入只得到「只能撤銷」的**受限登入狀態**，在入口層預設拒絕並由掃描全部路由的測試守住；有密碼者重新輸入密碼、只用 Google 者輸入確認文字）、匯出個人資料（JSON；CSV 為 zip，公式字元被中和）、期限清除（`purge-expired-data`：對話與帳本 12 個月、失敗原文 14 天、權杖到期後 7 天、稽核 24 個月）、排程執行刪除（`execute-account-deletions`）。閒置清除與自助刪除共用單一「抹除一個人」的出口，順便補上閒置清除沒有匿名化帳本對話編號的缺口。隱私權政策頁改為描述實際行為。依使用者決定，**告警拆出為 C-4d**。仍待：兩個指令的排程與備份還原後重新執行刪除的演練（C-5） |
 | ops-alerting（C-4d） | 已封存 | 2026-10-30（實作 `4d24d61`；封存時新增主規格 `operational-alerts`，補充 `app-configuration`、`service-observability`；11 項任務全部完成；pytest 5241、Node 175；本機資料庫已升級到 `0009`；以真實 SMTP 與真實 SQL Server 驗收寄信） | 排程指令 `flask check-alerts`：只算資料庫量得到的五項告警——全站用量 80%／100%、模型錯誤率（> 10%）、模型設定錯誤、對話延遲 p95（> 10 秒）、登入失敗激增（5 個帳號被鎖定）；有狀態（新資料表 `alert_states`，進入、升級、每 6 小時提醒、恢復各寄一封，先搶佔再寄信、不隨檢查頻率重複寄），管道只做電子郵件（`ALERT_EMAIL_TO`，staging 與 production 必填）。依使用者決定：5xx 比率、服務存活、寄信失敗由平台負責（C-5 設定，條件寫進營運文件）；不做 webhook。`usage.global_budget_warning` 不再是通知來源。仍待：排程設定與平台告警（C-5） |
 | launch-readiness（C-5a） | 已封存 | 2026-11-02（實作 `5052aa6`；封存時新增 6 個主規格 `security-headers`、`deployment-plan`、`platform-alerts`、`deletion-replay`、`load-testing`、`launch-gates`，補充 `service-observability`；24 項任務全部完成；pytest 5522、Node 175；`openspec validate --strict` 通過；本機 SQL Server 實跑還原演練通過；本機負載測試冒煙驗收；**腳本沒有對真實 gcloud 與雲端專案驗證**） | 依使用者決定把 C-5 拆成兩個：本 change 只做程式庫內的部分，不碰雲端帳號、不產生費用。安全標頭（HSTS 一年、不含子網域與預載入；不做 CSP）、Python 加 `gcloud` 的部署計畫腳本（預設只預覽）、平台告警定義（5xx 比率、`/healthz` 與 `/readyz` 探測、`mail.send_failed`、排程失敗與 `check-alerts` 停擺）、**`flask replay-deletions`（備份還原後重新抹除，補上目前沒有的指令）**與還原演練腳本、Locust 負載測試與假模型入口、營運手冊與上線前關卡。**IP 限流依使用者決定先不做**，AGENTS.md 第 9 節因此尚未滿足，列為上線前關卡 |
-| production-launch（C-5b） | 規劃中 | — | 在使用者的 Google Cloud 專案建立預備環境、壓測與調整 gunicorn、實際還原演練、正式上線；需要使用者提供雲端專案與計費，並評估與同意 Cloud SQL for SQL Server 的固定月費（N-9）、網域、寄信服務、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter），並決定入口層 IP 限流是否補做；上線前要重新確認供應商條款與年齡規則 |
+| staging-deployment（C-5b） | 規劃完成，待實作 | 2026-11-02（18 項任務；`openspec validate --strict` 通過） | 依使用者決定（**沒有可計費的 Google Cloud 專案**）只做程式、文件與**本機單人預演，不花錢**：以 `APP_ENV=staging`、SQLite 檔案、經 ngrok 的 https 網址在本機預演，驗證 HSTS、`__Host-` cookie、CSRF、冒煙驗收腳本、Google 登入（沿用現有實作，**不使用 Firebase**；首次登入仍須年齡確認）與營運告警信的真實寄送（Brevo SMTP，寄給使用者自己）；新增 `GEMINI_BASE_URL`（production 拒絕）與假模型伺服器 `loadtest/fake_llm/`、階梯式加壓、開發用 `TRUST_PROXY_HEADERS`；WSL 的 Docker 能啟動時做條件式的本機容器預演（結果**不是容量依據**）。驗收紀錄分「本機預演已驗證」與「必須在雲端驗證（尚未做）」兩欄，關卡不因預演通過。需要使用者提供：Brevo 的 SMTP 登入名稱與已驗證的寄件者、預備環境專用的 OAuth 用戶端、ngrok。`.env.staging` 與 `staging.vars` 已整理（被忽略） |
+| cloud-staging-run（C-5c） | 規劃完成，待實作（等前提） | 2026-11-02（規劃自原 C-5b 拆出） | **前提：使用者有可計費的 Google Cloud 專案**（已安裝並登入 `gcloud`、同意 Cloud SQL 的固定月費，N-9）。會產生雲端費用，每一步使用者在場確認（單步執行 `--only --yes`）：實際執行 C-5a 的腳本並把差異回寫、Cloud SQL（私有 IP、驗證伺服器憑證——失敗就停止，不退讓到 `TrustServerCertificate=yes`、備份與時間點還原、日誌保存 30 天）、平台告警六類各演練一次、隔離的壓測環境與 gunicorn 調整、Cloud SQL 複製的還原演練、`create-admin --password-env` |
+| production-launch（C-5d） | 規劃中 | — | production 資源與對外開放真實會員；需要使用者決定：自有網域與信件的 SPF／DKIM／DMARC、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter）、入口層 IP 限流是否補做、成年驗證方式（若要開放分級 3）；上線前要重新確認供應商條款與年齡規則。**「只留 Google 登入」尚未立案**（見專案記憶：管理員的密碼重新驗證有衝突） |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |
 
