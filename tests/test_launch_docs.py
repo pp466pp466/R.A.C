@@ -194,3 +194,28 @@ def test_the_incident_section_covers_the_five_incidents_with_actions_that_exist(
     assert all(len(row) == 4 and all(row) for row in rows)
     leak = next(row for row in rows if "金鑰外洩" in row[0])
     assert "立即輪替" in leak[2]
+
+
+# ---- 本機預演與預備環境驗收（staging-deployment）----------------------------------------------------------
+
+
+def test_the_local_rehearsal_section_lists_the_steps_and_splits_verified_from_cloud_only_items():
+    text = section(OPS, "### 本機預演（C-5b）")
+    for step in ("alembic upgrade head", "create-admin", "ngrok http", "staging_smoke.py", "check-alerts", "unset SECRET_KEY"):
+        assert step in text, f"本機預演缺少步驟：{step}"
+    assert "不放寬任何 staging 的檢查" in text and "不需要" in text and "TRUST_PROXY_HEADERS" in text
+    assert "本機預演可以驗證" in text and "必須在雲端驗證" in text and "尚未做" in text
+    for cloud_only in ("私有連線", "Secret Manager", "Cloud Scheduler", "平台告警", "壓測容量", "還原演練"):
+        assert cloud_only in text, f"必須在雲端驗證的項目沒有列出：{cloud_only}"
+    assert "不因本機預演而通過" in text and "不以 Flask 開發伺服器的數字代替" in text
+
+
+def test_the_staging_verification_section_documents_every_check_the_guard_and_the_record_rules():
+    text = section(OPS, "### 預備環境驗收（C-5b）")
+    for fragment in ("/healthz", "/readyz", "Strict-Transport-Security", "Content-Security-Policy", "__Host-", "--allow-model-call", "404", "401"):
+        assert fragment in text, f"預備環境驗收缺少：{fragment}"
+    assert "預設略過" in text and "沒有任何確認參數可以繞過" in text and "https" in text
+    assert ".invalid" in text and "不放真實個資" in text and "人工驗收" in text and "未驗證" in text
+    assert "本機預演已驗證" in text and "必須在雲端驗證（尚未做）" in text
+    rows = [row for row in table_rows(text) if row[0].isdigit()]
+    assert len(rows) == len(load_script("staging_smoke").CHECKS), "文件的檢查清單與腳本的檢查項目數量不一致"

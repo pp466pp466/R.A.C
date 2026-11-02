@@ -136,6 +136,7 @@ flowchart LR
 | `LLM_REQUEST_BUDGET_SECONDS` | 30 | 單次請求總預算（必須小於 55）；前端逾時 = 預算 + 5 秒 |
 | `LLM_BREAKER_SECONDS` | 60 | 主要模型異常後暫時跳過它的秒數 |
 | `LLM_MAX_OUTPUT_TOKENS`、`GEMINI_THINKING_BUDGET` | 4096、不設定 | 輸出上限與選用的思考預算 |
+| `GEMINI_BASE_URL` | 不設定（Gemini 官方端點） | 端點覆寫，只供隔離的壓測環境指向假模型伺服器 `loadtest/fake_llm/`；金鑰與提示詞會送往該位址，所以 production 設定了即啟動失敗，其餘環境須為 https（development 與 testing 另允許回送位址的 http）、不得含帳密／查詢／片段；錯誤訊息不回顯網址。只影響客服與摘要的 Gemini 轉接器，RPG 的端點仍是 `OPENROUTER_BASE_URL` |
 | `USAGE_DAILY_TOKEN_LIMIT`、`USAGE_DAILY_CALL_LIMIT` | 1000000、450 | 全站每日用量上限（見第 8 節）；不屬於單次呼叫的設定，但同樣依模型與方案而定，換模型或供應商時必須重設 |
 | `OPENROUTER_API_KEY`、`OPENROUTER_MODEL` | 無 | RPG 敘事用途的金鑰與主要模型，**須同時設定或同時省略**（見第 10 節）；不是 staging 與 production 的必要機密 |
 | `OPENROUTER_FALLBACK_MODEL` | 同主要模型 | RPG 用途的備援模型；與主要相同時暫時性錯誤直接降級 |

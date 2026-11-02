@@ -50,6 +50,9 @@ node --test "tests/js/**/*.test.js"
 | `DATABASE_URL` | development、staging、production | 資料庫連線字串；testing 預設為記憶體 SQLite |
 | `LOG_LEVEL` | 否 | 日誌層級，預設 `INFO` |
 | `FLASK_DEBUG` | 否 | 本機除錯模式；staging 與 production 設定即啟動失敗 |
+| `TRUST_PROXY_HEADERS` | 否 | `true` 或 `false`。**只有 development 可以設定**：經 HTTPS 通道（例如 ngrok）使用時，信任通道轉送的協定與主機標頭，POST 才會通過 CSRF 的來源檢查；testing、staging、production 設定了（不論值）會啟動失敗。它不會讓 development 送出 HSTS。步驟與注意事項見營運文件的「開發用通道（ngrok）」 |
+| `WEB_CONCURRENCY` | 否 | gunicorn 的 worker 數，預設 2；必須是正整數。初始值，依負載測試調整 |
+| `GUNICORN_THREADS` | 否 | 每個 worker 的執行緒數，預設 8；必須是正整數。初始值，依負載測試調整 |
 | `TEST_SQLSERVER_URL` | 否 | SQL Server 整合測試用連線字串，必須指向 `project_test` |
 | `SECRET_KEY_FALLBACKS` | 否 | 簽章金鑰輪替期間仍可驗證的舊金鑰（以逗號分隔）；新簽發的內容一律用 `SECRET_KEY` |
 | `EMAIL_VERIFICATION_REQUIRED` | 否 | `true` 或 `false`。未設定時 development、testing 為 `false`，staging、production 為 `true`；production 設為 `false` 會啟動失敗 |
@@ -72,6 +75,7 @@ node --test "tests/js/**/*.test.js"
 | `LLM_BREAKER_SECONDS` | 否 | 主要模型逾時或伺服器錯誤後暫時跳過它的秒數，預設 60 |
 | `LLM_MAX_OUTPUT_TOKENS` | 否 | 單次輸出 token 上限（含思考 token），預設 4096，範圍 256 至 32768 |
 | `GEMINI_THINKING_BUDGET` | 否 | 思考 token 預算（0 或正整數）；不設定則使用供應商預設 |
+| `GEMINI_BASE_URL` | 否 | Gemini 端點覆寫，**只供隔離的壓測環境指向假模型伺服器**（`loadtest/fake_llm/`）；預設為 Gemini 官方端點。金鑰與提示詞會被送往這個位址，所以 **production 設定了會啟動失敗**；其餘環境必須是 `https`（development 與 testing 另允許回送位址的 `http`），不得含帳號、密碼、查詢字串或片段，錯誤訊息不回顯網址 |
 | `USAGE_DAILY_TOKEN_LIMIT` | 否 | 全站每日 token 上限（正整數，台灣時間 00:00 為日界），預設 1000000；以 `llm_call_logs` 彙總全部呼叫（含摘要與失敗的嘗試），達 80% 記錄警告、達 100% 停止呼叫模型並回覆「目前使用人數較多，請稍後再試。」 |
 | `USAGE_DAILY_CALL_LIMIT` | 否 | 全站每日模型呼叫次數上限（正整數），預設 450（`gemini-3.5-flash-lite` 免費層每日 500 次請求的 90%）；每次請求不論大小都耗用供應商的每日請求數，單靠 token 上限擋不住，所以兩者並用，任一項達上限即停止。**換模型或換供應商時必須依新方案重設這兩個變數**（該層另有 15 RPM、25 萬 TPM，是整個專案共用） |
 | `OPENROUTER_API_KEY` | 否（與 `OPENROUTER_MODEL` 同時設定或同時省略） | RPG 敘事用途的 OpenAI 相容端點（目前是 OpenRouter）金鑰（機密）；客服與摘要永遠使用 Gemini，不受它影響。不是 staging 與 production 的必要機密（RPG 尚未實作） |
@@ -563,6 +567,81 @@ change `launch-readiness`。`loadtest/`：Locust 情境（註冊、登入、開�
 ## 部署計畫腳本（C-5a）
 
 change `launch-readiness`。`scripts/gcp_launch.py`（Python 加 `gcloud`）把雲端部署寫成可檢視、可測試的步驟：`python scripts/gcp_launch.py plan --project <專案> --region asia-east1 --env staging --sql-instance cs-sql-staging --image-tag <標籤> --vars-file staging.vars`。**預設只印出將執行的指令**，加 `--execute` 才逐步執行並在每一步前確認；子命令 `secrets`、`build`、`migrate`、`deploy`、`schedule`、`alerts` 可單獨預覽或執行，順序固定，migration 失敗即停止。機密的值只從標準輸入餵給 `gcloud`，一般設定檔（`--vars-file`，已列入 `.gitignore`）含機密名稱會被拒絕。腳本**沒有對真實 gcloud 與雲端專案驗證過**（C-5b 才實際執行）。完整步驟、回復與限制見 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 的「部署與回復」。
+
+## 預備環境前提與本機預演（C-5b）
+
+change `staging-deployment`。使用者目前**沒有可計費的 Google Cloud 專案**，所以 C-5b 只做程式、文件與**本機單人預演（不花錢）**：以 `APP_ENV=staging`、SQLite 檔案與 ngrok 的 https 網址在本機驗證預備環境的應用程式行為；雲端實跑另開 `cloud-staging-run`（C-5c），等使用者有專案再做。
+
+### 預備環境前提
+
+狀態只寫「已提供／待提供／可用／不可用」，**不含任何機密或帳號名稱**（最後確認：2026-11-02）。
+
+| 項目 | 狀態 | 說明 |
+|---|---|---|
+| `.env.staging` 與 `staging.vars` | 已存在，被版本控制忽略 | `git check-ignore` 驗證；`.env.staging` 放機密（`SECRET_KEY`、`GEMINI_API_KEY`、`MAIL_SMTP_PASSWORD`），`staging.vars` 放一般設定 |
+| Brevo SMTP 金鑰 | 已提供 | 已整理進 `.env.staging` 的 `MAIL_SMTP_PASSWORD` |
+| Brevo SMTP 登入名稱（`MAIL_SMTP_USER`） | **待提供** | Brevo 後台「SMTP 與 API」頁顯示的登入名稱，不是金鑰的標籤；填進 `staging.vars` |
+| 寄件者（`MAIL_FROM`） | **待提供** | 必須是 Brevo 已驗證的寄件者；用 `gmail.com` 這類免費信箱當寄件者有送達風險，第 6.4 項會真的寄一封確認 |
+| 預備環境專用的 Google OAuth 用戶端 | **待提供** | 網頁應用程式型，不重用開發用的與 Firebase 自動建立的；同意畫面維持「測試中」並把使用者的 Gmail 加為測試使用者，範圍只有 `openid email profile`；授權重新導向 URI 為 `<ngrok 網址>/auth/google/callback`；識別碼進 `staging.vars`（`GOOGLE_OAUTH_CLIENT_ID`），密鑰進 `.env.staging` |
+| ngrok | **待提供**（這台電腦找不到 ngrok） | 需安裝並登入，取得固定的免費網域後，`BASE_URL` 與授權重新導向 URI 才不會一直要改 |
+| WSL 的 Docker | **可用** | 2026-11-02 試過：WSL Ubuntu-2204 內以 root 執行 `service docker start` 後，Docker 29.9.2 啟動，12 個 CPU、約 6 GB 記憶體；所以第 6.5 項（本機容器預演）可以進行。每次重新開機後都需要再啟動一次 |
+| 可計費的 Google Cloud 專案與 `gcloud` | **沒有**（不在本 change 範圍） | 雲端的部分都在 `cloud-staging-run`，等使用者有專案、同意 Cloud SQL 的固定月費後才開始 |
+
+### 本 change 新增的工具
+
+| 工具 | 用途 |
+|---|---|
+| `python scripts/staging_smoke.py https://<網址> [--allow-model-call]` | 預備環境冒煙驗收（10 項檢查，輸出只有項目與結果）。只對 https 的預備環境執行，正式環境一律拒絕且沒有參數可繞過；預設不呼叫模型。檢查項目與紀錄格式見營運文件的「預備環境驗收」 |
+| `loadtest/fake_llm/`（獨立映像） | Gemini 相容的假模型伺服器，搭配 `GEMINI_BASE_URL` 讓真實的 Gemini 轉接器指向它；只接受測試金鑰，日誌只有彙總 |
+| `GEMINI_BASE_URL` | Gemini 端點覆寫，**production 設定了會啟動失敗**；其餘環境須為 https（development 與 testing 另允許回送位址的 http） |
+| `LOADTEST_STAIRS=start=20,step=20,steps=5,seconds=120` 加 `locust -f loadtest/locustfile_stairs.py` | 階梯式加壓；`evaluate.py` 新增 `--environment`、`--setting`、`--stairs`，輸出「記錄列」並標明**是否可作為容量依據**（只有雲端可以） |
+| `TRUST_PROXY_HEADERS` | 只有 development 可以設定：經 HTTPS 通道使用時信任轉送標頭；不會讓 development 送出 HSTS |
+| `WEB_CONCURRENCY`、`GUNICORN_THREADS` | 已列入 `.env.example` 與部署計畫的一般設定（預設仍是 2 與 8） |
+
+### 驗收紀錄（C-5b staging-deployment，2026-11-02，實作完成、待檢視與提交）
+
+日期 2026-11-02；對應的 commit：`60286d6` 之上的工作樹（**尚未提交**）。依規範分成兩欄，**沒有實際執行的項目一律標為未驗證，不以預期結果代替**。
+
+| 本機預演已驗證 | 結果 |
+|---|---|
+| 自動化測試與驗證 | pytest **5664 項通過**（含真實 SQL Server `project_test`，沒有略過、沒有警告；上次 5522，新增 142 項）；`node --test` **175 項通過**（沒有前端變動）；`openspec validate staging-deployment --strict` 與 `cloud-staging-run --strict` 皆通過；容器驗收 `scripts/verify_container.py` **95／95 項通過**（見下方第 4 點，先修好過期的腳本才跑得起來） |
+| 設定驗證（以 `.env.staging` 與 `staging.vars` 載入，`APP_ENV=staging`、SQLite 檔案） | 通過：信任入口層標頭、寄信已設定、告警收件人 1 位、信箱驗證關閉、`BASE_URL` 為 https；Google 登入未設定（等預備環境專用的 OAuth 用戶端） |
+| 映像在 Linux 與 gunicorn 下能跑（本機容器） | 通過：主映像（非 root、gunicorn gthread）以 SQLite 啟動，`alembic upgrade head` 在容器內成功，`WEB_CONCURRENCY` 啟動了對應數量的 worker，假模型容器經 `GEMINI_BASE_URL` 回覆 |
+| 本機容器的階梯式加壓（兩輪，見下表） | 已留下記錄；**兩輪都不是容量依據**，也都沒有通過判定 |
+| 啟動時缺機密即失敗（`APP_ENV=staging`、SQLite 檔案） | 通過：依序拿掉 `SECRET_KEY`、`GEMINI_API_KEY`、`ALERT_EMAIL_TO`，啟動都失敗（結束代碼 1），訊息只列變數名稱；補回後 `alembic upgrade head`（9 個 migration）與啟動成功 |
+| 經真實 https 網域（ngrok 固定網域，本機 Flask 伺服器） | 通過：`/healthz` 與 `/readyz` 回 200；首頁帶 `Strict-Transport-Security: max-age=31536000` 與其餘四個標頭、沒有 CSP；`__Host-csrf` cookie 帶 `Secure`、`HttpOnly`、`Path=/`、無 `Domain`（`__Host-session` 由冒煙驗收的登入檢查） |
+| 冒煙驗收腳本對通道網址 | 通過：**9 項通過、0 項失敗、1 項略過**（模型呼叫依設計預設略過），結束代碼 0；Flask 測試應用的 24 項測試另外守住腳本本身 |
+| 營運告警信經 Brevo 的真實寄送 | **通過（人工確認）**：在預演資料庫製造 5 個被鎖定的 `.invalid` 測試帳號（真實的註冊與登入流程），`check-alerts --dry-run` 預告「登入失敗激增：進入告警」，正式執行後 `進入告警，已通知`，使用者確認**信件在收件匣收到**（不在垃圾郵件匣）。寄件者是 `gmail.com`、經 Brevo 寄出，只測了一封信一個收件人，不代表其他情況；內文只有告警名稱、數值與門檻。驗證後已抹除測試帳號並重設告警狀態，管理員保留 |
+| 首位管理員 | 通過：使用者在自己的終端機輸入密碼建立（密碼沒有經過對話） |
+| Google 登入：首次登入（人工，使用者本人的 Google 帳號，預備環境專用的 OAuth 用戶端） | **通過**：勾選條款並填生日與年齡區間後，日誌依序為 `auth.google_started`、`auth.age_confirmed.google`、`auth.google_registered`，建立一個沒有密碼、信箱已驗證、綁定 1 筆 Google 身分的新帳號 |
+| Google 登入：第二次登入 | **能完成，但不是一次點擊（與原本的預期不符）**：日誌為 `auth.google_started`、`auth.google_login`，辨識出同一個帳號、沒有重複建立；然而登入頁每次都要求重新勾選條款並填生日與年齡區間，沒填就不離開本站。後端其實允許不帶這些欄位（已有帳號的人照樣登入），是登入頁沒有提供這個入口。使用者隨後提出新的需求（畫面只有 Google 登入與條款、生日與年齡區間改在登入之後補填、之後直接登入、沒登出就記住），屬獨立的後續 change，**未在本 change 實作** |
+| Google 登入：同信箱既有帳號的合併 | **通過**：先把測試帳號抹掉，管理員（同信箱、已驗證、有密碼）的信箱改回；以 Google 登入後日誌為 `auth.google_linked`（綁進既有的管理員帳號），帳號總數仍是 1 個，管理員的密碼與已驗證狀態保留；`auth.age_confirmed.later` 表示原本沒做過年齡確認的管理員帳號，順便用這次的資料完成了確認。**只驗證了「已驗證的帳號」這一種合併**，「未驗證者先清除密碼憑證再綁定」沒有在預演中做 |
+| 收尾（第 6.6 項） | 通道與預演伺服器已關閉；預演的 SQLite 檔案已刪除；`.env.staging` 與 `staging.vars` 被忽略且沒有被追蹤；`git status` 沒有任何預演產物。預演資料庫裡的管理員帳號隨檔案刪除，之後要再預演需重新建立 |
+
+| 必須在雲端驗證（尚未做） | 狀態 |
+|---|---|
+| 託管資料庫的私有連線與伺服器憑證驗證 | 尚未做（`cloud-staging-run`） |
+| Cloud Run 服務與 Secret Manager 的注入 | 尚未做 |
+| Cloud Scheduler 與 Cloud Run 工作 | 尚未做 |
+| 平台告警與演練 | 尚未做 |
+| 雲端的壓測容量（含 CPU 由 Cloud Monitoring 量測） | 尚未做 |
+| 雲端的還原演練 | 尚未做 |
+
+**本機容器的階梯式加壓**（2026-11-02；環境：WSL2 內的 Docker，12 個 CPU、約 6 GB 記憶體，容器不設 CPU 與記憶體上限；主映像以 `APP_ENV=development` 啟動，因為 Locust 走 http，`Secure` cookie 不會回傳，而且只有 development 與 testing 允許回送位址的 http 端點；SQLite 放在容器的記憶體檔案系統；假模型容器延遲 1.5 ± 0.5 秒、`LOADTEST_ERROR_RATES=rate_limited=0.01,server_error=0.01`；階梯 `start=100,step=100,steps=5,seconds=90`，共 450 秒；Locust 在 Windows 主機上）。**每一輪都標明不是容量依據**：SQLite、沒有資源上限、不是 Cloud Run。
+
+| 日期 | 環境 | 伺服器與資源設定 | 負載（階梯） | 各項數字與判定 | 整體 | 容量依據 |
+|---|---|---|---|---|---|---|
+| 2026-11-02 | 本機容器 | `WEB_CONCURRENCY=2`；`GUNICORN_THREADS=8`（基準）；CPU、記憶體不設上限 | 5 個階段（虛擬使用者 100、200、300、400、500），每階段 90 秒，共 450 秒 | 端到端 p95 8.30 秒（**未通過**）；錯誤率 0.48%（28／5847，全是假模型注入的降級回覆，通過）；資料庫鎖定錯誤 0 筆（通過）；CPU 使用率未驗證 | 未通過 | 否 |
+| 2026-11-02 | 本機容器 | `WEB_CONCURRENCY=2`；`GUNICORN_THREADS=16`（只調整執行緒數）；CPU、記憶體不設上限 | 同上 | 端到端 p95 4.90 秒（通過）；錯誤率 0.61%（36／5911，通過）；資料庫鎖定錯誤 **6 筆**（**未通過**）；CPU 使用率未驗證 | 未通過 | 否 |
+
+**怎麼讀這兩輪**（相對比較，不是結論）：同一個階梯下，執行緒加倍使 p95 從 8.30 降到 4.90 秒，方向符合「執行緒是瓶頸」；但 16 條執行緒那一輪出現 6 次 HTTP 500（註冊 3、登入 1、送訊息 2），都是資料庫層的 `OperationalError`，集中在階段開頭一次加入上百位使用者註冊的瞬間。SQLite 的單一寫入者在這種突發下會鎖定逾時，但**日誌不記例外訊息，無法確認就是鎖定**，也**只有一次實驗**，沒有重跑確認是否可重現。SQL Server 的行為不同，所以這是雲端壓測要重新量的項目，不能拿來決定 gunicorn 的設定。
+
+**預演發現並已修正的問題**（失敗的項目修正後才算數）
+1. **主映像啟動時寫出 `ERROR Control server error: Permission denied: '/nonexistent'`**：gunicorn 26 的控制通道預設路徑在家目錄，非 root 使用者的家目錄是 `/nonexistent`。服務不受影響，但這行會被誤認為異常；`gunicorn.conf.py` 已設 `control_socket_disable = True`（`tests/test_container_files.py` 守住），假模型映像同樣加了 `--no-control-socket`。
+2. **判定腳本的「資料庫鎖定錯誤」檢查在真實日誌上永遠是 0 筆**：它比對 `database is locked` 之類的訊息文字，但應用程式日誌依規範只記錯誤類型、不記例外訊息。現在額外把日誌裡的 `"error_type":"OperationalError"` 計入（`tests/test_loadtest_evaluate.py` 守住），所以第二輪才會被判為未通過；C-5a 時期留下的本機冒煙驗收數字（「無資料庫鎖定錯誤」）因此只能說「沒有比對到訊息文字」。
+3. **計畫與規格寫錯的預期（兩處）**：冒煙驗收的「一般會員存取管理員 API」原本寫成 403，實際（與 admin-console 規格、AGENTS.md 第 10 節）是 404；Google 登入「第二次一次點擊」，實際登入頁每次都要求重填條款與生日。計畫文件、腳本與營運文件都已更正為實際行為。
+4. **`scripts/verify_container.py` 自 C-4d 起就跑不起來**：staging／production 的容器沒有設定 `ALERT_EMAIL_TO`（C-4d 起必填，設定後寄信設定也要齊全），容器啟動即以結束碼 1 退出，第一次跑只有 31／54 項通過。C-4d 與 C-5a 都沒有重跑這個腳本，所以沒人發現。已補上假的告警收件人與寄信設定，重跑 **95／95 項通過**。
+5. **登入頁的「Google 登入」流程與使用者的期望不同**（未修，屬後續 change）：期望是畫面只有 Google 登入與勾選條款、生日與年齡區間在登入之後才補填、補完後下次直接登入、沒登出就記住。這會牽動 AGENTS.md 第 10 節（未滿 13 歲者不得註冊、不保存生日；登入有效期 7 天；管理員密碼重新驗證），需要先修訂規範再 propose。現況：後端已支援不帶年齡的登入；`/login` 與 `/register` 已登入時導向 `/account`，但 `/` 首頁不會；登入 cookie 是 7 天絕對期限。
 
 ## 營運告警（C-4d）
 

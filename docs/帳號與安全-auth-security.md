@@ -78,7 +78,7 @@ flowchart LR
     Check -->|"失敗"| E403["403 csrf_failed"]
 ```
 
-- staging 與 production 的 cookie 使用 `__Host-` 前綴（Secure、Path=/、無 Domain）；入口層由 `ProxyFix` 信任轉發標頭。
+- staging 與 production 的 cookie 使用 `__Host-` 前綴（Secure、Path=/、無 Domain）；入口層由 `ProxyFix` 信任轉發標頭（development 只有明確設定 `TRUST_PROXY_HEADERS` 經 HTTPS 通道使用時才信任，且仍不送 HSTS、cookie 不加前綴；其餘環境設定它會啟動失敗，見營運文件「開發用通道（ngrok）」）。
 - 改密碼、登出所有裝置、重設密碼、綁定 Google 時 `token_version` 加 1，既有登入立即失效。
 
 ## 4. Google 登入（選用）

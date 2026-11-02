@@ -142,6 +142,7 @@ class LlmSettings:
     breaker_seconds: float = DEFAULT_BREAKER_SECONDS
     max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS
     thinking_budget: int | None = None            # 不設定 = 使用供應商的預設
+    base_url: str | None = None                   # Gemini 端點覆寫（GEMINI_BASE_URL，僅非正式環境）；None = 轉接器的預設端點
 
     @property
     def enabled(self) -> bool:
@@ -446,7 +447,48 @@ def _seconds(values: Mapping[str, str], name: str, default: float) -> float:
     return number
 
 
-def _resolve_llm(values: Mapping[str, str]) -> LlmSettings:
+def _resolve_gemini_base_url(env: str, values: Mapping[str, str]) -> str | None:
+    """Gemini 端點覆寫，供隔離的壓測環境指向假模型伺服器。金鑰與提示詞都會被送到這個位址，所以：
+    production 設定了就啟動失敗；其餘環境必須是 https（development 與 testing 另允許回送位址的 http）；
+    不得含帳號、密碼、查詢字串與片段（路徑可以，預設端點本身就帶 /v1beta）。錯誤訊息只指出變數名稱，不回顯網址。"""
+    raw = _get(values, "GEMINI_BASE_URL")
+    if not raw:
+        return None
+    if env == "production":
+        raise ConfigError("production 環境不得設定 GEMINI_BASE_URL：金鑰與提示詞會被送往該位址，只有非正式環境的壓測可以覆寫。")
+    message = "GEMINI_BASE_URL 必須是不含帳號、密碼、查詢與片段的絕對網址，且使用 https（development 與 testing 的回送位址可用 http）。"
+    try:
+        parts = urlsplit(raw)
+        _ = parts.port
+    except ValueError as exc:
+        raise ConfigError(message) from exc
+    if (
+        parts.scheme not in ("http", "https")
+        or not parts.hostname
+        or parts.query
+        or parts.fragment
+        or parts.username is not None
+        or parts.password is not None
+    ):
+        raise ConfigError(message)
+    if parts.scheme == "http" and not (env in DEV_TOOL_ENVS and parts.hostname.lower() in _LOOPBACK_HOSTS):
+        raise ConfigError(message)
+    return raw.rstrip("/")
+
+
+def _resolve_trust_proxy_headers(env: str, values: Mapping[str, str]) -> bool:
+    """開發環境經 HTTPS 通道（例如 ngrok）使用時，選擇信任轉送的協定與主機標頭。只有 development 可以設定：
+    staging 與 production 本來就信任入口層，不需要第二個開關；testing 不該被通道影響。其餘環境設定了（不論值）即啟動失敗。
+    錯誤訊息只指出變數名稱，不回顯值。"""
+    raw = _get(values, "TRUST_PROXY_HEADERS")
+    if not raw:
+        return False
+    if env != "development":
+        raise ConfigError(f"{env} 環境不得設定 TRUST_PROXY_HEADERS：這個開關只給 development 經 HTTPS 通道使用。")
+    return _bool_setting(values, "TRUST_PROXY_HEADERS")
+
+
+def _resolve_llm(env: str, values: Mapping[str, str]) -> LlmSettings:
     """模型呼叫設定。金鑰為選用（缺漏的處理由呼叫端依環境決定）；其餘各項有預設值，不合法一律啟動失敗。"""
     key = _get(values, "GEMINI_API_KEY")
     primary = _model_name(values, "GEMINI_MODEL", DEFAULT_PRIMARY_MODEL)
@@ -485,6 +527,7 @@ def _resolve_llm(values: Mapping[str, str]) -> LlmSettings:
         breaker_seconds=_seconds(values, "LLM_BREAKER_SECONDS", DEFAULT_BREAKER_SECONDS),
         max_output_tokens=max_tokens,
         thinking_budget=thinking,
+        base_url=_resolve_gemini_base_url(env, values),
     )
 
 
@@ -545,7 +588,7 @@ def _resolve_rpg_llm(env: str, values: Mapping[str, str], base: LlmSettings) -> 
         raise ConfigError(f"RPG 用途的模型設定不完整：缺少 {missing}（金鑰與主要模型須同時設定或同時省略）。")
     fallback = _openai_model_name(values, "OPENROUTER_FALLBACK_MODEL") or primary
     return OpenAICompatibleSettings(
-        llm=replace(base, api_key=Secret(key), primary_model=primary, fallback_model=fallback, summary_model=primary, thinking_budget=None),
+        llm=replace(base, api_key=Secret(key), primary_model=primary, fallback_model=fallback, summary_model=primary, thinking_budget=None, base_url=None),
         base_url=_resolve_openai_base_url(env, values),
         zero_retention=_bool_setting(values, "OPENROUTER_ZDR"),
         supports_json_schema=_bool_setting(values, "OPENROUTER_JSON_SCHEMA"),
@@ -677,9 +720,10 @@ def load_config(
         reason = "信箱驗證已開啟" if email_verification_required else "Google 登入已啟用"
         raise ConfigError(f"{reason}，但缺少對外網址 BASE_URL（用於信件連結與 OAuth 回呼）。")
 
-    llm = _resolve_llm(values)
+    llm = _resolve_llm(env, values)
     rpg_llm = _resolve_rpg_llm(env, values, llm)
     content = _resolve_content(env, values, rpg_llm)
+    tunnel_trusts_proxy = _resolve_trust_proxy_headers(env, values)
 
     return AppConfig(
         env=env,
@@ -687,7 +731,7 @@ def load_config(
         secret_key=Secret(secret_key),
         database_url=Secret(database_url),
         log_level=log_level,
-        trust_proxy=env in PRODUCTION_LIKE_ENVS,
+        trust_proxy=env in PRODUCTION_LIKE_ENVS or tunnel_trusts_proxy,
         email_verification_required=email_verification_required,
         base_url=base_url,
         mail=mail,

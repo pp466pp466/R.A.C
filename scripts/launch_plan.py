@@ -48,9 +48,11 @@ PLAIN_VARS = (
     "USAGE_DAILY_TOKEN_LIMIT", "USAGE_DAILY_CALL_LIMIT",
     "OPENROUTER_MODEL", "OPENROUTER_FALLBACK_MODEL", "OPENROUTER_BASE_URL", "OPENROUTER_ZDR", "OPENROUTER_JSON_SCHEMA",
     "SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS", "GOOGLE_OAUTH_CLIENT_ID",
+    # gunicorn 的兩個旋鈕（正整數，預設 2 與 8）；GEMINI_BASE_URL 只給隔離的壓測服務指向假模型伺服器（production 設定了會啟動失敗）
+    "WEB_CONCURRENCY", "GUNICORN_THREADS", "GEMINI_BASE_URL",
 )
-# 不部署：只給本機開發與測試用，絕不出現在 staging 與 production
-NOT_DEPLOYED = ("TEST_SQLSERVER_URL", "FLASK_DEBUG")
+# 不部署：只給本機開發與測試用，絕不出現在 staging 與 production（TRUST_PROXY_HEADERS 在 staging 與 production 設定了會啟動失敗）
+NOT_DEPLOYED = ("TEST_SQLSERVER_URL", "FLASK_DEBUG", "TRUST_PROXY_HEADERS")
 
 # staging 與 production 需要由呼叫者提供的一般設定（缺少時應用程式啟動失敗，這裡先擋下）
 REQUIRED_PLAIN = ("ALERT_EMAIL_TO", "MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_FROM")

@@ -110,7 +110,7 @@ flowchart TD
 ```mermaid
 sequenceDiagram
     participant C as 瀏覽器
-    participant P as ProxyFix（僅 staging 與 production）
+    participant P as ProxyFix（staging 與 production；development 僅在設定 TRUST_PROXY_HEADERS 經 HTTPS 通道時）
     participant L as 請求日誌
     participant G as CSRF 檢查
     participant E as 端點（Controller）

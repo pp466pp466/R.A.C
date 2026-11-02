@@ -87,6 +87,12 @@ def test_gunicorn_configuration():
     assert config["bind"].startswith("0.0.0.0:")
 
 
+def test_gunicorn_does_not_open_its_control_socket_which_cannot_be_created_for_the_homeless_non_root_user():
+    """staging-deployment 的本機容器預演發現：gunicorn 26 的控制通道預設路徑在家目錄，非 root 使用者的家目錄是 /nonexistent，
+    啟動時會寫出 `ERROR Control server error: Permission denied`。服務不受影響，但不該有看起來像異常的錯誤行。"""
+    assert runpy.run_path(str(PROJECT_ROOT / "gunicorn.conf.py"))["control_socket_disable"] is True
+
+
 def test_gunicorn_port_follows_the_platform_port_variable(monkeypatch):
     monkeypatch.setenv("PORT", "9191")
     assert runpy.run_path(str(PROJECT_ROOT / "gunicorn.conf.py"))["bind"] == "0.0.0.0:9191"

@@ -55,6 +55,22 @@ def test_a_database_lock_error_in_the_log_fails_the_run(line):
     assert verdicts(result)["資料庫鎖定錯誤"] == "未通過" and result.exit_code == 1
 
 
+def test_the_applications_own_log_lines_are_what_the_check_can_actually_see():
+    """應用程式日誌只記錯誤類型、不記例外訊息：資料庫層的 OperationalError 就是真實日誌裡唯一的線索（否則這項檢查永遠是「0 筆」）。"""
+    line = '{"time":"2026-11-02T02:20:19.328+00:00","level":"ERROR","logger":"app.controllers.errors","message":"未預期的例外","request_id":"e3ff","error_type":"OperationalError","error_location":"default.py:1192"}'
+    result = evaluate.evaluate(stats(), log_text="ok\n" + line + "\n" + line + "\n", cpu_percent=10)
+    assert verdicts(result)["資料庫鎖定錯誤"] == "未通過" and result.exit_code == 1
+    assert next(item.detail for item in result.items if item.name == "資料庫鎖定錯誤") == "2 筆"
+
+
+@pytest.mark.parametrize("line", [
+    '{"level":"ERROR","error_type":"IntegrityError"}', '{"level":"ERROR","error_type":"ValueError"}',
+    '{"level":"INFO","message":"OperationalError 只是文字"}',
+])
+def test_other_error_types_and_mentions_in_plain_text_are_not_counted_as_database_lock_errors(line):
+    assert verdicts(evaluate.evaluate(stats(), log_text=line + "\n", cpu_percent=10))["資料庫鎖定錯誤"] == "通過"
+
+
 def test_latency_numbers_that_look_like_error_codes_are_not_mistaken_for_lock_errors():
     result = evaluate.evaluate(stats(), log_text='{"latency_ms": 1205}\n{"latency_ms": 1222}\n', cpu_percent=10)
     assert verdicts(result)["資料庫鎖定錯誤"] == "通過"
@@ -113,3 +129,87 @@ def test_the_command_exits_2_when_only_cpu_is_missing(tmp_path):
     messages: list[str] = []
     assert evaluate.main(["--csv-prefix", prefix, "--log", str(log)], out=messages.append) == 2
     assert any("未驗證" in line for line in messages)
+
+
+# ---- 每一輪的記錄：環境、設定、負載、是否為容量依據（staging-deployment 4.2）---------------------------------
+
+
+def run_command(tmp_path, *extra):
+    prefix = write_csv(tmp_path, stats())
+    log = tmp_path / "app.log"
+    log.write_text("ok\n", encoding="utf-8")
+    messages: list[str] = []
+    code = evaluate.main(["--csv-prefix", prefix, "--log", str(log), "--cpu-percent", "40", *extra], out=messages.append)
+    return code, messages
+
+
+@pytest.mark.parametrize("environment, label", [("local", "本機"), ("local-container", "本機容器")])
+def test_local_results_are_marked_as_not_a_capacity_basis(tmp_path, environment, label):
+    code, messages = run_command(tmp_path, "--environment", environment)
+    text = "\n".join(messages)
+    assert code == 0                                                       # 數字達標，但仍然不是容量依據
+    assert f"環境：{label}" in text and "不是容量依據" in text
+    assert next(line for line in messages if line.startswith("記錄列")).rstrip().endswith("| 否 |")
+
+
+def test_only_the_cloud_result_can_be_a_capacity_basis(tmp_path):
+    _, messages = run_command(tmp_path, "--environment", "cloud")
+    text = "\n".join(messages)
+    assert "環境：雲端" in text and "容量依據：是" in text and "不是容量依據" not in text
+    assert next(line for line in messages if line.startswith("記錄列")).rstrip().endswith("| 是 |")
+
+
+def test_without_an_environment_the_result_is_not_treated_as_a_capacity_basis(tmp_path):
+    _, messages = run_command(tmp_path)
+    text = "\n".join(messages)
+    assert "環境：未標明" in text and "沒有標明環境" in text and "容量依據：否" in text
+
+
+def test_the_record_carries_the_server_settings_and_the_load_parameters(tmp_path):
+    _, messages = run_command(
+        tmp_path, "--environment", "local-container", "--setting", "WEB_CONCURRENCY=2", "--setting", "GUNICORN_THREADS=8",
+        "--setting", "CPU=1", "--stairs", "start=20,step=20,steps=3,seconds=60",
+    )
+    text = "\n".join(messages)
+    assert "設定：WEB_CONCURRENCY=2；GUNICORN_THREADS=8；CPU=1" in text
+    assert "負載：3 個階段（虛擬使用者 20、40、60），每階段 60 秒，共 180 秒" in text
+    row = next(line for line in messages if line.startswith("記錄列"))
+    for part in ("本機容器", "WEB_CONCURRENCY=2", "3 個階段", "端到端 p95", "錯誤率", "CPU 使用率", "通過", "| 否 |"):
+        assert part in row, part
+    assert row.count("|") == 7                                             # 六欄
+
+
+def test_the_record_row_says_unverified_for_a_missing_cpu_figure_and_not_a_pass(tmp_path):
+    prefix = write_csv(tmp_path, stats())
+    log = tmp_path / "app.log"
+    log.write_text("ok\n", encoding="utf-8")
+    messages: list[str] = []
+    assert evaluate.main(["--csv-prefix", prefix, "--log", str(log), "--environment", "cloud"], out=messages.append) == 2
+    row = next(line for line in messages if line.startswith("記錄列"))
+    assert "CPU 使用率 未驗證" in row and "有未驗證項目" in row
+
+
+@pytest.mark.parametrize(
+    "extra, leaked",
+    [
+        (("--setting", "SECRET_KEY=abc"), "SECRET_KEY"),
+        (("--setting", "WEB_CONCURRENCY"), None),
+        (("--setting", "WEB_CONCURRENCY=" + "9" * 17), "9" * 17),
+        (("--setting", "CPU=1;rm -rf /"), "rm -rf"),
+        (("--stairs", "steps=1"), None),
+    ],
+)
+def test_invalid_record_options_are_refused_without_echoing_the_value(tmp_path, extra, leaked):
+    code, messages = run_command(tmp_path, *extra)
+    assert code == 1 and messages and messages[0].startswith("失敗")
+    if leaked:
+        assert leaked not in "\n".join(messages)
+
+
+def test_the_new_record_lines_do_not_leak_log_content(tmp_path):
+    prefix = write_csv(tmp_path, stats())
+    log = tmp_path / "app.log"
+    log.write_text("secret.person@example.com 的訊息\n", encoding="utf-8")
+    messages: list[str] = []
+    evaluate.main(["--csv-prefix", prefix, "--log", str(log), "--cpu-percent", "40", "--environment", "local"], out=messages.append)
+    assert "secret.person" not in "\n".join(messages) and str(log) not in "\n".join(messages)

@@ -77,7 +77,12 @@ def create_app(
         GoogleOidcClient(cfg.google, redirect_uri=f"{cfg.base_url}/auth/google/callback") if cfg.google else None
     )
     # 模型供應商：測試可注入假的；否則在設定了 GEMINI_API_KEY 時建立 Gemini 轉接器；兩者皆無則為空（需要模型的功能回 503）
-    app.extensions["llm_provider"] = llm_provider or (GeminiProvider(cfg.llm.api_key.reveal()) if cfg.llm.enabled else None)
+    # GEMINI_BASE_URL（僅非正式環境）讓隔離的壓測環境把轉接器指向假模型伺服器；未設定時用轉接器的預設端點
+    app.extensions["llm_provider"] = llm_provider or (
+        GeminiProvider(cfg.llm.api_key.reveal(), **({"base_url": cfg.llm.base_url} if cfg.llm.base_url else {}))
+        if cfg.llm.enabled
+        else None
+    )
     # RPG 敘事用途的供應商（OpenAI 相容端點）：與客服、摘要的 Gemini 互相獨立；沒有設定且沒有注入時為空（只有該用途回 503）
     app.extensions["rpg_llm_provider"] = rpg_llm_provider or (
         OpenAICompatibleProvider(
@@ -93,7 +98,8 @@ def create_app(
     init_login_session(app)
 
     if cfg.trust_proxy:
-        # 僅 staging 與 production：信任入口層（HTTPS 終止端）轉送的協定與主機標頭
+        # staging 與 production：信任入口層（HTTPS 終止端）轉送的協定與主機標頭；
+        # development 只有明確設定 TRUST_PROXY_HEADERS（經 HTTPS 通道使用）時才信任
         app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1)  # type: ignore[method-assign]
 
     # 請求日誌必須先於 session 註冊：after_request 以相反順序執行，這樣它最後執行，
@@ -102,7 +108,8 @@ def create_app(
     init_session(app, create_engine_for(cfg.database_url.reveal()))
     init_csrf(app)  # 在 init_session 之後：被拒絕的請求仍會走完 after_request，日誌才記得到最終狀態碼
     init_no_store(app)
-    init_security_headers(app, hsts=cfg.trust_proxy)  # HSTS 只在 staging 與 production（有 HTTPS 的入口層）送出
+    # HSTS 只在 staging 與 production 送出；development 即使經通道也不送（瀏覽器會把 HSTS 記在通道網域，牽連之後的本機開發）
+    init_security_headers(app, hsts=cfg.is_production_like)
 
     app.register_blueprint(page_bp)
     app.register_blueprint(auth_pages_bp)

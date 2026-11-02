@@ -7,7 +7,7 @@
 ## ADDED Requirements
 
 ### Requirement: 冒煙驗收腳本
-系統 SHALL 提供冒煙驗收腳本，對一個預備環境網址依序檢查並逐項輸出通過或失敗：`/healthz` 與 `/readyz` 回 200；首頁回應帶有 HSTS 與其餘四個安全標頭且沒有 `Content-Security-Policy`；session 與 CSRF cookie 使用 `__Host-` 前綴、帶 `Secure`、不含 `Domain`、session 為 `HttpOnly`；沒有 CSRF 權杖的 POST 被拒絕；註冊（使用保留的測試信箱網域）、登入與開新對話成功；一般會員存取管理員 API 得到 403；未登入存取需要登入的 API 得到 401。腳本 SHALL 預設不呼叫任何模型；需要時 SHALL 以明確的同意參數才送出一則訊息並檢查回覆不是降級文案。腳本輸出 SHALL 只含項目名稱與結果，SHALL NOT 含 cookie、權杖、密碼或回應內容。
+系統 SHALL 提供冒煙驗收腳本，對一個預備環境網址依序檢查並逐項輸出通過或失敗：`/healthz` 與 `/readyz` 回 200；首頁回應帶有 HSTS 與其餘四個安全標頭且沒有 `Content-Security-Policy`；session 與 CSRF cookie 使用 `__Host-` 前綴、帶 `Secure`、不含 `Domain`、session 為 `HttpOnly`；沒有 CSRF 權杖的 POST 被拒絕；註冊（使用保留的測試信箱網域）、登入與開新對話成功；一般會員存取管理員 API 得到 404（與不存在的端點相同，不透露後台存在；admin-console 規格與 AGENTS.md 第 10 節）；未登入存取需要登入的 API 得到 401。腳本 SHALL 預設不呼叫任何模型；需要時 SHALL 以明確的同意參數才送出一則訊息並檢查回覆不是降級文案。腳本輸出 SHALL 只含項目名稱與結果，SHALL NOT 含 cookie、權杖、密碼或回應內容。
 
 #### Scenario: 全部通過
 - **WHEN** 對設定正確的預備環境執行腳本
@@ -48,7 +48,7 @@
 - **THEN** 沒有任何一步以正式環境的備份或資料庫為來源
 
 ### Requirement: Google 登入在預備環境以人工驗收
-預備環境 SHALL 有專用的 Google OAuth 用戶端（網頁應用程式型；授權重新導向 URI 為預備環境網址加 `/auth/google/callback`），SHALL NOT 重用開發用的用戶端，也 SHALL NOT 重用 Firebase 自動建立的用戶端。因為真實的 Google 登入需要使用者本人的 Google 帳號，驗收 SHALL 由使用者人工進行並記錄：首次登入（勾選條款並提供生日與年齡區間後建立帳號、沒有密碼）、第二次登入（一次點擊完成）、以及同信箱既有帳號的合併。沒有人工驗收時 SHALL 標為「未驗證」，SHALL NOT 以自動化測試或預期結果代替。
+預備環境 SHALL 有專用的 Google OAuth 用戶端（網頁應用程式型；授權重新導向 URI 為預備環境網址加 `/auth/google/callback`），SHALL NOT 重用開發用的用戶端，也 SHALL NOT 重用 Firebase 自動建立的用戶端。因為真實的 Google 登入需要使用者本人的 Google 帳號，驗收 SHALL 由使用者人工進行並記錄：首次登入（勾選條款並提供生日與年齡區間後建立帳號、沒有密碼）、第二次登入（辨識為同一個帳號、不重複建立；目前登入頁仍要求重新填寫條款與生日，「一次點擊」屬獨立的後續 change）、以及同信箱既有帳號的合併。沒有人工驗收時 SHALL 標為「未驗證」，SHALL NOT 以自動化測試或預期結果代替。
 
 #### Scenario: 專用用戶端
 - **WHEN** 檢視預備環境的 Google 設定
@@ -56,7 +56,7 @@
 
 #### Scenario: 首次與再次登入
 - **WHEN** 使用者以真實 Google 帳號在預備環境登入兩次
-- **THEN** 第一次在同意條款並提供年齡確認後建立沒有密碼的帳號並登入，第二次不需任何輸入即登入
+- **THEN** 第一次在同意條款並提供年齡確認後建立沒有密碼的帳號並登入，第二次登入辨識為同一個帳號而不重複建立（目前登入頁仍要求重新勾選條款並填寫生日與年齡區間）
 
 #### Scenario: 沒做就標未驗證
 - **WHEN** 使用者不在場而沒有進行人工驗收

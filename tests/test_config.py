@@ -601,3 +601,51 @@ def test_the_model_key_is_read_from_the_dotenv_file_in_development_only(tmp_path
     assert cfg.llm.api_key.reveal() == FAKE_GEMINI_KEY
     testing = load_config(environ={"APP_ENV": "testing"}, dotenv_path=dotenv)       # testing 不讀 .env
     assert testing.llm.api_key is None
+
+# ---- GEMINI_BASE_URL：端點覆寫只限非正式環境（staging-deployment 3.1）-----------------------------
+
+FAKE_ENDPOINT = "https://fake-llm-abc123-uc.a.run.app/v1beta"
+URL_MARKER = "secret-host-marker.example.com"
+
+
+def test_gemini_base_url_defaults_to_none_and_is_taken_as_given_otherwise(tmp_path):
+    assert load_dev(tmp_path).llm.base_url is None
+    assert load_config(environ=prod_env(APP_ENV="staging")).llm.base_url is None
+    assert load_config(environ=prod_env(APP_ENV="staging", GEMINI_BASE_URL=FAKE_ENDPOINT + "/")).llm.base_url == FAKE_ENDPOINT   # 去除結尾斜線
+    assert load_dev(tmp_path, GEMINI_BASE_URL=FAKE_ENDPOINT).llm.base_url == FAKE_ENDPOINT
+
+
+def test_production_refuses_to_start_with_a_gemini_endpoint_override_and_names_only_the_variable():
+    with pytest.raises(ConfigError) as exc:
+        load_config(environ=prod_env(GEMINI_BASE_URL=f"https://{URL_MARKER}/v1beta"))
+    assert "GEMINI_BASE_URL" in str(exc.value) and URL_MARKER not in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        f"https://user:pw@{URL_MARKER}/v1beta",    # 帳號與密碼
+        f"https://{URL_MARKER}/v1beta?key=abc",    # 查詢字串
+        f"https://{URL_MARKER}/v1beta#frag",       # 片段
+        f"http://{URL_MARKER}/v1beta",             # 不是回送位址的 http
+        "http://localhost:8081/v1beta",            # staging 連回送位址也不允許 http
+        "ftp://example.com/v1beta", "not a url", "https:///v1beta", f"https://{URL_MARKER}:notaport/v1beta",
+    ],
+)
+def test_an_invalid_gemini_base_url_is_rejected_without_echoing_it(value):
+    with pytest.raises(ConfigError) as exc:
+        load_config(environ=prod_env(APP_ENV="staging", GEMINI_BASE_URL=value))
+    message = str(exc.value)
+    assert "GEMINI_BASE_URL" in message and "https" in message
+    assert URL_MARKER not in message and "pw@" not in message and "key=abc" not in message
+
+
+def test_development_and_testing_accept_a_loopback_http_endpoint_for_the_local_fake_server(tmp_path):
+    for host in ("localhost", "127.0.0.1"):
+        assert load_dev(tmp_path, GEMINI_BASE_URL=f"http://{host}:8081/v1beta").llm.base_url == f"http://{host}:8081/v1beta"
+    assert load_config(environ={"APP_ENV": "testing", "GEMINI_BASE_URL": "http://127.0.0.1:8081/v1beta"}).llm.base_url
+
+
+def test_the_rpg_purpose_never_inherits_the_gemini_endpoint(tmp_path):
+    cfg = load_dev(tmp_path, GEMINI_BASE_URL=FAKE_ENDPOINT, OPENROUTER_API_KEY="sk-or-fake", OPENROUTER_MODEL="vendor/model:free")
+    assert cfg.llm.base_url == FAKE_ENDPOINT and cfg.rpg_llm.llm.base_url is None and cfg.rpg_llm.base_url is None

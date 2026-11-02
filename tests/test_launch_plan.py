@@ -72,11 +72,25 @@ def test_secret_values_never_come_through_the_plain_settings_file():
     assert "GEMINI_API_KEY" in str(error.value) and SECRET_SENTINEL not in str(error.value)
 
 
-@pytest.mark.parametrize("variable", ["TEST_SQLSERVER_URL", "FLASK_DEBUG"])
+@pytest.mark.parametrize("variable", ["TEST_SQLSERVER_URL", "FLASK_DEBUG", "TRUST_PROXY_HEADERS"])
 def test_development_only_variables_are_refused_and_never_deployed(variable):
     with pytest.raises(plan.PlanError):
         build(plain={**PLAIN, variable: "x"})
     assert variable not in joined(build())
+
+
+def test_the_gunicorn_knobs_and_the_gemini_endpoint_override_are_plain_settings_that_reach_the_service():
+    """staging-deployment 3.2：兩個 gunicorn 變數是一般設定（放進一般設定檔不再被拒絕），並出現在服務的環境變數裡。"""
+    for variable in ("WEB_CONCURRENCY", "GUNICORN_THREADS", "GEMINI_BASE_URL"):
+        assert variable in plan.PLAIN_VARS and variable not in plan.SECRET_VARS and variable not in plan.NOT_DEPLOYED
+    settings = {**PLAIN, "WEB_CONCURRENCY": "3", "GUNICORN_THREADS": "12"}
+    flag = next(a for step in build(plain=settings) if step.id == "deploy-service" for a in step.argv if a.startswith("--set-env-vars="))
+    assert "WEB_CONCURRENCY=3" in flag and "GUNICORN_THREADS=12" in flag
+
+
+def test_gunicorn_conf_defaults_are_unchanged():
+    conf = (PROJECT_ROOT / "gunicorn.conf.py").read_text(encoding="utf-8-sig")
+    assert 'os.environ.get("WEB_CONCURRENCY", "2")' in conf and 'os.environ.get("GUNICORN_THREADS", "8")' in conf
 
 
 def test_app_env_is_the_environment_name_and_cannot_be_overridden():

@@ -27,6 +27,8 @@ FAKE_GEMINI_KEY = "AIzaSy-container-fake-gemini-key-0123456789"   # staging 與 
 PRODUCTION_AUTH_ENV = [
     "BASE_URL=https://cs.example.com", "MAIL_SMTP_HOST=127.0.0.1", "MAIL_SMTP_PORT=1", "MAIL_FROM=service@example.com",
     f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
+    # staging 與 production 必須設定告警收件人（C-4d 起），設定後寄信設定也必須完整；地址是假的，容器沒有網路出口
+    "ALERT_EMAIL_TO=ops@example.com",
 ]
 MEMBER_EMAIL = "container.member@example.com"
 MEMBER_PASSWORD = "container-member-password-1"
@@ -378,6 +380,7 @@ def verify_member_flow(image: str) -> None:
     env = [
         "APP_ENV=staging", f"SECRET_KEY={FAKE_SECRET}", "DATABASE_URL=sqlite+pysqlite:////tmp/member.sqlite3",
         "EMAIL_VERIFICATION_REQUIRED=false", "BASE_URL=https://cs.example.com", f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
+        "ALERT_EMAIL_TO=ops@example.com", "MAIL_SMTP_HOST=127.0.0.1", "MAIL_SMTP_PORT=1", "MAIL_FROM=service@example.com",
     ]
     env_args = [item for pair in (("-e", e) for e in env) for item in pair]
     code, out = docker("run", "-d", "--name", name, *env_args, image)

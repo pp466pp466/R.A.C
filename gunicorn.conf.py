@@ -17,6 +17,10 @@ timeout = 60
 graceful_timeout = 30   # 收到終止訊號後，等進行中的請求完成的時間
 keepalive = 5
 
+# 不使用 gunicorn 26 起的控制通道（gunicornc）：容器內的非 root 使用者沒有家目錄（/nonexistent），
+# 預設路徑建不出來，啟動時會寫出一行 ERROR（不影響服務，但會被誤認為異常）；也少開一個用不到的 unix socket
+control_socket_disable = True
+
 # 讓設定驗證錯誤在主程序載入應用程式時就失敗（缺少必要機密 → 以非零碼結束，而不是帶著錯誤設定運行）
 preload_app = True
 

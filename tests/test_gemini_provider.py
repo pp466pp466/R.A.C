@@ -331,3 +331,31 @@ def test_the_provider_end_to_end_over_the_real_transport_maps_a_503(local_server
     assert raised.value.kind == "server_error"
     path, headers, _ = local_server.seen[0]
     assert path == "/v1beta/models/gemini-x:generateContent" and headers[KEY_HEADER.lower()] == KEY and KEY not in path
+
+
+# ---- GEMINI_BASE_URL 讓 create_app 建立的轉接器改用其他端點（staging-deployment 3.1）-----------------------------
+
+
+def test_create_app_points_the_gemini_adapter_at_the_configured_endpoint_and_calls_it():
+    from app import create_app
+    from app.config import load_config
+
+    endpoint = "https://fake-llm.example.com/v1beta"
+    app = create_app(load_config(environ={"APP_ENV": "testing", "GEMINI_API_KEY": KEY, "GEMINI_BASE_URL": endpoint + "/"}))
+    provider = app.extensions["llm_provider"]
+    provider._transport = FakeTransport(payload=ok_payload("好"))              # 假傳輸：不連網，只記下實際呼叫的網址
+    provider.generate(make_request(model="gemini-x"))
+    call = provider._transport.calls[0]
+    assert call["url"] == f"{endpoint}/models/gemini-x:generateContent"
+    assert call["headers"][KEY_HEADER] == KEY and KEY not in call["url"]
+
+
+def test_create_app_without_the_override_uses_the_default_gemini_endpoint():
+    from app import create_app
+    from app.config import load_config
+
+    app = create_app(load_config(environ={"APP_ENV": "testing", "GEMINI_API_KEY": KEY}))
+    provider = app.extensions["llm_provider"]
+    provider._transport = FakeTransport(payload=ok_payload("好"))
+    provider.generate(make_request(model="gemini-x"))
+    assert provider._transport.calls[0]["url"] == f"{DEFAULT_BASE_URL}/models/gemini-x:generateContent"
