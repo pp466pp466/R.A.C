@@ -1,6 +1,7 @@
 """會員相關的 MVC Page Controller：只渲染頁面外殼與初始狀態，回應是 HTML 或重新導向（見 AGENTS.md 第 3 節）。
 
-頁面：/login、/login/password、/age、/appeal、/forgot-password、/reset-password、/verify-email、/account、/terms、/privacy（/register 只作導向），
+頁面：/login、/login/password、/age、/appeal、/reset-password（只服務管理員）、/account、/terms、/privacy（/register 只作導向；
+/forgot-password 與 /verify-email 已移除，回 404），
 以及 Google 登入的回呼 /auth/google/callback（它是從 Google 回來的瀏覽器導覽，結果是重新導向，不是 JSON）。
 所有資料操作都在 /api/auth/* 完成；頁面只帶「初始狀態」：以 JSON 區塊（tojson 已跳脫）傳給前端，不以字串拼進腳本。
 `next` 的安全檢查在伺服器端完成，前端只拿到已驗證的值。

@@ -71,7 +71,7 @@ def create_app(
     app.extensions["app_config"] = cfg
     app.extensions["clock"] = clock or utcnow
     app.extensions["age_policy"] = age_policy or DEFAULT_AGE_POLICY
-    # 寄信器：測試可注入假的；否則在設定了寄信參數（信箱驗證開啟）時以設定建立真實的 SMTP 寄信器
+    # 寄信器：測試可注入假的；否則在設定了寄信參數（告警收件人或任何 MAIL_*）時以設定建立真實的 SMTP 寄信器
     app.extensions["mail_sender"] = mail_sender or (SmtpMailSender(cfg.mail) if cfg.mail else None)
     # Google 身分供應商：測試可注入假的；否則在設定了 Google 用戶端時以設定建立真實的 OIDC 用戶端
     app.extensions["identity_provider"] = identity_provider or (

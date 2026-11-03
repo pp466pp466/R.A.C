@@ -38,7 +38,7 @@ def current_request_id() -> str | None:
 
 
 def get_mail_sender() -> Any | None:
-    """寄信器；信箱驗證關閉且沒有注入時為 None（此時不寄任何信）。"""
+    """寄信器；沒有寄信設定（告警收件人與 MAIL_* 都沒設）且沒有注入時為 None（此時不寄任何信）。"""
     return current_app.extensions.get("mail_sender")
 
 

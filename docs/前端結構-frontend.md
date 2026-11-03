@@ -93,6 +93,8 @@ flowchart LR
     Age -->|"POST /api/auth/verify-age"| Done["導向 next 或 /cs"]
     Age -.->|"age_not_eligible：帳號已抹除"| Final["只留說明與回登入頁的連結"]
     Pw -->|"POST /api/auth/admin-password"| Done
+    Pw -.->|"忘記密碼：信中的連結"| Reset["reset-password.js<br/>新密碼＋確認（只服務管理員）"]
+    Reset -->|"POST /api/auth/reset-password"| Back["前往登入"]
     Flows["auth-flows.js（純函式）"] -.-> Login
     Flows -.-> Age
     Flows -.-> Appeal
@@ -103,6 +105,7 @@ flowchart LR
 - **年齡確認頁**：伺服器提供年齡規則（區間選項與範圍）放在初始狀態，沒有任何個人資料；`age_mismatch` 顯示通用說明並清空兩個欄位；`age_not_eligible`（帳號已抹除）只顯示說明與回登入頁的連結；登入逾時導向登入頁。生日只存在輸入框的響應式欄位，不寫入任何瀏覽器儲存體。
 - **申訴頁**：字數提示（以 Unicode 字元計）、自己的申訴與處理狀態、已有待處理的申訴時不顯示表單；申訴內容一律純文字；沒有被鎖定時 API 回 404，頁面導向預設頁面。
 - **管理員密碼驗證頁**：密碼在送出的當下立即清空；沒有或已過期的中間狀態導回 `/login?error=google_state`；「忘記密碼」只在伺服器說有寄信設定時顯示。
+- **重設密碼確認頁**（`/reset-password`，`reset-password.js`，只服務管理員；玩家沒有密碼，也不會收到這類信）：權杖在信中連結的網址片段（`#token=…`），頁面讀取後立即從網址列移除，**載入時不自動送出任何動作**，使用者輸入新密碼（8 至 128 字）與確認、按下按鈕才 `POST /api/auth/reset-password`。兩次輸入不一致在前端擋下；成功後清空兩個欄位，只顯示結果訊息與「前往登入」；缺少權杖時顯示「連結不完整」的說明與回到登入的連結。沒有寄信設定（寄信器與 `BASE_URL`）時伺服器回 404，這個頁面不存在。
 - 所有頁面都遵守前端規範：無 `v-html`、無 Bootstrap 的 JavaScript、處理中禁用按鈕並在 `finally` 恢復（`Auth.useForm`）。
 
 ## 3b. 帳號頁（`/account`）的匯出、刪除與撤銷（C-4c）

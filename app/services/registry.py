@@ -175,7 +175,7 @@ def get_email_flow_service() -> EmailFlowService:
 
 
 def admin_password_reset_available() -> bool:
-    """管理員的「忘記密碼」（寄重設信）是否可用：只需要寄信設定（寄信器與對外網址），不受信箱驗證開關控制。"""
+    """管理員的「忘記密碼」（寄重設信）是否可用：只需要寄信設定（寄信器與對外網址）。"""
     return get_mail_sender() is not None and bool(get_config().base_url)
 
 

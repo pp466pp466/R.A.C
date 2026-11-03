@@ -72,7 +72,7 @@ erDiagram
     auth_tokens {
         int id PK
         int user_id FK
-        string purpose "verify_email 或 reset_password"
+        string purpose "只有 reset_password（管理員）；遷移前遺留的 verify_email 只等著過期清除"
         string token_hash UK "SHA-256 只存雜湊"
         datetime expires_at
         datetime used_at "單次使用"
@@ -204,7 +204,7 @@ flowchart TD
     Acc -->|"使用者申請刪除"| Pend["deletion_pending：立即停用，所有裝置登出，7 天寬限期"]
     Pend -->|"7 天內登入並撤銷"| Acc
     Pend -->|"寬限期滿（execute-account-deletions）"| Era
-    Era --> Wipe["刪除使用者；對話、訊息、第三方身分、驗證權杖串聯刪除；帳本與稽核的使用者欄位變空值"]
+    Era --> Wipe["刪除使用者；對話、訊息、第三方身分、重設權杖串聯刪除；帳本與稽核的使用者欄位變空值"]
     Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months、user_requested、underage、age_unconfirmed，或備份還原後補上的 restore_replay），不納入期限清除"]
     Err["error_detail（失敗原文）"] -->|"14 天（purge-expired-data）"| Del4["清為空值，帳本那一筆保留；僅管理員可讀"]
     Log["llm_call_logs"] -->|"365 天（purge-expired-data）"| Del3["刪除"]
