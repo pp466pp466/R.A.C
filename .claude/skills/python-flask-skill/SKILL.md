@@ -1,6 +1,6 @@
 ---
 name: python-flask-skill
-description: 開發本專案（Python Flask「開放世界文字 RPG」與「會員制智能客服機器人」雙核心平台）時使用。觸發情境包含：Flask MVC Page Controller / Web API Controller / Service / Repository 分層、Vue 3 全域變數模式前端（離線 vendor、自製 Modal/Toast/Sidebar、深色電影感配色）、SQLAlchemy SQLite 與 SQL Server 雙軌資料庫與 Alembic migration、會員註冊登入（信箱驗證、Google 登入、CSRF、資料隔離與權限）、Gemini LLM 串流（SSE）與客服結構化 JSON 輸出、對話滑動視窗與摘要記憶、用量與限流、繁體中文與 UTF-8 編碼、個資保存與日誌規範，以及 Docker 部署與機密管理。
+description: 開發本專案（Python Flask「開放世界文字 RPG」與「會員制智能客服機器人」雙核心平台）時使用。觸發情境包含：Flask MVC Page Controller / Web API Controller / Service / Repository 分層、Vue 3 全域變數模式前端（離線 vendor、自製 Modal/Toast/Sidebar、深色電影感配色）、SQLAlchemy SQLite 與 SQL Server 雙軌資料庫與 Alembic migration、會員登入（玩家只用 Google 登入、管理員先 Google 再密碼、CSRF、資料隔離與權限）、Gemini LLM 串流（SSE）與客服結構化 JSON 輸出、對話滑動視窗與摘要記憶、用量與限流、繁體中文與 UTF-8 編碼、個資保存與日誌規範，以及 Docker 部署與機密管理。
 ---
 
 # python-flask-skill

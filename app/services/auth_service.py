@@ -1,8 +1,8 @@
-"""註冊、登入、登入狀態辨識、變更密碼與建立管理員（見 AGENTS.md 第 10 節）。
+"""管理員的密碼驗證、登入狀態辨識、年齡補填、變更密碼與建立管理員（見 AGENTS.md 第 10 節）。
 
-這裡的幾個保證是「結構性」的，不靠各端點自律：
-- 註冊對「信箱已存在」與「新信箱」回傳同樣的結果，且兩者都先雜湊密碼；
-- 登入對「信箱不存在／密碼錯誤／無密碼／鎖定中」做等價的運算並拋出同一個錯誤；
+玩家只用 Google 登入（`GoogleSignInService`），沒有密碼註冊與密碼登入；密碼只屬於管理員，用於 Google 通過之後的第二道驗證
+與高風險操作的重新輸入。這裡的幾個保證是「結構性」的，不靠各端點自律：
+- 密碼驗證對「中間狀態對不上帳號／密碼錯誤／鎖定中」做等價的運算並拋出同一個錯誤；
 - 失敗計數與 `token_version` 一律用單一條件式 UPDATE 修改（Repository），並行請求不會互相覆蓋。
 Service 不匯入 flask，也不知道 HTTP；時間由注入的時鐘提供。
 """
@@ -12,10 +12,7 @@ from datetime import datetime, timedelta
 from typing import Callable, Protocol
 
 from app.models.lock_strike import STRIKE_IDENTITY_REJECTED
-from app.models.user import (
-    PROVIDER_GOOGLE, ROLE_ADMIN, STATUS_ACTIVE, STATUS_PENDING_VERIFICATION,
-    STATUS_SUSPENDED, User,
-)
+from app.models.user import PROVIDER_GOOGLE, ROLE_ADMIN, STATUS_ACTIVE, STATUS_SUSPENDED, User
 from app.observability import security_events
 from app.repositories.errors import DuplicateUserError
 from app.repositories.user_identity_repository import UserIdentityRepository
@@ -26,7 +23,6 @@ from app.services.current_user import CurrentUser
 from app.services.errors import Conflict, Forbidden, UnderageAccountErased, Unauthenticated, ValidationError
 from app.services.input_cleaning import clean_single_line
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, VerifiedAge, age_group, taipei_today, validate_age_input
-from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.normalization import canonical_email, is_valid_email, normalize_email
 from app.services.password_hasher import MAX_PASSWORD_LENGTH, PasswordHasherService, normalize_password, password_problem
 
@@ -45,9 +41,7 @@ _DISABLED_STATUSES = (STATUS_SUSPENDED,)
 
 
 class AccountMailer(Protocol):
-    """帳號相關的寄信動作（實作見 EmailFlowService）。信箱驗證關閉時不需要，傳入 None。"""
-
-    def send_verification(self, user: User) -> None: ...
+    """帳號相關的寄信動作（實作見 EmailFlowService）。沒有寄信設定時不需要，傳入 None。"""
 
     def send_password_changed_notice(self, user: User) -> None: ...
 
@@ -64,7 +58,6 @@ class AuthService:
         identities: UserIdentityRepository,
         hasher: PasswordHasherService,
         clock: Callable[[], datetime],
-        email_verification_required: bool,
         mailer: AccountMailer | None = None,
         persist_failures: Callable[[], None] | None = None,
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
@@ -78,111 +71,14 @@ class AuthService:
         self._identities = identities
         self._hasher = hasher
         self._clock = clock
-        self._verification_required = email_verification_required
         self._mailer = mailer
         # 登入失敗會回 4xx，而請求級交易遇到 4xx 預設會回復——失敗次數若跟著回復就永遠不會累積、帳號永遠不會鎖定。
         # 記錄失敗後呼叫它，要求這個請求即使以 4xx 結束也保留變更（沒有請求的環境，例如命令列，不需要）。
         self._persist_failures = persist_failures or (lambda: None)
 
     # =========================================================================
-    # 註冊
+    # 管理員的密碼驗證
     # =========================================================================
-
-    def register(
-        self,
-        *,
-        email: object,
-        password: object,
-        display_name: object,
-        accept_terms: object,
-        birth_date: object,
-        age_range: object,
-    ) -> None:
-        """以信箱加密碼註冊。不論信箱是否已有帳號，回傳與副作用以外的行為完全相同（沒有回傳值）。
-
-        - 同意條款（獨立的明確勾選）與生日加年齡區間（規則見 `age_policy.validate_age_input`）都要通過；驗證發生在
-          查詢信箱是否存在之前，所以輸入不合法時，已存在與不存在的信箱得到同樣的錯誤。
-        - 生日與年齡區間不一致、或未滿最低註冊年齡：不建立帳號、不保存任何年齡資料、**不封鎖或標記該信箱**，
-          也不累計次數，使用者可以立刻以同一個信箱與密碼再註冊；日誌只記事件名稱。
-        - 信箱驗證開啟：新帳號為 pending_verification 並寄驗證信；關閉：直接 active，不寄信。
-        - 信箱已存在：不建立帳號，也不覆蓋既有的密碼、資料與年齡確認紀錄；若該帳號尚未驗證信箱且驗證開啟，
-          重新寄驗證信（受寄信頻率限制）。
-        - 不自動登入。
-        """
-        clean_email, clean_name, verified = self._validate_new_account(
-            email, password, display_name, require_consents=True, accept_terms=accept_terms,
-            birth_date=birth_date, age_range=age_range,
-        )
-        assert verified is not None
-        password_hash = self._hasher.hash(str(password))      # 不論信箱是否存在都先雜湊，使耗時一致
-        canonical = canonical_email(clean_email)
-
-        existing = self._users.get_by_canonical_email(canonical)
-        if existing is None:
-            now = self._clock()
-            user = User(
-                email=normalize_email(clean_email),
-                email_canonical=canonical,
-                display_name=clean_name,
-                password_hash=password_hash,
-                status=STATUS_PENDING_VERIFICATION if self._verification_required else STATUS_ACTIVE,
-                terms_version=CURRENT_TERMS_VERSION,
-                terms_accepted_at=now,
-                birth_date=verified.birth_date,
-                age_range=verified.age_range,
-                is_adult_at_confirmation=verified.is_adult,
-                age_confirmed_at=now,
-                age_policy_version=self._age_policy.version,
-            )
-            try:
-                self._users.add_user(user)
-            except DuplicateUserError:
-                existing = self._users.get_by_canonical_email(canonical)   # 並行註冊同一信箱：輸家當作「已存在」
-            else:
-                security_events.log_event(security_events.REGISTER, user_id=user.id)
-                security_events.log_event(security_events.AGE_CONFIRMED_REGISTER, user_id=user.id)
-                if self._verification_required:
-                    self._require_mailer().send_verification(user)
-                return
-
-        if existing is None:  # 唯一索引說有重複，卻查不到：理論上不會發生，保守地當作成功
-            return
-        security_events.log_event(security_events.REGISTER_EXISTING, user_id=existing.id)
-        if (
-            self._verification_required
-            and existing.email_verified_at is None
-            and existing.status in (STATUS_PENDING_VERIFICATION, STATUS_ACTIVE)
-        ):
-            self._require_mailer().send_verification(existing)
-
-    # =========================================================================
-    # 登入
-    # =========================================================================
-
-    def login(self, *, email: object, password: object) -> CurrentUser:
-        """驗證信箱與密碼。失敗一律拋出同一個 `invalid_credentials`（401）；帳號被停用時拋出 403。"""
-        fields: dict[str, str] = {}
-        if not isinstance(email, str) or not email.strip():
-            fields["email"] = "請輸入電子郵件。"
-        if not isinstance(password, str) or not password:
-            fields["password"] = "請輸入密碼。"
-        if fields:
-            raise ValidationError("請輸入信箱與密碼。", fields=fields)
-        assert isinstance(email, str) and isinstance(password, str)
-
-        now = self._clock()
-        user = self._users.get_by_email(normalize_email(email)) if is_valid_email(email) else None
-        if user is None:
-            self._hasher.burn(password)
-            security_events.log_event(security_events.LOGIN_FAILED_UNKNOWN_USER)
-            raise _invalid_credentials()
-        if user.role == ROLE_ADMIN:
-            # 管理員不能只靠密碼登入（要先通過 Google，再到 `verify_admin_password`）：與密碼錯誤相同的通用回應，
-            # 不計入失敗次數（否則任何人都能靠亂猜管理員信箱鎖住它）
-            self._hasher.burn(password)
-            security_events.log_event(security_events.LOGIN_FAILED_ADMIN_PASSWORD_ONLY, user_id=user.id)
-            raise _invalid_credentials()
-        return self._authenticate(user, password, now)
 
     def verify_admin_password(self, user_id: int, token_version: int, password: object) -> CurrentUser:
         """管理員通過 Google 之後的密碼驗證步驟。`user_id` 與 `token_version` 來自簽章的中間狀態 cookie。
@@ -200,7 +96,7 @@ class AuthService:
         return self._authenticate(user, password, self._clock())
 
     def _authenticate(self, user: User, password: str, now: datetime) -> CurrentUser:
-        """密碼驗證與失敗鎖定（密碼登入與管理員的密碼驗證步驟共用）。失敗一律拋出同一個 `invalid_credentials`（401）。"""
+        """密碼驗證與失敗鎖定（管理員的密碼驗證步驟）。失敗一律拋出同一個 `invalid_credentials`（401）。"""
         if user.locked_until is not None:
             if user.locked_until > now:
                 self._hasher.burn(password)
@@ -350,8 +246,8 @@ class AuthService:
         self._users.reset_login_failures(user)
         self._users.bump_token_version(user)
         security_events.log_event(security_events.PASSWORD_CHANGED, user_id=user.id)
-        if self._verification_required:
-            self._require_mailer().send_password_changed_notice(user)
+        if self._mailer is not None:
+            self._mailer.send_password_changed_notice(user)
         return CurrentUser.from_model(user)
 
     # =========================================================================
@@ -393,7 +289,7 @@ class AuthService:
 
     def create_admin(self, *, email: object, display_name: object, password: object) -> CurrentUser:
         """由部署者以一次性指令建立管理員：角色 admin、狀態 active、信箱視為已驗證。信箱已存在時拒絕且不改動既有帳號。"""
-        clean_email, clean_name, _ = self._validate_new_account(email, password, display_name, require_consents=False)
+        clean_email, clean_name = self._validate_admin_input(email, password, display_name)
         canonical = canonical_email(clean_email)
         if self._users.get_by_canonical_email(canonical) is not None:
             raise Conflict("這個信箱已經有帳號了。", code="email_exists")
@@ -417,19 +313,8 @@ class AuthService:
     # 內部輔助
     # =========================================================================
 
-    def _validate_new_account(
-        self,
-        email: object,
-        password: object,
-        display_name: object,
-        *,
-        require_consents: bool,
-        accept_terms: object = True,
-        birth_date: object = None,
-        age_range: object = None,
-    ) -> tuple[str, str, VerifiedAge | None]:
-        """驗證新帳號的輸入。欄位錯誤一次回報；年齡的語意錯誤（未滿最低年齡、不一致）只在沒有欄位錯誤時才拋出，
-        因為欄位錯誤可以就地修正，而語意錯誤要求使用者重新填寫。管理員指令（`require_consents=False`）不涉及年齡。"""
+    def _validate_admin_input(self, email: object, password: object, display_name: object) -> tuple[str, str]:
+        """驗證 `create-admin` 的輸入。欄位錯誤一次回報。"""
         fields: dict[str, str] = {}
         if not isinstance(email, str) or not is_valid_email(email):
             fields["email"] = "請輸入有效的電子郵件地址。"
@@ -439,22 +324,10 @@ class AuthService:
         cleaned_name = clean_single_line(display_name) if isinstance(display_name, str) else None
         if not cleaned_name or len(cleaned_name) > MAX_DISPLAY_NAME_LENGTH:
             fields["display_name"] = f"顯示名稱須為 1 至 {MAX_DISPLAY_NAME_LENGTH} 字。"
-        verified: VerifiedAge | None = None
-        age_error: ValidationError | None = None
-        if require_consents:
-            if accept_terms is not True:
-                fields["accept_terms"] = "請先勾選同意服務條款與隱私權政策。"
-            verified, age_error = self._check_age_input(birth_date, age_range)
-            if age_error is not None and age_error.code == ValidationError.code:    # 缺少或格式不合法：欄位錯誤，一併回報
-                fields.update(age_error.fields)
-                age_error = None
         if fields:
             raise ValidationError(fields=fields)
-        if age_error is not None:
-            security_events.log_age_rejection(age_error.code)
-            raise age_error
         assert isinstance(email, str) and cleaned_name is not None
-        return email, cleaned_name, verified
+        return email, cleaned_name
 
     def _check_age_input(self, birth_date: object, age_range: object) -> tuple[VerifiedAge | None, ValidationError | None]:
         """以「今天（Asia/Taipei）」驗證生日與年齡區間；回傳（結果, 錯誤），不拋出、不記錄。"""
@@ -469,7 +342,3 @@ class AuthService:
             raise Unauthenticated()
         return user
 
-    def _require_mailer(self) -> AccountMailer:
-        if self._mailer is None:
-            raise RuntimeError("信箱驗證已開啟，但沒有設定寄信元件。")
-        return self._mailer

@@ -7,13 +7,13 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.models.user import (
-    MEMBER_TIERS, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, USER_STATUSES,
+    MEMBER_TIERS, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED, USER_STATUSES,
 )
 from app.repositories.admin_repository import AdminRepository
 from app.services.normalization import canonical_email
 from tests.support.auth import add_user
 
-SUSPENDABLE = (STATUS_ACTIVE, STATUS_PENDING_VERIFICATION)
+SUSPENDABLE = (STATUS_ACTIVE,)
 
 
 @pytest.fixture()
@@ -94,32 +94,23 @@ def test_unsaved_changes_to_the_object_are_flushed_before_the_conditional_update
 
 # ---- 解除停權 -------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("to_status", [STATUS_ACTIVE, STATUS_PENDING_VERIFICATION])
-def test_unsuspending_restores_the_requested_status(repo, member_session, to_status):
+def test_unsuspending_restores_active(repo, member_session):
     user = add_user(member_session, 1, status=STATUS_SUSPENDED)
-    assert repo.unsuspend_user(user, to_status=to_status) is True
-    assert reload(member_session, user).status == to_status
+    assert repo.unsuspend_user(user) is True
+    assert reload(member_session, user).status == STATUS_ACTIVE
 
 
 @pytest.mark.parametrize("status", [s for s in USER_STATUSES if s != STATUS_SUSPENDED])
 def test_only_a_suspended_user_can_be_unsuspended(repo, member_session, status):
     user = add_user(member_session, 1, status=status)
-    assert repo.unsuspend_user(user, to_status=STATUS_ACTIVE) is False
+    assert repo.unsuspend_user(user) is False
     assert reload(member_session, user).status == status
-
-
-@pytest.mark.parametrize("bad", [STATUS_SUSPENDED, STATUS_DELETION_PENDING, "banana", ""])
-def test_an_invalid_resulting_status_is_refused(repo, member_session, bad):
-    user = add_user(member_session, 1, status=STATUS_SUSPENDED)
-    with pytest.raises(ValueError):
-        repo.unsuspend_user(user, to_status=bad)
-    assert reload(member_session, user).status == STATUS_SUSPENDED
 
 
 def test_unsuspending_does_not_change_the_token_version(repo, member_session):
     user = add_user(member_session, 1, status=STATUS_SUSPENDED)
     version = user.token_version
-    repo.unsuspend_user(user, to_status=STATUS_ACTIVE)
+    repo.unsuspend_user(user)
     assert reload(member_session, user).token_version == version       # 停權時已撤銷既有登入；解除不需要再改
 
 

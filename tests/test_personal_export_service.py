@@ -11,7 +11,7 @@ from datetime import date, timedelta
 import pytest
 
 from app.models import AuthToken, ChatConversation, ChatMessage, User, UserIdentity
-from app.models.user import PROVIDER_GOOGLE, TOKEN_VERIFY_EMAIL
+from app.models.user import PROVIDER_GOOGLE, TOKEN_RESET_PASSWORD
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
@@ -66,7 +66,7 @@ def rich_user(session) -> User:
         email_verified_at=START, last_login_at=START, terms_version="2026-10-28-draft-2", terms_accepted_at=START,
     )
     session.add(UserIdentity(user_id=user.id, provider=PROVIDER_GOOGLE, provider_subject=SECRET_SUBJECT))
-    session.add(AuthToken(user_id=user.id, purpose=TOKEN_VERIFY_EMAIL, token_hash=SECRET_TOKEN_HASH, expires_at=START))
+    session.add(AuthToken(user_id=user.id, purpose=TOKEN_RESET_PASSWORD, token_hash=SECRET_TOKEN_HASH, expires_at=START))
     session.commit()
     return user
 

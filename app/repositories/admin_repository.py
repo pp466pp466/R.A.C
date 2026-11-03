@@ -21,7 +21,7 @@ from app.models.chat import ROLE_ASSISTANT, ChatConversation, ChatMessage
 from app.models.llm_call_log import KIND_CHAT, STATUS_BLOCKED, STATUS_VALIDATION_FAILED, LlmCallLog
 from app.models.lock_appeal import LockAppeal
 from app.models.user import (
-    MEMBER_TIERS, STATUS_ACTIVE, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, User,
+    MEMBER_TIERS, STATUS_ACTIVE, STATUS_SUSPENDED, User,
 )
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.lock_strike_repository import LockStrikeRepository
@@ -330,12 +330,10 @@ class AdminRepository:
             .values(status=STATUS_SUSPENDED, token_version=User.token_version + 1),
         )
 
-    def unsuspend_user(self, user: User, *, to_status: str) -> bool:
-        """只有 `suspended` 才能解除；`to_status` 由呼叫端依信箱驗證設定決定（`active` 或 `pending_verification`）。"""
-        if to_status not in (STATUS_ACTIVE, STATUS_PENDING_VERIFICATION):
-            raise ValueError(f"解除停權後的狀態不合法：{to_status!r}")
+    def unsuspend_user(self, user: User) -> bool:
+        """只有 `suspended` 才能解除，結果一律是 `active`。"""
         return self._update_user(
-            user, update(User).where(User.id == user.id, User.status == STATUS_SUSPENDED).values(status=to_status)
+            user, update(User).where(User.id == user.id, User.status == STATUS_SUSPENDED).values(status=STATUS_ACTIVE)
         )
 
     def change_tier(self, user: User, *, tier: str) -> bool:

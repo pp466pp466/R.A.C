@@ -195,3 +195,22 @@ def test_the_service_gets_the_configured_models_and_limits():
 
     app.test_client().get("/_settings")
     assert seen == {"primary": "model-a", "fallback": "model-b", "budget": 40.0}
+
+
+# ---- 寄信器只在有寄信設定時建立（營運告警與管理員的重設密碼；玩家端不寄任何信）--------------------------
+
+
+def test_without_any_mail_settings_there_is_no_mailer_and_the_admin_reset_pages_are_404():
+    app = make_testing_app()
+    assert app.extensions["mail_sender"] is None
+    client = app.test_client()
+    assert client.get("/reset-password").status_code == 404
+    assert client.post("/api/auth/reset-password", json={"token": "x", "new_password": "a-brand-new-password"}).status_code == 404
+
+
+def test_with_the_mail_settings_the_real_smtp_mailer_is_built_and_the_reset_page_exists():
+    from app.services.mail_sender import SmtpMailSender
+
+    app = make_production_like_app("staging")
+    assert isinstance(app.extensions["mail_sender"], SmtpMailSender)
+    assert app.test_client().get("/reset-password").status_code == 200

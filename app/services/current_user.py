@@ -11,7 +11,7 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from app.models.user import (
-    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, User,
+    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, User,
 )
 
 
@@ -86,8 +86,8 @@ class CurrentUser:
 
     @property
     def may_delete_account(self) -> bool:
-        """帳號頁是否提供「刪除帳號」：一般會員（管理員不可自助刪除），且帳號狀態允許申請（使用中或待驗證信箱）。"""
-        return self.role != ROLE_ADMIN and self.status in (STATUS_ACTIVE, STATUS_PENDING_VERIFICATION)
+        """帳號頁是否提供「刪除帳號」：一般會員（管理員不可自助刪除），且帳號狀態允許申請（使用中）。"""
+        return self.role != ROLE_ADMIN and self.status == STATUS_ACTIVE
 
     @property
     def awaiting_deletion(self) -> bool:

@@ -1,4 +1,4 @@
-"""privacy-lifecycle 端到端：註冊、驗證、登入、對話、匯出、申請刪除、受限登入、撤銷、再申請、寬限期滿的排程刪除、期限清除。
+"""privacy-lifecycle 端到端：Google 首次登入、年齡確認、對話、匯出、申請刪除（玩家不收任何信）、受限登入、撤銷、再申請、寬限期滿的排程刪除、期限清除。
 
 整個應用程式以假的模型供應商與假寄信器組裝（沒有網路與金鑰），時鐘手動推進；結束後掃描整段日誌與指令輸出，
 證明沒有任何 email、名稱、生日、密碼、確認文字、對話內容或失敗原文。
@@ -19,10 +19,12 @@ from app.models import (
 )
 from app.observability.json_logging import ALLOWED_FIELDS
 from tests.support.age import age_fields, birth_date_for_age
-from tests.support.auth import GOOD_PASSWORD, FakeClock
+from tests.support.auth import FakeClock
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
+from tests.support.google import SUB, FakeProvider, google_sign_in
 from tests.support.llm import FakeLLMProvider, Step
+from app.services.google_oidc import GoogleProfile
 
 pytestmark = pytest.mark.usefixtures("generous_free_limits")
 
@@ -52,9 +54,12 @@ def uid(n: int) -> str:
 def world():
     clock, sender = FakeClock(), FakeSender()
     provider = FakeLLMProvider(default=Step(lambda request: {"summary": "摘要"} if "累積摘要" in request.system_instruction else reply_json(SECRET_REPLY)))
+    google = FakeProvider()
+    google.profile = GoogleProfile(SUB, EMAIL, True, NAME)
     app = create_app(
-        load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV, "BASE_URL": BASE}),
-        mail_sender=sender, clock=clock, llm_provider=provider,
+        # 有寄信器與寄信設定：證明即使如此，玩家端也不寄任何信（含申請刪除的通知）
+        load_config(environ={"APP_ENV": "testing", "ALERT_EMAIL_TO": "ops@example.com", **AUTH_ENV, "BASE_URL": BASE}),
+        mail_sender=sender, clock=clock, llm_provider=provider, identity_provider=google,
     )
     Base.metadata.create_all(app.extensions["db_engine"])
     return app, clock, sender, provider
@@ -78,13 +83,11 @@ def test_the_whole_privacy_lifecycle_from_signup_to_erasure_and_expiry_without_l
     runner = app.test_cli_runner()
     cli_output: list[str] = []
 
-    # ---- 註冊、驗證、登入 ----
+    # ---- Google 首次登入（勾選條款）、年齡確認 ----
     client = app.test_client()
-    registered = client.post("/api/auth/register", json={"email": EMAIL, "password": GOOD_PASSWORD, "display_name": NAME, "accept_terms": True, **age_fields(30)})
-    assert registered.status_code == 200
-    token = sender.last_token()
-    assert client.post("/api/auth/verify-email", json={"token": token}).status_code == 200
-    assert client.post("/api/auth/login", json={"email": EMAIL, "password": GOOD_PASSWORD}).status_code == 200
+    first = google_sign_in(app, client)
+    assert first.status_code == 302 and first.headers["Location"] == "/age"
+    assert client.post("/api/auth/verify-age", json=age_fields(30)).status_code == 200
 
     # ---- 對話（走真正的客服流程，含摘要）----
     public_id = client.post("/api/cs/conversations", json={"client_id": uid(999)}).get_json()["conversation"]["id"]
@@ -104,21 +107,21 @@ def test_the_whole_privacy_lifecycle_from_signup_to_erasure_and_expiry_without_l
     assert sorted(archive.namelist()) == ["account.csv", "appeals.csv", "messages.csv"]
     assert data["appeals"] == []
 
-    # ---- 申請刪除：所有裝置登出、通知信 ----
+    # ---- 申請刪除：所有裝置登出；玩家端不寄任何信 ----
     other_device = app.test_client()
-    other_device.post("/api/auth/login", json={"email": EMAIL, "password": GOOD_PASSWORD})
-    sent_before = len(sender.sent)
-    requested = client.post("/api/account/delete", json={"password": GOOD_PASSWORD})
+    google_sign_in(app, other_device)
+    assert other_device.get("/api/auth/me").status_code == 200
+    requested = client.post("/api/account/delete", json={"confirm_text": CONFIRM})
     assert requested.status_code == 200 and requested.get_json()["scheduled_at"] == "2026-11-03T12:00:00Z"
     assert client.get("/api/auth/me").status_code == 401 and other_device.get("/api/auth/me").status_code == 401
-    assert len(sender.sent) == sent_before + 1 and "刪除帳號" in sender.sent[-1]["subject"]
+    assert sender.sent == []
     assert counts(app) == before                                              # 寬限期內資料都還在
 
     # ---- 寬限期內：重新登入只能撤銷 ----
     clock.advance(days=2)
     returning = app.test_client()
-    login = returning.post("/api/auth/login", json={"email": EMAIL, "password": GOOD_PASSWORD})
-    assert login.get_json()["user"]["status"] == "deletion_pending"
+    google_sign_in(app, returning)                                           # 已綁定 Google 的待刪除帳號可以登入（受限登入狀態）
+    assert returning.get("/api/auth/me").get_json()["user"]["status"] == "deletion_pending"
     assert returning.get("/api/cs/conversations").status_code == 403
     assert returning.post("/api/account/export", json={"format": "json"}).status_code == 403
     assert returning.get("/cs").headers["Location"] == "/account"
@@ -135,7 +138,7 @@ def test_the_whole_privacy_lifecycle_from_signup_to_erasure_and_expiry_without_l
     assert returning.get("/api/cs/conversations").status_code == 200
 
     # ---- 再申請，寬限期滿，排程刪除 ----
-    assert returning.post("/api/account/delete", json={"password": GOOD_PASSWORD}).status_code == 200
+    assert returning.post("/api/account/delete", json={"confirm_text": CONFIRM}).status_code == 200
     clock.advance(days=7)
     preview = runner.invoke(args=["execute-account-deletions", "--dry-run"])
     erased = runner.invoke(args=["execute-account-deletions"])
@@ -151,11 +154,12 @@ def test_the_whole_privacy_lifecycle_from_signup_to_erasure_and_expiry_without_l
         tombstone = s.scalars(select(DeletionTombstone)).one()
         assert tombstone.reason == "user_requested"
         assert {c.name for c in DeletionTombstone.__table__.columns} == {"id", "user_id", "deleted_at", "reason"}
-    assert app.test_client().post("/api/auth/login", json={"email": EMAIL, "password": GOOD_PASSWORD}).status_code == 401
+    assert sender.sent == []                                                  # 整段流程玩家都沒有收到信
 
-    # ---- 同一個信箱可以重新註冊 ----
+    # ---- 同一個信箱可以重新以 Google 登入並建立新帳號 ----
     fresh = app.test_client()
-    assert fresh.post("/api/auth/register", json={"email": EMAIL, "password": GOOD_PASSWORD, "display_name": "新帳號", "accept_terms": True, **age_fields(30)}).status_code == 200
+    again_in = google_sign_in(app, fresh)
+    assert again_in.status_code == 302 and again_in.headers["Location"] == "/age"
 
     # ---- 一年多之後的期限清除 ----
     with db(app) as s:
@@ -183,7 +187,7 @@ def test_the_whole_privacy_lifecycle_from_signup_to_erasure_and_expiry_without_l
     raw = log_lines.raw() + "".join(cli_output)
     assert raw.strip()
     for secret in (
-        EMAIL, NAME, GOOD_PASSWORD, CONFIRM, SECRET_USER_TEXT, SECRET_REPLY, SECRET_BAD_OUTPUT, token, public_id,
+        EMAIL, NAME, CONFIRM, SECRET_USER_TEXT, SECRET_REPLY, SECRET_BAD_OUTPUT, SUB, public_id,
         birth_date_for_age(30).isoformat(), "25_34",
     ):
         assert secret not in raw, f"日誌或指令輸出洩漏了：{secret[:14]}…"

@@ -1,4 +1,4 @@
-"""會員相關資料表：使用者、第三方身分、電子郵件權杖（見 AGENTS.md 第 4、10 節）。
+"""會員相關資料表：使用者、第三方身分、重設密碼權杖（見 AGENTS.md 第 4、10 節）。
 
 設計要點：
 - email 與 `email_canonical` 各自唯一；兩者都由 Service 先正規化再寫入（SQLite 區分大小寫、SQL Server 不區分）。
@@ -29,11 +29,10 @@ TIER_PLUS = "plus"
 TIER_VIP = "vip"
 MEMBER_TIERS = (TIER_FREE, TIER_PLUS, TIER_VIP)
 
-STATUS_PENDING_VERIFICATION = "pending_verification"
 STATUS_ACTIVE = "active"
 STATUS_SUSPENDED = "suspended"
 STATUS_DELETION_PENDING = "deletion_pending"
-USER_STATUSES = (STATUS_PENDING_VERIFICATION, STATUS_ACTIVE, STATUS_SUSPENDED, STATUS_DELETION_PENDING)
+USER_STATUSES = (STATUS_ACTIVE, STATUS_SUSPENDED, STATUS_DELETION_PENDING)
 
 PROVIDER_GOOGLE = "google"
 IDENTITY_PROVIDERS = (PROVIDER_GOOGLE,)
@@ -44,13 +43,12 @@ AGE_CONFIRMATION_DEADLINE = timedelta(hours=24)
 # 申請刪除後的寬限期：期間內可登入並撤銷，期滿由排程指令抹除（AGENTS.md 第 11 節）
 DELETION_GRACE_PERIOD = timedelta(days=7)
 
-TOKEN_VERIFY_EMAIL = "verify_email"
-TOKEN_RESET_PASSWORD = "reset_password"
-TOKEN_PURPOSES = (TOKEN_VERIFY_EMAIL, TOKEN_RESET_PASSWORD)
+TOKEN_RESET_PASSWORD = "reset_password"       # 管理員的重設密碼；信箱驗證權杖已退役（遷移前遺留的只等著過期被清除）
+TOKEN_PURPOSES = (TOKEN_RESET_PASSWORD,)
 
 
 class User(Base, PublicIdMixin, TimestampMixin):
-    """會員。`status` 沒有預設值：由 Service 依信箱驗證設定明確指定。"""
+    """會員。`status` 沒有預設值：由 Service 明確指定（玩家與管理員建立時都是 `active`）。"""
 
     __tablename__ = "users"
 
@@ -80,8 +78,8 @@ class User(Base, PublicIdMixin, TimestampMixin):
     age_range: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
     is_adult_at_confirmation: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
-    # 自助刪除（account-deletion 規格）：申請時間與申請前的狀態（只會是 active 或 pending_verification，撤銷時用來還原，
-    # 避免待驗證的帳號藉由刪除再撤銷變成 active）。兩欄平時都是空值，不進索引：待刪除的帳號極少，掃描即可。
+    # 自助刪除（account-deletion 規格）：申請時間與申請前的狀態（只會是 active，撤銷時還原）。
+    # 兩欄平時都是空值，不進索引：待刪除的帳號極少，掃描即可。
     deletion_requested_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     status_before_deletion: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
     # Google 登入改版（google-first-login）：
@@ -111,7 +109,7 @@ class UserIdentity(Base):
 
 
 class AuthToken(Base):
-    """信箱驗證與重設密碼的權杖。只存 SHA-256 雜湊，原值只出現在寄出的信件中。"""
+    """管理員重設密碼的權杖（遷移前遺留的信箱驗證權杖只等著過期被清除）。只存 SHA-256 雜湊，原值只出現在寄出的信件中。"""
 
     __tablename__ = "auth_tokens"
     __table_args__ = (

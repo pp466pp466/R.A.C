@@ -40,7 +40,7 @@ class Persisted:
 class AdminKit:
     """一個後台 Service 與它周邊的東西。"""
 
-    def __init__(self, session: Session, *, verification: bool = False, settings: UsageSettings | None = None) -> None:
+    def __init__(self, session: Session, *, settings: UsageSettings | None = None) -> None:
         self.session = session
         self.clock = FakeClock()
         self.persisted = Persisted()
@@ -51,15 +51,15 @@ class AdminKit:
         self.ledger = LlmCallLogRepository(session)
         self.auth = AuthService(
             users=UserRepository(session), identities=UserIdentityRepository(session), hasher=FAST_HASHER, clock=self.clock,
-            email_verification_required=verification, persist_failures=self.persisted,
+            persist_failures=self.persisted,
         )
         usage = UsageService(
             ledger=self.ledger, chats=self.chats, settings=self.settings, clock=self.clock, processing_ttl=timedelta(seconds=60)
         )
         self.service = AdminService(
-            policy=AccessPolicy(email_verification_required=verification, clock=self.clock), admins=self.admins, audit=self.audit,
+            policy=AccessPolicy(clock=self.clock), admins=self.admins, audit=self.audit,
             usage=usage, age_stats=AgeStatsService(users=UserRepository(session)), usage_settings=self.settings,
-            email_verification_required=verification, confirm_password=self.auth.confirm_password,
+            confirm_password=self.auth.confirm_password,
             persist_on_error=self.persisted, clock=self.clock,
         )
         self._n = 100

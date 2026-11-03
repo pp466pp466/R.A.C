@@ -5,7 +5,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 
 from app.models import User, UserIdentity
-from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED
+from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.services.auth_service import AuthService
@@ -18,7 +18,6 @@ from app.services.google_sign_in_service import (
 from app.services.legal import CURRENT_TERMS_VERSION
 from tests.support.age import age_fields
 from tests.support.auth import FAST_HASHER, GOOD_PASSWORD, START, FakeClock, add_user
-from tests.support.email_flow import DeferQueue, FakeSender, make_flow
 from tests.support.google import SUB, FakeProvider
 
 def make_service(session, provider=None, clock=None) -> GoogleSignInService:
@@ -305,15 +304,16 @@ def test_a_verified_local_account_gets_the_google_identity_and_keeps_its_passwor
     assert len(users(member_session)) == 1 and len(identities(member_session)) == 1
 
 
-def test_an_unverified_local_account_loses_its_password_is_verified_and_its_sessions_die(member_session):
-    """預先佔用信箱：攻擊者以受害者的信箱註冊並設了密碼；受害者之後用 Google 登入。"""
-    user = add_user(member_session, 1, status=STATUS_PENDING_VERIFICATION, password="attackers-chosen-pw")
+def test_a_legacy_unverified_account_loses_its_password_is_verified_and_its_sessions_die(member_session):
+    """遺留的預先佔用信箱：遷移前攻擊者以受害者的信箱註冊並設了密碼（遷移把狀態改為 active、驗證時間仍為空）；
+    受害者之後用 Google 登入。攻擊者在遷移前取得的登入狀態（uid, tv）也要失效。"""
+    user = add_user(member_session, 1, password="attackers-chosen-pw")          # active，email_verified_at 為空
     attacker_auth = AuthService(
         users=UserRepository(member_session), identities=UserIdentityRepository(member_session), hasher=FAST_HASHER,
-        clock=FakeClock(), email_verification_required=False,
+        clock=FakeClock(),
     )
-    attacker_session = attacker_auth.login(email="user1@example.com", password="attackers-chosen-pw")
-    assert attacker_auth.resolve_session(attacker_session.id, attacker_session.token_version)
+    attacker_session = attacker_auth.resolve_session(user.id, user.token_version)
+    assert attacker_session is not None
 
     provider = FakeProvider()
     provider.profile = GoogleProfile(SUB, "user1@example.com", True, "真正的主人")
@@ -324,8 +324,6 @@ def test_an_unverified_local_account_loses_its_password_is_verified_and_its_sess
     assert user.password_hash is None and user.email_verified_at == START
     assert user.status == STATUS_ACTIVE and user.token_version == 2
     assert attacker_auth.resolve_session(attacker_session.id, attacker_session.token_version) is None   # 攻擊者的登入狀態失效
-    with pytest.raises(Unauthenticated):
-        attacker_auth.login(email="user1@example.com", password="attackers-chosen-pw")                  # 密碼也不能再用
     assert result.user.token_version == 2                                                               # 新的登入狀態使用新版本
 
 
@@ -386,42 +384,6 @@ def test_losing_a_registration_race_falls_back_to_linking_instead_of_failing(mem
 # =============================================================================
 # 與其他流程的銜接
 # =============================================================================
-
-def test_a_google_account_that_later_sets_a_password_can_sign_in_both_ways(member_session):
-    clock = FakeClock()
-    service = make_service(member_session, clock=clock)
-    first = login_with(service)
-    assert first.outcome == OUTCOME_REGISTERED
-
-    sender, queue = FakeSender(), DeferQueue()
-    flow = make_flow(member_session, clock=clock, sender=sender, queue=queue)
-    clock.advance(minutes=5)
-    flow.request_password_reset("person@example.com")
-    queue.run()
-    flow.reset_password(sender.last_token(), "my-new-password-123")
-
-    auth = AuthService(
-        users=UserRepository(member_session), identities=UserIdentityRepository(member_session), hasher=FAST_HASHER,
-        clock=clock, email_verification_required=False,
-    )
-    assert auth.login(email="person@example.com", password="my-new-password-123").id == first.user.id    # 密碼登入
-    second = login_with(service)                                                                          # Google 登入仍然可用
-    assert second.outcome == OUTCOME_LOGIN and second.user.id == first.user.id
-    assert len(identities(member_session)) == 1
-
-
-def test_registering_with_the_address_of_a_google_account_creates_nothing_and_sets_no_password(member_session):
-    google_user = login_with(make_service(member_session)).user
-    auth = AuthService(
-        users=UserRepository(member_session), identities=UserIdentityRepository(member_session), hasher=FAST_HASHER,
-        clock=FakeClock(), email_verification_required=False,
-    )
-    auth.register(
-        email="person@example.com", password=GOOD_PASSWORD, display_name="冒名者", accept_terms=True, **age_fields(30)
-    )
-    assert len(users(member_session)) == 1
-    assert users(member_session)[0].password_hash is None and users(member_session)[0].id == google_user.id
-
 
 # =============================================================================
 # 日誌

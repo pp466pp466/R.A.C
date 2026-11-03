@@ -24,7 +24,7 @@ def test_lists_every_required_variable():
 
 
 AUTH_VARIABLES = (
-    "SECRET_KEY_FALLBACKS", "EMAIL_VERIFICATION_REQUIRED", "BASE_URL",
+    "SECRET_KEY_FALLBACKS", "BASE_URL",
     "MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_SMTP_SECURITY", "MAIL_SMTP_USER", "MAIL_SMTP_PASSWORD", "MAIL_FROM",
     "GOOGLE_OAUTH_CLIENT_ID", "GOOGLE_OAUTH_CLIENT_SECRET",
 )
@@ -34,6 +34,11 @@ def test_lists_every_member_auth_variable():
     names = parse_assignments()
     for name in AUTH_VARIABLES:
         assert name in names, f"{name} 未列在 .env.example"
+
+
+def test_does_not_list_the_retired_email_verification_variable():
+    """玩家只用 Google 登入，信箱驗證開關已淘汰（app-configuration 規格「已淘汰的信箱驗證開關被忽略」）。"""
+    assert "EMAIL_VERIFICATION_REQUIRED" not in parse_assignments()
 
 
 def test_every_variable_the_config_reads_is_listed():

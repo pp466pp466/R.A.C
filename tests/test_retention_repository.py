@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from app.models import (
     AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User,
 )
-from app.models.user import TOKEN_VERIFY_EMAIL
+from app.models.user import TOKEN_RESET_PASSWORD
 from app.repositories.retention_repository import RetentionRepository
 from tests.support.auth import START, add_user
 
@@ -124,7 +124,7 @@ def test_tokens_are_found_by_expiry_whether_or_not_they_were_used(member_session
     cutoff = START - seven_days
 
     def token(n: int, expires_at, used_at=None) -> AuthToken:
-        row = AuthToken(user_id=user, purpose=TOKEN_VERIFY_EMAIL, token_hash=f"{n:064d}", expires_at=expires_at, used_at=used_at)
+        row = AuthToken(user_id=user, purpose=TOKEN_RESET_PASSWORD, token_hash=f"{n:064d}", expires_at=expires_at, used_at=used_at)
         s.add(row)
         s.flush()
         return row

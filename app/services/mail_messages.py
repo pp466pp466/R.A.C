@@ -1,4 +1,4 @@
-"""系統寄出的信件文案（繁體中文純文字，見 AGENTS.md 第 8 節）。
+"""系統寄出的信件文案（繁體中文純文字，見 AGENTS.md 第 8 節）。玩家不會收到任何信，這裡只有管理員的重設密碼信與密碼已變更通知。
 
 文案是常數加 `str.format`，**不使用 Jinja**：顯示名稱是使用者輸入的文字，不能把它當成範本處理。
 連結一律由設定的對外網址（BASE_URL）組成，絕不使用請求的主機標頭（主機標頭注入會讓重設連結指向攻擊者的網站）。
@@ -19,26 +19,8 @@ class MailContent:
     body: str
 
 
-def verification_link(base_url: str, token: str) -> str:
-    return f"{base_url}/verify-email#token={token}"
-
-
 def reset_link(base_url: str, token: str) -> str:
     return f"{base_url}/reset-password#token={token}"
-
-
-def verification_mail(display_name: str, link: str) -> MailContent:
-    return MailContent(
-        subject=f"【{PRODUCT_NAME}】請驗證您的電子郵件信箱",
-        body=(
-            "{name} 您好：\n\n"
-            "感謝您註冊{product}。請點擊下方連結，開啟頁面後按下「確認」完成信箱驗證：\n\n"
-            "{link}\n\n"
-            "這個連結將於 24 小時後失效，且只能使用一次。\n\n"
-            "{ignore}\n\n"
-            "{product}\n"
-        ).format(name=display_name, product=PRODUCT_NAME, link=link, ignore=IGNORE_NOTICE),
-    )
 
 
 def reset_password_mail(display_name: str, link: str) -> MailContent:
@@ -61,20 +43,6 @@ TAIPEI = timezone(timedelta(hours=8))      # 台灣沒有日光節約時間，�
 def taiwan_time_text(moment: datetime) -> str:
     local = moment.astimezone(TAIPEI)
     return f"{local.year} 年 {local.month} 月 {local.day} 日 {local.hour:02d}:{local.minute:02d}（台灣時間）"
-
-
-def deletion_notice_mail(display_name: str, scheduled_at: datetime) -> MailContent:
-    return MailContent(
-        subject=f"【{PRODUCT_NAME}】我們已收到您的刪除帳號申請",
-        body=(
-            "{name} 您好：\n\n"
-            "我們已收到刪除您帳號的申請。您的帳號已立即停用，並將於 {when} 之後永久刪除，"
-            "包含您的對話與個人資料，刪除後無法復原。\n\n"
-            "如果您改變主意，請在這個時間之前登入，並在帳號設定頁按下「撤銷刪除」。\n\n"
-            "如果這不是您本人的操作，請立即登入並撤銷刪除，然後變更密碼。\n\n"
-            "{product}\n"
-        ).format(name=display_name, when=taiwan_time_text(scheduled_at), product=PRODUCT_NAME),
-    )
 
 
 def password_changed_mail(display_name: str) -> MailContent:

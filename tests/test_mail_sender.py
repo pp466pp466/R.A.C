@@ -73,12 +73,12 @@ def test_the_subject_is_rfc2047_encoded_on_the_wire_not_raw_utf8(sink):
 
 
 def test_the_real_product_messages_round_trip_through_smtp(sink):
-    link = mail_messages.verification_link("https://cs.example.com", "tok-en_1")
-    content = mail_messages.verification_mail("王小明", link)
+    link = mail_messages.reset_link("https://cs.example.com", "tok-en_1")
+    content = mail_messages.reset_password_mail("王小明", link)
     SmtpMailSender(plain_settings(sink.port)).send(to="member@example.com", subject=content.subject, body=content.body)
     message = email.message_from_bytes(sink.envelopes[0].content, policy=policy.default)
     text = message.get_content()
-    assert "王小明" in text and link in text and "24 小時" in text and "忽略這封信" in text
+    assert "王小明" in text and link in text and "1 小時" in text and "忽略這封信" in text
 
 
 # ---- 連線方式（以替身驗證呼叫順序）--------------------------------------------

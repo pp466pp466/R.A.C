@@ -35,34 +35,23 @@ class FakeClock:
 
 
 class RecordingMailer:
-    """代替 EmailFlowService：只記錄被要求寄出的信（對象為使用者的內部編號）。"""
+    """代替 EmailFlowService：只記錄被要求寄出的信（對象為使用者的內部編號）。玩家端不寄信，只剩管理員的密碼已變更通知。"""
 
     def __init__(self) -> None:
-        self.verifications: list[int] = []
         self.notices: list[int] = []
-        self.deletions: list[tuple[int, object]] = []
-
-    def send_verification(self, user: User) -> None:
-        self.verifications.append(user.id)
 
     def send_password_changed_notice(self, user: User) -> None:
         self.notices.append(user.id)
-
-    def send_deletion_notice(self, user: User, scheduled_at) -> None:
-        self.deletions.append((user.id, scheduled_at))
 
 
 def make_auth_service(
     session: Session,
     *,
-    verification_required: bool = False,
     clock: FakeClock | None = None,
     mailer: RecordingMailer | None = None,
     hasher: PasswordHasherService | None = None,
     age_policy: AgePolicy = DEFAULT_AGE_POLICY,
 ) -> AuthService:
-    if verification_required and mailer is None:
-        mailer = RecordingMailer()
     clock = clock or FakeClock()
     users = UserRepository(session)
     return AuthService(
@@ -70,7 +59,6 @@ def make_auth_service(
         identities=UserIdentityRepository(session),
         hasher=hasher or FAST_HASHER,
         clock=clock,
-        email_verification_required=verification_required,
         mailer=mailer,
         age_policy=age_policy,
         # 與正式組裝相同的協作者：補填年齡時的抹除與鎖定計次

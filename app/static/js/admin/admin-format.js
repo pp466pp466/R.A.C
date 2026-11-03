@@ -25,7 +25,7 @@
      tests/test_admin_format_labels.py 會比對兩邊，新增列舉卻漏了標籤時測試會失敗。 */
   var LABELS = {
     status: {
-      pending_verification: '待驗證信箱', active: '使用中', suspended: '已停權', deletion_pending: '待刪除'
+      active: '使用中', suspended: '已停權', deletion_pending: '待刪除'
     },
     tier: { free: '一般', plus: '進階', vip: '尊榮' },
     role: { user: '使用者', admin: '管理員' },

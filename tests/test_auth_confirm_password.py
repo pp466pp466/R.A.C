@@ -29,7 +29,7 @@ def build(session, clock=None, persisted=None):
     persisted = persisted or Persisted()
     service = AuthService(
         users=UserRepository(session), identities=UserIdentityRepository(session), hasher=FAST_HASHER, clock=clock,
-        email_verification_required=False, persist_failures=persisted,
+        persist_failures=persisted,
     )
     return service, clock, persisted
 

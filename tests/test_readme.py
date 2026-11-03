@@ -143,7 +143,7 @@ def test_readme_member_auth_endpoint_tables_list_exactly_the_registered_routes()
         if rule.rule.startswith("/api/auth/") or rule.endpoint.startswith("auth_pages."):
             for method in sorted(rule.methods - {"HEAD", "OPTIONS"}):
                 actual.add((rule.rule, method))
-    assert len(actual) >= 20, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) >= 15, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 

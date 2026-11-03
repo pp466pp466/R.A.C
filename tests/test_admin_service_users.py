@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 
 from app.models.user import (
-    STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, User,
+    STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED, User,
 )
 from app.services.current_user import CurrentUser
 from app.services.errors import AdminTargetForbidden, Conflict, NotFound, ValidationError
@@ -123,8 +123,8 @@ def test_the_profile_shows_the_users_chat_suspension(kit):
 
 # ---- 停權 -----------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("status", [STATUS_ACTIVE, STATUS_PENDING_VERIFICATION])
-def test_suspending_changes_the_status_revokes_sessions_and_leaves_one_audit_row(kit, status, log_lines):
+def test_suspending_changes_the_status_revokes_sessions_and_leaves_one_audit_row(kit, log_lines):
+    status = STATUS_ACTIVE
     admin = kit.admin()
     member = kit.member(2, status=status)
     version = member.token_version
@@ -138,17 +138,13 @@ def test_suspending_changes_the_status_revokes_sessions_and_leaves_one_audit_row
     assert "反覆違規" not in log_lines.raw() and member.email not in log_lines.raw()
 
 
-def test_a_suspended_user_can_no_longer_log_in_and_their_session_is_gone(kit):
-    from app.services.errors import Forbidden
-
+def test_a_suspended_users_session_is_gone(kit):
+    """停權使既有的登入狀態立即失效（Google 登入對停權帳號的拒絕見 test_google_sign_in_service）。"""
     admin = kit.admin()
     member = kit.member(2)
     session_version = member.token_version
     kit.service.suspend_user(admin, member.public_id, reason="違規", password=GOOD_PASSWORD)
     assert kit.auth.resolve_session(member.id, session_version) is None
-    with pytest.raises(Forbidden) as exc:
-        kit.auth.login(email=member.email, password=GOOD_PASSWORD)
-    assert exc.value.code == "account_disabled"
 
 
 @pytest.mark.parametrize("reason", [None, "", "   ", 5, "x" * 201, "含\x00控制字元" * 0 + "\x00"])
@@ -274,35 +270,27 @@ def test_an_unknown_target_is_a_404(kit, public_id):
 
 # ---- 解除停權 -------------------------------------------------------------------------------
 
-def test_unsuspending_restores_an_active_account_that_can_log_in_again(kit):
+def test_unsuspending_restores_an_active_account_whose_session_works_again(kit):
     admin = kit.admin()
     member = kit.member(2, status=STATUS_SUSPENDED)
     view = kit.service.unsuspend_user(admin, member.public_id, password=GOOD_PASSWORD)
     assert view["status"] == STATUS_ACTIVE
-    assert kit.auth.login(email=member.email, password=GOOD_PASSWORD).id == member.id
+    assert kit.auth.resolve_session(member.id, member.token_version).id == member.id
     [entry] = kit.audit_rows()
     assert (entry.action, entry.detail) == ("user.unsuspend", {"to_status": "active"}) and entry.reason is None
 
 
-def test_with_verification_on_a_verified_user_returns_to_active(member_session):
-    kit = AdminKit(member_session, verification=True)
+@pytest.mark.parametrize("verified", [datetime(2026, 1, 1, tzinfo=timezone.utc), None])
+def test_unsuspending_always_returns_to_active_whether_or_not_the_email_was_ever_verified(kit, verified):
     admin = kit.admin()
-    member = kit.member(2, status=STATUS_SUSPENDED, email_verified_at=datetime(2026, 1, 1, tzinfo=timezone.utc))
+    member = kit.member(2, status=STATUS_SUSPENDED, email_verified_at=verified)
     assert kit.service.unsuspend_user(admin, member.public_id, password=GOOD_PASSWORD)["status"] == STATUS_ACTIVE
+    assert kit.audit_rows()[0].detail == {"to_status": "active"}
 
 
-def test_with_verification_on_a_never_verified_user_returns_to_pending_verification_not_active(member_session):
-    kit = AdminKit(member_session, verification=True)
+def test_only_a_suspended_user_can_be_unsuspended(kit):
     admin = kit.admin()
-    member = kit.member(2, status=STATUS_SUSPENDED)
-    assert kit.service.unsuspend_user(admin, member.public_id, password=GOOD_PASSWORD)["status"] == STATUS_PENDING_VERIFICATION
-    assert kit.audit_rows()[0].detail == {"to_status": "pending_verification"}
-
-
-@pytest.mark.parametrize("status", [STATUS_ACTIVE, STATUS_PENDING_VERIFICATION])
-def test_only_a_suspended_user_can_be_unsuspended(kit, status):
-    admin = kit.admin()
-    member = kit.member(2, status=status)
+    member = kit.member(2, status=STATUS_ACTIVE)
     with pytest.raises(Conflict) as exc:
         kit.service.unsuspend_user(admin, member.public_id, password=GOOD_PASSWORD)
     assert exc.value.code == "not_suspended" and kit.audit_rows() == []

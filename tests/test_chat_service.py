@@ -47,11 +47,11 @@ def reply_json(text="您好，請問有什麼可以協助您的嗎？", intent="
     }, ensure_ascii=False)
 
 
-def make_service(session, provider, *, wall=None, llm=True, after_reply=None, verification=False):
+def make_service(session, provider, *, wall=None, llm=True, after_reply=None):
     wall = wall or Wall()
     return ChatService(
         chats=ChatRepository(session), llm=build(session, provider, wall=wall) if llm else None,
-        policy=AccessPolicy(email_verification_required=verification, clock=wall),
+        policy=AccessPolicy(clock=wall),
         usage=UsageService(
             ledger=LlmCallLogRepository(session), chats=ChatRepository(session), settings=UsageSettings(), clock=wall,
             processing_ttl=PROCESSING_STALE_AFTER,
@@ -691,10 +691,10 @@ def test_the_gate_is_checked_before_a_message_is_written(member_session, alice, 
     assert provider.calls == [] and messages_of(member_session, convo) == [] and count(member_session, LlmCallLog) == 0
 
 
-def test_an_unverified_email_is_a_plain_forbidden_when_verification_is_on(member_session, alice, convo):
-    unverified = CurrentUser(**{**alice.__dict__, "email_verified": False})
+def test_a_suspended_account_is_a_plain_forbidden_not_an_invitation_to_fill_in_the_age(member_session, alice, convo):
+    suspended = CurrentUser(**{**alice.__dict__, "status": "suspended", "birth_date": None})
     with pytest.raises(Forbidden) as error:
-        make_service(member_session, provider_with(), verification=True).send_message(unverified, convo, uid(1), "你好")
+        make_service(member_session, provider_with()).send_message(suspended, convo, uid(1), "你好")
     assert not isinstance(error.value, AgeConfirmationRequired) and messages_of(member_session, convo) == []
 
 

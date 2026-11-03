@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from app.models import Base, User
 from app.models.base import utcnow
 from app.models.user import (
-    PROVIDER_GOOGLE, STATUS_ACTIVE, TOKEN_RESET_PASSWORD, TOKEN_VERIFY_EMAIL, UserIdentity,
+    PROVIDER_GOOGLE, STATUS_ACTIVE, TOKEN_RESET_PASSWORD, UserIdentity,
 )
 from app.repositories.auth_token_repository import AuthTokenRepository
 from app.repositories.errors import DuplicateIdentityError, DuplicateUserError
@@ -249,7 +249,7 @@ def test_admins_are_never_inactive(session, users):
 
 def test_every_status_is_covered_not_only_active_accounts(session, users):
     ids = [users.add_user(make_user(n, status=status, **seen(10))).id for n, status in enumerate(
-        ("active", "pending_verification", "suspended", "deletion_pending"), start=1)]
+        ("active", "suspended", "deletion_pending"), start=1)]
     assert users.find_inactive_ids(CUTOFF) == ids
 
 
@@ -341,6 +341,10 @@ def test_identity_lookup_and_duplicates(session, users):
 # =============================================================================
 # AuthTokenRepository
 # =============================================================================
+
+# Repository 不認得用途的含義，只比對字串；這裡用一個測試專用的用途，與 TOKEN_RESET_PASSWORD 互為「另一個用途」
+TOKEN_VERIFY_EMAIL = "test_purpose"
+
 
 def issue(tokens, user, token_hash="h" * 64, *, purpose=TOKEN_VERIFY_EMAIL, created=None, lifetime=timedelta(hours=1)):
     created = created or utcnow()

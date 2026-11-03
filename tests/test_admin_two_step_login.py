@@ -190,17 +190,18 @@ def test_a_missing_password_is_a_field_error_not_a_failure_count(app):
 
 # ---- 管理員不能只靠密碼 -------------------------------------------------------------------------------
 
-def test_an_admin_cannot_log_in_with_only_the_password_and_looks_like_any_other_failure(app):
+def test_there_is_no_password_login_endpoint_so_an_admin_cannot_log_in_with_only_the_password(app):
+    """`POST /api/auth/login` 已不存在：任何信箱與密碼的組合（對的、錯的、不存在的）都是同樣的 404，沒有登入狀態。"""
     client = app.test_client()
     right = client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": GOOD_PASSWORD})
     wrong = client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": "definitely-wrong-password"})
     unknown = client.post("/api/auth/login", json={"email": "nobody@example.com", "password": GOOD_PASSWORD})
-    assert {r.status_code for r in (right, wrong, unknown)} == {401}
+    assert {r.status_code for r in (right, wrong, unknown)} == {404}
     assert {r.get_data() for r in (right, wrong, unknown)} == {unknown.get_data()}
     assert client.get_cookie("session") is None and client.get("/api/auth/me").status_code == 401
 
 
-def test_password_only_attempts_never_count_toward_the_admins_lockout(app):
+def test_attempts_at_the_removed_password_login_never_count_toward_the_admins_lockout(app):
     client = app.test_client()
     for _ in range(12):
         client.post("/api/auth/login", json={"email": ADMIN_EMAIL, "password": GOOD_PASSWORD})

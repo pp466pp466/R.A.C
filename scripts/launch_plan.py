@@ -41,7 +41,7 @@ SECRET_VARS = (
 REQUIRED_SECRETS = ("SECRET_KEY", "DATABASE_URL", "GEMINI_API_KEY")
 # 一般設定：以環境變數設定。`APP_ENV` 由計畫依環境填入，其餘由呼叫者提供（`--vars-file`）
 PLAIN_VARS = (
-    "APP_ENV", "LOG_LEVEL", "EMAIL_VERIFICATION_REQUIRED", "BASE_URL",
+    "APP_ENV", "LOG_LEVEL", "BASE_URL",
     "MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_SMTP_SECURITY", "MAIL_SMTP_USER", "MAIL_FROM", "ALERT_EMAIL_TO",
     "GEMINI_MODEL", "GEMINI_FALLBACK_MODEL", "GEMINI_SUMMARY_MODEL", "LLM_CALL_TIMEOUT_SECONDS",
     "LLM_REQUEST_BUDGET_SECONDS", "LLM_BREAKER_SECONDS", "LLM_MAX_OUTPUT_TOKENS", "GEMINI_THINKING_BUDGET",
@@ -53,6 +53,8 @@ PLAIN_VARS = (
 )
 # 不部署：只給本機開發與測試用，絕不出現在 staging 與 production（TRUST_PROXY_HEADERS 在 staging 與 production 設定了會啟動失敗）
 NOT_DEPLOYED = ("TEST_SQLSERVER_URL", "FLASK_DEBUG", "TRUST_PROXY_HEADERS")
+# 已淘汰：應用程式讀到會忽略並警告，但部署計畫檔不得再含有它（玩家只用 Google 登入，沒有信箱驗證）
+OBSOLETE_VARS = ("EMAIL_VERIFICATION_REQUIRED",)
 
 # staging 與 production 需要由呼叫者提供的一般設定（缺少時應用程式啟動失敗，這裡先擋下）
 REQUIRED_PLAIN = ("ALERT_EMAIL_TO", "MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_FROM")
@@ -165,6 +167,9 @@ def validate(target: Target, plain: dict[str, str], *, need_plain: bool = True) 
     leaked = sorted(name for name in plain if name in SECRET_VARS)
     if leaked:
         raise PlanError("一般設定檔不得含機密變數（機密只走 Secret Manager）：" + "、".join(leaked))
+    obsolete = sorted(name for name in plain if name in OBSOLETE_VARS)
+    if obsolete:
+        raise PlanError("這些變數已淘汰，請自設定檔移除：" + "、".join(obsolete))
     forbidden = sorted(name for name in plain if name in NOT_DEPLOYED)
     if forbidden:
         raise PlanError("這些變數不可部署：" + "、".join(forbidden))
@@ -178,10 +183,7 @@ def validate(target: Target, plain: dict[str, str], *, need_plain: bool = True) 
     missing = [name for name in REQUIRED_PLAIN if not plain.get(name)]
     if missing:
         raise PlanError("缺少必要的一般設定：" + "、".join(missing))
-    verification_off = plain.get("EMAIL_VERIFICATION_REQUIRED", "").lower() == "false"
-    if target.env == "production" and verification_off:
-        raise PlanError("production 必須開啟信箱驗證（EMAIL_VERIFICATION_REQUIRED 不得為 false）")
-    if not verification_off and not plain.get("BASE_URL"):
+    if not plain.get("BASE_URL"):                     # Google 登入的 OAuth 回呼與管理員的重設連結都需要它
         raise PlanError("缺少必要的一般設定：BASE_URL")
 
 

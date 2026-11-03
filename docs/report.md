@@ -1,6 +1,6 @@
 # 會員制智能客服機器人：Explore 報告
 
-> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴），決定紀錄見第 4.1 節的 U-12 至 U-19。本報告中與上述有關的描述（例如 D-18 的信箱驗證、Cookie 存活 7 天、上線前關卡 1）是修訂前的內容；change ① `google-first-login` 已實作（見路線圖），change ② 尚未實作。
+> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴），決定紀錄見第 4.1 節的 U-12 至 U-19。本報告中與上述有關的描述（例如 D-18 的信箱驗證、Cookie 存活 7 天、上線前關卡 1）是修訂前的內容；change ① `google-first-login` 與 change ② `remove-player-password-auth` 都已實作（見路線圖）：玩家端的密碼註冊、密碼登入、忘記密碼、信箱驗證、`EMAIL_VERIFICATION_REQUIRED` 與 `pending_verification` 已移除，玩家不收任何信。
 
 - **文件版本**：v1.1（Explore 階段產出，供後續 propose 引用）
 - **日期**：2026-10-27
@@ -171,7 +171,7 @@ flowchart LR
 | D-15 | migration | Alembic，release 步驟執行，expand/contract | 建議 |
 | D-16 | 可攜性 | Docker 打包 | 建議 |
 | D-17 | 資料隔離 | Repository 範圍化查詢加 Service 政策層，找不到回 404 | 建議 |
-| D-18 | 身分驗證 | 簽章 session cookie、CSRF、Argon2id、信箱驗證、Google OAuth | 建議；寄信服務待 N-1、網域待 N-4。**2026-11-02 起玩家只用 Google 登入（U-12）**，信箱驗證與玩家密碼將於 change ② 移除，管理員保留密碼作為 Google 之後的第二道驗證（U-15） |
+| D-18 | 身分驗證 | 簽章 session cookie、CSRF、Argon2id、信箱驗證、Google OAuth | 建議；寄信服務待 N-1、網域待 N-4。**2026-11-02 起玩家只用 Google 登入（U-12）**，信箱驗證與玩家密碼已於 change ② 移除（2026-11-03），管理員保留密碼作為 Google 之後的第二道驗證（U-15） |
 | D-19 | 角色與權限 | `user` 與 `admin`；三級會員；Web 管理後台 | 已確認（U-3 採 a、U-6 採 b）；後台細節待決定 N-6 |
 | D-20 | 用量與成本 | 速率、每日額度、全站預算，以資料庫帳本計算 | 建議；Gemini 採免費方案，配額與風險待決定 N-3 |
 | D-21 | 輸入與內容安全 | 1000 字上限、`system_instruction` 隔離、無工具、純文字渲染 | 建議 |
@@ -500,7 +500,7 @@ sequenceDiagram
 | `email_verified_at` | 無 | DateTime，可為空；非空代表信箱已驗證 |
 | `role` | 無 | Unicode(10)、NOT NULL，預設 `user`；值為 `user`、`admin` |
 | `member_tier` | 無 | Unicode(10)、NOT NULL，預設 `free`；值為 `free`、`plus`、`vip` |
-| `status` | 無 | Unicode(20)、NOT NULL；值為 `pending_verification`、`active`、`suspended`、`deletion_pending` |
+| `status` | 無 | Unicode(20)、NOT NULL；值為 `active`、`suspended`、`deletion_pending`（`pending_verification` 已於 2026-11-03 退役，遷移 `0011` 改為 `active`） |
 | `failed_login_count`、`locked_until` | 無 | 登入失敗鎖定用（D-18），存資料庫以符合多 worker |
 | `token_version` | 無 | Integer，預設 1；改密碼、登出所有裝置、停權時加 1，使既有 session 失效 |
 | `last_login_at`、`created_at`、`deleted_at` | 部分 | 補齊 |
@@ -763,8 +763,8 @@ flowchart LR
 | 登入方式 | **Flask 簽章 session cookie**，內容只有 `user_id` 與 `token_version`；不使用 JWT（同源網站，無跨服務需求）。簽章式 cookie 無伺服器端狀態，符合多 worker。登出、改密碼、停權時 `token_version` 加 1 即可撤銷 |
 | Cookie 設定 | `HttpOnly`、`Secure`（正式）、`SameSite=Lax`；正式環境使用 `__Host-` 前綴；存活 7 天 |
 | 密碼雜湊 | **Argon2id**（`argon2-cffi`，參數不低於 OWASP 建議）。密碼長度 8 至 128 字，不強制字元組合；`password_hash` 欄位 255 足夠 |
-| 註冊 | 信箱加密碼 → 建立 `pending_verification` 帳號 → 寄驗證信 → 驗證後轉為 `active`。**未驗證信箱不得使用客服對話**（防止濫用 Gemini 額度），可重寄驗證信（有頻率限制） |
-| 驗證與重設連結 | 32 位元組隨機權杖，資料庫只存其 SHA-256 雜湊（`auth_tokens`），單次使用；驗證信 24 小時、重設信 1 小時失效。連結的 GET 只顯示確認頁，由 POST 完成動作，避免信件掃描器預先點擊而消耗權杖 |
+| 註冊（**2026-11-03 起已移除，玩家只用 Google 登入**） | 信箱加密碼 → 建立 `pending_verification` 帳號 → 寄驗證信 → 驗證後轉為 `active`。**未驗證信箱不得使用客服對話**（防止濫用 Gemini 額度），可重寄驗證信（有頻率限制） |
+| 驗證與重設連結（**驗證信已移除，只剩管理員的重設信**） | 32 位元組隨機權杖，資料庫只存其 SHA-256 雜湊（`auth_tokens`），單次使用；驗證信 24 小時、重設信 1 小時失效。連結的 GET 只顯示確認頁，由 POST 完成動作，避免信件掃描器預先點擊而消耗權杖 |
 | 忘記密碼 | 不論信箱是否存在，一律回應相同文案，防止帳號列舉；重設成功後 `token_version` 加 1，並寄通知信 |
 | Google 登入 | Authorization Code 流程加 PKCE、`state`、`nonce`，使用 Authlib 套件；範圍 `openid email profile`；驗證 ID token 的 `iss`、`aud`、`exp`、`nonce`，且要求 `email_verified` 為真。**開發與正式使用不同的 OAuth 用戶端**，正式回呼網址為 `https://<網域>/auth/google/callback`，需 HTTPS 與 ProxyFix |
 | CSRF | 以 Flask-WTF 的 `CSRFProtect`：token 放在頁面 meta，Axios 預設帶 `X-CSRF-Token` 標頭；所有非 GET 請求都檢查，並驗證 `Origin` |
@@ -1038,7 +1038,7 @@ flowchart TD
 | U-17 | 2026-11-02：只剩 Google 登入，所以登入與註冊合一為 /login（Google 登入與條款勾選），登入後另有年齡確認頁，沒有 /register；尚未完成年齡確認的玩家一律導向年齡確認頁 | 已寫入 AGENTS.md 第 3、10 節 |
 | U-18 | 2026-11-02：staging 與 production 唯一的設定例外是 `GEMINI_BASE_URL`（壓測用，production 設定了即啟動失敗）；`TRUST_PROXY_HEADERS` 只有 development 可以設定 | 已寫入 AGENTS.md 第 9 節 |
 | U-19 | 2026-11-02：玩家帳號有「鎖定」狀態：同一帳號 15 分鐘內 Google 登入被拒達 5 次，或被每分鐘訊息數上限擋下達 10 次（客服洗版）即自動鎖定，只有管理員能解除；被鎖定者仍可登入但只進申訴頁（單則 1000 字、每小時 3 則、一次 1 則待處理），其他一律 403 `account_locked`；管理員只看得到被鎖定帳號送出的申訴，不得任意讀取其他對話全文；「登入失敗激增」告警改為「帳號鎖定激增」 | 已寫入 AGENTS.md 第 10、11 節；門檻與申訴上限為預設值，可調整；沒有帳號的身分與無法辨識身分的失敗不計入，匿名濫用靠入口層 IP 限流（目前先不做，列為未滿足的規範項目） |
-| N-10 | 預備環境先不做信箱驗證，正式上線前再開啟 | 新增設定 `EMAIL_VERIFICATION_REQUIRED`：development、testing、staging 可為 `false`（註冊後直接啟用，忘記密碼一併停用）；production 必須為 `true`，否則啟動失敗。新增 `APP_ENV=staging`。已寫入 AGENTS.md 第 9、10 節。不再需要預備環境的寄信方式 |
+| N-10 | 預備環境先不做信箱驗證，正式上線前再開啟 | 新增設定 `EMAIL_VERIFICATION_REQUIRED`：development、testing、staging 可為 `false`（註冊後直接啟用，忘記密碼一併停用）；production 必須為 `true`，否則啟動失敗。新增 `APP_ENV=staging`。已寫入 AGENTS.md 第 9、10 節。不再需要預備環境的寄信方式。**（2026-11-03 起此設定已淘汰：change ② 移除了 `EMAIL_VERIFICATION_REQUIRED`，玩家端不再有信箱驗證。）** |
 | N-3b | 沒有使用過，無配額數據 | C-4 以保守預設值實作並設為環境變數，第一次實際呼叫後再依 AI Studio 顯示的配額調整 |
 | N-11 | 依建議：更新 Windows 到 22H2 後安裝 Docker | Git 已正常；Docker 因 Windows 21H2 過舊安裝失敗，待你更新後重新查核（見 4.2）。Git 提交者名稱與信箱待提供 |
 | N-12 | 依建議：v1 只回答平台自身資訊 | 超出範圍的問題歸為 `unknown` 並引導意見回饋；有 FAQ 文件時再另行擴充（不做 RAG）。已寫入 AGENTS.md 第 7 節 |
@@ -1072,7 +1072,7 @@ flowchart TD
 
 **上線前關卡**（C-5 開放給真實會員前必須全部通過，不是現在要決定的事）：
 
-1. **開啟信箱驗證**：`EMAIL_VERIFICATION_REQUIRED` 必須為 `true`，且已設定寄信服務（見 4.4）。（2026-11-02：玩家端改為只用 Google 登入後，此關卡在 change ② 完成時改為「營運告警的寄信設定已就緒」，見 U-12。）
+1. **營運告警與管理員重設密碼的寄信設定已就緒**：`ALERT_EMAIL_TO` 與 `MAIL_*` 已設定並實際寄出過一封（見 4.4）。（原「開啟信箱驗證」關卡已在 change ② 取消：玩家只用 Google 登入，不寄任何信，見 U-12。）
 2. Gemini 方案：重新評估是否仍使用免費方案（資料使用條款與個資，見 AGENTS.md 第 11 節）。
 3. 網域：已取得，且 Google 登入與信件的 SPF、DKIM、DMARC 已設定。
 4. 法務覆核：隱私權政策、服務條款與保存期限。
@@ -1107,7 +1107,7 @@ U-2 採 (b) 後，`order_query` 與 `refund_request` 要實際查詢與處理訂
 | 容器內 Python 版本 | 與本機開發相同（目前為 3.14），在 Dockerfile 釘選版本，避免開發與正式環境差異 |
 | 行尾字元 | 專案加入 `.gitattributes` 固定使用 LF，避免 Windows 的 CRLF 讓 Linux 容器內的腳本無法執行 |
 | 資料庫連線驗證 | C-1 開始時以唯讀方式驗證連線，確認 `project` 資料庫已存在、`sa` 可用 SQL 驗證登入（SQL Server 須啟用混合驗證模式）；若不存在由你建立，或另行授權我建立 |
-| 信箱驗證關閉期間的帳號 | 註冊後直接為 `active`、`email_verified_at` 為空；Google 登入合併時仍視為「未驗證」，沿用既有合併規則 |
+| 信箱驗證關閉期間的帳號（遺留資料） | 註冊後直接為 `active`、`email_verified_at` 為空；Google 登入合併時仍視為「未驗證」，沿用既有合併規則；遷移 `0011` 之後這類帳號的密碼雜湊已清除 |
 | 本機與正式的 Web 伺服器 | 本機開發用 `flask run`（Windows 無法執行 gunicorn）；正式容器用 gunicorn（gthread） |
 | 預備環境的 Google 登入 | 使用 OAuth 測試模式與測試使用者；正式發布需網域驗證，屬上線前關卡 |
 | 本機容器的使用方式 | Docker 跑在 WSL 發行版 `Ubuntu-2204` 內（舊版 WSL 不支援 systemd，PID 1 為 `init`，且已把 iptables 切到 legacy 模式）。每次使用前先執行 `wsl -d Ubuntu-2204 -u root -- service docker start`（可重複執行），再以 `wsl -d Ubuntu-2204 -u root -- docker ...` 操作；專案目錄在 WSL 內的路徑為 `/mnt/c/Users/User/Desktop/newprojet`。Windows 原生沒有 `docker` 指令 |
@@ -1136,7 +1136,7 @@ U-2 採 (b) 後，`order_query` 與 `refund_request` 要實際查詢與處理訂
 | C-2 | `member-auth` | 使用者相關三張表、註冊、驗證、登入、忘記密碼、Google 登入、CSRF、登入鎖定、`AccessPolicy`、寄信、會員等級欄位 | 認證流程測試全數通過；IDOR 測試框架就緒 | 無（N-5、N-7 已決定） |
 | C-3 | `cs-chat-core` | chat 資料表與 `llm_call_logs`、`GeminiClient`、`parse_llm_json`、單次呼叫契約、滑動視窗與摘要、同步與冪等、`/api/cs/*`、`/cs` 頁面 | 對話可運作；重送不重複呼叫模型；JSON 失敗可降級。**狀態（2026-10-29）：已實作，待審查與封存**；`GeminiClient` 實作為 `app/llm/gemini.py` 的 `GeminiProvider`，`ChatService`、`ContextBuilder`（`cs_context.py`）、`SummaryService` 與 `LlmService` 見 `app/services/`。**對本報告的取捨**：D-01 的意圖由 8 個改為 **7 個**（`order_query`、`refund_request` 與其實體留給 C-6，實體固定 4 個欄位）；D-05 **不設 `deleted_at`**（使用者刪除即永久刪除、帳號刪除靠 CASCADE），另增 `chat_conversations.client_id`（建立對話冪等）、處理標記 `processing_since` 與 `llm_call_logs.counted`，`llm_call_logs.conversation_id` **不設外鍵**（SQL Server 的多路徑串聯限制，由 Repository 在刪除對話時清為空值） | 無（N-12 已決定）；需要 `GEMINI_API_KEY` |
 | C-4 | `usage-safety-ops` | 配額與速率限制、全站預算、輸入安全、可觀測性與告警、保留期限清理、刪除帳號與匯出、**管理員 Web 後台**與稽核 | 額度可擋下超量；日誌經檢查不含黑名單欄位；後台操作皆有稽核 | 無（N-6 已決定；N-3b 配額數字可後補） |
-| C-5 | `production-launch` | 選定平台部署、secret 注入、migration 步驟、負載測試、備份還原演練、營運手冊 | 達到 D-24 通過標準後才對外開放 | N-1、N-9，以及 4.2 的上線前關卡（含開啟信箱驗證與設定寄信服務） |
+| C-5 | `production-launch` | 選定平台部署、secret 注入、migration 步驟、負載測試、備份還原演練、營運手冊 | 達到 D-24 通過標準後才對外開放 | N-1、N-9，以及 4.2 的上線前關卡（含營運告警的寄信設定） |
 | C-6 | `order-integration` | `OrderService`、`OrderProvider` 介面與模擬實作（範例資料）、訂單查詢與退款申請、使用者與訂單對應、二次確認 Modal、相關 Intent/Entity 行為與測試 | 只能查詢自己的訂單；退款為申請而非直接執行；個資處理符合 N-3 的決定；換成真實 API 時只需替換 `OrderProvider` 實作 | 無（預設模擬服務）；若有真實系統需提供 API 文件 |
 
 **關鍵規則**：

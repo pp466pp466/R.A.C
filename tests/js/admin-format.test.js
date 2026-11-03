@@ -5,7 +5,7 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const Format = require('../../app/static/js/admin/admin-format.js');
 
-const STATUSES = ['pending_verification', 'active', 'suspended', 'deletion_pending'];
+const STATUSES = ['active', 'suspended', 'deletion_pending'];
 const TIERS = ['free', 'plus', 'vip'];
 const ACTIONS = ['user.lookup', 'user.suspend', 'user.unsuspend', 'user.change_tier', 'conversation.read', 'conversation.delete', 'failures.read', 'reauth.failed',
   'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock'];
@@ -145,7 +145,7 @@ test('the suspension note appears only while the suspension lasts, with the resu
 test('audit details are turned into one readable line and never throw on odd shapes', () => {
   assert.equal(Format.auditDetailText('user.change_tier', { from_tier: 'free', to_tier: 'plus' }), '一般 → 進階');
   assert.equal(Format.auditDetailText('user.suspend', { from_status: 'active' }), '原狀態：使用中');
-  assert.equal(Format.auditDetailText('user.unsuspend', { to_status: 'pending_verification' }), '還原為：待驗證信箱');
+  assert.equal(Format.auditDetailText('user.unsuspend', { to_status: 'active' }), '還原為：使用中');
   assert.equal(Format.auditDetailText('user.lookup', { via: 'email', found: 1 }), '以信箱');
   assert.equal(Format.auditDetailText('user.lookup', { via: 'id', found: 0 }), '以識別碼，查無此人');
   assert.equal(Format.auditDetailText('failures.read', { count: 3 }), '3 筆');

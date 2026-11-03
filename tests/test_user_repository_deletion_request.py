@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.models import User
 from app.models.user import (
-    DELETION_GRACE_PERIOD, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED,
+    DELETION_GRACE_PERIOD, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
 )
 from app.repositories.user_repository import UserRepository
 from tests.support.auth import START, add_user
@@ -26,14 +26,13 @@ def reload(session, user: User) -> User:
 
 # ---- 申請 -------------------------------------------------------------------------
 
-@pytest.mark.parametrize("status", [STATUS_ACTIVE, STATUS_PENDING_VERIFICATION])
-def test_an_active_or_unverified_member_can_request_deletion_and_everything_is_recorded_at_once(member_session, status):
-    user = add_user(member_session, 1, status=status)
+def test_an_active_member_can_request_deletion_and_everything_is_recorded_at_once(member_session):
+    user = add_user(member_session, 1, status=STATUS_ACTIVE)
     assert UserRepository(member_session).request_deletion(user, now=NOW) is True
     member_session.commit()
     fresh = reload(member_session, user)
     assert fresh.status == STATUS_DELETION_PENDING and fresh.deletion_requested_at == NOW
-    assert fresh.status_before_deletion == status          # 申請前的狀態是更新前的值，不是新的 deletion_pending
+    assert fresh.status_before_deletion == STATUS_ACTIVE          # 申請前的狀態是更新前的值，不是新的 deletion_pending
     assert fresh.token_version == 2                          # 所有裝置的登入狀態失效
 
 
@@ -85,26 +84,14 @@ def test_the_grace_period_boundary_is_seven_days_exactly(member_session):
     assert reload(member_session, exactly).status == STATUS_DELETION_PENDING
 
 
-def test_a_pending_verification_account_stays_unverified_after_cancelling(member_session):
-    user = requested(member_session, before=STATUS_PENDING_VERIFICATION)
-    assert UserRepository(member_session).cancel_deletion(user, now=NOW)
-    assert reload(member_session, user).status == STATUS_PENDING_VERIFICATION
-
-
-def test_an_account_verified_while_pending_becomes_active_on_cancel(member_session):
-    """待刪除期間以 Google 登入完成了信箱驗證：撤銷後是 active，而不是又回到待驗證。"""
-    user = requested(member_session, before=STATUS_PENDING_VERIFICATION, email_verified_at=NOW - timedelta(hours=1))
-    assert UserRepository(member_session).cancel_deletion(user, now=NOW)
-    assert reload(member_session, user).status == STATUS_ACTIVE
-
-
-def test_an_empty_previous_status_falls_back_on_whether_the_email_is_verified(member_session):
-    verified = requested(member_session, 1, before=None, email_verified_at=NOW)
-    unverified = requested(member_session, 2, before=None)
+def test_cancelling_always_restores_active_even_when_the_previous_status_is_missing_or_a_retired_value(member_session):
+    """`pending_verification` 已退役（遷移 0011 改為 active）；萬一殘留或申請前的狀態是空值，撤銷一律還原為 active。"""
+    empty = requested(member_session, 1, before=None)
+    retired = requested(member_session, 2, before="pending_verification")
     users = UserRepository(member_session)
-    assert users.cancel_deletion(verified, now=NOW) and users.cancel_deletion(unverified, now=NOW)
-    assert reload(member_session, verified).status == STATUS_ACTIVE
-    assert reload(member_session, unverified).status == STATUS_PENDING_VERIFICATION
+    assert users.cancel_deletion(empty, now=NOW) and users.cancel_deletion(retired, now=NOW)
+    assert reload(member_session, empty).status == STATUS_ACTIVE and reload(member_session, retired).status == STATUS_ACTIVE
+    assert reload(member_session, retired).status_before_deletion is None
 
 
 def test_cancelling_requires_a_pending_account_with_a_request_time(member_session):

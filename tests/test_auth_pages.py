@@ -8,29 +8,30 @@ from sqlalchemy.orm import Session
 
 from app import create_app
 from app.config import load_config
-from app.models import Base
+from app.models import Base, User
 from app.security.redirects import DEFAULT_AFTER_LOGIN
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.legal import CURRENT_TERMS_VERSION
 from tests.architecture.test_frontend_rules import own_asset_violations
 from tests.support.age import birth_date_for_age
-from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user, sign_in_as
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 from tests.support.google import FakeProvider
 from tests.support.idor import logged_in_client
 
 STATE_PATTERN = re.compile(r'<script type="application/json" id="initial-state">(.*?)</script>', re.S)
-PAGES = ("/login", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy")
+PAGES = ("/login", "/reset-password", "/terms", "/privacy")          # /reset-password 需要寄信設定（full_app 有）
 
 
-def make_app(*, verification=False, google=False, age_policy: AgePolicy | None = None):
+def make_app(*, mail=False, google=False, age_policy: AgePolicy | None = None):
+    """`mail=True`：有寄信設定（管理員的重設密碼頁才存在）。"""
     environ = {"APP_ENV": "testing"}
-    if verification:
-        environ.update({"EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV, "BASE_URL": "http://localhost:5000"})
+    if mail:
+        environ.update({"ALERT_EMAIL_TO": "ops@example.com", **AUTH_ENV, "BASE_URL": "http://localhost:5000"})
     app = create_app(
         load_config(environ=environ),
-        mail_sender=FakeSender() if verification else None,
+        mail_sender=FakeSender() if mail else None,
         identity_provider=FakeProvider() if google else None,
         clock=FakeClock(),                     # 固定的「今天」：生日欄位的範圍與年齡都不受真實日期影響
         age_policy=age_policy,
@@ -45,8 +46,11 @@ def state_of(response) -> dict:
     return json.loads(match.group(1))
 
 
-def login(client, email="user1@example.com", password=GOOD_PASSWORD):
-    return client.post("/api/auth/login", json={"email": email, "password": password})
+def login(client, email="user1@example.com"):
+    """代表「通過 Google 登入」：以該信箱目前的 (uid, token_version) 寫入登入 cookie（玩家沒有密碼登入）。"""
+    with Session(client.application.extensions["db_engine"]) as s:
+        user = s.query(User).filter(User.email == email).one()
+        sign_in_as(client, user.id, user.token_version)
 
 
 @pytest.fixture()
@@ -56,14 +60,14 @@ def app():
 
 @pytest.fixture()
 def full_app():
-    return make_app(verification=True, google=True)
+    return make_app(mail=True, google=True)
 
 
 def logged_in(app, **user_overrides):
     with Session(app.extensions["db_engine"]) as s:
         add_user(s, 1, **user_overrides)
     client = app.test_client()
-    assert login(client).status_code == 200
+    login(client)
     return client
 
 
@@ -125,7 +129,7 @@ def test_vue_templates_are_not_processed_by_jinja(full_app):
     assert "{{ google.state.submitting" in html and 'id="app"' in html         # Vue 的插值原樣送到瀏覽器
 
 
-@pytest.mark.parametrize("path", ["/login", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy"])
+@pytest.mark.parametrize("path", PAGES)
 def test_no_jinja_syntax_leaks_into_any_page(full_app, path):
     """{% raw %} 區塊內的 Jinja 語法不會被處理：任何頁面都不能把 {# #} 或 {% %} 原樣送給使用者。"""
     html = full_app.test_client().get(path).get_data(as_text=True)
@@ -139,13 +143,13 @@ def test_no_jinja_syntax_leaks_into_any_page(full_app, path):
 def test_login_page_state_has_a_validated_next_and_the_feature_flags(full_app):
     state = state_of(full_app.test_client().get("/login?next=/account%3Ftab%3D1"))
     assert state["next"] == "/account?tab=1"
-    assert state["googleEnabled"] is True and state["verificationRequired"] is True
+    assert state["googleEnabled"] is True and "verificationRequired" not in state
     assert state["termsVersion"] == CURRENT_TERMS_VERSION and state["notice"] is None
 
 
 def test_the_flags_follow_the_configuration(app):
     state = state_of(app.test_client().get("/login"))
-    assert state["googleEnabled"] is False and state["verificationRequired"] is False
+    assert state["googleEnabled"] is False and "verificationRequired" not in state
 
 
 @pytest.mark.parametrize("bad", ["https://evil.example/", "//evil.example", "javascript:alert(1)", "/\\evil", "/%2f/evil"])
@@ -304,7 +308,7 @@ def test_every_password_field_states_and_enforces_the_8_to_128_range(full_app):
         assert "10 至 128" not in html and 'minlength="10"' not in html, path
 
 
-@pytest.mark.parametrize("path", ["/login", "/forgot-password", "/reset-password", "/verify-email"])
+@pytest.mark.parametrize("path", ["/login", "/reset-password"])
 def test_every_vue_mount_point_is_cloaked_until_vue_has_mounted(full_app, path):
     """Vue 掛載之前，頁面內的範本（{{ }}）不能被使用者看見。"""
     assert '<div id="app" v-cloak>' in full_app.test_client().get(path).get_data(as_text=True)
@@ -346,43 +350,40 @@ def test_forms_restore_their_state_in_a_finally_block_and_never_use_unsafe_dom_a
 
 
 # =============================================================================
-# 信箱驗證關閉時：相關頁面 404；開啟時存在，且不含權杖
+# 玩家端的忘記密碼與信箱驗證頁已移除；管理員的重設密碼頁只在有寄信設定時存在，且不含權杖
 # =============================================================================
 
-@pytest.mark.parametrize("path", ["/forgot-password", "/reset-password", "/verify-email"])
-def test_email_flow_pages_are_404_when_verification_is_off_and_never_linked(app, path):
-    response = app.test_client().get(path)
+@pytest.mark.parametrize("path", ["/forgot-password", "/verify-email"])
+@pytest.mark.parametrize("which", ["app", "full_app"])
+def test_the_removed_player_pages_are_404_whatever_the_configuration(request, which, path):
+    response = request.getfixturevalue(which).test_client().get(path)
     assert response.status_code == 404 and "找不到" in response.get_data(as_text=True)
 
 
-def test_the_login_page_state_still_reports_the_verification_flag_but_the_page_has_no_forgot_password_link(app, full_app):
-    """玩家沒有密碼，登入頁沒有「忘記密碼」；旗標仍在初始狀態裡（玩家端的密碼功能由後續的 change 移除）。"""
-    assert 'href="/forgot-password"' not in app.test_client().get("/login").get_data(as_text=True)
-    assert state_of(app.test_client().get("/login"))["verificationRequired"] is False
-    assert state_of(full_app.test_client().get("/login"))["verificationRequired"] is True
+def test_the_reset_page_needs_the_mail_settings_and_the_login_page_has_no_forgot_password_link(app, full_app):
+    assert app.test_client().get("/reset-password").status_code == 404
+    assert full_app.test_client().get("/reset-password").status_code == 200
+    for client in (app.test_client(), full_app.test_client()):
+        html = client.get("/login").get_data(as_text=True)
+        assert 'href="/forgot-password"' not in html and 'href="/verify-email"' not in html
 
 
-@pytest.mark.parametrize("path", ["/forgot-password", "/reset-password", "/verify-email"])
-def test_email_flow_pages_exist_when_verification_is_on(full_app, path):
-    assert full_app.test_client().get(path).status_code == 200
-
-
-@pytest.mark.parametrize("path", ["/reset-password", "/verify-email"])
-def test_the_confirmation_pages_never_contain_a_token_even_if_one_is_sent_to_the_server(full_app, path):
+def test_the_reset_page_never_contains_a_token_even_if_one_is_sent_to_the_server(full_app):
     """權杖在網址片段，伺服器根本收不到；就算有人把它放進查詢字串，頁面也不會回顯。"""
-    response = full_app.test_client().get(f"{path}?token=SECRET-TOKEN-VALUE-123")
+    response = full_app.test_client().get("/reset-password?token=SECRET-TOKEN-VALUE-123")
     assert "SECRET-TOKEN-VALUE-123" not in response.get_data(as_text=True)
     assert "token" not in json.dumps(state_of(response)).lower()
 
 
-def test_the_confirmation_pages_do_not_submit_anything_on_load():
+def test_the_reset_page_does_not_submit_anything_on_load():
     from app.config import PROJECT_ROOT
 
-    for name in ("verify-email.js", "reset-password.js"):
-        text = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / name).read_text(encoding="utf-8")
-        assert "readFragmentToken(window)" in text                      # 權杖來自片段，讀取後即移除
-        body_before_setup = text.split("setup:")[0]
-        assert "axios.post" not in body_before_setup                    # 只有在使用者按下按鈕的函式裡才送出
+    text = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "reset-password.js").read_text(encoding="utf-8")
+    assert "readFragmentToken(window)" in text                      # 權杖來自片段，讀取後即移除
+    body_before_setup = text.split("setup:")[0]
+    assert "axios.post" not in body_before_setup                    # 只有在使用者按下按鈕的函式裡才送出
+    assert not (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "verify-email.js").exists()
+    assert not (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "forgot-password.js").exists()
 
 
 # =============================================================================
@@ -417,12 +418,12 @@ def test_the_tier_labels_are_chinese_and_the_page_uses_them():
     assert "{{ tierLabel }}" in template
 
 
-def test_the_account_page_shows_the_verification_prompt_for_an_unverified_member_only_when_verification_is_on(full_app):
+def test_the_account_page_has_no_verification_prompt_or_resend_button_even_for_a_member_without_a_verification_time(full_app):
     client = logged_in(full_app)
     state = state_of(client.get("/account"))
-    assert state["verificationRequired"] is True and state["user"]["email_verified"] is False
+    assert "verificationRequired" not in state and state["user"]["email_verified"] is False
     html = client.get("/account").get_data(as_text=True)
-    assert "重新寄送驗證信" in html
+    assert "重新寄送驗證信" not in html and "resend" not in html and "尚未驗證，驗證完成前" not in html
 
 
 def test_dangerous_actions_are_confirmed_with_the_custom_modal_and_use_no_native_dialogs():

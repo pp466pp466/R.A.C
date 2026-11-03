@@ -118,7 +118,7 @@ Google 登入成功（玩家）或管理員通過密碼驗證步驟後，狀態�
 - **THEN** 密碼驗證回應 401，不建立登入狀態
 
 ### Requirement: 玩家帳號不持有密碼
-系統 SHALL NOT 提供以信箱與密碼登入的端點（`POST /api/auth/login` 回應 404），玩家帳號 SHALL NOT 持有密碼雜湊、登入失敗計數或密碼鎖定。資料遷移 SHALL 清除所有非管理員帳號的密碼雜湊、失敗計數與密碼鎖定，並把既有的 `pending_verification` 帳號（以及申請刪除前狀態為 `pending_verification` 者）改為 `active`。遷移之後，持有舊帳號的玩家以同信箱的 Google 登入即綁定回原帳號。
+系統 SHALL NOT 提供以信箱與密碼登入的端點（`POST /api/auth/login` 回應 404），玩家帳號 SHALL NOT 持有密碼雜湊、登入失敗計數或密碼鎖定。資料遷移 SHALL 清除所有非管理員帳號的密碼雜湊、失敗計數與密碼鎖定，並把既有的 `pending_verification` 帳號（以及申請刪除前狀態為 `pending_verification` 者）改為 `active`；曾持有密碼雜湊的玩家帳號 SHALL 同時使 `token_version` 加 1（既有登入狀態隨憑證失效）。遷移之後，持有舊帳號的玩家以同信箱的 Google 登入即綁定回原帳號。
 
 #### Scenario: 密碼登入端點不存在
 - **WHEN** 任何人以任何信箱與密碼呼叫 `POST /api/auth/login`
@@ -126,7 +126,11 @@ Google 登入成功（玩家）或管理員通過密碼驗證步驟後，狀態�
 
 #### Scenario: 遷移清除玩家的密碼
 - **WHEN** 資料庫中有帶密碼雜湊與失敗計數的玩家帳號與管理員帳號，執行遷移
-- **THEN** 玩家帳號的密碼雜湊為空、失敗計數為 0、密碼鎖定為空；管理員帳號完全不變
+- **THEN** 玩家帳號的密碼雜湊為空、失敗計數為 0、密碼鎖定為空；管理員帳號完全不變；曾有密碼的玩家 `token_version` 加 1，從來沒有密碼的玩家不變
+
+#### Scenario: 遷移撤銷靠密碼取得的登入狀態
+- **WHEN** 遷移前有人以他人的信箱預先註冊並以密碼登入（取得登入 cookie），遷移之後帶著那個 cookie 請求
+- **THEN** 被視為未登入；該信箱的擁有者以 Google 登入即綁定回原帳號
 
 #### Scenario: 遷移改寫待驗證狀態
 - **WHEN** 資料庫中有狀態為 `pending_verification` 的帳號，以及申請刪除前狀態為 `pending_verification` 的帳號，執行遷移

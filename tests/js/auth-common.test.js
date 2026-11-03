@@ -17,7 +17,7 @@ function fakeDocument({ meta, stateText } = {}) {
   };
 }
 
-function fakeWindow(hash, pathname = '/verify-email', search = '') {
+function fakeWindow(hash, pathname = '/reset-password', search = '') {
   const calls = [];
   return {
     calls,
@@ -60,9 +60,9 @@ test('script-looking content in the state is never executed, only parsed', () =>
 // ---- 片段權杖 -----------------------------------------------------------------
 
 test('the token is read from the fragment and removed from the address bar', () => {
-  const win = fakeWindow('#token=abc_DEF-123', '/verify-email', '?lang=zh');
+  const win = fakeWindow('#token=abc_DEF-123', '/reset-password', '?lang=zh');
   assert.equal(Auth.readFragmentToken(win), 'abc_DEF-123');
-  assert.deepEqual(win.calls, [[null, '', '/verify-email?lang=zh']]);       // 片段被移除，路徑與查詢字串保留
+  assert.deepEqual(win.calls, [[null, '', '/reset-password?lang=zh']]);       // 片段被移除，路徑與查詢字串保留
 });
 
 test('a missing or malformed fragment yields an empty token but still cleans the address bar', () => {

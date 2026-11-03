@@ -90,13 +90,10 @@ def test_the_whole_moderation_flow(app, log_lines):
     suspended = admin.post(f"/api/admin/users/{bob_public}/suspend", json={"password": GOOD_PASSWORD, "reason": REASON})
     assert suspended.status_code == 200 and suspended.get_json()["user"]["status"] == "suspended"
     assert client_for(app, "bob").get(BASE).status_code == 401                                 # 舊 cookie 的 token_version 已過期
-    login = app.test_client().post("/api/auth/login", json={"email": "user2@example.com", "password": GOOD_PASSWORD})
-    assert login.status_code == 403 and login.get_json()["error"]["code"] == "account_disabled"
 
     # ---- 解除 → 可以再登入；調整等級 → 額度立即改變 ----
     assert admin.post(f"/api/admin/users/{bob_public}/unsuspend", json={"password": GOOD_PASSWORD}).get_json()["user"]["status"] == "active"
-    relogin = app.test_client().post("/api/auth/login", json={"email": "user2@example.com", "password": GOOD_PASSWORD})
-    assert relogin.status_code == 200
+    assert client_for(app, "bob").get(BASE).status_code == 200                                 # 重新登入（Google）後可用
     changed = admin.post(f"/api/admin/users/{bob_public}/tier", json={"password": GOOD_PASSWORD, "tier": "plus"})
     assert changed.get_json()["user"]["usage"]["daily"]["limit"] == 100
     assert client_for(app, "bob").get("/api/cs/usage").get_json()["usage"]["per_minute_limit"] == 10
@@ -143,8 +140,6 @@ def test_failed_reauthentication_is_kept_audited_and_locks_the_admin_after_five(
     # 鎖定：即使現在密碼正確也被拒絕
     refused = admin.post(f"/api/admin/users/{target}/suspend", json={"password": GOOD_PASSWORD, "reason": REASON})
     assert refused.status_code == 400 and bob_status(app) == "active"
-    # 鎖定與登入共用：管理員用正確的密碼登入也被擋（通用的登入失敗訊息）
-    assert app.test_client().post("/api/auth/login", json={"email": "user3@example.com", "password": GOOD_PASSWORD}).status_code == 401
 
     with Session(app.extensions["db_engine"]) as session:
         rows = list(session.scalars(select(AdminAuditLog).order_by(AdminAuditLog.id)))

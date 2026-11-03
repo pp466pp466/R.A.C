@@ -125,11 +125,14 @@ def test_the_locust_wrapper_exists_and_only_delegates_to_the_shape():
     assert "LoadTestShape" in source and "stairs_from_environment" in source and "STAIRS.tick(self.get_run_time())" in source
 
 
-def test_the_wrapper_refuses_an_invalid_spec_in_a_subprocess_with_a_clear_message():
+def test_the_wrapper_refuses_an_invalid_spec_in_a_subprocess_with_a_clear_message(tmp_path):
     """在子行程執行：匯入 Locust 會對標準函式庫做 gevent 猴子補丁，不能發生在 pytest 行程裡。"""
+    import json
     import os
 
-    environ = {**os.environ, "LOADTEST_STAIRS": "steps=1", "PYTHONIOENCODING": "utf-8"}
+    pool = tmp_path / "pool.json"          # 場景匯入時就會讀取預先簽出的登入狀態；這裡只為了讓匯入走到階梯設定
+    pool.write_text(json.dumps({"cookie_name": "session", "sessions": [{"value": "v"}]}), encoding="utf-8")
+    environ = {**os.environ, "LOADTEST_STAIRS": "steps=1", "PYTHONIOENCODING": "utf-8", "LOADTEST_SESSIONS": str(pool)}
     result = subprocess.run(
         [sys.executable, "-c", "import loadtest.locustfile_stairs"], cwd=PROJECT_ROOT, env=environ, capture_output=True, text=True, encoding="utf-8",
     )

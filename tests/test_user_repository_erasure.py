@@ -9,7 +9,7 @@ from sqlalchemy import func, select
 
 from app.models import AuthToken, ChatConversation, ChatMessage, LlmCallLog, User, UserIdentity
 from app.models.base import utcnow
-from app.models.user import PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING, TOKEN_VERIFY_EMAIL
+from app.models.user import PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING, TOKEN_RESET_PASSWORD
 from app.repositories.user_repository import UserRepository
 from tests.support.auth import START, add_user
 
@@ -93,7 +93,7 @@ def test_deleting_cascades_to_identities_tokens_conversations_and_messages_and_a
     gone = pending(s, 1, requested_at=CUTOFF - timedelta(days=1))
     keeper = add_user(s, 2)
     s.add(UserIdentity(user_id=gone.id, provider=PROVIDER_GOOGLE, provider_subject="sub-1"))
-    s.add(AuthToken(user_id=gone.id, purpose=TOKEN_VERIFY_EMAIL, token_hash="a" * 64, expires_at=NOW))
+    s.add(AuthToken(user_id=gone.id, purpose=TOKEN_RESET_PASSWORD, token_hash="a" * 64, expires_at=NOW))
     gone_conv = conversation(s, gone.id, 1)
     keeper_conv = conversation(s, keeper.id, 2)
     ledger_row(s, gone.id, gone_conv.id)

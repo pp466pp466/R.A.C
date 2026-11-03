@@ -39,7 +39,7 @@ def test_log_event_writes_one_json_line_with_the_event_and_user_id(log_lines):
 
 
 def test_user_id_is_omitted_when_unknown(log_lines):
-    log_event(security_events.LOGIN_FAILED_UNKNOWN_USER)
+    log_event(security_events.CSRF_REJECTED)
     payload = log_lines()[-1]
     assert "user_id" not in payload
 
@@ -53,7 +53,6 @@ def test_failures_are_warnings_and_successes_are_info(log_lines):
 
 
 AGE_EVENTS = {
-    security_events.AGE_CONFIRMED_REGISTER: ("auth.age_confirmed.register", "INFO"),
     security_events.AGE_CONFIRMED_LATER: ("auth.age_confirmed.later", "INFO"),
     security_events.AGE_GATE_DENIED: ("auth.age_gate_denied", "INFO"),
     security_events.AGE_REJECTED_UNDERAGE: ("auth.age_rejected.underage", "WARNING"),

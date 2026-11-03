@@ -50,7 +50,7 @@
     }
   }
 
-  /* 信箱驗證與重設密碼的連結把權杖放在網址片段（#token=…）：片段不會送到伺服器，也不進存取日誌。
+  /* 管理員重設密碼的連結把權杖放在網址片段（#token=…）：片段不會送到伺服器，也不進存取日誌。
      讀取後立即從網址列移除，避免被複製、截圖或存進瀏覽紀錄。 */
   function readFragmentToken(win) {
     var hash = (win.location && win.location.hash) || '';

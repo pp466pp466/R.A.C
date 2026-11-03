@@ -4,12 +4,12 @@ Controller 只做三件事：讀取請求、呼叫 Service、把結果交給 HTT
 權限與業務判斷都在 Service；CSRF 在 `before_request` 統一檢查；業務錯誤由 controllers/errors.py 統一轉成 JSON。
 
 只讀取白名單內的欄位：請求裡夾帶的 `role`、`member_tier`、`status` 等欄位一律被忽略，
-因此無法透過任何 API 建立管理員或提升角色。
+因此無法透過任何 API 建立管理員或提升角色。玩家只用 Google 登入：沒有註冊、密碼登入、信箱驗證與玩家的忘記密碼端點。
 """
 from flask import Blueprint, abort, jsonify
 
 from app.controllers.request_helpers import read_json_object
-from app.runtime import get_config, get_identity_provider
+from app.runtime import get_identity_provider
 from app.security.oauth_cookie import store_transaction
 from app.security.redirects import safe_next
 from app.security.admin_step import clear_admin_step, read_admin_step
@@ -21,38 +21,6 @@ from app.services.registry import (
 )
 
 auth_api_bp = Blueprint("auth_api", __name__, url_prefix="/api/auth")
-
-# 註冊的回應：不論信箱是否已有帳號都完全相同，不洩漏帳號是否存在
-REGISTER_MESSAGE_WITH_VERIFICATION = "若這個信箱可以註冊，我們已寄出驗證信，請於 24 小時內點擊信中的連結完成驗證。"
-REGISTER_MESSAGE_WITHOUT_VERIFICATION = "註冊完成，請前往登入。"
-
-
-@auth_api_bp.post("/register")
-def register():
-    body = read_json_object()
-    get_auth_service().register(
-        email=body.get("email"),
-        password=body.get("password"),
-        display_name=body.get("display_name"),
-        accept_terms=body.get("accept_terms"),
-        birth_date=body.get("birth_date"),
-        age_range=body.get("age_range"),
-    )
-    verification = get_config().email_verification_required
-    return jsonify(
-        ok=True,
-        verification_required=verification,
-        message=REGISTER_MESSAGE_WITH_VERIFICATION if verification else REGISTER_MESSAGE_WITHOUT_VERIFICATION,
-    )
-
-
-@auth_api_bp.post("/login")
-def login():
-    body = read_json_object()
-    service = get_auth_service()
-    user = service.login(email=body.get("email"), password=body.get("password"))
-    login_user(user)
-    return jsonify(user=service.profile(user))
 
 
 @auth_api_bp.post("/logout")
@@ -128,50 +96,12 @@ def verify_age():
     return jsonify(user=service.profile(updated))
 
 
-# ---- 信箱驗證與重設密碼（信箱驗證關閉時整組不存在，一律 404）--------------------------
-
-# 忘記密碼的回應：不論信箱是否存在、是否被頻率限制，都完全相同
-FORGOT_PASSWORD_MESSAGE = "若這個信箱已註冊，我們已寄出重設密碼的信件，請於 1 小時內點擊信中的連結。"
-
-
-def _require_email_flows_enabled() -> None:
-    if not get_config().email_verification_required:
-        abort(404)
-
-
-def _require_reset_available() -> None:
-    """重設密碼的連結流程：信箱驗證開啟時（玩家）或有寄信設定時（管理員的忘記密碼）可用，否則 404。"""
-    if not (get_config().email_verification_required or admin_password_reset_available()):
-        abort(404)
-
-
-@auth_api_bp.post("/verify-email")
-def verify_email():
-    _require_email_flows_enabled()
-    body = read_json_object()
-    get_email_flow_service().verify_email(body.get("token"))
-    return jsonify(ok=True, message="信箱驗證完成，請重新登入。")
-
-
-@auth_api_bp.post("/resend-verification")
-def resend_verification():
-    _require_email_flows_enabled()
-    user = require_login()
-    get_email_flow_service().resend_verification(user)
-    return jsonify(ok=True, message="驗證信已重新寄出，請檢查您的信箱。")
-
-
-@auth_api_bp.post("/forgot-password")
-def forgot_password():
-    _require_email_flows_enabled()
-    body = read_json_object()
-    get_email_flow_service().request_password_reset(body.get("email"))
-    return jsonify(ok=True, message=FORGOT_PASSWORD_MESSAGE)
-
+# ---- 管理員的重設密碼（沒有寄信設定時一律 404）--------------------------------------
 
 @auth_api_bp.post("/reset-password")
 def reset_password():
-    _require_reset_available()
+    if not admin_password_reset_available():
+        abort(404)
     body = read_json_object()
     get_email_flow_service().reset_password(body.get("token"), body.get("new_password"))
     logout_user()          # 這台裝置的舊登入狀態一併清除（token_version 已加 1，其他裝置也已失效）

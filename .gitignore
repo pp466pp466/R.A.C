@@ -43,3 +43,7 @@ Desktop.ini
 loadtest/result*
 loadtest/*.db
 loadtest/*.log
+
+# 測試玩家的登入憑證（scripts/mint_test_sessions.py 的輸出；有效的 session cookie，只屬於 loadtest.invalid 的測試帳號）
+test-sessions.json
+*.test-sessions.json

@@ -95,11 +95,6 @@
     <p>因為您未滿 {{ ageRules.adultAge }} 歲，內容會限制在適合所有年齡的範圍，且無法調整。滿 {{ ageRules.adultAge }} 歲之後會自動解除，不需要任何操作。</p>
   </section>
 
-  <div v-if="verificationRequired && !user.email_verified" class="auth-notice" role="status">
-    <p>您的信箱尚未驗證，驗證完成前無法使用客服。請到信箱點擊驗證連結；找不到信的話，可以重新寄送。</p>
-    <button type="button" class="ui-btn" :disabled="actions.state.submitting" :aria-busy="actions.state.submitting ? 'true' : 'false'" @click="resend">重新寄送驗證信</button>
-  </div>
-
   <section class="account-section" aria-labelledby="security-title">
     <h2 id="security-title">安全性</h2>
     <div class="auth-actions">
@@ -107,7 +102,7 @@
       <button type="button" class="ui-btn" @click="logoutAllOpen = true">登出所有裝置</button>
       <button type="button" class="ui-btn" :disabled="actions.state.submitting" @click="logout">登出</button>
     </div>
-    <p v-if="!user.has_password" class="auth-hint">目前只使用 Google 登入，沒有設定密碼。<span v-if="verificationRequired">如需改用密碼登入，請在登入頁使用「忘記密碼」設定。</span></p>
+    <p v-if="!user.has_password" class="auth-hint">目前只使用 Google 登入，沒有設定密碼。</p>
   </section>
 
   <section class="account-section" aria-labelledby="export-title">

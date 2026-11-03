@@ -104,7 +104,7 @@ class Secret:
 
 @dataclass(frozen=True)
 class MailSettings:
-    """寄信（SMTP）設定；只在信箱驗證開啟時存在。"""
+    """寄信（SMTP）設定；設定了告警收件人或任何一項 `MAIL_*` 時才存在（營運告警信與管理員的重設密碼信用）。"""
 
     host: str
     port: int
@@ -195,7 +195,6 @@ class AppConfig:
     log_level: str
     trust_proxy: bool
     # ---- 會員驗證（C-2）；有預設值，讓只關心前面欄位的呼叫端不受影響 ----
-    email_verification_required: bool = False
     base_url: str | None = None
     mail: MailSettings | None = None
     google: GoogleSettings | None = None
@@ -311,21 +310,20 @@ def _get(values: Mapping[str, str], name: str) -> str:
     return (values.get(name) or "").strip()
 
 
-def _resolve_email_verification(env: str, values: Mapping[str, str]) -> bool:
-    """信箱驗證開關。未設定時 development、testing 為關閉，staging、production 為開啟；production 不得關閉。"""
-    raw = _get(values, "EMAIL_VERIFICATION_REQUIRED").lower()
-    if not raw:
-        return env in PRODUCTION_LIKE_ENVS
-    if raw not in ("true", "false"):
-        raise ConfigError("EMAIL_VERIFICATION_REQUIRED 的值不合法。合法值為：true、false。")
-    required = raw == "true"
-    if env == "production" and not required:
-        raise ConfigError("production 環境必須開啟信箱驗證（EMAIL_VERIFICATION_REQUIRED 不得為 false）。")
-    return required
+OBSOLETE_EMAIL_VERIFICATION_VARIABLE = "EMAIL_VERIFICATION_REQUIRED"
+
+
+def _warn_obsolete_variables(values: Mapping[str, str]) -> None:
+    """玩家只用 Google 登入，沒有信箱驗證，所以 `EMAIL_VERIFICATION_REQUIRED` 已不再讀取。
+
+    平台設定裡殘留它不該讓部署失敗（含 production），只提醒移除；警告只含變數名稱，不回顯值。
+    """
+    if _get(values, OBSOLETE_EMAIL_VERIFICATION_VARIABLE):
+        logger.warning("%s 已淘汰且不再生效，請自環境設定移除。", OBSOLETE_EMAIL_VERIFICATION_VARIABLE)
 
 
 def _resolve_base_url(env: str, values: Mapping[str, str]) -> str | None:
-    """對外網址（組信件連結與 OAuth 回呼用，不使用請求的主機標頭）。回傳去除結尾斜線的來源。"""
+    """對外網址（組管理員的重設密碼連結與 OAuth 回呼用，不使用請求的主機標頭）。回傳去除結尾斜線的來源。"""
     raw = _get(values, "BASE_URL")
     if not raw:
         return None
@@ -374,8 +372,11 @@ def _resolve_alerts(env: str, values: Mapping[str, str]) -> AlertSettings:
     return AlertSettings(recipients=tuple(recipients))
 
 
-def _resolve_mail(env: str, values: Mapping[str, str], *, reason: str = "信箱驗證已開啟") -> MailSettings:
-    """寄信設定；呼叫端只在信箱驗證開啟、或設定了告警收件人時才需要它。"""
+_MAIL_VARIABLES = ("MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_FROM")
+
+
+def _resolve_mail(env: str, values: Mapping[str, str], *, reason: str) -> MailSettings:
+    """寄信設定；呼叫端只在設定了告警收件人、或任何一項寄信參數時才需要它（一旦需要就要求完整）。"""
     required = ("MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_FROM")
     missing = [name for name in required if not _get(values, name)]
     if missing:
@@ -706,19 +707,18 @@ def load_config(
     debug = env in ("development", "testing") and _is_truthy(values.get("FLASK_DEBUG"))
 
     # ---- 會員驗證相關設定 ----
-    email_verification_required = _resolve_email_verification(env, values)
+    _warn_obsolete_variables(values)
     base_url = _resolve_base_url(env, values)
     google = _resolve_google(values)
     alerts = _resolve_alerts(env, values)
-    if email_verification_required:
-        mail = _resolve_mail(env, values)
-    elif alerts.recipients:
+    if alerts.recipients:
         mail = _resolve_mail(env, values, reason="已設定告警收件人（ALERT_EMAIL_TO）")
+    elif any(_get(values, name) for name in _MAIL_VARIABLES):
+        mail = _resolve_mail(env, values, reason="已設定部分寄信參數（MAIL_*）")
     else:
         mail = None
-    if (email_verification_required or google) and not base_url:
-        reason = "信箱驗證已開啟" if email_verification_required else "Google 登入已啟用"
-        raise ConfigError(f"{reason}，但缺少對外網址 BASE_URL（用於信件連結與 OAuth 回呼）。")
+    if google and not base_url:
+        raise ConfigError("Google 登入已啟用，但缺少對外網址 BASE_URL（用於 OAuth 回呼）。")
 
     llm = _resolve_llm(env, values)
     rpg_llm = _resolve_rpg_llm(env, values, llm)
@@ -732,7 +732,6 @@ def load_config(
         database_url=Secret(database_url),
         log_level=log_level,
         trust_proxy=env in PRODUCTION_LIKE_ENVS or tunnel_trusts_proxy,
-        email_verification_required=email_verification_required,
         base_url=base_url,
         mail=mail,
         google=google,

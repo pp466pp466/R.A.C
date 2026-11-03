@@ -76,7 +76,6 @@ def build_auth_service(
         identities=UserIdentityRepository(session),
         hasher=PasswordHasherService(parameters_for_env(config.env)),
         clock=clock,
-        email_verification_required=config.email_verification_required,
         mailer=mailer,
         persist_failures=persist_failures,
         age_policy=age_policy,
@@ -134,7 +133,6 @@ def get_google_sign_in_service() -> GoogleSignInService:
 def get_access_policy() -> AccessPolicy:
     config = get_config()
     return AccessPolicy(
-        email_verification_required=config.email_verification_required,
         age_policy=get_age_policy(),
         clock=get_clock(),
         # 等級 3 只能以環境設定開啟（預設關閉）；啟動時已驗證過條件（見 app/config.py）
@@ -152,7 +150,7 @@ def build_email_flow_service(
     request_id: Callable[[], str | None] = lambda: None,
 ) -> EmailFlowService:
     if not config.base_url:
-        raise RuntimeError("信箱驗證需要設定對外網址 BASE_URL。")
+        raise RuntimeError("管理員的重設密碼需要設定對外網址 BASE_URL。")
     return EmailFlowService(
         users=UserRepository(session),
         tokens=AuthTokenRepository(session),
@@ -166,10 +164,10 @@ def build_email_flow_service(
 
 
 def get_email_flow_service() -> EmailFlowService:
-    """目前請求的 EmailFlowService（信箱驗證與重設密碼）。信箱驗證關閉時沒有寄信器，不應被呼叫。"""
+    """目前請求的 EmailFlowService（管理員的重設密碼）。沒有寄信設定時沒有寄信器，不應被呼叫。"""
     sender = get_mail_sender()
     if sender is None:
-        raise RuntimeError("信箱驗證未啟用，沒有寄信器。")
+        raise RuntimeError("沒有寄信設定，沒有寄信器。")
     return build_email_flow_service(
         get_session(), config=get_config(), clock=get_clock(), mail_sender=sender,
         defer=defer_until_commit, request_id=current_request_id,
@@ -182,9 +180,9 @@ def admin_password_reset_available() -> bool:
 
 
 def get_auth_service() -> AuthService:
-    """目前請求的 AuthService；信箱驗證開啟時，註冊與變更密碼會經由 EmailFlowService 寄信。"""
+    """目前請求的 AuthService；有寄信設定時，變更密碼會經由 EmailFlowService 寄出通知信。"""
     config = get_config()
-    mailer = get_email_flow_service() if config.email_verification_required else None
+    mailer = get_email_flow_service() if admin_password_reset_available() else None
     return build_auth_service(
         get_session(), config=config, clock=get_clock(), mailer=mailer, persist_failures=keep_changes_on_error,
         age_policy=get_age_policy(),
@@ -299,17 +297,15 @@ def get_admin_service() -> AdminService:
     return AdminService(
         policy=get_access_policy(), admins=AdminRepository(session), audit=AdminAuditRepository(session),
         usage=get_usage_service(), age_stats=build_age_stats_service(session, age_policy=get_age_policy()),
-        usage_settings=config.usage, email_verification_required=config.email_verification_required,
+        usage_settings=config.usage,
         confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
     )
 
 
 def get_account_deletion_service() -> AccountDeletionService:
-    """目前請求的自助刪除帳號服務；信箱驗證開啟時，申請成功後寄通知信。"""
-    config = get_config()
+    """目前請求的自助刪除帳號服務（玩家端不寄任何信，包含申請刪除的通知）。"""
     return AccountDeletionService(
         users=UserRepository(get_session()), confirm_password=get_auth_service().confirm_password, clock=get_clock(),
-        mailer=get_email_flow_service() if config.email_verification_required else None,
     )
 
 

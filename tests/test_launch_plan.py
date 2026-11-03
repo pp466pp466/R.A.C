@@ -108,11 +108,20 @@ def test_required_plain_settings_are_checked_before_anything_is_printed(missing)
     assert missing in str(error.value)
 
 
-def test_production_cannot_turn_email_verification_off_but_staging_can():
-    with pytest.raises(plan.PlanError):
-        build("production", plain={**PLAIN, "EMAIL_VERIFICATION_REQUIRED": "false"})
-    staging_plain = {k: v for k, v in PLAIN.items() if k != "BASE_URL"} | {"EMAIL_VERIFICATION_REQUIRED": "false"}
-    assert build("staging", plain=staging_plain)
+@pytest.mark.parametrize("env", ["staging", "production"])
+@pytest.mark.parametrize("value", ["true", "false"])
+def test_a_plan_file_still_holding_the_retired_verification_variable_is_refused_by_name(env, value):
+    with pytest.raises(plan.PlanError) as error:
+        build(env, plain={**PLAIN, "EMAIL_VERIFICATION_REQUIRED": value})
+    assert "EMAIL_VERIFICATION_REQUIRED" in str(error.value) and "已淘汰" in str(error.value)
+
+
+@pytest.mark.parametrize("env", ["staging", "production"])
+def test_the_base_url_is_always_required_because_google_login_and_the_admin_reset_link_need_it(env):
+    without = {k: v for k, v in PLAIN.items() if k != "BASE_URL"}
+    with pytest.raises(plan.PlanError) as error:
+        build(env, plain=without)
+    assert "BASE_URL" in str(error.value)
 
 
 def test_unknown_variables_and_unknown_secrets_are_refused():

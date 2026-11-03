@@ -11,13 +11,11 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.models import Base, User
-from app.models.user import ROLE_ADMIN, ROLE_USER, STATUS_PENDING_VERIFICATION
+from app.models.user import ROLE_ADMIN, ROLE_USER
 from app.services.age_policy import AgePolicy
 from tests.support.age import age_fields, birth_date_for_age
 from tests.support.age_gate import ENDPOINT, add_ai_endpoint
 from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user, sign_in_as
-from tests.support.config_env import AUTH_ENV
-from tests.support.email_flow import FakeSender
 
 
 def make_app(*, age_policy: AgePolicy | None = None, environ: dict | None = None, **kwargs):
@@ -75,11 +73,10 @@ def test_verifying_later_opens_the_same_endpoint_without_logging_in_again(app):
     assert len(app.work_done) == 1
 
 
-def test_a_member_who_registered_with_a_birthday_passes_straight_away(app):
-    client = app.test_client()
-    body = {"email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "新會員", "accept_terms": True, **age_fields(30)}
-    assert client.post("/api/auth/register", json=body).status_code == 200
-    assert client.post("/api/auth/login", json={"email": "new@example.com", "password": GOOD_PASSWORD}).status_code == 200
+def test_a_member_who_fills_in_the_age_after_signing_in_passes_straight_away(app):
+    seed(app, 1, age=None)
+    client = signed_in(app, 1)
+    verify(client, 30)
     assert client.post(ENDPOINT, json={}).status_code == 200
 
 
@@ -161,10 +158,8 @@ def test_raising_the_minimum_age_to_18_blocks_existing_teens_with_their_own_code
     assert "帳號設定" not in teen.get_json()["error"]["message"]                  # 補填也沒有用，所以不引導
     assert signed_in(strict, 2).post(ENDPOINT, json={}).status_code == 200
     assert strict.work_done == [adult_id]                                        # 只有成年者的請求真的做了事
-    refused = strict.test_client().post(
-        "/api/auth/register",
-        json={"email": "t@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, **age_fields(15)},
-    )
+    seed(strict, 3, age=None)                                                   # 新的玩家補填 15 歲：低於最低註冊年齡，帳號被抹除
+    refused = signed_in(strict, 3).post("/api/auth/verify-age", json=age_fields(15))
     assert refused.status_code == 400 and refused.get_json()["error"]["code"] == "age_not_eligible"
 
 
@@ -194,16 +189,17 @@ def test_an_allowed_request_leaves_no_denial_in_the_log(app, log_lines):
 
 
 # =============================================================================
-# 檢查順序：帳號與信箱條件先於年齡
+# 信箱不是閘門：驗證時間為空的帳號直接被引導補填年齡
 # =============================================================================
 
-def test_an_unverified_member_is_told_about_the_account_not_sent_to_fill_in_the_age(log_lines):
-    """信箱驗證開啟時，尚未驗證的人補填年齡也沒有用，所以不能回 `age_confirmation_required`。"""
-    app = make_app(environ={"EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV}, mail_sender=FakeSender())
-    seed(app, 1, status=STATUS_PENDING_VERIFICATION)
+def test_an_account_without_a_verification_time_is_asked_to_fill_in_the_age_not_refused_for_the_email(log_lines):
+    """信箱驗證已退役：玩家的信箱由 Google 驗證，遺留的驗證時間為空的帳號也不被信箱條件擋下。
+    （玩家沒有生日時在登入檢查就被導向年齡確認頁，所以用不受該受限狀態影響的管理員代表。）"""
+    app = make_app()
+    seed(app, 1, role=ROLE_ADMIN, age=None)
 
     response = signed_in(app, 1).post(ENDPOINT, json={})
 
-    assert response.status_code == 403 and response.get_json()["error"]["code"] == "forbidden"
+    assert response.status_code == 403 and response.get_json()["error"]["code"] == "age_confirmation_required"
     assert app.work_done == []
-    assert [line for line in log_lines() if line.get("event") == "auth.age_gate_denied"] == []
+    assert [line["event"] for line in log_lines() if line.get("event") == "auth.age_gate_denied"] == ["auth.age_gate_denied"]

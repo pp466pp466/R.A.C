@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import re
 import subprocess
 import sys
@@ -20,22 +21,26 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+import mint_test_sessions  # noqa: E402 - 產生「在容器內簽出測試玩家 cookie」的程式
+
 DISTRO = "Ubuntu-2204"
 FAKE_SECRET = "S3cretValue-for-container-test-0123456789"   # staging 與 production 的 SECRET_KEY 至少 32 字元
 FAKE_GEMINI_KEY = "AIzaSy-container-fake-gemini-key-0123456789"   # staging 與 production 必須有金鑰才能啟動；容器內沒有網路出口，這把假的永遠不會被送出
-# production 預設要求信箱驗證：需要寄信設定與 https 的對外網址（寄信目的地是不存在的主機，只為了通過啟動驗證）
+# production 的寄信設定（營運告警與管理員的重設密碼信）與 https 的對外網址（寄信目的地是不存在的主機，只為了通過啟動驗證）
 PRODUCTION_AUTH_ENV = [
     "BASE_URL=https://cs.example.com", "MAIL_SMTP_HOST=127.0.0.1", "MAIL_SMTP_PORT=1", "MAIL_FROM=service@example.com",
     f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
     # staging 與 production 必須設定告警收件人（C-4d 起），設定後寄信設定也必須完整；地址是假的，容器沒有網路出口
     "ALERT_EMAIL_TO=ops@example.com",
 ]
-MEMBER_EMAIL = "container.member@example.com"
-MEMBER_PASSWORD = "container-member-password-1"
+MINT_PREFIX = "container-1"
+MEMBER_EMAIL = f"{MINT_PREFIX}-1@loadtest.invalid"      # scripts/mint_test_sessions.py 簽出的測試玩家
 ADMIN_EMAIL = "container.admin@example.com"
 ADMIN_PASSWORD = "container-admin-password-1"
 
 results: list[tuple[str, bool, str]] = []
+EXPECTED_FLOW_RESULTS = 53          # 流程腳本至少要回報這麼多項（調整腳本時同步更新）
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -80,7 +85,7 @@ from datetime import datetime, timedelta, timezone
 
 BASE = "http://127.0.0.1:8080"
 ORIGIN = "https://cs.example.com"
-EMAIL, PASSWORD = "%(email)s", "%(password)s"
+EMAIL = "%(email)s"
 cookies, attributes = {}, {}
 
 
@@ -135,7 +140,7 @@ def born(age):
 
 
 AGE_SECRETS = {"birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult_at_confirmation"}
-BASE_BODY = {"email": EMAIL, "password": PASSWORD, "display_name": "container", "accept_terms": True}
+REMOVED_ENDPOINTS = ("/api/auth/register", "/api/auth/login", "/api/auth/verify-email", "/api/auth/resend-verification", "/api/auth/forgot-password")
 
 
 status, _, headers = call("GET", "/login")
@@ -145,31 +150,35 @@ report("csrf cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/,
        all(part in csrf_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/")) and "Domain" not in csrf_cookie, csrf_cookie.split(";")[0][:20])
 report("html pages are not cacheable", headers.get("Cache-Control") == "no-store")
 
-status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY))
-report("register without the birthday and range is refused with field errors", status == 400 and set(body["error"]["fields"]) == {"birth_date", "age_range"}, str(status))
-status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY, birth_date=born(30), age_range="13_17"))
-report("a mismatched birthday and range is refused with the fixed message and no field", status == 400 and body["error"]["code"] == "age_mismatch" and "fields" not in body["error"], str(status))
-status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY, birth_date=born(12), age_range="under_13"))
-report("someone under 13 is refused", status == 400 and body["error"]["code"] == "age_not_eligible", str(status))
-status, body, _ = call("POST", "/api/auth/register", dict(BASE_BODY, birth_date=born(30), age_range="25_34"))
-report("after the refusals the same address and password register straight away", status == 200 and body.get("ok") is True, str(status))
-status, body, _ = call("POST", "/api/auth/login", {"email": EMAIL, "password": PASSWORD})
-report("login succeeds", status == 200, str(status))
+# players only sign in with Google: the password and mail-verification endpoints no longer exist (a valid CSRF token and Origin are sent)
+for path in REMOVED_ENDPOINTS:
+    status, _, _ = call("POST", path, {"email": EMAIL, "password": "x-not-a-password", "display_name": "x", "accept_terms": True, "token": "x"})
+    report("the removed endpoint " + path + " answers 404", status == 404, str(status))
+for page in ("/forgot-password", "/verify-email"):
+    status, _, _ = call("GET", page)
+    report("the removed page " + page + " answers 404", status == 404, str(status))
+report("no session cookie was issued by any of the removed endpoints", "__Host-session" not in cookies)
+
+# The test player was minted inside this container with its own SECRET_KEY (scripts/mint_test_sessions.py): the same cookie a real login sets
+cookies["__Host-session"] = "%(session)s"
+status, body, _ = call("GET", "/api/auth/me")
+report("the minted player's session cookie is accepted", status == 200 and body["user"]["email"] == EMAIL and body["user"]["role"] == "user", str(status))
 session_cookie = attributes.get("__Host-session", "")
 report("session cookie is __Host- prefixed, Secure, HttpOnly, SameSite=Lax, Path=/, with Expires, no Domain",
        all(part in session_cookie for part in ("Secure", "HttpOnly", "SameSite=Lax", "Path=/", "Expires=")) and "Domain" not in session_cookie)
-status, body, _ = call("GET", "/api/auth/me")
-report("/api/auth/me returns the member", status == 200 and body["user"]["email"] == EMAIL, str(status))
 me = body
 status, _, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "25_34"}, csrf=False)
 report("verify-age without the CSRF header is refused", status == 403, str(status))
 report("/api/auth/me never exposes internals", not ({"id", "token_version", "password_hash"} & set(me["user"])))
-report("a member who registered with a birthday reports age_confirmed and age_group, never the birthday or range",
-       me["user"].get("age_confirmed") is True and me["user"].get("age_group") == "adult" and not (AGE_SECRETS & set(me["user"])))
+report("a minted player reports age_confirmed and age_group, never the birthday or range, and has no password",
+       me["user"].get("age_confirmed") is True and me["user"].get("age_group") == "adult" and me["user"].get("has_password") is False
+       and not (AGE_SECRETS & set(me["user"])))
 status, body, _ = call("GET", "/account")
 report("/account renders for a logged-in member", status == 200 and "account-list" in body)
-status, body, _ = call("POST", "/api/auth/change-password", {"current_password": PASSWORD, "new_password": PASSWORD + "-new"}, csrf=False)
+status, body, _ = call("POST", "/api/auth/change-password", {"current_password": "x-not-a-password", "new_password": "y-not-a-password"}, csrf=False)
 report("a POST without the CSRF header is refused", status == 403 and body["error"]["code"] == "csrf_failed", str(status))
+status, body, _ = call("POST", "/api/auth/change-password", {"current_password": "x-not-a-password", "new_password": "y-not-a-password"})
+report("a player has no password to change (400 no_password)", status == 400 and body["error"]["code"] == "no_password", str(status))
 status, _, _ = call("POST", "/api/auth/logout")
 report("logout succeeds", status == 200)
 status, _, _ = call("GET", "/api/auth/me")
@@ -196,9 +205,9 @@ status, _, _ = call("GET", "/")
 report("the home page is public for an anonymous visitor", status == 200)
 
 # create-admin is run in the container beforehand and deliberately does not fill in the age: the admin has no birthday yet.
-# An admin can no longer log in with only the password: Google comes first and then the password.
+# An admin can never log in with only the password (the endpoint is gone): Google comes first and then the password.
 status, body, _ = call("POST", "/api/auth/login", {"email": "%(admin_email)s", "password": "%(admin_password)s"})
-report("the admin created by the command cannot log in with only the password (generic 401)", status == 401 and body["error"]["code"] == "invalid_credentials", str(status))
+report("the admin created by the command cannot log in with only the password (the endpoint no longer exists: 404)", status == 404, str(status))
 report("... and no session cookie is issued", "__Host-session" not in cookies)
 # Google is not configured in this run, so the two-step login cannot be walked through here (tests cover it with a fake provider).
 # The remaining checks need an admin session, so one is signed with the server's own secret: the same cookie the real login sets.
@@ -266,9 +275,12 @@ status, _, headers = call("GET", "/cs")
 report("chat: an anonymous /cs redirects to /login keeping next=/cs", status == 302 and headers.get("Location", "") == "/login?next=%%2Fcs", headers.get("Location", ""))
 status, _, _ = call("GET", "/terms")
 report("/terms and /privacy are public", status == 200 and call("GET", "/privacy")[0] == 200)
-status, body, _ = call("POST", "/api/auth/forgot-password", {"email": EMAIL})
-report("forgot-password is 404 because verification is off in this staging run", status == 404, str(status))
-''' % {"email": MEMBER_EMAIL, "password": MEMBER_PASSWORD, "admin_email": ADMIN_EMAIL, "admin_password": ADMIN_PASSWORD}
+'''
+
+
+def render_auth_flow(session_value: str) -> str:
+    """把容器內簽出的測試玩家 session cookie 放進流程腳本（程式碼必須是 ASCII；cookie 值是 base64 與點號組成）。"""
+    return AUTH_FLOW % {"email": MEMBER_EMAIL, "session": session_value, "admin_email": ADMIN_EMAIL, "admin_password": ADMIN_PASSWORD}
 
 
 LAYER_SCAN = r"""
@@ -345,7 +357,7 @@ def main() -> int:
     # staging 其餘設定齊全、只缺模型金鑰：同樣啟動失敗，輸出只指出變數名稱，不含其他機密
     code, out = docker(
         "run", "--rm", "-e", "APP_ENV=staging", "-e", f"SECRET_KEY={FAKE_SECRET}", "-e", "DATABASE_URL=sqlite+pysqlite:///:memory:",
-        "-e", "EMAIL_VERIFICATION_REQUIRED=false", "-e", "BASE_URL=https://cs.example.com", image, timeout=120,
+        "-e", "BASE_URL=https://cs.example.com", image, timeout=120,
     )
     check("staging 缺少 GEMINI_API_KEY：容器以非零結束碼結束", code != 0, f"結束碼 {code}")
     check("輸出只指出缺少 GEMINI_API_KEY 這個變數名稱，不含其他機密值",
@@ -411,20 +423,20 @@ def main() -> int:
 
 
 def verify_member_flow(image: str) -> None:
-    """會員驗證：新增的相依套件可載入；在容器內以 SQLite 執行 migration 後，經 HTTP 走完註冊、登入與登出。"""
+    """會員驗證：新增的相依套件可載入；在容器內以 SQLite 執行 migration 後，簽出測試玩家的 cookie，經 HTTP 檢查已移除的端點、登入狀態與登出。"""
     code, out = run_python_in_image(image, "import argon2, jwt, cryptography; print('imports-ok')")
     check("映像內可載入 argon2、PyJWT 與 cryptography", code == 0 and "imports-ok" in out, out.strip()[:120])
 
     name = f"pf-auth-{uuid.uuid4().hex[:8]}"
     env = [
         "APP_ENV=staging", f"SECRET_KEY={FAKE_SECRET}", "DATABASE_URL=sqlite+pysqlite:////tmp/member.sqlite3",
-        "EMAIL_VERIFICATION_REQUIRED=false", "BASE_URL=https://cs.example.com", f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
+        "BASE_URL=https://cs.example.com", f"GEMINI_API_KEY={FAKE_GEMINI_KEY}",
         "ALERT_EMAIL_TO=ops@example.com", "MAIL_SMTP_HOST=127.0.0.1", "MAIL_SMTP_PORT=1", "MAIL_FROM=service@example.com",
     ]
     env_args = [item for pair in (("-e", e) for e in env) for item in pair]
     code, out = docker("run", "-d", "--name", name, *env_args, image)
     try:
-        check("[會員流程] 預備環境容器啟動（驗證關閉、SQLite 檔案資料庫）", code == 0, out.strip()[:80])
+        check("[會員流程] 預備環境容器啟動（SQLite 檔案資料庫）", code == 0, out.strip()[:80])
         time.sleep(4)
         code, out = docker("exec", name, "python", "-m", "alembic", "upgrade", "head", timeout=120)
         check("[會員流程] 在容器內執行 alembic upgrade head 成功，升級到生日與年齡區間的 0004",
@@ -436,20 +448,31 @@ def verify_member_flow(image: str) -> None:
                            stdin=ADMIN_PASSWORD + "\n", timeout=120)
         check("[會員流程] 在容器內以 flask create-admin 建立管理員", code == 0, out.strip()[-160:].replace("\n", " "))
 
-        code, out = docker("exec", "-i", name, "python", "-", stdin=AUTH_FLOW, timeout=120)
+        # 測試玩家在容器內建立並簽出 cookie：與 load-testing、staging-verification 用的是同一段程式，映像本身沒有任何簽發登入狀態的指令
+        code, out = docker("exec", "-i", name, "python", "-", stdin=mint_test_sessions.render_snippet(1, MINT_PREFIX), timeout=120)
+        try:
+            minted = mint_test_sessions.parse_output(out)
+        except mint_test_sessions.MintError:
+            minted = None
+        check("[會員流程] 在容器內建立測試玩家並簽出 session cookie（信箱屬於 loadtest.invalid）",
+              code == 0 and minted is not None and minted["cookie_name"] == "__Host-session" and minted["sessions"][0]["email"] == MEMBER_EMAIL,
+              "" if minted else out.strip()[-160:].replace("\n", " "))
+        session_value = minted["sessions"][0]["value"] if minted else ""
+        code, out = docker("exec", "-i", name, "python", "-", stdin=render_auth_flow(session_value), timeout=120)
         flow = [line.split("|", 3) for line in out.splitlines() if line.startswith("RESULT|")]
-        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 51, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 51 else f"{len(flow)} 項")
+        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= EXPECTED_FLOW_RESULTS, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < EXPECTED_FLOW_RESULTS else f"{len(flow)} 項")
         for _, label, ok, detail in flow:
             check(f"[會員流程] {label}", ok == "1", detail)
 
         code, logs = docker("logs", name)
         check("[會員流程] 日誌沒有信箱、密碼與金鑰",
-              not any(secret in logs for secret in (MEMBER_EMAIL, MEMBER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET, FAKE_GEMINI_KEY)))
+              not any(secret in logs for secret in (MEMBER_EMAIL, session_value, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET, FAKE_GEMINI_KEY)))
         events = re.findall(r'"event":"([a-z_.]+)"', logs)
-        check("[會員流程] 日誌有註冊、登入、登出的安全事件", {"auth.register", "auth.login_success", "auth.logout"} <= set(events), ", ".join(sorted(set(events))))
-        check("[會員流程] 日誌有管理員不能只靠密碼登入的警告事件", "auth.login_failed.admin_password_only" in set(events), ", ".join(sorted(set(events))))
-        check("[會員流程] 日誌有註冊、補填年齡，以及不一致與未滿 13 歲被拒絕的安全事件",
-              {"auth.age_confirmed.register", "auth.age_confirmed.later", "auth.age_rejected.mismatch", "auth.age_rejected.underage"} <= set(events),
+        check("[會員流程] 日誌有登出的安全事件，且沒有註冊、密碼登入與信箱驗證的事件",
+              "auth.logout" in set(events) and not {e for e in events if e.startswith(("auth.register", "auth.verification", "auth.email_verified"))},
+              ", ".join(sorted(set(events))))
+        check("[會員流程] 日誌有補填年齡，以及不一致與未滿 13 歲被拒絕的安全事件",
+              {"auth.age_confirmed.later", "auth.age_rejected.mismatch", "auth.age_rejected.underage"} <= set(events),
               ", ".join(sorted(set(events))))
         # gunicorn 自己的啟動行（"[2026-10-28 09:00:00 +0000] ..."）本來就有日期，所以只掃結構化 JSON 日誌，並先去掉 time 欄位
         app_lines = [re.sub(r'"time":"[^"]*",?', "", line) for line in logs.splitlines() if line.startswith("{")]

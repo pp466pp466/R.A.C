@@ -2,7 +2,8 @@
 import pytest
 
 from app.models import User
-from app.models.user import PROVIDER_GOOGLE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, UserIdentity
+from app.repositories.user_repository import UserRepository
+from app.models.user import PROVIDER_GOOGLE, STATUS_DELETION_PENDING, STATUS_SUSPENDED, UserIdentity
 from app.services.errors import Unauthenticated, ValidationError
 from app.services.legal import CURRENT_AGE_POLICY_VERSION
 from tests.support.age import age_fields, birth_date_for_age
@@ -23,11 +24,6 @@ def test_a_valid_cookie_resolves_to_the_member(member_session):
     user = add_user(member_session, 1)
     current = make_auth_service(member_session).resolve_session(user.id, 1)
     assert current is not None and current.id == user.id and current.email == "user1@example.com"
-
-
-def test_a_pending_member_session_is_valid(member_session):
-    user = add_user(member_session, 1, status=STATUS_PENDING_VERIFICATION)
-    assert make_auth_service(member_session).resolve_session(user.id, 1) is not None
 
 
 def test_a_stale_token_version_or_an_unknown_member_resolves_to_nothing(member_session):
@@ -60,20 +56,20 @@ def test_a_session_of_a_member_awaiting_deletion_resolves_with_that_status(membe
 def test_logging_out_everywhere_invalidates_every_existing_session(member_session):
     user = add_user(member_session, 1)
     service = make_auth_service(member_session)
-    device_a = service.login(email="user1@example.com", password=GOOD_PASSWORD)
-    device_b = service.login(email="user1@example.com", password=GOOD_PASSWORD)
+    device_a = service.resolve_session(user.id, user.token_version)         # 兩個裝置持有同一個 cookie 內容 (uid, tv)
+    device_b = service.resolve_session(user.id, user.token_version)
     service.logout_all(device_a)
     assert service.resolve_session(device_a.id, device_a.token_version) is None
     assert service.resolve_session(device_b.id, device_b.token_version) is None
     assert reload(member_session, user).token_version == 2
-    fresh = service.login(email="user1@example.com", password=GOOD_PASSWORD)
-    assert fresh.token_version == 2 and service.resolve_session(fresh.id, 2) is not None
+    fresh = service.resolve_session(user.id, 2)                          # 重新登入（Google）後 cookie 帶新的版本
+    assert fresh is not None and fresh.token_version == 2
 
 
 def test_logout_events_are_logged(member_session, log_lines):
     add_user(member_session, 1)
     service = make_auth_service(member_session)
-    current = service.login(email="user1@example.com", password=GOOD_PASSWORD)
+    current = logged_in(member_session, service)
     service.record_logout(current)
     service.logout_all(current)
     events = [line["event"] for line in log_lines() if "event" in line]
@@ -236,13 +232,15 @@ def test_the_stored_adult_flag_is_only_a_record_and_decides_nothing(member_sessi
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     assert service.profile(current)["age_group"] == "minor"
-    assert AccessPolicy(email_verification_required=False, clock=lambda: TODAY_UTC).content_ceiling(current).safe_mode is True
+    assert AccessPolicy(clock=lambda: TODAY_UTC).content_ceiling(current).safe_mode is True
 
 
 # ---- 變更密碼 -----------------------------------------------------------------
 
 def logged_in(session, service):
-    return service.login(email="user1@example.com", password=GOOD_PASSWORD)
+    """玩家只用 Google 登入、管理員先 Google 再密碼，都不在這一層：直接取得與 cookie 內容 (uid, tv) 通過 resolve_session 相同的快照。"""
+    user = UserRepository(session).get_by_email("user1@example.com")
+    return service.resolve_session(user.id, user.token_version)
 
 
 def test_changing_the_password_keeps_this_device_and_logs_out_the_others(member_session):
@@ -258,9 +256,10 @@ def test_changing_the_password_keeps_this_device_and_logs_out_the_others(member_
     assert service.resolve_session(updated.id, updated.token_version) is not None      # 目前裝置以新版本維持登入
     assert service.resolve_session(other_device.id, other_device.token_version) is None  # 其他裝置失效
     assert reload(member_session, user).password_hash != old_hash
-    with pytest.raises(Unauthenticated):
-        service.login(email="user1@example.com", password=GOOD_PASSWORD)                # 舊密碼不能再用
-    assert service.login(email="user1@example.com", password=NEW_PASSWORD).id == user.id
+    # 舊密碼不能再用、新密碼可用：以重新輸入密碼的確認（與登入共用驗證與失敗計數）檢查
+    with pytest.raises(ValidationError):
+        service.confirm_password(updated, GOOD_PASSWORD)
+    service.confirm_password(updated, NEW_PASSWORD)
 
 
 def test_a_wrong_current_password_is_refused_counts_as_a_failure_and_changes_nothing(member_session, log_lines):
@@ -332,17 +331,17 @@ def test_an_account_without_a_password_cannot_use_this_path(member_session):
     assert exc.value.code == "no_password"
 
 
-def test_a_notice_mail_is_requested_only_when_verification_is_on(member_session):
+def test_a_notice_mail_is_requested_only_when_a_mailer_is_configured(member_session):
     user = add_user(member_session, 1)
-    off, on = RecordingMailer(), RecordingMailer()
-    service_off = make_auth_service(member_session, verification_required=False, mailer=off)
-    current = logged_in(member_session, service_off)
-    current = service_off.change_password(current, current_password=GOOD_PASSWORD, new_password=NEW_PASSWORD)
-    assert off.notices == []
+    mailer = RecordingMailer()
+    without = make_auth_service(member_session)
+    current = logged_in(member_session, without)
+    current = without.change_password(current, current_password=GOOD_PASSWORD, new_password=NEW_PASSWORD)
+    assert mailer.notices == []
 
-    service_on = make_auth_service(member_session, verification_required=True, mailer=on)
-    service_on.change_password(current, current_password=NEW_PASSWORD, new_password="yet-another-password")
-    assert on.notices == [user.id]
+    with_mailer = make_auth_service(member_session, mailer=mailer)
+    with_mailer.change_password(current, current_password=NEW_PASSWORD, new_password="yet-another-password")
+    assert mailer.notices == [user.id]
 
 
 def test_the_public_dict_never_exposes_internal_fields(member_session):

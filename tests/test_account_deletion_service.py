@@ -8,25 +8,23 @@ from datetime import timedelta
 import pytest
 
 from app.models import User
-from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED
+from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED
 from app.repositories.user_repository import UserRepository
 from app.services.account_deletion_service import CONFIRM_TEXT, AccountDeletionService
 from app.services.current_user import CurrentUser
 from app.services.errors import Conflict, Forbidden, ValidationError
-from app.services.mail_messages import deletion_notice_mail
-from tests.support.auth import GOOD_PASSWORD, START, FakeClock, RecordingMailer, add_user, make_auth_service
+from tests.support.auth import GOOD_PASSWORD, START, FakeClock, add_user, make_auth_service
 
 GRACE_END = START + timedelta(days=7)
 
 
 class Kit:
-    def __init__(self, session, *, with_mailer: bool = True) -> None:
+    def __init__(self, session) -> None:
         self.session = session
         self.clock = FakeClock()
-        self.mailer = RecordingMailer() if with_mailer else None
         auth = make_auth_service(session, clock=self.clock)
         self.service = AccountDeletionService(
-            users=UserRepository(session), confirm_password=auth.confirm_password, clock=self.clock, mailer=self.mailer,
+            users=UserRepository(session), confirm_password=auth.confirm_password, clock=self.clock,
         )
 
     def me(self, user: User) -> CurrentUser:
@@ -59,7 +57,6 @@ def test_a_wrong_password_is_a_field_error_changes_nothing_and_counts_as_a_faile
     assert "password" in exc.value.fields
     row = kit.row(user)
     assert row.status == STATUS_ACTIVE and row.deletion_requested_at is None and row.failed_login_count == 1
-    assert kit.mailer.deletions == []
 
 
 def test_five_wrong_passwords_lock_the_account_and_then_even_the_right_one_is_refused(member_session):
@@ -136,13 +133,6 @@ def test_a_suspended_or_already_pending_account_cannot_request(member_session, s
     assert exc.value.code == "deletion_not_allowed"
 
 
-def test_an_unverified_account_may_request_and_remembers_it_was_unverified(member_session):
-    kit = Kit(member_session)
-    user = add_user(member_session, 1, status=STATUS_PENDING_VERIFICATION)
-    kit.service.request(kit.me(user), password=GOOD_PASSWORD)
-    assert kit.row(user).status_before_deletion == STATUS_PENDING_VERIFICATION
-
-
 def test_requesting_invalidates_every_existing_login(member_session):
     kit = Kit(member_session)
     user = add_user(member_session, 1)
@@ -152,23 +142,16 @@ def test_requesting_invalidates_every_existing_login(member_session):
     assert auth.resolve_session(user.id, 1) is None
 
 
-# ---- 通知信 -----------------------------------------------------------------------
+# ---- 不寄信 -----------------------------------------------------------------------
 
-def test_a_notice_is_sent_with_the_scheduled_time_and_none_without_a_mailer(member_session):
+def test_the_service_has_no_mailer_so_no_notice_can_be_sent(member_session):
+    """玩家端不寄任何信（含申請刪除的通知）：服務不接受寄信元件，申請成功只回傳預定刪除的時間。"""
+    import inspect
+
+    assert "mailer" not in inspect.signature(AccountDeletionService).parameters
     kit = Kit(member_session)
     user = add_user(member_session, 1)
-    kit.service.request(kit.me(user), password=GOOD_PASSWORD)
-    assert kit.mailer.deletions == [(user.id, GRACE_END)]
-    quiet = Kit(member_session, with_mailer=False)
-    other = add_user(member_session, 2)
-    assert quiet.service.request(quiet.me(other), password=GOOD_PASSWORD) == GRACE_END         # 信箱驗證關閉：不寄信，其餘相同
-
-
-def test_the_notice_is_in_traditional_chinese_with_taiwan_time_and_the_way_to_undo():
-    mail = deletion_notice_mail("王小明", GRACE_END)
-    assert "王小明 您好" in mail.body and "2026 年 11 月 3 日 20:00（台灣時間）" in mail.body
-    assert "撤銷刪除" in mail.body and "刪除帳號" in mail.subject
-    assert "http" not in mail.body                                 # 不放連結：撤銷要登入後在帳號設定頁進行
+    assert kit.service.request(kit.me(user), password=GOOD_PASSWORD) == GRACE_END
 
 
 # ---- 撤銷 -------------------------------------------------------------------------
@@ -201,12 +184,6 @@ def test_cancelling_when_nothing_was_requested_is_a_conflict(member_session):
     with pytest.raises(Conflict) as exc:
         kit.service.cancel(kit.me(user))
     assert exc.value.code == "not_pending"
-
-
-def test_a_pending_verification_account_is_still_unverified_after_cancelling(member_session):
-    kit = Kit(member_session)
-    user = requested_user(member_session, before=STATUS_PENDING_VERIFICATION)
-    assert kit.service.cancel(kit.me(user)).status == STATUS_PENDING_VERIFICATION
 
 
 # ---- 事件 -------------------------------------------------------------------------

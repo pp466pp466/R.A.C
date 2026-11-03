@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.models import Base, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User, UserIdentity
-from app.models.user import AuthToken, PROVIDER_GOOGLE, TOKEN_VERIFY_EMAIL
+from app.models.user import AuthToken, PROVIDER_GOOGLE, TOKEN_RESET_PASSWORD
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_retention_service import INACTIVITY_PERIOD, AccountRetentionService
@@ -45,7 +45,7 @@ def seed(app) -> dict[str, int]:
             last_login_at=START - OLD, created_at=START - OLD, age=40,
         )
         s.add(UserIdentity(user_id=rich.id, provider=PROVIDER_GOOGLE, provider_subject="sub-secret-1"))
-        s.add(AuthToken(user_id=rich.id, purpose=TOKEN_VERIFY_EMAIL, token_hash="a" * 64, expires_at=START))
+        s.add(AuthToken(user_id=rich.id, purpose=TOKEN_RESET_PASSWORD, token_hash="a" * 64, expires_at=START))
         s.commit()
         ids = {"stale": stale.id, "never": never.id, "recent": recent.id, "admin": admin.id, "rich": rich.id}
     return ids

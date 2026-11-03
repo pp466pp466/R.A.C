@@ -10,12 +10,12 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import and_, case, delete, func, or_, select, update
+from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.models.llm_call_log import LlmCallLog
 from app.models.user import (
-    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, User,
+    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, User,
 )
 from app.repositories.base import BaseRepository
 from app.repositories.errors import DuplicateUserError
@@ -337,7 +337,7 @@ class UserRepository(BaseRepository[User]):
     # ---- 自助刪除的申請與撤銷（account-deletion 規格）-----------------------------------------
 
     def request_deletion(self, user: User, *, now: datetime) -> bool:
-        """條件式 UPDATE：非管理員、狀態為 `active` 或 `pending_verification` 時，轉為待刪除。回傳是否真的轉換。
+        """條件式 UPDATE：非管理員、狀態為 `active` 時，轉為待刪除。回傳是否真的轉換。
 
         同一個語句記下申請時間與申請前的狀態（SET 右邊讀的是更新前的值），並使 `token_version` 加 1，
         讓所有裝置（含目前這台）的登入狀態失效。兩個並行的申請只有一個會成立，不會加兩次、也不會把申請前的狀態
@@ -348,7 +348,7 @@ class UserRepository(BaseRepository[User]):
             update(User)
             .where(User.id == user.id)
             .where(User.role != ROLE_ADMIN)
-            .where(User.status.in_((STATUS_ACTIVE, STATUS_PENDING_VERIFICATION)))
+            .where(User.status == STATUS_ACTIVE)
             .values(
                 status_before_deletion=User.status,
                 status=STATUS_DELETION_PENDING,
@@ -361,15 +361,9 @@ class UserRepository(BaseRepository[User]):
     def cancel_deletion(self, user: User, *, now: datetime) -> bool:
         """條件式 UPDATE：待刪除且申請未滿寬限期時，還原為申請前的狀態並清除兩個欄位。回傳是否真的還原。
 
-        還原規則：申請前為 `active` → `active`；申請前為 `pending_verification`（或空值）→ 信箱此時已驗證就是 `active`
-        （待刪除期間以 Google 完成了驗證），否則仍是 `pending_verification`，不會因為刪除再撤銷就變成已驗證。
+        一律還原為 `active`（申請前的狀態只可能是 `active`；`pending_verification` 已退役，遷移 `0011` 把殘留的改成 `active`）。
         不改變 `token_version`：持有受限登入狀態的人撤銷後，目前的登入狀態直接變成完整的。
         """
-        restored = case(
-            (User.status_before_deletion == STATUS_ACTIVE, STATUS_ACTIVE),
-            (User.email_verified_at.is_not(None), STATUS_ACTIVE),
-            else_=STATUS_PENDING_VERIFICATION,
-        )
         changed = self._run_update(
             user,
             update(User)
@@ -377,6 +371,6 @@ class UserRepository(BaseRepository[User]):
             .where(User.status == STATUS_DELETION_PENDING)
             .where(User.deletion_requested_at.is_not(None))
             .where(User.deletion_requested_at > now - DELETION_GRACE_PERIOD)
-            .values(status=restored, deletion_requested_at=None, status_before_deletion=None),
+            .values(status=STATUS_ACTIVE, deletion_requested_at=None, status_before_deletion=None),
         )
         return changed == 1

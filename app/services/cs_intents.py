@@ -29,7 +29,7 @@ INTENT_DESCRIPTIONS: dict[str, str] = {
     INTENT_GREETING: "問候、感謝、結束語（例如「你好」「謝謝」「再見」）",
     INTENT_GENERAL_QA: "詢問這個平台自身的資訊，且不屬於會員等級與額度、也不屬於登入與帳號問題",
     INTENT_MEMBERSHIP_INFO: "詢問會員等級（free、plus、vip）、各等級的權益與額度",
-    INTENT_ACCOUNT_HELP: "登入、註冊、密碼、信箱驗證、Google 登入、帳號設定等帳號問題",
+    INTENT_ACCOUNT_HELP: "登入、Google 登入、年齡確認、帳號設定等帳號問題",
     INTENT_COMPLAINT_FEEDBACK: "使用者要留下意見、客訴、建議，或回報平台的問題或錯誤",
     INTENT_HUMAN_HANDOFF: "使用者要求轉接或找「真人客服」",
     INTENT_UNKNOWN: (

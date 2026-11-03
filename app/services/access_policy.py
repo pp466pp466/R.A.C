@@ -4,7 +4,7 @@
 - 非擁有者存取資源 → `NotFound`（404），與資源真的不存在完全相同，避免洩漏資源是否存在；
 - 授權不依賴識別碼的不可猜測性（即使知道別人的 public_id 也一樣被擋下）；
 - 會員等級（free、plus、vip）只影響額度，**不參與任何權限判斷**——這個類別刻意不讀 `member_tier`；
-- 會呼叫 Gemini 的功能一律先問 `require_chat_access`：帳號可用、已完成年齡確認、且年齡不低於最低使用年齡
+- 會呼叫 Gemini 的功能一律先問 `require_chat_access`：帳號可用（狀態為 active）、已完成年齡確認、且年齡不低於最低使用年齡
   （管理員與各等級都不豁免）；
 - 內容上限由 `content_ceiling` 依「當下」的年齡決定：未滿成年門檻（或尚未完成年齡確認）一律是安全模式；成年者最高到 2，
   只有組裝時以環境設定開啟等級 3（`SEXUAL_CONTENT_LEVEL3_ENABLED`，預設關閉，見 AGENTS.md 第 7 節）才是 3。
@@ -46,14 +46,12 @@ class AccessPolicy:
     def __init__(
         self,
         *,
-        email_verification_required: bool,
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
         clock: Callable[[], datetime] = utcnow,
         adult_ceiling: int = MAX_ADULT_SEXUAL_CONTENT_LEVEL,
     ) -> None:
         if adult_ceiling not in _ALLOWED_ADULT_CEILINGS:
             raise ValueError("成年者的內容上限只能是 2 或 3。")
-        self._verification_required = email_verification_required
         self._age_policy = age_policy
         self._clock = clock
         self._adult_ceiling = adult_ceiling
@@ -99,10 +97,8 @@ class AccessPolicy:
     # ---- 是否可使用 AI 功能 -------------------------------------------------
 
     def _account_usable(self, user: CurrentUser) -> bool:
-        """帳號必須啟用中；信箱驗證開啟時，信箱還必須已驗證（防止未驗證的帳號消耗 Gemini 額度）。"""
-        if user.status != STATUS_ACTIVE:
-            return False
-        return user.email_verified or not self._verification_required
+        """帳號必須啟用中。玩家的信箱在建立帳號時就由 Google 驗證，所以不再另看信箱驗證時間。"""
+        return user.status == STATUS_ACTIVE
 
     def can_use_chat(self, user: CurrentUser) -> bool:
         """是否可使用客服與其他會呼叫 Gemini 的功能：帳號可用、已完成年齡確認，且年齡不低於最低使用年齡。

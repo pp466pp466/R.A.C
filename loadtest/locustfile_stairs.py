@@ -28,5 +28,9 @@ except StairConfigError as error:
 
 
 class StairStepShape(LoadTestShape):
+    def peak_users(self) -> int:
+        """階梯的最高虛擬使用者數：登入狀態的數量要在送出任何請求之前檢查（見 locustfile 的 `_guard_target`）。"""
+        return STAIRS.peak_users
+
     def tick(self):
         return STAIRS.tick(self.get_run_time())

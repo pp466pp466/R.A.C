@@ -1,13 +1,13 @@
 """本機開發用的 SMTP 擷取伺服器：收下應用程式寄出的信，把內容印在終端機（僅供開發，絕不用於其他環境）。
 
-用途：在本機測試信箱驗證與忘記密碼，不需要任何真實的寄信服務或帳號。信件不會被轉寄出去。
+用途：在本機測試管理員的「忘記密碼」重設信與營運告警信（玩家端不寄任何信），不需要任何真實的寄信服務或帳號。信件不會被轉寄出去。
 
 用法（PowerShell，每個步驟各開一個終端機）：
     # 1) 啟動擷取伺服器
     .\\.venv\\Scripts\\python.exe scripts\\dev_smtp_sink.py
 
     # 2) 讓應用程式寄到它（行程環境變數優先於 .env）
-    $env:EMAIL_VERIFICATION_REQUIRED = "true"
+    $env:BASE_URL = "http://localhost:5000"      # 重設連結需要對外網址
     $env:MAIL_SMTP_HOST = "127.0.0.1"; $env:MAIL_SMTP_PORT = "1025"
     $env:MAIL_SMTP_SECURITY = "none"; $env:MAIL_FROM = "service@example.com"
     .\\.venv\\Scripts\\python.exe -m flask --app wsgi run

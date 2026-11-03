@@ -37,16 +37,15 @@ def test_the_guard_accepts_the_two_local_environments(env):
     assert fake_app.guard_environment({"APP_ENV": env}) == env
 
 
-def test_build_app_injects_the_load_test_provider_turns_verification_off_and_creates_the_tables(monkeypatch):
+def test_build_app_injects_the_load_test_provider_and_creates_the_tables(monkeypatch):
     monkeypatch.setenv("LOADTEST_LATENCY_SECONDS", "0")
     environ = {"APP_ENV": "testing", "LOADTEST_LATENCY_SECONDS": "0", "LOADTEST_JITTER_SECONDS": "0"}
     app = fake_app.build_app(environ)
     assert isinstance(app.extensions["llm_provider"], LoadTestProvider)
-    assert app.extensions["app_config"].email_verification_required is False
     from sqlalchemy import inspect
 
     assert "users" in inspect(app.extensions["db_engine"]).get_table_names()
-    assert environ["EMAIL_VERIFICATION_REQUIRED"] == "false"
+    assert "EMAIL_VERIFICATION_REQUIRED" not in environ
 
 
 def test_the_flask_factory_name_is_make_app():
@@ -149,6 +148,9 @@ class FlaskSession:
     def __init__(self, client):
         self.client = client
 
+    def set_cookie(self, name, value):
+        self.client.set_cookie(name, value)
+
     def _reply(self, response):
         body = response.get_json(silent=True) if response.mimetype == "application/json" else None
         return actions.Reply(response.status_code, body, "" if body is not None else response.get_data(as_text=True))
@@ -176,7 +178,7 @@ class MailSpy:
 def world():
     spy = MailSpy()
     app = create_app(
-        load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "false"}), mail_sender=spy,
+        load_config(environ={"APP_ENV": "testing"}), mail_sender=spy,
         llm_provider=LoadTestProvider(latency_seconds=0, jitter_seconds=0, sleep=lambda s: None),
     )
     from app.models import Base
@@ -189,33 +191,61 @@ def member(app, number=1, run="t1"):
     return actions.Member(FlaskSession(raw_client(app)), run_id=run, number=number)
 
 
-def test_one_virtual_member_registers_logs_in_opens_a_conversation_and_chats(world):
+def mint_pool(app, count=2, prefix="loadtest-t1"):
+    """與 scripts/mint_test_sessions.py 相同的做法：建立測試玩家並以該環境自己的簽章器簽出 cookie。"""
+    from sqlalchemy.orm import Session
+
+    from tests.support.auth import add_user
+
+    values = []
+    with Session(app.extensions["db_engine"]) as s:
+        for n in range(1, count + 1):
+            email = f"{prefix}-{n}@loadtest.invalid"
+            user = add_user(s, n, email=email, email_canonical=email, password=None)
+            values.append(app.session_interface.get_signing_serializer(app).dumps({"uid": user.id, "tv": user.token_version}))
+    return app.config["SESSION_COOKIE_NAME"], values
+
+
+def sign_in(app, m, number=1):
+    name, values = mint_pool(app, number)
+    return m.sign_in(name, values[number - 1])
+
+
+def test_one_virtual_member_signs_in_with_a_minted_cookie_opens_a_conversation_and_chats(world):
     app, spy = world
     m = member(app)
-    assert m.register_and_login() and m.open_conversation()
+    assert sign_in(app, m) and m.open_conversation()
     assert m.conversation_id
     reply = m.send_message()
     assert reply.ok and reply.body["assistant_message"]["seq"] >= 2 and m.last_seq >= 2
     assert m.list_conversations().ok
     pulled = m.pull_since()
     assert pulled.ok and pulled.body is not None
-    assert spy.sent == [], "關閉信箱驗證，註冊不會寄出任何信件"
+    assert spy.sent == [], "玩家端不寄任何信"
+
+
+def test_a_cookie_the_environment_did_not_sign_is_not_a_login(world):
+    app, _ = world
+    m = member(app)
+    assert m.sign_in(app.config["SESSION_COOKIE_NAME"], "not-a-valid-cookie") is False
 
 
 def test_every_virtual_member_uses_its_own_reserved_domain_account_and_its_own_conversation(world):
     app, _ = world
+    name, values = mint_pool(app, 2)
     first, second = member(app, 1), member(app, 2)
-    for m in (first, second):
-        assert m.register_and_login() and m.open_conversation()
-    assert first.email != second.email and first.conversation_id != second.conversation_id
-    assert first.email.endswith("@loadtest.invalid") and first.email == "loadtest-t1-1@loadtest.invalid"
+    for m, value in ((first, values[0]), (second, values[1])):
+        assert m.sign_in(name, value) and m.open_conversation()
+    assert first.conversation_id != second.conversation_id
     assert first.send_message().ok and second.send_message().ok
+    me = first.session.get("/api/auth/me").body["user"]
+    assert me["email"] == "loadtest-t1-1@loadtest.invalid" and me["email"].endswith("@" + guard.TEST_EMAIL_DOMAIN)
 
 
 def test_the_requests_pass_the_csrf_check_and_would_be_rejected_without_the_token_and_origin(world):
     app, _ = world
     m = member(app)
-    assert m.register_and_login()
+    assert sign_in(app, m)
     no_token = m.session.post("/api/cs/conversations", json={"client_id": "x"}, headers={})
     assert 400 <= no_token.status < 500
     assert m.open_conversation(), "帶權杖與同源的 Origin 就通過"
@@ -224,20 +254,68 @@ def test_the_requests_pass_the_csrf_check_and_would_be_rejected_without_the_toke
 def test_each_message_gets_a_new_client_id_so_the_seq_keeps_increasing(world):
     app, _ = world
     m = member(app)
-    assert m.register_and_login() and m.open_conversation()
+    assert sign_in(app, m) and m.open_conversation()
     assert m.send_message().ok
     first = m.last_seq
     assert m.send_message().ok and m.last_seq > first
 
 
-def test_the_registration_birth_date_always_matches_the_chosen_range_for_age_thirty():
-    from datetime import date
+# ---- 預先簽出的登入狀態（loadtest/session_pool.py）---------------------------------------------------
 
-    from app.services.age_policy import DEFAULT_AGE_POLICY, age_on, range_for_age
 
-    for today in (date(2026, 1, 1), date(2026, 6, 14), date(2026, 6, 15), date(2026, 12, 31), date(2028, 2, 29)):
-        born = actions.birth_date_for(actions.AGE, today)
-        assert age_on(born, today) == actions.AGE and range_for_age(actions.AGE, DEFAULT_AGE_POLICY) is not None
+def pool_file(tmp_path, count=3, name="__Host-session"):
+    import json
+
+    path = tmp_path / "pool.json"
+    sessions = [{"email": f"p-{n}@loadtest.invalid", "value": f"v{n}"} for n in range(1, count + 1)]
+    path.write_text(json.dumps({"cookie_name": name, "sessions": sessions}, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def test_the_pool_hands_out_one_cookie_per_virtual_member_in_order(tmp_path):
+    from loadtest.session_pool import load_pool
+
+    pool = load_pool(pool_file(tmp_path))
+    assert len(pool) == 3 and pool.cookie_name == "__Host-session"
+    assert [pool.value_for(n) for n in (1, 2, 3)] == ["v1", "v2", "v3"]
+
+
+def test_asking_for_more_members_than_cookies_fails_before_any_request_and_says_how_many_are_missing(tmp_path):
+    from loadtest.session_pool import PoolError, load_pool, require
+
+    pool = load_pool(pool_file(tmp_path, count=3))
+    require(pool, 3)
+    with pytest.raises(PoolError) as error:
+        require(pool, 20)
+    assert "20" in str(error.value) and "3" in str(error.value) and "17" in str(error.value)
+    with pytest.raises(PoolError):
+        pool.value_for(4)
+
+
+@pytest.mark.parametrize("content", [
+    "not json", "[]", '{"cookie_name": "x"}', '{"cookie_name": "", "sessions": [{"value": "v"}]}', '{"cookie_name": "x", "sessions": []}',
+])
+def test_a_malformed_pool_file_is_an_error_about_the_format(tmp_path, content):
+    from loadtest.session_pool import PoolError, load_pool
+
+    path = tmp_path / "bad.json"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(PoolError) as error:
+        load_pool(path)
+    assert "格式" in str(error.value)
+
+
+def test_a_missing_pool_file_points_to_the_script_that_makes_it(tmp_path):
+    from loadtest.session_pool import PoolError, load_pool
+
+    with pytest.raises(PoolError) as missing:
+        load_pool(tmp_path / "nope.json")
+    assert "mint_test_sessions" in str(missing.value)
+
+
+def test_the_member_module_no_longer_has_any_registration_or_password_login():
+    text = (PROJECT_ROOT / "loadtest" / "actions.py").read_text(encoding="utf-8")
+    assert "/api/auth/register" not in text and "/api/auth/login" not in text and "PASSWORD" not in text
 
 
 # ---- 位址守門 ---------------------------------------------------------------------------
@@ -285,6 +363,7 @@ from loadtest import locustfile
 
 class Options:
     confirm_remote = False
+    num_users = 0
 
 class Environment:
     parsed_options = Options()
@@ -303,14 +382,26 @@ assert refused("https://staging.example.com") and refused("https://cs-web-produc
 Options.confirm_remote = True
 assert not refused("https://staging.example.com")
 assert refused("https://cs-web-production-x.a.run.app")
+# 預先簽出的登入狀態只有 3 組：虛擬使用者數不能超過它（在送出任何請求之前就失敗）
+Options.num_users = 3
+assert not refused("http://127.0.0.1:5000")
+Options.num_users = 20
+assert refused("http://127.0.0.1:5000")
 print("ok")
 """
 
 
-def test_the_locust_listener_enforces_the_guard():
+def test_the_locust_listener_enforces_the_guard_and_the_number_of_minted_sessions(tmp_path):
     """在子行程執行：匯入 locust 會對標準函式庫做 gevent 猴子補丁，不能發生在 pytest 行程裡（會影響其他測試）。"""
-    result = subprocess.run([sys.executable, "-W", "ignore", "-c", GUARD_SCRIPT], cwd=PROJECT_ROOT, capture_output=True, text=True, encoding="utf-8")
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "LOADTEST_SESSIONS": str(pool_file(tmp_path, count=3))}
+    result = subprocess.run([sys.executable, "-W", "ignore", "-c", GUARD_SCRIPT], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, encoding="utf-8")
     assert result.returncode == 0 and "ok" in result.stdout, result.stderr[-400:]
+
+
+def test_the_locust_scenario_stops_before_any_request_when_the_sessions_file_is_missing(tmp_path):
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8", "LOADTEST_SESSIONS": str(tmp_path / "missing.json")}
+    result = subprocess.run([sys.executable, "-W", "ignore", "-c", "from loadtest import locustfile"], cwd=PROJECT_ROOT, env=env, capture_output=True, text=True, encoding="utf-8")
+    assert result.returncode != 0 and "mint_test_sessions" in result.stderr
 
 
 def test_the_test_process_never_imports_locust():
@@ -323,10 +414,10 @@ def test_a_degraded_reply_is_a_failure_even_though_the_http_status_is_200(world)
 
     spy = MailSpy()
     broken = LoadTestProvider(latency_seconds=0, jitter_seconds=0, error_rates={"server_error": 1.0}, seed=1, sleep=lambda s: None)
-    app = create_app(load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "false"}), mail_sender=spy, llm_provider=broken)
+    app = create_app(load_config(environ={"APP_ENV": "testing"}), mail_sender=spy, llm_provider=broken)
     Base.metadata.create_all(app.extensions["db_engine"])
     m = member(app)
-    assert m.register_and_login() and m.open_conversation()
+    assert sign_in(app, m) and m.open_conversation()
     reply = m.send_message()
     assert reply.status == 200 and reply.body["assistant_message"]["msg_status"] == "fallback"
     assert m.degraded == 1 and m.session.problems == ["降級回覆（模型暫時性錯誤）"]
@@ -335,5 +426,5 @@ def test_a_degraded_reply_is_a_failure_even_though_the_http_status_is_200(world)
 def test_a_normal_reply_is_not_reported_as_degraded(world):
     app, _ = world
     m = member(app)
-    assert m.register_and_login() and m.open_conversation()
+    assert sign_in(app, m) and m.open_conversation()
     assert m.send_message().ok and m.degraded == 0 and getattr(m.session, "problems", []) == []

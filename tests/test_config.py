@@ -234,50 +234,34 @@ def test_app_config_is_immutable():
 # 會員驗證相關設定（member-auth：app-configuration 與 google-sign-in 規格）
 # =============================================================================
 
-# ---- 信箱驗證開關 -------------------------------------------------------------
+# ---- 信箱驗證開關已淘汰 -------------------------------------------------------
 
-def test_production_with_verification_off_refuses_to_start():
-    with pytest.raises(ConfigError) as exc:
-        load_config(environ=prod_env(EMAIL_VERIFICATION_REQUIRED="false"))
-    assert "信箱驗證" in str(exc.value) and "production" in str(exc.value)
-
-
-def test_staging_can_explicitly_turn_verification_off_without_a_base_url():
-    """關閉信箱驗證就不需要對外網址；但 staging 一定要有告警收件人，所以寄信設定仍然需要（見 test_config_alerts.py）。"""
-    env = prod_env(APP_ENV="staging", EMAIL_VERIFICATION_REQUIRED="false", BASE_URL=None)
-    cfg = load_config(environ=env)
-    assert cfg.email_verification_required is False
-    assert cfg.base_url is None and cfg.mail is not None and cfg.alerts.recipients == ("ops@example.com",)
+@pytest.mark.parametrize("env_name", ["staging", "production"])
+@pytest.mark.parametrize("value", ["false", "true", "maybe"])
+def test_the_retired_verification_variable_never_stops_a_production_like_start_and_only_warns_by_name(env_name, value, caplog):
+    """玩家只用 Google 登入，沒有信箱驗證：平台設定裡殘留 `EMAIL_VERIFICATION_REQUIRED` 不得讓部署失敗（含 production），
+    只在日誌留一則只含變數名稱的警告。"""
+    with caplog.at_level("WARNING", logger="app.config"):
+        cfg = load_config(environ=prod_env(APP_ENV=env_name, EMAIL_VERIFICATION_REQUIRED=value))
+    assert cfg.mail is not None and not hasattr(cfg, "email_verification_required")
+    warnings = [r.getMessage() for r in caplog.records if "EMAIL_VERIFICATION_REQUIRED" in r.getMessage()]
+    assert len(warnings) == 1 and value not in warnings[0].replace("EMAIL_VERIFICATION_REQUIRED", "")
 
 
-def test_development_without_the_variable_means_off_and_needs_no_mail_settings(tmp_path):
+def test_without_the_retired_variable_there_is_no_warning(caplog):
+    with caplog.at_level("WARNING", logger="app.config"):
+        load_config(environ=prod_env())
+    assert not [r for r in caplog.records if "EMAIL_VERIFICATION_REQUIRED" in r.getMessage()]
+
+
+def test_development_without_any_mail_settings_has_no_mail_and_no_base_url(tmp_path):
     cfg = load_dev(tmp_path)
-    assert cfg.email_verification_required is False
     assert cfg.mail is None and cfg.base_url is None
 
 
-def test_testing_without_the_variable_means_off():
-    assert load_config(environ={"APP_ENV": "testing"}).email_verification_required is False
-
-
 @pytest.mark.parametrize("env_name", ["staging", "production"])
-def test_production_like_defaults_to_verification_on(env_name):
-    cfg = load_config(environ=prod_env(APP_ENV=env_name))
-    assert cfg.email_verification_required is True
-    assert cfg.mail is not None
-
-
-@pytest.mark.parametrize("value", ["maybe", "1", "yes", "on", "no"])
-def test_verification_value_must_be_true_or_false(value, tmp_path):
-    with pytest.raises(ConfigError) as exc:
-        load_dev(tmp_path, EMAIL_VERIFICATION_REQUIRED=value)
-    assert "true" in str(exc.value) and "false" in str(exc.value)
-
-
-@pytest.mark.parametrize("value,expected", [("TRUE", True), ("False", False), (" true ", True)])
-def test_verification_value_is_case_and_space_insensitive(value, expected, tmp_path):
-    overrides = dict(EMAIL_VERIFICATION_REQUIRED=value, BASE_URL="http://localhost:5000", **_dev_mail())
-    assert load_dev(tmp_path, **overrides).email_verification_required is expected
+def test_production_like_always_has_mail_settings_because_the_alerts_need_them(env_name):
+    assert load_config(environ=prod_env(APP_ENV=env_name)).mail is not None
 
 
 def _dev_mail(**overrides: str) -> dict[str, str]:
@@ -288,24 +272,42 @@ def _dev_mail(**overrides: str) -> dict[str, str]:
 
 # ---- 寄信與對外網址設定 -------------------------------------------------------
 
-def test_verification_on_without_mail_host_names_the_missing_variable():
+def test_without_mail_host_the_missing_variable_is_named(tmp_path):
     with pytest.raises(ConfigError) as exc:
         load_config(environ=prod_env(MAIL_SMTP_HOST=None))
     assert "MAIL_SMTP_HOST" in str(exc.value)
     assert "MAIL_FROM" not in str(exc.value)  # 只列出真正缺少的
 
 
-def test_verification_on_lists_every_missing_mail_variable():
+def test_every_missing_mail_variable_is_listed():
     with pytest.raises(ConfigError) as exc:
         load_config(environ=prod_env(MAIL_SMTP_HOST=None, MAIL_SMTP_PORT=None, MAIL_FROM=None))
     for name in ("MAIL_SMTP_HOST", "MAIL_SMTP_PORT", "MAIL_FROM"):
         assert name in str(exc.value)
 
 
-def test_verification_on_without_base_url_fails():
+@pytest.mark.parametrize("given", [{"MAIL_SMTP_HOST": "localhost"}, {"MAIL_FROM": "service@example.com"}, {"MAIL_SMTP_PORT": "1025"}])
+def test_any_single_mail_setting_makes_the_rest_required_even_without_alert_recipients(given, tmp_path):
+    """寄信設定一旦開始設定就必須完整（半套設定明確失敗，而不是被默默忽略）；訊息只列出缺少的變數名稱。"""
     with pytest.raises(ConfigError) as exc:
-        load_config(environ=prod_env(BASE_URL=None))
-    assert "BASE_URL" in str(exc.value)
+        load_dev(tmp_path, **given)
+    assert "MAIL_" in str(exc.value) and next(iter(given.values())) not in str(exc.value)
+
+
+def test_complete_mail_settings_without_recipients_enable_the_mailer_in_development(tmp_path):
+    cfg = load_dev(tmp_path, **_dev_mail())
+    assert cfg.mail is not None and cfg.alerts.recipients == ()
+
+
+def test_google_login_without_base_url_fails():
+    with pytest.raises(ConfigError) as exc:
+        load_config(environ=prod_env(BASE_URL=None, GOOGLE_OAUTH_CLIENT_ID="id", GOOGLE_OAUTH_CLIENT_SECRET="secret"))
+    assert "BASE_URL" in str(exc.value) and "secret" not in str(exc.value)
+
+
+def test_without_google_a_missing_base_url_is_allowed_and_only_disables_the_admin_reset_link():
+    cfg = load_config(environ=prod_env(BASE_URL=None))
+    assert cfg.base_url is None and cfg.mail is not None
 
 
 def test_production_base_url_must_be_https():
@@ -349,7 +351,7 @@ def test_mail_password_without_username_fails_and_does_not_echo_values():
 
 
 def test_mail_without_credentials_is_allowed(tmp_path):
-    cfg = load_dev(tmp_path, EMAIL_VERIFICATION_REQUIRED="true", BASE_URL="http://localhost:5000", **_dev_mail())
+    cfg = load_dev(tmp_path, BASE_URL="http://localhost:5000", **_dev_mail())
     assert cfg.mail.username is None and cfg.mail.password is None
 
 
@@ -361,9 +363,9 @@ def test_production_like_rejects_unencrypted_mail_connection(env_name):
 
 
 def test_development_and_testing_allow_unencrypted_mail_connection(tmp_path):
-    overrides = dict(EMAIL_VERIFICATION_REQUIRED="true", BASE_URL="http://localhost:5000", **_dev_mail())
+    overrides = dict(BASE_URL="http://localhost:5000", **_dev_mail())
     assert load_dev(tmp_path, **overrides).mail.security == "none"
-    testing = {"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "true", "BASE_URL": "http://localhost", **_dev_mail()}
+    testing = {"APP_ENV": "testing", "BASE_URL": "http://localhost", **_dev_mail()}
     assert load_config(environ=testing).mail.security == "none"
 
 

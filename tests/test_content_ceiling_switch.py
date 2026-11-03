@@ -26,7 +26,7 @@ LEVEL3_ENV = {
 
 def policy(adult_ceiling: int | None = None) -> AccessPolicy:
     extra = {} if adult_ceiling is None else {"adult_ceiling": adult_ceiling}
-    return AccessPolicy(email_verification_required=False, clock=lambda: TODAY_UTC, **extra)
+    return AccessPolicy(clock=lambda: TODAY_UTC, **extra)
 
 
 # ---- 政策物件 ------------------------------------------------------------------------------------------
@@ -59,7 +59,7 @@ def test_the_switch_does_not_make_the_age_boundary_any_softer():
 @pytest.mark.parametrize("value", [0, 1, 4, 99, -1, None, True, "3"])
 def test_only_2_and_3_are_accepted_as_an_adult_ceiling(value):
     with pytest.raises(ValueError):
-        AccessPolicy(email_verification_required=False, adult_ceiling=value)
+        AccessPolicy(adult_ceiling=value)
 
 
 # ---- 從環境設定到 HTTP ---------------------------------------------------------------------------------

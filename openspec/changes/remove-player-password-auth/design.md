@@ -33,7 +33,7 @@ change ①（`google-first-login`，已封存）讓 Google 成為玩家唯一的
 
 ### D2：資料遷移 `0011` 只動資料，用輕量資料表表達式，不匯入應用程式程式碼
 `migrations/versions/…_0011_remove_player_passwords.py`：
-- `users`：`role <> 'admin'` 的列，`password_hash=NULL`、`failed_login_count=0`、`locked_until=NULL`。
+- `users`：`role <> 'admin'` 的列，`password_hash=NULL`、`failed_login_count=0`、`locked_until=NULL`；其中**曾持有密碼雜湊的**另外 `token_version` 加 1（先加再清，所以重複執行不會再加）——它們的既有登入狀態隨憑證一起失效，包含遷移前被預先佔用信箱的攻擊者靠密碼取得的 cookie；純 Google 玩家與管理員的登入狀態不受影響。
 - `users`：`status='pending_verification'` → `'active'`；`status_before_deletion='pending_verification'` → `'active'`。
 - 以 `sa.table()`／`sa.column()` 加 `op.get_bind().execute(sa.update(...))` 表達，不是原生 SQL，也不匯入 `app.models`（與 0010 一致，避免未來模型變動讓舊 migration 壞掉）。可重複執行（冪等）。
 - `downgrade()` 不做任何事並在註解說明：被清除的雜湊無法還原，回復靠遷移前的備份。
@@ -59,7 +59,7 @@ change ①（`google-first-login`，已封存）讓 Google 成為玩家唯一的
 `_account_usable` 只看 `status == active`。玩家的信箱在建立帳號時就由 Google 驗證（`email_verified_at` 有值），管理員由 `create-admin` 建立時也設為已驗證；遷移後唯一 `email_verified_at` 為空且 `active` 的是遺留的舊帳號，它們無法登入（沒有憑證），直到以 Google 登入而被標為已驗證。所以這個檢查在移除後沒有任何可到達的作用。`AdminService.get_user` 之類回傳的 `email_verified` 欄位保留（它描述的是事實，不是開關）。
 
 ### D8：自動化驗收改用「在目標環境內建立測試玩家並簽出 session cookie」
-共同做法：一個主機端 Python 輔助模組（`scripts/test_sessions.py`）產生一小段程式，**在目標環境的程序內執行**（`docker exec … python -c`、或本機以同樣的環境變數載入），它：拒絕 `APP_ENV=production`；以應用程式工廠建立 N 位 `@loadtest.invalid` 的玩家（`active`、已完成年齡確認的成年人、條款已同意、無密碼，走 `UserRepository.add_user`）；用 `app.session_interface` 的簽章器以該環境自己的 `SECRET_KEY` 簽出與真實登入完全相同的 session cookie（內容只有 `uid`、`tv`）；以 JSON 印出。這與 `verify_container.py` 對管理員已採用的做法相同，只是抽成可重用的單一實作。
+共同做法：一個主機端 Python 輔助模組（`scripts/mint_test_sessions.py`）產生一小段程式，**在目標環境的程序內執行**（`docker exec … python -c`、或本機以同樣的環境變數載入），它：拒絕 `APP_ENV=production`；以應用程式工廠建立 N 位 `@loadtest.invalid` 的玩家（`active`、已完成年齡確認的成年人、條款已同意、無密碼，走 `UserRepository.add_user`）；用 `app.session_interface` 的簽章器以該環境自己的 `SECRET_KEY` 簽出與真實登入完全相同的 session cookie（內容只有 `uid`、`tv`）；以 JSON 印出。這與 `verify_container.py` 對管理員已採用的做法相同，只是抽成可重用的單一實作。
 - `loadtest`：`Member` 改為從 cookie 檔取得登入狀態（`register_and_login` → `sign_in`）；cookie 檔不足就在送出任何請求前失敗；`fake_app` 不再設定驗證旗標。
 - `staging_smoke.py`：需要登入的項目只在環境變數提供 cookie 時執行，否則標「未驗證」（不是通過）；新增「已移除端點回 404」的檢查。
 - `verify_container.py`：玩家流程改為簽出 cookie 後檢查（`/api/auth/me`、`/account`、CSRF、登出），並檢查五個端點回 404。

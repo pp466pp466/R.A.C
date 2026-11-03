@@ -111,7 +111,7 @@ def test_the_container_acceptance_covers_the_model_key_and_the_chat_flow():
     for needed in ("age_confirmation_required", "version_conflict", "/cs", "request_timeout_ms", "chat:"):
         assert needed in script, needed
     namespace = runpy.run_path(str(PROJECT_ROOT / "scripts" / "verify_container.py"))
-    flow = namespace["AUTH_FLOW"]
+    flow = namespace["render_auth_flow"]("minted-session-value")
     compile(flow, "flow", "exec")
     assert flow.isascii() and flow.count("chat: ") >= 14                          # 容器內的腳本以 stdin 傳入：必須是 ASCII
     assert namespace["FAKE_GEMINI_KEY"] not in (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8-sig")

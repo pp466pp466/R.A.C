@@ -28,7 +28,7 @@ from typing import Any, Callable
 
 from app.models.lock_strike import STRIKE_IDENTITY_REJECTED
 from app.models.user import (
-    AGE_CONFIRMATION_DEADLINE, PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION,
+    AGE_CONFIRMATION_DEADLINE, PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING,
     STATUS_SUSPENDED, User, UserIdentity,
 )
 from app.observability import security_events
@@ -200,8 +200,6 @@ class GoogleSignInService:
             self._bind(user, profile.subject)
             user.password_hash = None
             user.email_verified_at = now
-            if user.status == STATUS_PENDING_VERIFICATION:
-                user.status = STATUS_ACTIVE
             self._users.save(user)
             self._users.bump_token_version(user)
             return self._finish(user, now, OUTCOME_LINKED_UNVERIFIED, security_events.GOOGLE_LINKED_UNVERIFIED)

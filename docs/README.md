@@ -32,7 +32,7 @@
 |---|---|
 | 分層、禁止匯入規則、後台專用 Repository 的規則、`create_app` 的注入參數、請求生命週期、主要外部依賴 | 系統架構-architecture.md |
 | 資料表、欄位、約束、索引、外鍵動作、migration、保存期限與刪除流程 | 資料模型-data-model.md（保存期限的實作狀態同步 營運與部署-operations.md） |
-| 註冊、登入、驗證信、Google 登入、session、CSRF、年齡規則、權限政策、`/api/auth/*`、`/api/admin/*`、後台的可讀範圍與重新輸入密碼 | 帳號與安全-auth-security.md |
+| Google 登入、管理員二階段登入與重設密碼、session、CSRF、年齡規則、權限政策、`/api/auth/*`、`/api/admin/*`、後台的可讀範圍與重新輸入密碼 | 帳號與安全-auth-security.md |
 | `/api/cs/*`、送出流程、冪等、處理標記、上下文與狀態、摘要、降級文案、客服回覆原則、管理員可讀的對話範圍 | 客服對話-chat-service.md |
 | `LlmService`、轉接器、錯誤分類、斷路、預算、帳本、提示詞結構、`GEMINI_*` 與 `LLM_*` 設定 | 模型呼叫層-llm-layer.md（用到的端點與流程同步 客服對話-chat-service.md） |
 | 前端模組、載入順序、共用元件、Sidebar、暫存與同步、前端規範 | 前端結構-frontend.md |
@@ -54,7 +54,8 @@ flowchart TD
 ```
 
 重點：
-- **OpenSpec 會提醒**：openspec/config.yaml 的 ules.tasks 要求會影響設計的 change 在 	asks.md 最後加一項「更新設計文件」，operations.apply 與 operations.archive 的 guidance 在 apply 與 archive 時重複提醒；技能 design-docs-sync 提供逐步的檢查表。
+- **OpenSpec 會提醒**：openspec/config.yaml 的 
+ules.tasks 要求會影響設計的 change 在 	asks.md 最後加一項「更新設計文件」，operations.apply 與 operations.archive 的 guidance 在 apply 與 archive 時重複提醒；技能 design-docs-sync 提供逐步的檢查表。
 - **文件與程式在同一個 change 內一起更新**，不留到「之後再補」；`tests/test_design_docs.py` 把最容易漂移的事實變成測試（見第 5 節）。
 - 圖與表描述的是最新設計；被取代的設計不留在圖上（理由放進該 change 的 `design.md`）。
 - 每份文件的標頭有「最後更新」日期與「對應 change」；內容有實質修改時一併更新。

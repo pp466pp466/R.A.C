@@ -15,6 +15,8 @@ from app.models import Base, User
 from app.models.user import STATUS_SUSPENDED
 from app.security.redirects import safe_next
 from app.security.session import current_user, login_required_api, login_required_page, login_user, logout_user
+from app.repositories.user_repository import UserRepository
+from app.db.session import get_session
 from app.services.registry import get_auth_service
 from tests.support.auth import GOOD_PASSWORD, add_user
 from tests.support.config_env import production_like_env
@@ -31,8 +33,10 @@ def make_app(env="testing"):
 
     @app.post("/api/_t/login")
     def t_login():
+        """代表「通過登入」（玩家的 Google 登入或管理員的兩步驟都在別處測試）：以該信箱目前的帳號快照建立登入狀態。"""
         body = read_json_object()
-        login_user(get_auth_service().login(email=body["email"], password=body["password"]))
+        user = UserRepository(get_session()).get_by_email(body["email"])
+        login_user(get_auth_service().resolve_session(user.id, user.token_version))
         return {"ok": True}
 
     @app.post("/api/_t/logout")

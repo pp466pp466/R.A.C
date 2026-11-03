@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from app.models import (
     AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, LockAppeal, LockStrike, User,
 )
-from app.models.user import TOKEN_VERIFY_EMAIL
+from app.models.user import TOKEN_RESET_PASSWORD
 from app.repositories.retention_repository import RetentionRepository
 from app.services.data_retention_service import (
     ADMIN_AUDIT_RETENTION, AUTH_TOKEN_RETENTION, CONVERSATION_RETENTION, ERROR_DETAIL_RETENTION, LEDGER_RETENTION,
@@ -66,7 +66,7 @@ def seed_every_category(session) -> dict[str, tuple]:
     )
     tokens = []
     for n, expires in enumerate((START - AUTH_TOKEN_RETENTION - SECOND, START - AUTH_TOKEN_RETENTION + SECOND), start=1):
-        token = AuthToken(user_id=user, purpose=TOKEN_VERIFY_EMAIL, token_hash=f"{n:064d}", expires_at=expires)
+        token = AuthToken(user_id=user, purpose=TOKEN_RESET_PASSWORD, token_hash=f"{n:064d}", expires_at=expires)
         session.add(token)
         session.flush()
         tokens.append(token.id)

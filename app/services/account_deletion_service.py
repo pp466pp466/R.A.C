@@ -6,15 +6,15 @@
   `token_version` 加 1（所有裝置登出）。管理員不可自助刪除。
 - 撤銷也是單一條件式 UPDATE：只在寬限期（7 天）內成立，還原為申請前的狀態。
 - 期滿後的抹除由排程指令走 `AccountErasureService`，不在這裡。
-- 信箱驗證開啟時，申請成功後（提交之後）寄通知信；寄信失敗不影響申請結果。
+- 玩家端不寄任何信（含申請刪除的通知）：寬限期與撤銷方式由申請成功後的畫面與 `/account` 說明。
 """
 from __future__ import annotations
 
 import unicodedata
 from datetime import datetime
-from typing import Callable, Protocol
+from typing import Callable
 
-from app.models.user import DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, User
+from app.models.user import DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, User
 from app.observability import lifecycle_events
 from app.repositories.user_repository import UserRepository
 from app.services.current_user import CurrentUser
@@ -29,10 +29,6 @@ NOT_PENDING_MESSAGE = "您的帳號沒有申請刪除，不需要撤銷。"
 GRACE_EXPIRED_MESSAGE = "撤銷期限（申請後 7 天）已過，帳號即將被刪除，無法撤銷。"
 
 
-class DeletionMailer(Protocol):
-    def send_deletion_notice(self, user: User, scheduled_at: datetime) -> None: ...
-
-
 class AccountDeletionService:
     def __init__(
         self,
@@ -40,19 +36,17 @@ class AccountDeletionService:
         users: UserRepository,
         confirm_password: Callable[[CurrentUser, object], None],
         clock: Callable[[], datetime],
-        mailer: DeletionMailer | None = None,
     ) -> None:
         self._users = users
         self._confirm_password = confirm_password
         self._clock = clock
-        self._mailer = mailer
 
     def request(self, current: CurrentUser, *, password: object = None, confirm_text: object = None) -> datetime:
         """申請刪除自己的帳號。成功回傳預定刪除的時間（申請時間加 7 天）。"""
         user = self._require_user(current)
         if user.role == ROLE_ADMIN:
             raise Forbidden(ADMIN_DELETE_FORBIDDEN_MESSAGE, code="admin_delete_forbidden")
-        if user.status not in (STATUS_ACTIVE, STATUS_PENDING_VERIFICATION):
+        if user.status != STATUS_ACTIVE:
             raise Conflict(NOT_ALLOWED_MESSAGE, code="deletion_not_allowed")
         self._confirm(user, current, password, confirm_text)
 
@@ -61,8 +55,6 @@ class AccountDeletionService:
             raise Conflict(NOT_ALLOWED_MESSAGE, code="deletion_not_allowed")       # 並行的另一個請求搶先了
         scheduled_at = now + DELETION_GRACE_PERIOD
         lifecycle_events.log_deletion_requested(user_id=user.id)
-        if self._mailer is not None:
-            self._mailer.send_deletion_notice(user, scheduled_at)
         return scheduled_at
 
     def cancel(self, current: CurrentUser) -> CurrentUser:

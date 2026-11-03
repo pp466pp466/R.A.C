@@ -52,14 +52,6 @@
         }, { onError: onError });
       }
 
-      function resend() {
-        return actions.run(function () {
-          return axios.post('/api/auth/resend-verification').then(function (response) {
-            UI.toast(response.data.message);
-          });
-        }, { onError: onError });
-      }
-
       // 補填生日與年齡區間：沒填就不送出請求；成功後以 Toast 回報並更新狀態（補填區塊隨之消失，未成年者看到安全模式的提示）
       function verifyAge() {
         ageForm.clearErrors();
@@ -215,10 +207,8 @@
         scheduledText: scheduledText,
         tierLabel: TIER_LABELS[user.member_tier] || '一般',
         methods: methods.length ? methods.join('、') : '—',
-        verificationRequired: !!state.verificationRequired,
         logout: logout,
         logoutAll: logoutAll,
-        resend: resend,
         verifyAge: verifyAge,
         changePassword: changePassword,
         resetPasswordForm: resetPasswordForm,

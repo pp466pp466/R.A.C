@@ -9,6 +9,7 @@ import pytest
 
 from app.config import PROJECT_ROOT
 from app.services import cs_intents, cs_prompt
+from app.services.age_policy import DEFAULT_AGE_POLICY
 from app.services.cs_intents import ENTITY_ENUMS, INTENTS, RESPONSE_SCHEMA, semantic_rules
 from app.services.quota_policy import tier_facts
 from app.services.cs_prompt import (
@@ -134,13 +135,37 @@ def test_the_instruction_defines_the_scope_and_the_special_cases():
     assert "沒有另外的表單" in INSTRUCTION
 
 
-def test_the_platform_facts_follow_the_real_constants():
-    from app.services.auth_service import LOCK_DURATION, MAX_FAILED_LOGINS
-    from app.services.password_hasher import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
+def test_the_platform_facts_describe_google_login_only():
+    """cs-nlp-contract「客服的平台資料如實描述 Google 登入」：只有 Google 登入、年齡確認與申訴，沒有密碼註冊與信箱驗證。"""
+    assert "玩家只用 Google 帳號登入" in INSTRUCTION and "同意服務條款與隱私權政策" in INSTRUCTION
+    assert "填寫生日並選擇年齡區間" in INSTRUCTION and "申訴頁" in INSTRUCTION
+    assert "登出所有裝置" in INSTRUCTION and "匯出自己的資料" in INSTRUCTION and "申請刪除帳號" in INSTRUCTION
 
-    assert f"{MIN_PASSWORD_LENGTH} 至 {MAX_PASSWORD_LENGTH} 字" in INSTRUCTION
-    assert f"連續輸入錯誤密碼 {MAX_FAILED_LOGINS} 次，會被鎖定 {int(LOCK_DURATION.total_seconds() // 60)} 分鐘" in INSTRUCTION
-    assert "24 小時內有效" in INSTRUCTION and "1 小時內有效" in INSTRUCTION
+
+@pytest.mark.parametrize("removed", ["忘記密碼", "信箱驗證", "驗證信", "密碼長度", "註冊需要信箱與密碼", "變更密碼", "重新寄送"])
+def test_the_instruction_never_mentions_the_removed_password_and_verification_features(removed):
+    assert removed not in INSTRUCTION
+
+
+def test_the_platform_facts_follow_the_real_constants(monkeypatch):
+    from datetime import timedelta
+
+    from app.models import user as user_model
+    from app.services import cs_prompt
+    from app.services.age_policy import AgePolicy
+
+    hours = int(user_model.AGE_CONFIRMATION_DEADLINE.total_seconds() // 3600)
+    days = user_model.DELETION_GRACE_PERIOD.days
+    assert f"須在 {hours} 小時內填寫生日" in INSTRUCTION and f"申請後有 {days} 天可以撤銷" in INSTRUCTION
+    policy = DEFAULT_AGE_POLICY
+    assert f"未滿 {policy.min_register_age} 歲者不得使用本服務" in INSTRUCTION
+    assert f"{policy.min_use_age} 至 {policy.adult_age - 1} 歲可以使用，但只能使用安全模式" in INSTRUCTION
+    # 常數改變，提示詞跟著改，不需要另外修改文字
+    monkeypatch.setattr(cs_prompt, "AGE_CONFIRMATION_DEADLINE", timedelta(hours=48))
+    monkeypatch.setattr(cs_prompt, "DEFAULT_AGE_POLICY", AgePolicy(min_register_age=16, min_use_age=16, adult_age=20))
+    changed = build_system_instruction(MARKER)
+    assert "須在 48 小時內填寫生日" in changed and "未滿 16 歲者不得使用本服務" in changed
+    assert "16 至 19 歲可以使用，但只能使用安全模式；滿 20 歲之後會自動解除" in changed
 
 
 def test_the_initial_quotas_match_agents_md_section_7():

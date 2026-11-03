@@ -1,13 +1,15 @@
-"""member-registration 與 session-authentication 規格：`/api/auth/*` 端到端（註冊、登入、登出、查詢、變更密碼）。"""
+"""session-authentication 規格：`/api/auth/*` 端到端（登入狀態、補填年齡、登出、查詢、變更密碼、已移除的端點）。
+
+玩家只用 Google 登入、管理員先 Google 再密碼，都不經過 `/api/auth/*` 的密碼端點；註冊、密碼登入、信箱驗證與玩家的忘記密碼已移除。"""
 import pytest
 from sqlalchemy.orm import Session
 
 from app import create_app
 from app.config import load_config
 from app.models import Base, LockStrike, User
-from app.models.user import STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED
+from app.models.user import STATUS_SUSPENDED
 from tests.support.age import age_fields, birth_date_for_age
-from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user, sign_in_as
 from tests.support.client import raw_client
 from tests.support.idor import logged_in_client
 
@@ -36,22 +38,19 @@ def db(app) -> Session:
     return Session(app.extensions["db_engine"])
 
 
-def register(client, **overrides):
-    body = {
-        "email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "王小明",
-        "accept_terms": True, **age_fields(30),
-    }
-    body.update(overrides)
-    return client.post("/api/auth/register", json=body)
-
-
-def login(client, email="new@example.com", password=GOOD_PASSWORD):
-    return client.post("/api/auth/login", json={"email": email, "password": password})
-
-
-def registered_member(client, **overrides):
-    assert register(client, **overrides).status_code == 200
+def login(client, email="user1@example.com"):
+    """代表「通過 Google 登入」：以該信箱目前的 (uid, token_version) 寫入登入 cookie（玩家沒有密碼登入）。"""
+    with db(client.application) as s:
+        user = s.query(User).filter(User.email == email).one()
+        sign_in_as(client, user.id, user.token_version)
     return client
+
+
+def member_client(app, n: int = 1, **overrides):
+    """一位已完成年齡確認的玩家，及其登入狀態。"""
+    with db(app) as s:
+        add_user(s, n, display_name="王小明", **overrides)
+    return login(app.test_client(), email=f"user{n}@example.com")
 
 
 def users_in(app) -> list[User]:
@@ -60,109 +59,53 @@ def users_in(app) -> list[User]:
 
 
 # =============================================================================
-# 註冊
+# 已移除的玩家端密碼與信箱驗證端點（remove-player-password-auth）
 # =============================================================================
 
-def test_register_creates_an_active_account_and_does_not_log_in(app, client):
-    response = register(client)
-    assert response.status_code == 200
-    assert response.get_json() == {"ok": True, "verification_required": False, "message": "註冊完成，請前往登入。"}
-    (user,) = users_in(app)
-    assert user.email == "new@example.com" and user.role == "user" and user.member_tier == "free"
-    assert client.get("/api/auth/me").status_code == 401      # 沒有自動登入
-    assert client.get_cookie("session") is None
+REMOVED_ENDPOINTS = ("register", "login", "verify-email", "resend-verification", "forgot-password")
 
 
-def test_register_ignores_fields_that_would_raise_privileges(app, client):
-    response = register(
-        client, role="admin", member_tier="vip", status="active", is_admin=True, email_verified_at="2026-01-01",
-        token_version=99, id=1, public_id="00000000-0000-4000-8000-000000000000",
-    )
-    assert response.status_code == 200
-    (user,) = users_in(app)
-    assert (user.role, user.member_tier, user.token_version) == ("user", "free", 1)
-    assert user.email_verified_at is None and user.public_id != "00000000-0000-4000-8000-000000000000"
+@pytest.mark.parametrize("name", REMOVED_ENDPOINTS)
+def test_the_removed_endpoints_answer_404_without_creating_anything(app, name):
+    with db(app) as s:
+        add_user(s, 1)
+    body = {"email": "user1@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, "token": "t"}
+    response = app.test_client().post(f"/api/auth/{name}", json=body)
+    assert response.status_code == 404
+    assert "session=" not in response.headers.get("Set-Cookie", "")
+    assert len(users_in(app)) == 1
 
 
-def test_register_reports_field_errors_and_creates_nothing(app, client):
-    response = register(client, email="bad", password="short", display_name="", accept_terms=False, birth_date=None, age_range=None)
-    assert response.status_code == 400
-    error = response.get_json()["error"]
-    assert error["code"] == "validation_error"
-    assert set(error["fields"]) == {"email", "password", "display_name", "accept_terms", "birth_date", "age_range"}
-    assert users_in(app) == []
-
-
-def test_register_without_the_birthday_or_range_creates_nothing_and_names_the_missing_field(app, client):
-    assert set(register(client, birth_date=None).get_json()["error"]["fields"]) == {"birth_date"}
-    assert set(register(client, age_range=None).get_json()["error"]["fields"]) == {"age_range"}
-    payload = {"email": "new@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True}
-    omitted = client.post("/api/auth/register", json=payload)                 # 完全沒有帶年齡欄位
-    assert omitted.status_code == 400
-    assert set(omitted.get_json()["error"]["fields"]) == {"birth_date", "age_range"}
-    assert users_in(app) == []
-
-
-def test_register_with_a_mismatched_birthday_says_the_data_is_wrong_and_creates_nothing(app, client):
-    response = register(client, **age_fields(30, age_range="13_17"))
-    assert response.status_code == 400
-    error = response.get_json()["error"]
-    assert error["code"] == "age_mismatch" and error["message"] == "資料有誤，請重新註冊。" and "fields" not in error
-    assert users_in(app) == []
-
-
-def test_register_under_13_is_refused_with_its_own_code_and_nothing_is_stored(app, client):
-    response = register(client, **age_fields(12))
-    assert response.status_code == 400 and response.get_json()["error"]["code"] == "age_not_eligible"
-    assert users_in(app) == []
-    assert birth_date_for_age(12).isoformat() not in response.get_data(as_text=True)
-
-
-def test_after_a_mismatch_the_same_email_and_password_register_straight_away(app, client):
-    """資料有誤常是輸入太快：不封鎖信箱，使用者提醒後可以立刻以同一組資料重新註冊。"""
-    for _ in range(3):
-        assert register(client, **age_fields(30, age_range="13_17")).status_code == 400
-    assert register(client).status_code == 200
-    (user,) = users_in(app)
-    assert user.email == "new@example.com" and user.birth_date == birth_date_for_age(30)
-    assert login(client).status_code == 200
-
-
-def test_register_records_the_birthday_and_range_and_keeps_them_out_of_the_response(app, client):
-    response = register(client, **age_fields(15))
-    assert response.get_json() == {"ok": True, "verification_required": False, "message": "註冊完成，請前往登入。"}
-    (user,) = users_in(app)
-    assert user.birth_date == birth_date_for_age(15) and user.age_range == "13_17"
-    assert user.is_adult_at_confirmation is False and user.age_confirmed_at is not None and user.age_policy_version
-
-
-def test_register_requires_a_json_object_body(client):
-    assert client.post("/api/auth/register", data={"email": "a@example.com"}).status_code == 415
-    assert client.post("/api/auth/register", data="[1]", content_type="application/json").status_code == 400
-
-
-def test_register_without_csrf_is_rejected(app):
-    response = raw_client(app).post("/api/auth/register", json={"email": "a@example.com"}, headers={"Origin": "http://localhost"})
-    assert response.status_code == 403 and users_in(app) == []
+def test_the_admin_cannot_use_the_removed_password_login_either_and_nothing_is_counted(app):
+    with db(app) as s:
+        add_user(s, 1, role="admin")
+    probe = app.test_client()
+    response = probe.post("/api/auth/login", json={"email": "user1@example.com", "password": GOOD_PASSWORD})
+    assert response.status_code == 404 and probe.get_cookie("session") is None
+    with db(app) as s:
+        assert s.query(User).one().failed_login_count == 0
 
 
 # =============================================================================
-# 登入與查詢
+# 登入狀態與查詢
 # =============================================================================
 
-def test_login_returns_the_profile_and_sets_the_login_cookie(client):
-    registered_member(client)
-    response = login(client)
-    assert response.status_code == 200
-    user = response.get_json()["user"]
+def test_me_returns_the_profile_of_the_signed_in_member_and_401_before(app, client):
+    assert client.get("/api/auth/me").status_code == 401
+    signed_in = member_client(app)
+    user = signed_in.get("/api/auth/me").get_json()["user"]
     assert set(user) == PROFILE_KEYS
     assert not (FORBIDDEN_KEYS & set(user))
-    assert user["email"] == "new@example.com" and user["display_name"] == "王小明"
+    assert user["email"] == "user1@example.com" and user["display_name"] == "王小明"
     assert user["member_tier"] == "free" and user["role"] == "user" and user["status"] == "active"
     assert user["email_verified"] is False and user["has_password"] is True and user["google_linked"] is False
-    assert user["age_confirmed"] is True and user["age_group"] == "adult"            # 註冊時已完成
+    assert user["age_confirmed"] is True and user["age_group"] == "adult"
     assert not any(secret in user for secret in AGE_SECRETS)
-    assert client.get_cookie("session") is not None
+
+
+def test_a_suspended_members_cookie_no_longer_works(app):
+    client = member_client(app, status=STATUS_SUSPENDED)
+    assert client.get("/api/auth/me").status_code == 401
 
 
 # =============================================================================
@@ -170,16 +113,16 @@ def test_login_returns_the_profile_and_sets_the_login_cookie(client):
 # =============================================================================
 
 def unverified_member_client(app):
-    """升級前就存在、沒有年齡資料的帳號（直接寫入資料庫，再以 API 登入）。"""
+    """沒有年齡資料的帳號（例如剛以 Google 建立的玩家；直接寫入資料庫，再寫入登入 cookie）。"""
     with db(app) as s:
         add_user(s, 1, age=None)
-    client = app.test_client()
-    user = login(client, email="user1@example.com").get_json()["user"]
+    client = login(app.test_client())
+    user = client.get("/api/auth/me").get_json()["user"]
     assert user["age_confirmed"] is False and user["restriction"] == "age_pending" and user["age_group"] is None
     return client
 
 
-def test_an_account_without_age_data_sees_age_confirmed_false_in_login_and_me(app):
+def test_an_account_without_age_data_sees_age_confirmed_false_in_me(app):
     client = unverified_member_client(app)
     user = client.get("/api/auth/me").get_json()["user"]
     assert user["age_confirmed"] is False and user["age_group"] is None
@@ -304,14 +247,12 @@ def test_verify_age_only_changes_the_callers_own_account(app):
 
 
 def test_no_auth_response_ever_contains_the_birthday_or_the_range(app):
-    """走一遍註冊、登入、查詢、補填，所有回應文字都不含生日、區間代碼與其欄位名稱。"""
-    client = app.test_client()
-    texts = [register(client, **age_fields(15)).get_data(as_text=True), login(client).get_data(as_text=True)]
-    texts.append(client.get("/api/auth/me").get_data(as_text=True))
+    """走一遍查詢與補填，所有回應文字都不含生日、區間代碼與其欄位名稱。"""
+    client = member_client(app, age=15)
+    texts = [client.get("/api/auth/me").get_data(as_text=True)]
     with db(app) as s:
         add_user(s, 5, age=None)
-    other = app.test_client()
-    login(other, email="user5@example.com")
+    other = login(app.test_client(), email="user5@example.com")
     texts.append(other.post("/api/auth/verify-age", json=age_fields(40)).get_data(as_text=True))
     texts.append(other.post("/api/auth/verify-age", json=age_fields(40, age_range="13_17")).get_data(as_text=True))
     joined = " ".join(texts)
@@ -319,54 +260,13 @@ def test_no_auth_response_ever_contains_the_birthday_or_the_range(app):
         assert secret not in joined, secret
 
 
-def test_me_returns_the_same_profile_after_login_and_401_before(client):
-    assert client.get("/api/auth/me").status_code == 401
-    registered_member(client)
-    profile = login(client).get_json()["user"]
-    assert client.get("/api/auth/me").get_json() == {"user": profile}
-
-
-def test_a_pending_member_can_log_in_and_sees_that_the_email_is_unverified(app, client):
-    registered_member(client)
-    with db(app) as s:
-        s.query(User).one().status = STATUS_PENDING_VERIFICATION
-        s.commit()
-    user = login(client).get_json()["user"]
-    assert user["status"] == "pending_verification" and user["email_verified"] is False
-
-
-def test_a_suspended_member_gets_a_403_and_no_cookie(app, client):
-    registered_member(client)
-    with db(app) as s:
-        s.query(User).one().status = STATUS_SUSPENDED
-        s.commit()
-    response = login(client)
-    assert response.status_code == 403
-    assert response.get_json()["error"]["code"] == "account_disabled"
-    assert client.get_cookie("session") is None
-
-
-def test_login_with_missing_fields_is_a_400(client):
-    response = client.post("/api/auth/login", json={"email": "a@example.com"})
-    assert response.status_code == 400 and "password" in response.get_json()["error"]["fields"]
-
-
-def test_login_replaces_the_csrf_token(client):
-    registered_member(client)
-    before = client.csrf_token()
-    login(client)
-    assert client.get_cookie("csrf").value != before
-
-
 # =============================================================================
 # 登出
 # =============================================================================
 
 def test_logout_ends_this_device_only_and_is_idempotent(app):
-    this_device, other_device = app.test_client(), app.test_client()
-    registered_member(this_device)
-    login(this_device)
-    login(other_device)
+    this_device = member_client(app)
+    other_device = login(app.test_client())
     assert this_device.post("/api/auth/logout").status_code == 200
     assert this_device.get("/api/auth/me").status_code == 401
     assert other_device.get("/api/auth/me").status_code == 200
@@ -374,15 +274,13 @@ def test_logout_ends_this_device_only_and_is_idempotent(app):
 
 
 def test_logout_all_ends_every_device_including_this_one(app):
-    this_device, other_device = app.test_client(), app.test_client()
-    registered_member(this_device)
-    login(this_device)
-    login(other_device)
+    this_device = member_client(app)
+    other_device = login(app.test_client())
     response = this_device.post("/api/auth/logout-all")
     assert response.status_code == 200
     assert this_device.get("/api/auth/me").status_code == 401
     assert other_device.get("/api/auth/me").status_code == 401
-    assert login(this_device).status_code == 200                           # 之後仍可重新登入
+    assert login(this_device).get("/api/auth/me").status_code == 200       # 之後以新的版本重新登入（Google）即可
 
 
 def test_logout_all_requires_a_login(client):
@@ -394,29 +292,25 @@ def test_logout_all_requires_a_login(client):
 # =============================================================================
 
 def test_change_password_keeps_this_device_and_logs_out_the_others(app):
-    this_device, other_device = app.test_client(), app.test_client()
-    registered_member(this_device)
-    login(this_device)
-    login(other_device)
+    """變更密碼只有管理員有意義（玩家沒有密碼）；端點本身對任何已設定密碼的帳號運作。"""
+    this_device = member_client(app, role="admin")
+    other_device = login(app.test_client())
     response = this_device.post(
         "/api/auth/change-password", json={"current_password": GOOD_PASSWORD, "new_password": NEW_PASSWORD}
     )
     assert response.status_code == 200
     assert this_device.get("/api/auth/me").status_code == 200
     assert other_device.get("/api/auth/me").status_code == 401
-    assert login(app.test_client(), password=GOOD_PASSWORD).status_code == 401
-    assert login(app.test_client(), password=NEW_PASSWORD).status_code == 200
 
 
 def test_changing_the_password_keeps_the_page_usable_because_the_csrf_token_is_not_replaced(app):
     """帳號頁在變更密碼後不會重新載入：頁面上的權杖必須仍然有效，否則之後的登出會被擋成 403。"""
+    with db(app) as s:
+        add_user(s, 1, role="admin")
     client = raw_client(app)
     client.get("/")
     token = client.get_cookie("csrf").value
-    headers = {"Origin": "http://localhost", "X-CSRF-Token": token}
-    client.post("/api/auth/register", json={"email": "keep@example.com", "password": GOOD_PASSWORD, "display_name": "x", "accept_terms": True, **age_fields(30)}, headers=headers)
-    assert client.post("/api/auth/login", json={"email": "keep@example.com", "password": GOOD_PASSWORD}, headers=headers).status_code == 200
-    token = client.get_cookie("csrf").value                   # 登入換發了新權杖（頁面會跟著重新載入）
+    login(client)
     headers = {"Origin": "http://localhost", "X-CSRF-Token": token}
     changed = client.post("/api/auth/change-password", json={"current_password": GOOD_PASSWORD, "new_password": NEW_PASSWORD}, headers=headers)
     assert changed.status_code == 200
@@ -424,13 +318,12 @@ def test_changing_the_password_keeps_the_page_usable_because_the_csrf_token_is_n
     assert client.post("/api/auth/logout", headers=headers).status_code == 200     # 仍可用同一個權杖繼續操作
 
 
-def test_change_password_with_a_wrong_current_password_is_a_400_and_changes_nothing(app, client):
-    registered_member(client)
-    login(client)
+def test_change_password_with_a_wrong_current_password_is_a_400_and_changes_nothing(app):
+    client = member_client(app, role="admin")
     response = client.post("/api/auth/change-password", json={"current_password": "not-mine-at-all", "new_password": NEW_PASSWORD})
     assert response.status_code == 400
     assert response.get_json()["error"]["fields"] == {"current_password": "目前的密碼不正確。"}
-    assert login(app.test_client(), password=GOOD_PASSWORD).status_code == 200
+    assert client.get("/api/auth/me").status_code == 200                       # token_version 沒變，仍登入
 
 
 def test_change_password_requires_a_login(client):
@@ -442,103 +335,45 @@ def test_a_google_only_account_cannot_change_a_password_this_way(app, client):
     with db(app) as s:
         add_user(s, 1, password=None)
     # 純 Google 帳號沒有密碼可登入；以測試用的登入狀態直接建立 session
-    from app.security.cookies import SignedCookies  # noqa: F401 - 僅確認模組可用
-    with client.session_transaction() as session:
-        session["uid"], session["tv"] = 1, 1
+    login(client)
     response = client.post("/api/auth/change-password", json={"current_password": "anything-at-all", "new_password": NEW_PASSWORD})
     assert response.status_code == 400 and response.get_json()["error"]["code"] == "no_password"
 
 
 # =============================================================================
-# 6.2：列舉防護的對照（狀態碼與本文逐字相同）
+# 失敗計數：變更密碼時輸入錯誤的目前密碼也累積（4xx 之後計數仍在）
 # =============================================================================
 
-def test_registering_an_existing_and_a_new_address_look_exactly_the_same(app):
-    first = register(app.test_client(), email="someone@example.com")
-    repeated = register(app.test_client(), email="someone@example.com", password="different-password-1", display_name="別人")
-    assert (first.status_code, first.get_data()) == (repeated.status_code, repeated.get_data())
-    assert first.status_code == 200
-    assert len(users_in(app)) == 1
-
-
-def test_registering_a_gmail_alias_of_an_existing_account_looks_the_same_too(app):
-    new = register(app.test_client(), email="john.doe@gmail.com")
-    alias = register(app.test_client(), email="johndoe+x@googlemail.com")
-    assert (new.status_code, new.get_data()) == (alias.status_code, alias.get_data())
-
-
-def test_unknown_address_wrong_password_and_locked_account_get_byte_identical_responses(app):
-    with db(app) as s:
-        add_user(s, 1)
-        add_user(s, 2)
-    probe = app.test_client()
-    unknown = login(probe, email="nobody@example.com", password="whatever-password")
-    wrong = login(probe, email="user1@example.com", password="whatever-password")
-    for _ in range(5):
-        login(probe, email="user2@example.com", password="whatever-password")
-    locked = login(probe, email="user2@example.com", password=GOOD_PASSWORD)      # 鎖定中，即使密碼正確
-    assert {r.status_code for r in (unknown, wrong, locked)} == {401}
-    assert {r.get_data() for r in (unknown, wrong, locked)} == {unknown.get_data()}
-    assert unknown.get_json()["error"]["code"] == "invalid_credentials"
-
-
-def test_failed_attempts_over_http_really_accumulate_and_the_fifth_one_locks(app):
-    """回歸測試：登入失敗回 401，失敗次數必須在請求結束後仍然存在（不能隨 4xx 回復）。"""
-    with db(app) as s:
-        add_user(s, 1)
-    probe = app.test_client()
-    for _ in range(4):
-        login(probe, email="user1@example.com", password="wrong-password-1")
-    with db(app) as s:
-        assert s.query(User).one().failed_login_count == 4
-    login(probe, email="user1@example.com", password="wrong-password-1")
-    with db(app) as s:
-        user = s.query(User).one()
-        assert user.failed_login_count == 5 and user.locked_until is not None
-    assert login(probe, email="user1@example.com", password=GOOD_PASSWORD).status_code == 401   # 鎖定中
-
-
-def test_wrong_current_passwords_when_changing_the_password_also_accumulate_over_http(app, client):
-    registered_member(client)
-    login(client)
+def test_wrong_current_passwords_when_changing_the_password_accumulate_over_http(app):
+    client = member_client(app, role="admin")
     for _ in range(3):
         client.post("/api/auth/change-password", json={"current_password": "not-mine-at-all", "new_password": NEW_PASSWORD})
     with db(app) as s:
         assert s.query(User).one().failed_login_count == 3
 
 
-def test_a_failed_login_sets_no_login_cookie(app):
+# =============================================================================
+# 安全事件
+# =============================================================================
+
+def test_the_whole_flow_is_logged_as_events_without_personal_data(app, log_lines):
     with db(app) as s:
-        add_user(s, 1)
-    probe = app.test_client()
-    login(probe, email="user1@example.com", password="wrong-password-123")
-    assert probe.get_cookie("session") is None
-
-
-# =============================================================================
-# 6.3：安全事件
-# =============================================================================
-
-def test_the_whole_flow_is_logged_as_events_without_personal_data(app, client, log_lines):
-    registered_member(client, email="log.me@example.com", password="log-me-password-xyz")
-    login(client, email="log.me@example.com", password="wrong-one-entirely")
-    login(client, email="log.me@example.com", password="log-me-password-xyz")
+        add_user(s, 1, role="admin", email="log.me@example.com", email_canonical="log.me@example.com", password="log-me-password-xyz")
+    client = login(app.test_client(), email="log.me@example.com")
+    client.post("/api/auth/change-password", json={"current_password": "wrong-one-entirely", "new_password": "another-new-password-1"})
     client.post("/api/auth/change-password", json={"current_password": "log-me-password-xyz", "new_password": "another-new-password-1"})
     client.post("/api/auth/logout")
-    login(client, email="log.me@example.com", password="another-new-password-1")
+    login(client, email="log.me@example.com")
     client.post("/api/auth/logout-all")
     events = [line["event"] for line in log_lines() if "event" in line]
-    assert events == [
-        "auth.register", "auth.age_confirmed.register", "auth.login_failed.bad_password", "auth.login_success",
-        "auth.password_changed", "auth.logout", "auth.login_success", "auth.logout_all",
-    ]
+    assert events == ["auth.password_change_refused", "auth.password_changed", "auth.logout", "auth.logout_all"]
     raw = log_lines.raw()
     for secret in ("log.me@example.com", "log-me-password-xyz", "wrong-one-entirely", "another-new-password-1"):
         assert secret not in raw
 
 
-def test_events_carry_the_internal_user_id_when_known(app, client, log_lines):
-    registered_member(client)
-    login(client)
-    success = next(line for line in log_lines() if line.get("event") == "auth.login_success")
-    assert isinstance(success["user_id"], int)
+def test_events_carry_the_internal_user_id_when_known(app, log_lines):
+    client = member_client(app)
+    client.post("/api/auth/logout")
+    logout = next(line for line in log_lines() if line.get("event") == "auth.logout")
+    assert isinstance(logout["user_id"], int)

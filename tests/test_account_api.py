@@ -45,8 +45,19 @@ def row(app, user_id: int) -> User:
         return user
 
 
-def login(client, email="user1@example.com", password=GOOD_PASSWORD):
-    return client.post("/api/auth/login", json={"email": email, "password": password})
+class _Signed:
+    status_code = 200
+    def get_json(self):
+        return {}
+
+
+def login(client, email="user1@example.com"):
+    """代表「通過 Google 登入」：以該信箱目前的 (uid, token_version) 寫入登入 cookie。玩家沒有密碼登入；
+    申請刪除後 token_version 已加 1，所以每次都讀最新的版本（等同重新登入）。"""
+    with Session(client.application.extensions["db_engine"]) as s:
+        user = s.query(User).filter(User.email == email).one()
+        sign_in_as(client, user.id, user.token_version)
+    return _Signed()
 
 
 # ---- 申請 -------------------------------------------------------------------------
@@ -137,9 +148,9 @@ def test_after_requesting_the_owner_can_log_back_in_but_can_only_cancel(app, clo
 
     client = app.test_client()
     clock.advance(days=2)
-    response = login(client)
-    assert response.status_code == 200 and response.get_json()["user"]["status"] == "deletion_pending"
+    login(client)
     me = client.get("/api/auth/me").get_json()["user"]
+    assert me["status"] == "deletion_pending"
     assert me["deletion_scheduled_at"] == "2026-11-03T12:00:00Z"
 
     blocked = client.get("/api/cs/conversations")
@@ -176,40 +187,13 @@ def test_cancelling_when_nothing_was_requested_is_a_409(app):
     assert response.status_code == 409 and "not_pending" in response.get_data(as_text=True)
 
 
-def test_five_wrong_logins_lock_even_a_pending_account(app, clock):
-    make_member(app, status=STATUS_DELETION_PENDING, deletion_requested_at=clock(), status_before_deletion="active")
-    client = app.test_client()
-    for _ in range(5):
-        assert login(client, password="wrong-wrong-wrong").status_code == 401
-    assert login(client).status_code == 401                          # 鎖定中：連正確的密碼也一律失敗
+# ---- 玩家端不寄任何信 ----------------------------------------------------------------
 
-
-# ---- 通知信 -----------------------------------------------------------------------
-
-def test_with_email_verification_on_a_notice_is_sent_after_the_commit_and_never_on_failure():
+def test_no_mail_is_sent_when_a_player_requests_deletion_even_if_mail_is_configured():
+    """玩家端不寄任何信（含申請刪除的通知）：即使有寄信設定與寄信器，申請成功與失敗都不寄。"""
     sender = FakeSender()
     app = create_app(
-        load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV, "BASE_URL": BASE}),
-        mail_sender=sender, clock=FakeClock(),
-    )
-    Base.metadata.create_all(app.extensions["db_engine"])
-    with db(app) as s:
-        add_user(s, 1, age=30, email_verified_at=FakeClock()())
-    client = app.test_client()
-    login(client)
-    wrong = client.post("/api/account/delete", json={"password": "definitely-the-wrong-password"})
-    assert wrong.status_code == 400 and sender.sent == []             # 失敗不寄信
-    client.post("/api/account/delete", json={"password": GOOD_PASSWORD})
-    (mail,) = sender.sent
-    assert mail["to"] == "user1@example.com" and "刪除帳號" in mail["subject"]
-    assert "2026 年 11 月 3 日 20:00（台灣時間）" in mail["body"] and "撤銷刪除" in mail["body"]
-
-
-def test_a_mail_failure_does_not_undo_the_request():
-    sender = FakeSender()
-    sender.fail = True
-    app = create_app(
-        load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV, "BASE_URL": BASE}),
+        load_config(environ={"APP_ENV": "testing", "ALERT_EMAIL_TO": "ops@example.com", **AUTH_ENV, "BASE_URL": BASE}),
         mail_sender=sender, clock=FakeClock(),
     )
     Base.metadata.create_all(app.extensions["db_engine"])
@@ -217,11 +201,15 @@ def test_a_mail_failure_does_not_undo_the_request():
         user_id = add_user(s, 1, age=30, email_verified_at=FakeClock()()).id
     client = app.test_client()
     login(client)
+    wrong = client.post("/api/account/delete", json={"password": "definitely-the-wrong-password"})
+    assert wrong.status_code == 400
     assert client.post("/api/account/delete", json={"password": GOOD_PASSWORD}).status_code == 200
     assert row(app, user_id).status == STATUS_DELETION_PENDING
+    assert sender.sent == []
+    assert app.extensions["mail_sender"] is sender
 
 
-def test_without_email_verification_no_mail_is_attempted(app):
+def test_without_any_mail_settings_there_is_no_mailer_and_the_request_still_works(app):
     make_member(app)
     client = app.test_client()
     login(client)

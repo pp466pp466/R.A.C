@@ -22,7 +22,7 @@ from app.models.admin_audit_log import (
     MAX_REASON_CHARS,
 )
 from app.models.user import (
-    MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED,
+    MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
     USER_STATUSES, User,
 )
 from app.observability import admin_events, security_events
@@ -52,7 +52,7 @@ OVERVIEW_DAYS = 7
 VIA_EMAIL = "email"
 VIA_ID = "id"
 
-_SUSPENDABLE = (STATUS_ACTIVE, STATUS_PENDING_VERIFICATION)
+_SUSPENDABLE = (STATUS_ACTIVE,)
 
 
 def _iso(moment: datetime | None) -> str | None:
@@ -73,7 +73,6 @@ class AdminService:
         usage: UsageService,
         age_stats: AgeStatsService,
         usage_settings: UsageSettings,
-        email_verification_required: bool,
         confirm_password: Callable[[CurrentUser, object], None],
         persist_on_error: Callable[[], None],
         clock: Callable[[], datetime],
@@ -84,7 +83,6 @@ class AdminService:
         self._usage = usage
         self._age_stats = age_stats
         self._usage_settings = usage_settings
-        self._verification_required = email_verification_required
         self._confirm_password = confirm_password
         self._persist_on_error = persist_on_error          # 「這個請求即使以 4xx 結束也保留變更」（與登入失敗計數同一個機制）
         self._clock = clock
@@ -198,11 +196,9 @@ class AdminService:
         if user.status != STATUS_SUSPENDED:
             raise Conflict("這個帳號目前不是停權狀態。", code="not_suspended")
         self._confirm(admin, password, ACTION_USER_UNSUSPEND, target_user=user)
-        # 信箱驗證開啟而這個帳號從未驗證信箱時，回到「待驗證」，而不是繞過驗證直接啟用
-        restored = STATUS_ACTIVE if (user.email_verified_at is not None or not self._verification_required) else STATUS_PENDING_VERIFICATION
-        if not self._admins.unsuspend_user(user, to_status=restored):
+        if not self._admins.unsuspend_user(user):
             raise Conflict("這個帳號的狀態已經改變，請重新整理後再試。", code="state_changed")
-        self._record(admin, ACTION_USER_UNSUSPEND, target_user=user, detail={"to_status": restored}, changed=True)
+        self._record(admin, ACTION_USER_UNSUSPEND, target_user=user, detail={"to_status": STATUS_ACTIVE}, changed=True)
         return self._user_view(user)
 
     def change_tier(self, admin: CurrentUser, public_id: str, *, tier: object, password: object) -> dict[str, Any]:

@@ -10,15 +10,11 @@ import logging
 
 logger = logging.getLogger("app.security")
 
-# ---- 註冊與登入 ----
-REGISTER = "auth.register"
-REGISTER_EXISTING = "auth.register_existing"
+# ---- 管理員的登入（玩家只用 Google 登入，見下方 Google 登入）----
 LOGIN_SUCCESS = "auth.login_success"
-LOGIN_FAILED_UNKNOWN_USER = "auth.login_failed.unknown_user"
 LOGIN_FAILED_BAD_PASSWORD = "auth.login_failed.bad_password"
 LOGIN_FAILED_NO_PASSWORD = "auth.login_failed.no_password"
 LOGIN_FAILED_LOCKED = "auth.login_failed.locked"
-LOGIN_FAILED_ADMIN_PASSWORD_ONLY = "auth.login_failed.admin_password_only"     # 管理員不能只靠密碼登入
 ADMIN_GOOGLE_PASSED = "auth.admin_google_passed"                               # 管理員通過 Google，等待密碼驗證
 ADMIN_STEP_EXPIRED = "auth.admin_step_expired"
 LOGIN_REFUSED_DISABLED = "auth.login_refused.disabled"
@@ -29,10 +25,7 @@ PASSWORD_CHANGED = "auth.password_changed"
 PASSWORD_CHANGE_REFUSED = "auth.password_change_refused"
 ADMIN_CREATED = "auth.admin_created"
 
-# ---- 信箱驗證與重設密碼 ----
-VERIFICATION_SENT = "auth.verification_sent"
-VERIFICATION_RESEND_LIMITED = "auth.verification_resend_limited"
-EMAIL_VERIFIED = "auth.email_verified"
+# ---- 管理員的重設密碼 ----
 EMAIL_TOKEN_REJECTED = "auth.email_token_rejected"
 PASSWORD_RESET_REQUESTED = "auth.password_reset_requested"
 PASSWORD_RESET_LIMITED = "auth.password_reset_limited"
@@ -52,10 +45,9 @@ GOOGLE_REJECTED_DISABLED = "auth.google_rejected.disabled"
 GOOGLE_REJECTED_CONFLICT = "auth.google_rejected.conflict"
 
 # ---- 年齡確認（age-gate）----
-AGE_CONFIRMED_REGISTER = "auth.age_confirmed.register"
 AGE_CONFIRMED_LATER = "auth.age_confirmed.later"
 AGE_GATE_DENIED = "auth.age_gate_denied"
-# 被拒絕註冊或補填：只有事件名稱，不帶任何輸入（生日與區間都不得進入日誌）
+# 被拒絕的補填：只有事件名稱，不帶任何輸入（生日與區間都不得進入日誌）
 AGE_REJECTED_UNDERAGE = "auth.age_rejected.underage"
 AGE_REJECTED_MISMATCH = "auth.age_rejected.mismatch"
 

@@ -8,7 +8,7 @@
 from flask import Blueprint, Response, abort, redirect, render_template, request
 
 from app.observability import security_events
-from app.runtime import get_age_policy, get_clock, get_config, get_identity_provider
+from app.runtime import get_age_policy, get_clock, get_identity_provider
 from app.security.admin_step import read_admin_step, store_admin_step
 from app.security.oauth_cookie import clear_transaction, read_transaction
 from app.security.redirects import landing_for, safe_next
@@ -28,7 +28,7 @@ auth_pages_bp = Blueprint("auth_pages", __name__)
 # /login?error=<代碼> 的說明文字：代碼是固定列舉，文字都在這裡，外部提供的任何文字都不會進入頁面
 LOGIN_ERROR_MESSAGES = {
     ERROR_STATE: "Google 登入的驗證已逾時或不完整，請再試一次。",
-    ERROR_UNAVAILABLE: "Google 登入暫時無法使用，請稍後再試，或改用信箱與密碼登入。",
+    ERROR_UNAVAILABLE: "Google 登入暫時無法使用，請稍後再試。",
     ERROR_REJECTED: "Google 登入沒有完成或被拒絕，請再試一次。",
     ERROR_TERMS: "第一次使用 Google 註冊時，請先勾選同意服務條款與隱私權政策。",
     ERROR_DISABLED: "此帳號已停用，無法登入。",
@@ -61,7 +61,6 @@ def _state(**extra) -> dict:
     """所有會員頁面共同的初始狀態。"""
     return {
         "googleEnabled": get_identity_provider() is not None,
-        "verificationRequired": get_config().email_verification_required,
         "termsVersion": CURRENT_TERMS_VERSION,
         "ageRules": _age_rules(),
         **extra,
@@ -78,14 +77,9 @@ def _legal_context() -> dict:
     }
 
 
-def _require_email_flows() -> None:
-    if not get_config().email_verification_required:
-        abort(404)
-
-
 def _require_reset_available() -> None:
-    """重設密碼確認頁：信箱驗證開啟時（玩家）或有寄信設定時（管理員的忘記密碼寄出的連結）可用，否則 404。"""
-    if not (get_config().email_verification_required or admin_password_reset_available()):
+    """重設密碼確認頁：只服務管理員，需要寄信設定（寄信器與對外網址），缺少時 404。"""
+    if not admin_password_reset_available():
         abort(404)
 
 
@@ -151,25 +145,13 @@ def appeal_page():
     )
 
 
-# ---- 信箱驗證與重設密碼（信箱驗證關閉時整組 404）-----------------------------------
-# 這幾頁的 GET 只顯示確認頁：權杖在網址片段（#token=…），伺服器看不到，因此頁面本身不含權杖。
-
-@auth_pages_bp.get("/forgot-password")
-def forgot_password_page():
-    _require_email_flows()
-    return render_template("auth/forgot_password.html", initial_state=_state())
-
+# ---- 管理員的重設密碼（沒有寄信設定時 404）------------------------------------------
+# GET 只顯示確認頁：權杖在網址片段（#token=…），伺服器看不到，因此頁面本身不含權杖。
 
 @auth_pages_bp.get("/reset-password")
 def reset_password_page():
     _require_reset_available()
     return render_template("auth/reset_password.html", initial_state=_state())
-
-
-@auth_pages_bp.get("/verify-email")
-def verify_email_page():
-    _require_email_flows()
-    return render_template("auth/verify_email.html", initial_state=_state())
 
 
 # ---- 帳號設定 -----------------------------------------------------------------

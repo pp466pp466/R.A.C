@@ -31,8 +31,8 @@ def initial_state_of(response):
 
 @pytest.fixture()
 def world():
-    """信箱驗證開啟（才有「信箱未驗證」這一種帳號）；四種帳號：可用、沒有生日、年齡不足、信箱未驗證。"""
-    config = load_config(environ={"APP_ENV": "testing", "EMAIL_VERIFICATION_REQUIRED": "true", **AUTH_ENV, "BASE_URL": "http://localhost:5000"})
+    """三種帳號：可用、沒有生日、年齡不足。信箱驗證時間為空的啟用帳號同樣可用（信箱不再是閘門）。"""
+    config = load_config(environ={"APP_ENV": "testing", **AUTH_ENV, "BASE_URL": "http://localhost:5000"})
     app = create_app(config, mail_sender=FakeSender(), clock=FakeClock(), llm_provider=FakeLLMProvider())
     Base.metadata.create_all(app.extensions["db_engine"])
     from datetime import timedelta
@@ -46,7 +46,7 @@ def world():
             # 玩家沒有生日時在登入檢查就被導向年齡確認頁；頁面回報閘門結果的是管理員（不會是待確認年齡的受限狀態）
             "no-birthday": add_user(session, 2, age=None, role="admin", email_verified_at=verified).id,
             "too-young": add_user(session, 3, age=12, email_verified_at=verified).id,
-            "unverified": add_user(session, 4, age=30).id,
+            "no-verification-time": add_user(session, 4, age=30).id,
         }
     return app
 
@@ -57,14 +57,14 @@ def account(app, name):
 
 
 @pytest.mark.parametrize("name, expected", [
-    ("usable", None), ("no-birthday", "age_confirmation_required"), ("too-young", "age_restricted"), ("unverified", "forbidden"),
+    ("usable", None), ("no-birthday", "age_confirmation_required"), ("too-young", "age_restricted"), ("no-verification-time", None),
 ])
 def test_the_page_reports_the_gate_result_and_it_matches_what_the_api_would_enforce(world, name, expected):
     app = world
     state = initial_state_of(logged_in_client(app, account(app, name)).get("/cs"))
     assert state["chat_gate"] == expected
     # 與 require_chat_access 的結果一致：頁面的閘門代碼就是 API 會拋出的錯誤代碼
-    policy = AccessPolicy(email_verification_required=True, clock=app.extensions["clock"])
+    policy = AccessPolicy(clock=app.extensions["clock"])
     user = CurrentUser.from_model(account(app, name))
     if expected is None:
         policy.require_chat_access(user)

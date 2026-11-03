@@ -16,16 +16,15 @@ import json
 from typing import Any, Sequence
 
 from app.llm.types import LLMContent
-from app.services.auth_service import LOCK_DURATION, MAX_FAILED_LOGINS
+from app.models.user import AGE_CONFIRMATION_DEADLINE, DELETION_GRACE_PERIOD
+from app.services.age_policy import DEFAULT_AGE_POLICY
 from app.services.cs_intents import (
     ACTION_TYPE_QUICK_REPLY, ENTITY_ENUMS, INTENT_DESCRIPTIONS, MAX_ACTION_LABEL_CHARS, MAX_ACTION_TEXT_CHARS,
     MAX_REPLY_CHARS, MAX_SUGGESTED_ACTIONS, MAX_TOPIC_CHARS,
 )
-from app.services.email_flow_service import RESET_TTL, VERIFY_TTL
 from app.services.llm_service import (
     DEGRADED_BLOCKED, DEGRADED_BUDGET, DEGRADED_CONFIG, DEGRADED_TRANSIENT, DEGRADED_VALIDATION,
 )
-from app.services.password_hasher import MAX_PASSWORD_LENGTH, MIN_PASSWORD_LENGTH
 from app.services.quota_policy import tier_facts
 
 MARKER_LABEL = b"cs-prompt-marker-v1"
@@ -63,24 +62,24 @@ def leak_marker(secret_key: str) -> str:
 
 # ---- 系統指令 ---------------------------------------------------------------------------
 
-# 平台資料：模型唯一可以依據的事實。數字取自實際生效的常數（密碼長度、鎖定、連結有效期、各等級的額度），
+# 平台資料：模型唯一可以依據的事實。數字取自實際生效的常數（年齡確認期限與最低年齡、刪除的撤銷期限、各等級的額度），
 # 以免提示詞與系統行為各說各話；額度的數字與 `UsageService` 判斷用的是同一份 `quota_policy.TIER_LIMITS`。
 
 
 def _platform_facts() -> tuple[str, ...]:
-    lock_minutes = int(LOCK_DURATION.total_seconds() // 60)
-    verify_hours = int(VERIFY_TTL.total_seconds() // 3600)
-    reset_hours = int(RESET_TTL.total_seconds() // 3600)
+    policy = DEFAULT_AGE_POLICY
+    confirm_hours = int(AGE_CONFIRMATION_DEADLINE.total_seconds() // 3600)
+    grace_days = DELETION_GRACE_PERIOD.days
     return (
-        "註冊需要信箱與密碼，並同意服務條款與隱私權政策，另須填寫生日並選擇年齡區間（僅供年齡確認與內容分級）。"
+        "玩家只用 Google 帳號登入：第一次登入就會建立帳號，沒有另外的註冊表單。"
+        "登入頁只有「使用 Google 登入」按鈕與一個「同意服務條款與隱私權政策」的勾選框；第一次登入必須勾選，回訪的使用者不必勾選，一鍵登入。"
         "一組信箱只能對應一個帳號。",
-        f"密碼長度為 {MIN_PASSWORD_LENGTH} 至 {MAX_PASSWORD_LENGTH} 字，不強制混合大小寫或符號。",
-        "正式環境註冊後需要先完成信箱驗證，才能使用客服對話；驗證信可以重新寄送。",
-        f"信箱驗證信的連結 {verify_hours} 小時內有效，忘記密碼的重設連結 {reset_hours} 小時內有效，每個連結只能使用一次。",
-        "忘記密碼時，到登入頁的「忘記密碼」輸入註冊的信箱，系統會寄出重設連結；為了保護帳號，不論信箱是否已註冊，畫面提示都一樣。",
-        f"同一個帳號連續輸入錯誤密碼 {MAX_FAILED_LOGINS} 次，會被鎖定 {lock_minutes} 分鐘。",
-        "也可以用 Google 帳號登入；Google 的信箱與已註冊的信箱相同時，會視為同一個帳號。",
-        "登入後在「帳號」頁可以變更密碼、登出所有裝置、登出；未完成年齡確認的帳號可在這裡補填生日與年齡區間。",
+        f"第一次登入後，須在 {confirm_hours} 小時內填寫生日並選擇年齡區間（僅供年齡確認與內容分級，不蒐集證件）；"
+        f"逾時沒有完成，帳號與資料會被刪除。未滿 {policy.min_register_age} 歲者不得使用本服務，發現時帳號會立即刪除。",
+        f"{policy.min_use_age} 至 {policy.adult_age - 1} 歲可以使用，但只能使用安全模式；滿 {policy.adult_age} 歲之後會自動解除，不需要任何操作。",
+        "帳號若因多次異常（例如登入多次被拒或訊息過於頻繁）被自動鎖定，登入後只能進入申訴頁向管理員留言，由管理員審視後解除。",
+        f"登入後在「帳號」頁可以登出、登出所有裝置、匯出自己的資料，以及申請刪除帳號；刪除申請後有 {grace_days} 天可以撤銷，期滿才會永久刪除。"
+        "還沒完成年齡確認的帳號，也是在這裡補填生日與年齡區間。",
         "會員等級分為 free（一般）、plus（進階）、vip（尊榮）；等級只影響額度，不影響功能與權限。",
         tier_facts(),
         "意見回饋：使用者直接在對話中說出意見、客訴、建議或回報問題，內容會保存在對話紀錄中，管理員之後會檢視；沒有另外的表單。",
@@ -93,7 +92,7 @@ _INSTRUCTION_TEMPLATE = """\
 
 ## 服務範圍
 你只回答這個平台自身的資訊，共三類：
-1. 登入與帳號：註冊、登入、忘記密碼、信箱驗證、Google 登入、帳號設定。
+1. 登入與帳號：Google 登入、年齡確認、帳號鎖定與申訴、帳號設定。
 2. 會員等級與額度：free（一般）、plus（進階）、vip（尊榮）三種等級與各自的額度。
 3. 意見回饋：使用者可以直接在對話中說出意見、客訴、建議或回報問題。
 下列情形一律超出範圍：訂單、退款、金流、物流，以及與平台無關的話題。

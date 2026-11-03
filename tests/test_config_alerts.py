@@ -2,7 +2,7 @@
 import pytest
 
 from app.config import MAX_ALERT_RECIPIENTS, ConfigError, load_config
-from tests.support.config_env import ALERT_ENV, AUTH_ENV, VERIFICATION_OFF_ENV, production_like_env
+from tests.support.config_env import ALERT_ENV, AUTH_ENV, production_like_env
 
 MAIL_ONLY = {k: v for k, v in AUTH_ENV.items() if k.startswith("MAIL_")}
 
@@ -36,21 +36,21 @@ def test_development_and_testing_may_leave_the_recipients_unset(env, tmp_path):
 
 # ---- 寄信設定的相依 -------------------------------------------------------------------
 
-def test_recipients_require_the_mail_settings_even_when_verification_is_off():
+def test_recipients_require_the_mail_settings():
     with pytest.raises(ConfigError) as exc:
-        load_config(environ=env_for_testing(ALERT_EMAIL_TO="ops@example.com", EMAIL_VERIFICATION_REQUIRED="false"))
+        load_config(environ=env_for_testing(ALERT_EMAIL_TO="ops@example.com"))
     message = str(exc.value)
     assert "ALERT_EMAIL_TO" in message and "MAIL_SMTP_HOST" in message and "MAIL_SMTP_PORT" in message and "MAIL_FROM" in message
     assert "ops@example.com" not in message                                       # 不回顯設定的值
 
 
-def test_recipients_with_complete_mail_settings_work_with_verification_off():
-    config = load_config(environ=env_for_testing(ALERT_EMAIL_TO="ops@example.com", EMAIL_VERIFICATION_REQUIRED="false", **MAIL_ONLY))
-    assert config.alerts.recipients == ("ops@example.com",) and config.mail is not None and not config.email_verification_required
+def test_recipients_with_complete_mail_settings_work():
+    config = load_config(environ=env_for_testing(ALERT_EMAIL_TO="ops@example.com", **MAIL_ONLY))
+    assert config.alerts.recipients == ("ops@example.com",) and config.mail is not None
 
 
-def test_staging_with_verification_off_still_needs_the_mail_settings_for_the_alerts():
-    values = production_like_env("staging", **VERIFICATION_OFF_ENV)
+def test_staging_needs_the_mail_settings_for_the_alerts():
+    values = production_like_env("staging")
     for name in MAIL_ONLY:
         values.pop(name, None)
     with pytest.raises(ConfigError, match="MAIL_SMTP_HOST"):

@@ -23,7 +23,7 @@
   var MAX_REASON = 200;
   var API_PREFIX = '/api/admin';
   var TIERS = ['free', 'plus', 'vip'];
-  var SUSPENDABLE = ['active', 'pending_verification'];
+  var SUSPENDABLE = ['active'];
 
   var TABS = [
     { id: 'overview', label: '總覽' },
@@ -55,7 +55,7 @@
     },
     unsuspend: {
       code: 'ADMIN_UNSUSPEND_USER', title: '解除停權？', confirmText: '確認解除', needsReason: false, needsTier: false,
-      intro: '解除後，這位使用者可以再次登入。信箱驗證開啟而尚未驗證的帳號，會回到「待驗證信箱」。',
+      intro: '解除後，這位使用者可以再次以 Google 登入。',
       path: function (id) { return '/users/' + encodeURIComponent(id) + '/unsuspend'; }, done: '已解除停權。'
     },
     tier: {

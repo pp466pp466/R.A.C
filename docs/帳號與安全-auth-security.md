@@ -1,7 +1,7 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-03 ｜ 對應 change：google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
-> 注意（2026-11-02）：Google 登入改版的 change ① `google-first-login` 已實作（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）。**玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證仍在程式中，待 change ② 移除**，本文中相關段落標明「（待 ② 移除）」；決定見 [report.md](report.md) 的 U-12 至 U-19。
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-03 ｜ 對應 change：remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 
 本文件說明玩家如何以 Google 登入、登入後完成年齡確認，管理員如何先 Google 再輸入密碼，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -9,65 +9,35 @@
 
 ```mermaid
 stateDiagram-v2
-    [*] --> pending_verification : 密碼註冊（信箱驗證開啟，待 ② 移除）
-    [*] --> active : 玩家首次 Google 登入（年齡待確認，24 小時期限）、密碼註冊（信箱驗證關閉，待 ② 移除）或 flask create-admin
-    pending_verification --> active : 信箱驗證完成
+    [*] --> active : 玩家首次 Google 登入（年齡待確認，24 小時期限）或 flask create-admin
     active --> suspended : 管理員停權（token_version 加 1）
-    pending_verification --> suspended : 管理員停權
-    suspended --> active : 管理員解除（信箱驗證開啟而從未驗證者回 pending_verification）
+    suspended --> active : 管理員解除
     active --> deletion_pending : 使用者申請刪除（token_version 加 1，所有裝置登出）
-    pending_verification --> deletion_pending : 使用者申請刪除
-    deletion_pending --> active : 7 天內撤銷（申請前為 active）
-    deletion_pending --> pending_verification : 7 天內撤銷（申請前為 pending_verification）
+    deletion_pending --> active : 7 天內撤銷
     deletion_pending --> [*] : 寬限期滿由 execute-account-deletions 抹除
     active --> [*] : 連續 12 個月未登入直接刪除（管理員不納入）
     active --> [*] : 24 小時內未完成年齡確認（purge-unconfirmed-accounts）或補填時未滿 13 歲（立即抹除）
 ```
 
-- `active` 與 `pending_verification` 的帳號可登入；`suspended` 一律拒絕登入。`deletion_pending` **可以登入，但只得到受限登入狀態**（只能撤銷刪除與登出，見第 7a 節）。信箱驗證開啟時，信箱必須已驗證才能使用客服。
+- 只有三種狀態：`active`、`suspended`、`deletion_pending`。**`pending_verification` 已退役**（玩家的信箱在建立帳號時就由 Google 驗證）：遷移 `0011` 把殘留的 `pending_verification`（含申請刪除前的狀態）改為 `active`，程式不再產生它。
+- `active` 的帳號可登入；`suspended` 一律拒絕登入。`deletion_pending` **可以登入，但只得到受限登入狀態**（只能撤銷刪除與登出，見第 7a 節）。帳號是否可用客服只看狀態與年齡，不看信箱驗證時間。
 - 停權的帳號無法登入，所以無法自助刪除（仍由 12 個月閒置清除處理）；管理員帳號不可自助刪除。
-- `EMAIL_VERIFICATION_REQUIRED`：development、testing、staging 可關閉（註冊後直接 `active`、忘記密碼停用）；production 必須開啟並設定寄信服務，否則啟動失敗。
+- `EMAIL_VERIFICATION_REQUIRED` 已淘汰：程式不再讀取它（啟動時只警告一次，不回顯值，也不會讓部署失敗）；`scripts/launch_plan.py` 的部署計畫檔含有它會被拒絕。
 
-## 2. 密碼註冊與登入（玩家端待 change ② 移除）
+## 2. 密碼只屬於管理員
 
-玩家現在以 Google 登入（第 4 節）。下面的密碼流程仍在程式中，只為了讓 change ② 一次移除：玩家端的 `register`、`login`、`forgot-password`、`reset-password`、`verify-email`、`resend-verification` 與 `change-password`。**管理員不能只靠密碼登入**——`POST /api/auth/login` 對管理員一律失敗（回應與密碼錯誤相同、不計失敗次數）；管理員的密碼只用在 Google 之後的第二步（第 7c 節）與高風險操作的重新輸入。
+玩家只以 Google 登入（第 4 節）：**沒有密碼註冊、密碼登入、忘記密碼、信箱驗證，也不寄任何信給玩家**（含申請刪除的通知）。`POST /api/auth/register`、`/login`、`/verify-email`、`/resend-verification`、`/forgot-password` 與頁面 `/forgot-password`、`/verify-email` 都已移除（回 404）；`/register` 仍導向 `/login`。密碼只屬於管理員：用在 Google 之後的第二步（第 7c 節）、高風險操作的重新輸入，以及管理員自己的變更密碼與忘記密碼。
 
-```mermaid
-sequenceDiagram
-    participant U as 使用者
-    participant A as /api/auth
-    participant S as AuthService
-    participant D as 資料庫
-    participant M as 寄信（延後動作）
-
-    U->>A: POST register（email、密碼、生日、年齡區間、同意條款）
-    A->>S: register()
-    S->>S: 驗證密碼長度 8 到 128、年齡區間與生日對照
-    alt 未滿 13 歲或對不起來
-        S-->>U: 400（不建立帳號、不保存生日）
-    else 通過
-        S->>D: 寫入 users（Argon2id、email_canonical、年齡紀錄）
-        S-->>U: 200 通用訊息（信箱是否已存在，回應完全相同）
-        S->>M: 寄驗證信（提交後才寄）
-    end
-    U->>A: POST login（玩家）
-    A->>S: login()
-    alt 帳號不存在、管理員、密碼錯誤、被鎖定
-        S-->>U: 401 同一則通用訊息（運算量相當）
-    else 通過
-        S->>D: 重設失敗計數、記錄最後登入
-        A-->>U: 設定簽章 session cookie 並換發 CSRF 權杖
-    end
-```
+資料遷移 `0011_remove_player_passwords`（只動資料、不動結構、可重複執行）把既有資料帶到相同的狀態：非管理員帳號的 `password_hash`、`failed_login_count`、`locked_until` 清除，`pending_verification` 改為 `active`。遷移之後，持有舊密碼帳號的玩家以**同信箱**的 Google 登入即綁定回原帳號（已驗證者直接綁定；未驗證者依合併規則清除憑證並視為已驗證）。回復（downgrade）不還原雜湊，需要時靠遷移前的備份。
 
 | 項目 | 規則 |
 |---|---|
-| 密碼 | Argon2id，長度 8 至 128 字，不強制字元組合；玩家以 Google 登入，不設密碼，只有管理員有密碼 |
-| 防帳號列舉 | 註冊、忘記密碼、登入失敗的回應一律相同 |
-| 登入失敗 | 同一帳號連續 5 次鎖定 15 分鐘，計數存資料庫（現在只適用管理員的密碼驗證步驟與重新輸入密碼，以及尚未移除的玩家密碼登入） |
-| 信箱權杖 | 32 位元組隨機值，只存 SHA-256；驗證信 24 小時、重設信 1 小時；單次使用；兩次寄信至少間隔 60 秒並有每小時上限 |
+| 密碼 | Argon2id，長度 8 至 128 字，不強制字元組合；**只有管理員有密碼**，玩家的 `password_hash` 一律為空 |
+| 防帳號列舉 | 管理員的密碼驗證失敗回應一律相同（密碼錯誤與鎖定中同一則通用訊息）；`POST /api/auth/login` 不存在（404），不計入任何失敗次數 |
+| 登入失敗 | 同一帳號連續 5 次鎖定 15 分鐘，計數存資料庫（只適用管理員的密碼驗證步驟、重新輸入密碼與變更密碼時的目前密碼） |
+| 重設權杖 | 32 位元組隨機值，只存 SHA-256；1 小時失效；單次使用；兩次寄信至少間隔 60 秒並有每小時上限；**權杖所屬帳號必須是管理員**，遷移前遺留的玩家權杖一律視為無效；沒有寄信設定時整組停用（404） |
 | 連結流程 | GET 只顯示確認頁，POST 才完成動作；權杖放在網址片段（`#token=`），不進存取日誌 |
-| 重設密碼成功 | `token_version` 加 1（撤銷既有登入）並寄通知信 |
+| 重設密碼成功 | `token_version` 加 1（撤銷既有登入）並寄通知信（有寄信設定時；變更密碼成功同樣寄通知信） |
 
 ## 3. Session 與 CSRF
 
@@ -134,7 +104,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    Start["會呼叫模型的端點<br/>先問 AccessPolicy.chat_gate(user)"] --> Usable{"帳號 active<br/>且（信箱驗證關閉或信箱已驗證）？"}
+    Start["會呼叫模型的端點<br/>先問 AccessPolicy.chat_gate(user)"] --> Usable{"帳號 active？<br/>（不看信箱驗證時間）"}
     Usable -->|"否"| Forbidden["forbidden（403）<br/>不引導補填年齡"]
     Usable -->|"是"| HasAge{"已完成年齡確認<br/>（有生日）？"}
     HasAge -->|"否"| NeedAge["age_confirmation_required（403）<br/>只有管理員會走到這裡（玩家在登入檢查就被導向 /age）"]
@@ -174,23 +144,18 @@ flowchart TD
 | 是否為管理員 | `AccessPolicy.require_admin(user)`：不是 `admin` 或帳號不是 `active` 就記錄 `admin.access_denied` 並拋出 `NotFound`（404）；後台的唯一入口 |
 | 權限測試 | `tests/support/idor.py` 依序以「他人、不存在、未登入、擁有者」檢查每個帶識別碼的端點 |
 
-`/api/auth/*` 端點（全部需 CSRF；「登入」欄指是否需要已登入）：
+`/api/auth/*` 端點（全部需 CSRF；「登入」欄指是否需要已登入）。**已移除**：`register`、`login`、`verify-email`、`resend-verification`、`forgot-password`（回 404）。
 
 | 端點 | 方法 | 登入 | 用途 |
 |---|---|---|---|
-| `/api/auth/register` | POST | 否 | 密碼註冊（生日與年齡區間必填；待 ② 移除） |
-| `/api/auth/login` | POST | 否 | 密碼登入（管理員一律失敗；待 ② 移除玩家端） |
 | `/api/auth/admin-password` | POST | 否（需中間狀態） | 管理員通過 Google 之後的密碼驗證，成功才建立登入 session |
 | `/api/auth/admin-password/forgot` | POST | 否（需中間狀態） | 管理員按「忘記密碼」寄重設信（沒有中間狀態或沒有寄信設定一律 404） |
 | `/api/auth/logout` | POST | 否 | 登出目前裝置 |
 | `/api/auth/logout-all` | POST | 是 | 登出所有裝置 |
 | `/api/auth/me` | GET | 是 | 本人資料（不含生日與內部編號） |
 | `/api/auth/verify-age` | POST | 是（含待確認年齡） | 補填生日與年齡區間；未滿 13 歲的玩家立即抹除、不一致計入鎖定計次 |
-| `/api/auth/change-password` | POST | 是 | 變更密碼 |
-| `/api/auth/verify-email` | POST | 否 | 以權杖驗證信箱（驗證關閉時 404） |
-| `/api/auth/resend-verification` | POST | 是 | 重寄驗證信（驗證關閉時 404） |
-| `/api/auth/forgot-password` | POST | 否 | 忘記密碼（驗證關閉時 404） |
-| `/api/auth/reset-password` | POST | 否 | 以權杖設定新密碼（驗證關閉時 404） |
+| `/api/auth/change-password` | POST | 是 | 變更密碼（只有已設定密碼者，實際上是管理員；玩家得到 400 `no_password`） |
+| `/api/auth/reset-password` | POST | 否 | 管理員以重設權杖設定新密碼（沒有寄信設定時 404；非管理員的權杖視為無效） |
 | `/api/auth/google/start` | POST | 否 | 發起 Google 登入（未設定時 404）；只收 `accept_terms` 與 `next` |
 | `/api/appeals` | POST | 是（含被鎖定） | 被鎖定的玩家向管理員申訴（其他人 404） |
 | `/api/appeals/mine` | GET | 是（含被鎖定） | 自己的申訴與處理狀態 |
@@ -203,7 +168,7 @@ flowchart TD
 | `/api/account/cancel-deletion` | POST | 是（含受限狀態） | 寬限期內撤銷刪除，還原為申請前的狀態 |
 | `/api/account/export` | POST | 是 | 匯出自己的帳號資料與全部對話（JSON 或 CSV zip）；受限狀態不可用 |
 
-頁面：`/login`（登入與註冊合一）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/forgot-password`、`/reset-password`、`/verify-email` 為尚未移除的信箱流程（待 ② 移除；`/reset-password` 在有寄信設定時也供管理員的重設連結使用）。
+頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
 
 ## 7. 管理員後台的存取（C-4b）
 
@@ -266,17 +231,15 @@ sequenceDiagram
     participant A as /api/account
     participant S as AccountDeletionService
     participant D as 資料庫
-    participant M as 寄信（延後動作）
     participant J as 排程指令
 
     U->>A: POST delete（有密碼：password；只靠 Google：confirm_text）
     A->>S: request()
-    S->>S: 管理員 403；狀態須為 active 或 pending_verification
+    S->>S: 管理員 403；狀態須為 active
     S->>S: 確認本人（confirm_password，與登入共用失敗計數與鎖定；或固定確認文字）
     S->>D: 條件式 UPDATE：deletion_pending、申請時間、申請前狀態、token_version 加 1
-    S->>M: 通知信（提交之後才寄，失敗不影響結果）
-    A-->>U: 200，清除這台的 cookie（其他裝置因 token_version 失效）
-    U->>A: POST login（密碼或 Google）
+    A-->>U: 200，清除這台的 cookie（其他裝置因 token_version 失效）；不寄任何信
+    U->>A: Google 登入
     A-->>U: 登入成功，狀態為 deletion_pending（受限登入狀態），導向 /account
     U->>A: POST cancel-deletion
     A->>S: cancel()
@@ -300,11 +263,11 @@ flowchart TD
 | 受限登入狀態預設拒絕 | `resolve_session` 對 `deletion_pending` 回傳使用者；`require_login(allow_pending_deletion=False)` 與 `login_required_page` 預設拒絕它。**既有端點不必修改**就自動被擋，新增的端點漏掉檢查也是安全的一邊。`tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則：先以未登入找出需要登入的端點，再以受限登入狀態逐一請求，允許清單以外必須全部被擋，並有自我驗證（暫時加一個只用 `current_user()` 的端點必須被抓到） |
 | 第二道防線 | `AccessPolicy.chat_gate` 與 `is_admin` 各自要求帳號為 `active`，所以即使入口層漏了，客服與後台仍然不可用 |
 | 確認本人 | 有密碼的帳號重新輸入密碼（沿用 `AuthService.confirm_password`，連續 5 次失敗鎖定 15 分鐘）；沒有密碼（只靠 Google）的帳號輸入固定文字「刪除我的帳號」（NFC 正規化並去除前後空白，含全形空白）。伺服器依帳號是否有密碼決定要哪個欄位，另一個欄位被忽略 |
-| 申請 | 單一條件式 `UPDATE`：非管理員、狀態為 `active` 或 `pending_verification`；同一個語句記下申請時間與申請前的狀態並使 `token_version` 加 1。兩個並行的申請只有一個成立 |
-| 撤銷 | 單一條件式 `UPDATE`：狀態為 `deletion_pending` 且申請未滿 7 天；還原為申請前的狀態（待驗證信箱的帳號仍待驗證，除非待刪除期間已經驗證）。超過 7 天回 409 `grace_expired`，帳號維持待刪除 |
+| 申請 | 單一條件式 `UPDATE`：非管理員、狀態為 `active`；同一個語句記下申請時間與申請前的狀態並使 `token_version` 加 1。兩個並行的申請只有一個成立；**不寄通知信**（寬限期與撤銷方式由申請成功後的畫面與 `/account` 說明） |
+| 撤銷 | 單一條件式 `UPDATE`：狀態為 `deletion_pending` 且申請未滿 7 天；一律還原為 `active`。超過 7 天回 409 `grace_expired`，帳號維持待刪除 |
 | 期滿的抹除 | `flask execute-account-deletions`：條件在刪除當下再確認一次，剛撤銷的帳號不會被刪；每個帳號一個交易，原因 `user_requested` |
 | Google 登入 | 已綁定 Google 的待刪除帳號可登入（受限狀態，導向 `/account`）；以信箱找到、尚未綁定的待刪除帳號仍拒絕，不在即將刪除的帳號上新增綁定 |
-| 忘記密碼 | 待刪除期間維持停用（`EmailFlowService` 的 `_BLOCKED_FROM_RESET`）：有密碼者申請時才輸入過密碼，Google 登入或等候期滿都能解決 |
+| 重設密碼 | 待刪除或停權的帳號不會收到重設信（`EmailFlowService` 的 `_BLOCKED_FROM_RESET`）；玩家本來就沒有密碼 |
 | 帳號頁 | 待刪除者拿到**另一份 HTML**（預定刪除時間、撤銷、登出，沒有其他區塊；寬限期已過就不顯示撤銷按鈕）；管理員的頁面沒有刪除區塊 |
 | 匯出 | 受限狀態不能匯出：請在申請刪除之前匯出。內容與格式見 [資料模型-data-model.md](資料模型-data-model.md) 與 README |
 
@@ -324,7 +287,7 @@ flowchart TD
 
 ## 7c. 管理員二階段登入（google-first-login）
 
-管理員每次登入都先通過 Google，再通過密碼，兩者都通過才建立登入 session；**管理員不能只靠密碼登入**（`POST /api/auth/login` 對管理員一律失敗，回應與密碼錯誤相同，不計失敗次數）。
+管理員每次登入都先通過 Google，再通過密碼，兩者都通過才建立登入 session；**管理員不能只靠密碼登入**：`POST /api/auth/login` 已不存在（404，不建立 session、不計失敗次數），唯一的路徑是「先 Google、再密碼」。
 
 ```mermaid
 sequenceDiagram

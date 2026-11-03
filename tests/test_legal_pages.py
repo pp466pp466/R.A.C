@@ -71,7 +71,7 @@ def test_the_retention_table_uses_the_same_periods_as_the_purge_command(client):
         "對話與訊息": retention.CONVERSATION_RETENTION,
         "用量紀錄（不含對話全文）": retention.LEDGER_RETENTION,
         "模型回覆失敗時的原始輸出": retention.ERROR_DETAIL_RETENTION,
-        "信箱驗證與重設密碼的一次性權杖": retention.AUTH_TOKEN_RETENTION,
+        "管理員重設密碼的一次性權杖": retention.AUTH_TOKEN_RETENTION,
         "管理稽核紀錄": retention.ADMIN_AUDIT_RETENTION,
     }
     for label, period in expectations.items():

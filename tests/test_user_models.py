@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.models import AuthToken, Base, User, UserIdentity
 from app.models.base import utcnow
 from app.models.user import (
-    IDENTITY_PROVIDERS, MEMBER_TIERS, ROLES, STATUS_ACTIVE, TOKEN_PURPOSES, TOKEN_VERIFY_EMAIL, USER_STATUSES,
+    IDENTITY_PROVIDERS, MEMBER_TIERS, ROLES, STATUS_ACTIVE, TOKEN_PURPOSES, TOKEN_RESET_PASSWORD, USER_STATUSES,
 )
 
 NAMES = ("users", "user_identities", "auth_tokens")
@@ -45,9 +45,9 @@ def test_metadata_contains_the_three_member_tables():
 def test_value_domains_are_the_documented_ones():
     assert ROLES == ("user", "admin")
     assert MEMBER_TIERS == ("free", "plus", "vip")
-    assert USER_STATUSES == ("pending_verification", "active", "suspended", "deletion_pending")
+    assert USER_STATUSES == ("active", "suspended", "deletion_pending")
     assert IDENTITY_PROVIDERS == ("google",)
-    assert TOKEN_PURPOSES == ("verify_email", "reset_password")
+    assert TOKEN_PURPOSES == ("reset_password",)
 
 
 def test_nullable_columns_are_exactly_the_documented_ones():
@@ -123,9 +123,9 @@ def test_duplicate_token_hash_is_rejected(session):
     session.add(user)
     session.commit()
     expires = utcnow() + timedelta(hours=1)
-    session.add(AuthToken(user_id=user.id, purpose=TOKEN_VERIFY_EMAIL, token_hash="a" * 64, expires_at=expires))
+    session.add(AuthToken(user_id=user.id, purpose=TOKEN_RESET_PASSWORD, token_hash="a" * 64, expires_at=expires))
     session.commit()
-    session.add(AuthToken(user_id=user.id, purpose=TOKEN_VERIFY_EMAIL, token_hash="a" * 64, expires_at=expires))
+    session.add(AuthToken(user_id=user.id, purpose=TOKEN_RESET_PASSWORD, token_hash="a" * 64, expires_at=expires))
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()
@@ -212,7 +212,7 @@ def test_deleting_a_user_removes_identities_and_tokens(session, db_engine):
     session.add(user)
     session.commit()
     session.add(UserIdentity(user_id=user.id, provider="google", provider_subject="sub-1"))
-    session.add(AuthToken(user_id=user.id, purpose=TOKEN_VERIFY_EMAIL, token_hash="b" * 64, expires_at=utcnow()))
+    session.add(AuthToken(user_id=user.id, purpose=TOKEN_RESET_PASSWORD, token_hash="b" * 64, expires_at=utcnow()))
     session.commit()
     session.delete(user)
     session.commit()
@@ -222,7 +222,7 @@ def test_deleting_a_user_removes_identities_and_tokens(session, db_engine):
 
 
 def test_foreign_keys_reject_orphans(session):
-    session.add(AuthToken(user_id=999, purpose=TOKEN_VERIFY_EMAIL, token_hash="c" * 64, expires_at=utcnow()))
+    session.add(AuthToken(user_id=999, purpose=TOKEN_RESET_PASSWORD, token_hash="c" * 64, expires_at=utcnow()))
     with pytest.raises(IntegrityError):
         session.commit()
     session.rollback()

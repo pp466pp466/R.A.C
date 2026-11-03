@@ -8,7 +8,7 @@
 
 - **APP_ENV 為 staging 或 production 時啟動即失敗**（以非零代碼結束）：這個入口不可能出現在預備或正式環境。
   未設定 APP_ENV 時也拒絕（與整個專案一致，不預設為任何環境）。
-- 預設關閉信箱驗證（`EMAIL_VERIFICATION_REQUIRED=false`），所以註冊不會寄出任何信件。
+- 玩家只用 Google 登入，測試玩家改由 `scripts/test_sessions.py` 在這個環境內建立並簽出 session cookie（見 load-testing 規格）。
 - 沒有資料表時（SQLite 檔案等）建立資料表：僅限這兩個本機環境，與「正式環境嚴禁 create_all」不衝突。
 - 這個目錄不在容器映像內。
 """
@@ -31,7 +31,6 @@ def guard_environment(environ: dict[str, str]) -> str:
 def build_app(environ: dict[str, str] | None = None):
     environ = os.environ if environ is None else environ
     guard_environment(environ)
-    environ.setdefault("EMAIL_VERIFICATION_REQUIRED", "false")
 
     from app import create_app
     from app.config import load_config

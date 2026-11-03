@@ -17,7 +17,7 @@ REPORT = (PROJECT_ROOT / "docs" / "report.md").read_text(encoding="utf-8-sig")
 ROADMAP = (PROJECT_ROOT / "docs" / "路線圖-roadmap.md").read_text(encoding="utf-8-sig")
 
 STATUSES = {"未開始", "進行中", "已通過"}
-GATE_KEYWORDS = ("信箱驗證", "模型供應商方案", "網域", "法務", "資料庫的成本", "負載測試", "IP 限流", "成年驗證")
+GATE_KEYWORDS = ("寄信設定", "模型供應商方案", "網域", "法務", "資料庫的成本", "負載測試", "IP 限流", "成年驗證")
 
 
 def section(text: str, heading: str) -> str:
@@ -133,7 +133,7 @@ def test_the_gates_cover_every_gate_in_the_report_and_the_roadmap_lists_what_the
     report_items = re.findall(r"^\d+\. (.+)$", gates, re.M)
     assert len(report_items) == 6, "report.md 的上線前關卡數量變了：請同步營運文件的關卡表與路線圖"
     table_text = " ".join(" ".join(row) for row in gate_rows())
-    for keyword in ("信箱驗證", "方案", "網域", "法務", "成本", "負載測試"):
+    for keyword in ("寄信設定", "方案", "網域", "法務", "成本", "負載測試"):
         assert any(keyword in item for item in report_items), keyword
         assert keyword in table_text, f"營運文件的關卡表漏了：{keyword}"
     rows = {

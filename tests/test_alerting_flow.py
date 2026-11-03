@@ -11,8 +11,10 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.llm.types import LLMConfigError, LLMTransientError
-from app.models import Base
+from app.models import Base, User
 from app.observability.json_logging import ALLOWED_FIELDS
+from app.services.errors import Unauthenticated
+from app.services.registry import build_auth_service
 from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.config_env import AUTH_ENV, FAKE_SMTP_PASSWORD
 from tests.support.idor import logged_in_client
@@ -84,10 +86,17 @@ def test_the_whole_alert_lifecycle_with_real_traffic_and_no_leak(log_lines):
         return client.post("/api/cs/conversations", json={"client_id": uid(next(counter))}).get_json()["conversation"]["id"]
 
     def lock(first: int, last: int) -> None:
-        anonymous = app.test_client()
-        for n in range(first, last + 1):
-            for _ in range(5):
-                assert anonymous.post("/api/auth/login", json={"email": f"user{n}@example.com", "password": "definitely-the-wrong-password"}).status_code == 401
+        """帳號被鎖定：管理員在密碼驗證步驟連續失敗 5 次，鎖定 15 分鐘後自動解除（玩家沒有密碼登入；玩家的鎖定要管理員解除，不會自己恢復）。"""
+        with Session(app.extensions["db_engine"]) as s:
+            service = build_auth_service(s, config=app.extensions["app_config"], clock=app.extensions["clock"])
+            for n in range(first, last + 1):
+                user = s.query(User).filter(User.email == f"user{n}@example.com").one()
+                user.role = "admin"
+                s.flush()
+                for _ in range(5):
+                    with pytest.raises(Unauthenticated):
+                        service.verify_admin_password(user.id, user.token_version, "definitely-the-wrong-password")
+            s.commit()
 
     def subjects() -> list[str]:
         return [m["subject"] for m in sender.sent]

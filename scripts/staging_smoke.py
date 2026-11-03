@@ -2,20 +2,22 @@
 
     python scripts/staging_smoke.py https://<預備環境網址> [--allow-model-call]
 
-對一個預備環境網址依序檢查，逐項輸出「通過」、「失敗」或「略過」（結束代碼：沒有失敗為 0，有失敗為 1，位址被拒絕為 2）：
+對一個預備環境網址依序檢查，逐項輸出「通過」、「失敗」、「略過」或「未驗證」（結束代碼：沒有失敗為 0，有失敗為 1，位址被拒絕為 2）：
 1. `/healthz` 與 `/readyz` 回 200；
 2. 首頁帶有五個安全標頭（含 HSTS）且**沒有** `Content-Security-Policy`（刻意不送，見營運文件）；
 3. 沒有 CSRF 權杖的 POST 被拒絕（403）；
-4. 註冊（保留的 `.invalid` 測試信箱，由 `loadtest/actions.py` 的虛擬會員）並登入、開新對話；
-5. session 與 CSRF cookie 使用 `__Host-` 前綴、帶 `Secure`、不含 `Domain`，session 為 `HttpOnly`；
-6. 一般會員存取管理員 API 得到 404（與不存在的端點相同，不透露後台存在）；
-7. 未登入存取需要登入的 API 得到 401；
-8. **預設不呼叫任何模型**（標為略過）；加 `--allow-model-call` 才送出一則訊息，並檢查回覆不是降級文案。
+4. 已移除的 `POST /api/auth/login` 與 `/api/auth/register` 得到 404（玩家只用 Google 登入）；
+5. 未登入存取需要登入的 API 得到 401；
+6. **需要登入的項目**（帶測試玩家的 cookie 進入、開新對話、session 與 CSRF cookie 的屬性、一般會員存取管理員 API 得到 404）：
+   玩家只用 Google 登入，沒有註冊與密碼登入可用，所以只在環境變數 `SMOKE_SESSION_COOKIE`（`<cookie 名稱>=<值>`，由
+   `scripts/mint_test_sessions.py` 在預備環境內簽出）存在時執行；**沒有提供時這些項目標為「未驗證」**，不是通過；
+7. **預設不呼叫任何模型**（標為略過）；加 `--allow-model-call` 才送出一則訊息，並檢查回覆不是降級文案。
 
 - **只對 https 的預備環境執行**：主機名稱含 `production` 或位於 `loadtest/guard.py` 列出的正式網域時一律拒絕，**沒有任何確認參數可以繞過**；
   非 https、帶路徑、帳密、查詢字串或片段的位址也拒絕，而且是在送出任何請求之前。
 - 輸出**只有項目名稱與結果**：不含 cookie、權杖、密碼或回應內容。失敗的原因只說明是哪個標頭、狀態碼或屬性。
-- 註冊的帳號使用保留的 `.invalid` 網域（RFC 2606），不會寄出信件也不屬於任何真人；每執行一次會在預備環境留下一個這樣的測試帳號。
+- 測試玩家的信箱屬於保留的 `.invalid` 網域（RFC 2606），不會寄出信件也不屬於任何真人；cookie 是有效的登入憑證，只從環境變數讀取，
+  不接受命令列參數、不輸出、不寫入日誌。
 - 對經 ngrok 的網址會多帶 `ngrok-skip-browser-warning` 標頭，略過免費方案的瀏覽器警告頁。
 - 傳輸（HTTP）可注入：`Transport` 協定的實作在執行時是標準函式庫的 `urllib`，測試則用 Flask 測試客戶端驅動同一組檢查。
 """
@@ -27,8 +29,10 @@ import json
 import sys
 import urllib.error
 import urllib.request
+import os
+import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Protocol
@@ -38,10 +42,11 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from loadtest.actions import Member, Reply, degraded_reply  # noqa: E402 - 需要先把專案根目錄放進 sys.path
+from loadtest.actions import CSRF_META, Member, Reply, degraded_reply  # noqa: E402 - 需要先把專案根目錄放進 sys.path
 from loadtest.guard import TargetRefused, check_target  # noqa: E402
 
-PASS, FAIL, SKIP = "通過", "失敗", "略過"
+PASS, FAIL, SKIP, UNVERIFIED = "通過", "失敗", "略過", "未驗證"
+SESSION_COOKIE_ENV = "SMOKE_SESSION_COOKIE"
 SECURITY_HEADERS = (
     "Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options", "Permissions-Policy",
 )
@@ -50,6 +55,7 @@ NGROK_MARKERS = ("ngrok",)
 REQUEST_TIMEOUT_SECONDS = 20
 
 EXIT_OK, EXIT_FAILED, EXIT_REFUSED = 0, 1, 2
+NO_SESSION_DETAIL = f"沒有提供測試玩家的登入 cookie（環境變數 {SESSION_COOKIE_ENV}；以 scripts/mint_test_sessions.py 在預備環境內簽出）"
 
 
 # ---- 傳輸 ---------------------------------------------------------------------------------------
@@ -73,6 +79,8 @@ class Transport(Protocol):
 
     def request(self, method: str, path: str, *, headers: dict[str, str] | None = None, json_body: Any = None) -> HttpResponse: ...
 
+    def add_cookie(self, name: str, value: str) -> None: ...
+
     def fresh(self) -> "Transport": ...
 
 
@@ -81,12 +89,21 @@ class UrllibTransport:
 
     def __init__(self, base_url: str) -> None:
         self.origin = base_url.rstrip("/")
-        self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar()))
+        self._jar = http.cookiejar.CookieJar()
+        self._opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self._jar))
         host = (urlsplit(self.origin).hostname or "").lower()
         self._extra = {"ngrok-skip-browser-warning": "1"} if any(marker in host for marker in NGROK_MARKERS) else {}
 
     def fresh(self) -> "UrllibTransport":
         return UrllibTransport(self.origin)
+
+    def add_cookie(self, name: str, value: str) -> None:
+        """放進這個實例的 cookie jar（之後的請求照常帶上，也和伺服器發的 CSRF cookie 並存）。"""
+        parts = urlsplit(self.origin)
+        secure = parts.scheme == "https"                 # __Host- 前綴的 cookie 是 Secure：只在 https 上送出（預備環境一律是 https）
+        self._jar.set_cookie(http.cookiejar.Cookie(
+            0, name, value, None, False, parts.hostname or "", True, False, "/", True, secure, int(time.time()) + 3600, False, None, None, {},
+        ))
 
     def request(self, method: str, path: str, *, headers: dict[str, str] | None = None, json_body: Any = None) -> HttpResponse:
         data = None
@@ -106,7 +123,7 @@ class UrllibTransport:
 
 
 class SmokeSession:
-    """把 `Transport` 包成 `loadtest.actions` 的 `Session`，讓虛擬會員的註冊、登入與開對話動作可以直接重用。
+    """把 `Transport` 包成 `loadtest.actions` 的 `Session`，讓虛擬會員的登入（帶 cookie）與開對話動作可以直接重用。
     收到的 Set-Cookie 行記進 `cookie_log`（只用來檢查屬性；輸出不含 cookie 的值）。"""
 
     def __init__(self, transport: Transport, cookie_log: list[str]) -> None:
@@ -125,6 +142,9 @@ class SmokeSession:
             except ValueError:
                 body = None
         return Reply(response.status, body, text if body is None else "")
+
+    def set_cookie(self, name: str, value: str) -> None:
+        self.transport.add_cookie(name, value)
 
     def get(self, path: str, *, name: str | None = None) -> Reply:
         return self._send("GET", path)
@@ -165,6 +185,7 @@ class Context:
     transport: Transport
     allow_model_call: bool
     member: Member
+    session_cookie: tuple[str, str] | None = None
     cookie_log: list[str] = field(default_factory=list)
     signed_in: bool = False
     conversation_open: bool = False
@@ -202,23 +223,50 @@ def check_headers(ctx: Context) -> Outcome:
 
 def check_csrf(ctx: Context) -> Outcome:
     _get(ctx, "/")                                   # 先取得 CSRF cookie；刻意不帶 X-CSRF-Token 標頭
-    response = ctx.transport.request(
-        "POST", "/api/auth/login", headers={"Origin": ctx.transport.origin}, json_body={"email": "smoke@loadtest.invalid", "password": "x"},
-    )
+    response = ctx.transport.request("POST", "/api/auth/logout", headers={"Origin": ctx.transport.origin}, json_body={})
     ctx.cookie_log.extend(response.set_cookies())
     return Outcome(PASS) if response.status == 403 else Outcome(FAIL, f"沒有權杖的 POST 得到狀態碼 {response.status}（應被拒絕為 403）")
 
 
-def check_register_and_login(ctx: Context) -> Outcome:
-    if not ctx.member.register_and_login():
-        return Outcome(FAIL, "註冊或登入失敗（預備環境應關閉信箱驗證，並已建立資料表）")
+REMOVED_ENDPOINTS = ("/api/auth/login", "/api/auth/register")
+
+
+def check_removed_endpoints(ctx: Context) -> Outcome:
+    """玩家只用 Google 登入：舊的密碼登入與註冊端點必須不存在（帶著有效的 CSRF 權杖與同源 Origin，才不會被 CSRF 檢查的 403 蓋過 404）。"""
+    transport = ctx.transport.fresh()
+    page = transport.request("GET", "/terms")
+    match = CSRF_META.search(page.body.decode("utf-8", errors="replace"))
+    if page.status != 200 or not match:
+        return Outcome(FAIL, f"取不到 CSRF 權杖（/terms 狀態碼 {page.status}）")
+    headers = {"Origin": transport.origin, "X-CSRF-Token": match.group(1)}
+    wrong = [f"{path} 得到 {status}" for path in REMOVED_ENDPOINTS
+             for status in [transport.request("POST", path, headers=headers, json_body={"email": "smoke@loadtest.invalid", "password": "x"}).status]
+             if status != 404]
+    return Outcome(FAIL, "；".join(wrong) + "（應為 404）") if wrong else Outcome(PASS)
+
+
+def _needs_session(ctx: Context) -> Outcome | None:
+    """需要登入的項目共同的前置：沒有提供 cookie 是「未驗證」，有提供但進不去是前一項的失敗而「略過」。"""
+    if ctx.session_cookie is None:
+        return Outcome(UNVERIFIED, NO_SESSION_DETAIL)
+    if not ctx.signed_in:
+        return Outcome(SKIP, "前一項失敗，無法進行")
+    return None
+
+
+def check_sign_in(ctx: Context) -> Outcome:
+    if ctx.session_cookie is None:
+        return Outcome(UNVERIFIED, NO_SESSION_DETAIL)
+    name, value = ctx.session_cookie
+    if not ctx.member.sign_in(name, value):
+        return Outcome(FAIL, "帶著測試玩家的登入 cookie 進入失敗（cookie 無效、已過期，或不是這個環境簽出的）")
     ctx.signed_in = True
     return Outcome(PASS)
 
 
 def check_open_conversation(ctx: Context) -> Outcome:
-    if not ctx.signed_in:
-        return Outcome(SKIP, "前一項失敗，無法進行")
+    if (blocked := _needs_session(ctx)) is not None:
+        return blocked
     if not ctx.member.open_conversation():
         return Outcome(FAIL, "開新對話失敗")
     ctx.conversation_open = True
@@ -239,8 +287,8 @@ def _cookie_attributes(line: str) -> tuple[str, set[str], dict[str, str]]:
 
 
 def check_cookies(ctx: Context) -> Outcome:
-    if not ctx.signed_in:
-        return Outcome(SKIP, "前一項失敗，無法進行")
+    if (blocked := _needs_session(ctx)) is not None:
+        return blocked
     parsed = [_cookie_attributes(line) for line in ctx.cookie_log]
     problems = []
     for base in ("session", "csrf"):
@@ -263,8 +311,8 @@ def check_cookies(ctx: Context) -> Outcome:
 
 
 def check_admin_hidden(ctx: Context) -> Outcome:
-    if not ctx.signed_in:
-        return Outcome(SKIP, "前一項失敗，無法進行")
+    if (blocked := _needs_session(ctx)) is not None:
+        return blocked
     status = ctx.transport.request("GET", "/api/admin/overview").status
     return Outcome(PASS) if status == 404 else Outcome(FAIL, f"一般會員打管理員 API 得到狀態碼 {status}（應為 404，與不存在的端點相同）")
 
@@ -277,6 +325,8 @@ def check_unauthenticated(ctx: Context) -> Outcome:
 def check_model_reply(ctx: Context) -> Outcome:
     if not ctx.allow_model_call:
         return Outcome(SKIP, "未提供 --allow-model-call，略過模型呼叫（預設不送出任何訊息）")
+    if ctx.session_cookie is None:
+        return Outcome(UNVERIFIED, NO_SESSION_DETAIL)
     if not ctx.conversation_open:
         return Outcome(SKIP, "沒有可用的對話，無法進行")
     reply = ctx.member.send_message()
@@ -292,7 +342,8 @@ CHECKS: tuple[tuple[str, Callable[[Context], Outcome]], ...] = (
     ("就緒檢查 /readyz 回 200", check_readyz),
     ("首頁帶五個安全標頭且沒有 CSP", check_headers),
     ("沒有 CSRF 權杖的 POST 被拒絕", check_csrf),
-    ("註冊（.invalid 測試信箱）並登入", check_register_and_login),
+    ("已移除的密碼登入與註冊端點得到 404", check_removed_endpoints),
+    ("帶測試玩家的登入 cookie 進入", check_sign_in),
     ("開新對話", check_open_conversation),
     ("session 與 CSRF cookie 使用 __Host- 前綴、Secure、無 Domain，session 為 HttpOnly", check_cookies),
     ("一般會員存取管理員 API 得到 404", check_admin_hidden),
@@ -301,10 +352,12 @@ CHECKS: tuple[tuple[str, Callable[[Context], Outcome]], ...] = (
 )
 
 
-def run_checks(transport: Transport, *, allow_model_call: bool = False) -> list[tuple[str, Outcome]]:
+def run_checks(
+    transport: Transport, *, allow_model_call: bool = False, session_cookie: tuple[str, str] | None = None
+) -> list[tuple[str, Outcome]]:
     cookie_log: list[str] = []
     member = Member(SmokeSession(transport, cookie_log), run_id=f"smoke{uuid.uuid4().hex[:8]}", number=1)
-    ctx = Context(transport, allow_model_call, member, cookie_log)
+    ctx = Context(transport, allow_model_call, member, session_cookie, cookie_log)
     results = []
     for title, check in CHECKS:
         try:
@@ -322,18 +375,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: list[str] | None = None, *, out: Callable[[str], None] = print, transport_factory: Callable[[str], Transport] = UrllibTransport) -> int:
+def parse_session_cookie(raw: str | None) -> tuple[str, str] | None:
+    """`<名稱>=<值>`；沒有設定回傳 None，格式不對拋出 `ValueError`（訊息不含值）。"""
+    if not raw or not raw.strip():
+        return None
+    name, separator, value = raw.strip().partition("=")
+    if not separator or not name or not value or not name.replace("-", "").replace("_", "").isalnum():
+        raise ValueError(f"環境變數 {SESSION_COOKIE_ENV} 的格式必須是 <cookie 名稱>=<值>。")
+    return name, value
+
+
+def main(
+    argv: list[str] | None = None, *, out: Callable[[str], None] = print,
+    transport_factory: Callable[[str], Transport] = UrllibTransport, environ: Mapping[str, str] | None = None,
+) -> int:
     args = build_parser().parse_args(argv)
     try:
         origin = validate_target(args.url)
+        session_cookie = parse_session_cookie((os.environ if environ is None else environ).get(SESSION_COOKIE_ENV))
     except TargetRefused as error:
         out(str(error))
         return EXIT_REFUSED
-    results = run_checks(transport_factory(origin), allow_model_call=args.allow_model_call)
+    except ValueError as error:
+        out(str(error))
+        return EXIT_REFUSED
+    results = run_checks(transport_factory(origin), allow_model_call=args.allow_model_call, session_cookie=session_cookie)
     for title, outcome in results:
         out(f"{outcome.status}  {title}" + (f"：{outcome.detail}" if outcome.detail else ""))
-    counts = {status: sum(1 for _, outcome in results if outcome.status == status) for status in (PASS, FAIL, SKIP)}
-    out(f"結果：{counts[PASS]} 項通過、{counts[FAIL]} 項失敗、{counts[SKIP]} 項略過")
+    counts = {status: sum(1 for _, outcome in results if outcome.status == status) for status in (PASS, FAIL, SKIP, UNVERIFIED)}
+    summary = f"結果：{counts[PASS]} 項通過、{counts[FAIL]} 項失敗、{counts[SKIP]} 項略過"
+    out(summary + (f"、{counts[UNVERIFIED]} 項未驗證" if counts[UNVERIFIED] else ""))
     return EXIT_FAILED if counts[FAIL] else EXIT_OK
 
 

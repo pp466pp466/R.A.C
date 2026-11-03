@@ -10,7 +10,7 @@ from app.config import load_config
 from app.models import (
     AuthToken, Base, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User, UserIdentity,
 )
-from app.models.user import PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING, TOKEN_VERIFY_EMAIL
+from app.models.user import PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING, TOKEN_RESET_PASSWORD
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_deletion_executor import AccountDeletionExecutor
@@ -51,7 +51,7 @@ def seed(app) -> dict[str, int]:
             s, 5, START - timedelta(days=8), email=SECRET_EMAIL, email_canonical=SECRET_EMAIL, display_name=SECRET_NAME, age=40,
         )
         s.add(UserIdentity(user_id=rich.id, provider=PROVIDER_GOOGLE, provider_subject="sub-secret-2"))
-        s.add(AuthToken(user_id=rich.id, purpose=TOKEN_VERIFY_EMAIL, token_hash="b" * 64, expires_at=START))
+        s.add(AuthToken(user_id=rich.id, purpose=TOKEN_RESET_PASSWORD, token_hash="b" * 64, expires_at=START))
         conv = ChatConversation(user_id=rich.id, client_id="00000000-0000-4000-8000-0000000000aa", state_json={})
         s.add(conv)
         s.flush()

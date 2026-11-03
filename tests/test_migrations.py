@@ -354,6 +354,69 @@ def test_0010_adds_three_nullable_user_columns_two_indexes_and_two_tables_and_ke
     engine.dispose()
 
 
+def _insert_user(conn, users, number: int, **values) -> None:
+    now = utcnow().replace(tzinfo=None)
+    row = dict(
+        public_id=f"00000000-0000-4000-8000-{number:012d}", email=f"u{number}@example.com", email_canonical=f"u{number}@example.com",
+        display_name=f"帳號{number}", role="user", member_tier="free", status="active", failed_login_count=0, token_version=1,
+        created_at=now, updated_at=now,
+    )
+    row.update(values)
+    conn.execute(users.insert().values(**row))
+
+
+def test_0011_clears_player_passwords_and_retires_pending_verification_but_leaves_admins_and_structure_alone(tmp_path):
+    """remove-player-password-auth：只動資料。玩家的密碼雜湊、失敗計數與密碼鎖定被清除；待驗證改為 active；管理員完全不變；可重複執行。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'passwords.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0011_remove_player_passwords")
+    assert revision.down_revision == "0010_google_first_login" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0010_google_first_login")
+    locked = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        _insert_user(conn, users, 1, password_hash="$argon2id$player", failed_login_count=4, locked_until=locked)
+        _insert_user(conn, users, 2, status="pending_verification", password_hash="$argon2id$pending")
+        _insert_user(conn, users, 3, status="deletion_pending", status_before_deletion="pending_verification", deletion_requested_at=locked)
+        _insert_user(conn, users, 4, status="deletion_pending", status_before_deletion="active", deletion_requested_at=locked)
+        _insert_user(conn, users, 5, role="admin", password_hash="$argon2id$admin", failed_login_count=3, locked_until=locked)
+        _insert_user(conn, users, 6, status="suspended", password_hash="$argon2id$suspended")
+    before_tables = set(inspect(engine).get_table_names())
+    before_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+
+    def rows() -> dict[str, dict]:
+        with engine.connect() as conn:
+            table = Table("users", MetaData(), autoload_with=conn)
+            return {r["email"]: dict(r) for r in conn.execute(select(table)).mappings()}
+
+    admin_before = rows()["u5@example.com"]
+
+    command.upgrade(cfg, "0011_remove_player_passwords")
+    after = rows()
+    players = [after[f"u{n}@example.com"] for n in (1, 2, 3, 4, 6)]
+    assert all(p["password_hash"] is None and p["failed_login_count"] == 0 and p["locked_until"] is None for p in players)
+    assert after["u2@example.com"]["status"] == "active"
+    assert after["u3@example.com"]["status"] == "deletion_pending" and after["u3@example.com"]["status_before_deletion"] == "active"
+    assert after["u4@example.com"]["status_before_deletion"] == "active" and after["u4@example.com"]["status"] == "deletion_pending"
+    assert after["u6@example.com"]["status"] == "suspended"
+    assert after["u5@example.com"] == admin_before                                  # 管理員完全不變
+    # 曾持有密碼的玩家（1、2、6）token_version 加 1；沒有密碼的（3、4）不變——它們的登入狀態不是靠密碼取得的
+    assert [after[f"u{n}@example.com"]["token_version"] for n in (1, 2, 6)] == [2, 2, 2]
+    assert [after[f"u{n}@example.com"]["token_version"] for n in (3, 4)] == [1, 1]
+    assert all(after[f"u{n}@example.com"]["email_verified_at"] is None for n in (1, 2, 3))     # 驗證時間保持原樣
+
+    assert set(inspect(engine).get_table_names()) == before_tables                 # 沒有結構變更
+    assert {c["name"] for c in inspect(engine).get_columns("users")} == before_columns
+
+    command.downgrade(cfg, "0010_google_first_login")                              # 資料遷移不還原
+    assert rows() == after
+    command.upgrade(cfg, "0011_remove_player_passwords")                           # 再升級一次，結果相同
+    assert rows() == after
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):

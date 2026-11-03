@@ -10,7 +10,7 @@ from app.config import load_config
 from app.models import (
     AdminAuditLog, AuthToken, Base, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, LockStrike,
 )
-from app.models.user import TOKEN_VERIFY_EMAIL
+from app.models.user import TOKEN_RESET_PASSWORD
 from app.repositories.retention_repository import RetentionRepository
 from tests.support.auth import START, FakeClock, add_user
 
@@ -46,7 +46,7 @@ def seed(app) -> None:
                 counted=False, latency_ms=1, created_at=when, error_detail=SECRET_TEXT,
             ))
         for n, expires in ((1, START - timedelta(days=10)), (2, START + timedelta(hours=1))):
-            s.add(AuthToken(user_id=user, purpose=TOKEN_VERIFY_EMAIL, token_hash=f"{n:064d}", expires_at=expires))
+            s.add(AuthToken(user_id=user, purpose=TOKEN_RESET_PASSWORD, token_hash=f"{n:064d}", expires_at=expires))
         for created in (START - timedelta(days=800), START - timedelta(days=10)):
             s.add(AdminAuditLog(admin_user_id=admin, action="user.lookup", detail_json={}, created_at=created))
         for created in (START - timedelta(days=10), START - timedelta(days=1)):
