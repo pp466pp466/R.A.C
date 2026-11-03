@@ -3,8 +3,6 @@
 ## Purpose
 定義管理員如何找到並處理單一使用者：以信箱精確查詢、停權與解除、調整會員等級，以及哪些帳號可以被操作、危險操作如何要求管理員重新輸入密碼。每個操作都可追溯，且管理員看到的使用者資料只有最小範圍。
 
-> 注意（2026-11-02）：AGENTS.md 第 10 節已修訂（Google 登入改版），change ① `google-first-login` 已實作（登入、年齡確認、登入有效期、帳號鎖定、申訴與管理員二階段登入），其需求已於 2026-11-03 封存時同步進本規格；本規格中與玩家端密碼註冊、密碼登入、忘記密碼、信箱驗證有關的部分描述的是目前的實作，待 change ② 更新。
-
 ## Requirements
 
 ### Requirement: 以信箱精確查詢使用者（次要入口）
@@ -52,7 +50,7 @@
 - **THEN** 回應 409，沒有改變
 
 ### Requirement: 停權
-`POST /api/admin/users/<public_id>/suspend` SHALL 要求原因（清理後 1 至 200 字）與管理員的密碼；目標狀態為 `active` 或 `pending_verification` 時 SHALL 改為 `suspended` 並使其 `token_version` 加 1，使既有的登入狀態立即失效；目標已是 `suspended` 時 SHALL 得到 409。停權後該使用者 SHALL 無法登入（回應「帳號已停用」）。SHALL 寫入 `user.suspend` 稽核（含原因與原狀態）。
+`POST /api/admin/users/<public_id>/suspend` SHALL 要求原因（清理後 1 至 200 字）與管理員的密碼；目標狀態為 `active` 時 SHALL 改為 `suspended` 並使其 `token_version` 加 1，使既有的登入狀態立即失效；目標已是 `suspended` 時 SHALL 得到 409。停權後該使用者 SHALL 無法登入（回應「帳號已停用」）。SHALL 寫入 `user.suspend` 稽核（含原因與原狀態）。
 
 #### Scenario: 停權成功
 - **WHEN** 管理員以正確的密碼與原因停權一位使用中的使用者
@@ -67,15 +65,19 @@
 - **THEN** 回應 409，沒有新的稽核
 
 ### Requirement: 解除停權
-`POST /api/admin/users/<public_id>/unsuspend` SHALL 要求管理員的密碼；只有狀態為 `suspended` 的使用者可被解除，結果為 `active`，但在信箱驗證開啟而該使用者的信箱尚未驗證時 SHALL 為 `pending_verification`。其他狀態 SHALL 得到 409。SHALL 寫入 `user.unsuspend` 稽核。
+`POST /api/admin/users/<public_id>/unsuspend` SHALL 要求管理員的密碼；只有狀態為 `suspended` 的使用者可被解除，結果一律為 `active`。其他狀態 SHALL 得到 409。SHALL 寫入 `user.unsuspend` 稽核。
 
 #### Scenario: 解除後可登入
-- **WHEN** 管理員以正確的密碼解除一位已驗證信箱的停權使用者
-- **THEN** 狀態為 `active`，該使用者可以再次登入
+- **WHEN** 管理員以正確的密碼解除一位停權的使用者
+- **THEN** 狀態為 `active`，該使用者可以再次以 Google 登入
 
 #### Scenario: 信箱未驗證
-- **WHEN** 信箱驗證開啟，被解除的使用者從未驗證信箱
-- **THEN** 狀態為 `pending_verification`
+- **WHEN** 被解除的使用者信箱驗證時間為空（遷移前遺留的帳號）
+- **THEN** 狀態仍為 `active`，不會變成其他狀態
+
+#### Scenario: 非停權狀態
+- **WHEN** 對狀態為 `active` 的使用者解除停權
+- **THEN** 回應 409，沒有新的稽核
 
 ### Requirement: 調整會員等級
 `POST /api/admin/users/<public_id>/tier` SHALL 接受 `tier`（`free`、`plus`、`vip`）與管理員的密碼，改變使用者的等級並寫入 `user.change_tier` 稽核（含調整前後的等級）。等級不在範圍內 SHALL 得到 400；與目前相同 SHALL 得到 409。調整 SHALL 立即反映在該使用者的額度上。

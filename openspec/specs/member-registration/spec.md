@@ -1,109 +1,43 @@
 # member-registration Specification
 
 ## Purpose
-定義會員資料的基本模型與註冊行為：以信箱加密碼建立帳號、一組信箱只能對應一個帳號、註冊時必須同意條款並留下紀錄，以及信箱驗證開關在不同環境下的註冊結果。
-
-> 注意（2026-11-02）：AGENTS.md 第 10 節已修訂（Google 登入改版），change ① `google-first-login` 已實作（登入、年齡確認、登入有效期、帳號鎖定、申訴與管理員二階段登入），其需求已於 2026-11-03 封存時同步進本規格；本規格中與玩家端密碼註冊、密碼登入、忘記密碼、信箱驗證有關的部分描述的是目前的實作，待 change ② 更新。
+定義會員資料的基本模型與帳號唯一性：以 email 為帳號識別、一組信箱（含 Gmail 的別名寫法）只能對應一個帳號、對外只用 UUID，帳號狀態只有啟用、停權與待刪除，以及服務條款與隱私權政策頁面。帳號只經由 Google 登入建立（見 `google-sign-in`），沒有密碼註冊與信箱驗證。
 
 ## Requirements
 
 ### Requirement: 會員資料模型
-系統 SHALL 以 email 為帳號識別，每位會員 SHALL 具有顯示名稱、角色（`user` 或 `admin`）、會員等級（`free`、`plus`、`vip`）與帳號狀態（`pending_verification`、`active`、`suspended`、`deletion_pending`）。新會員的角色 SHALL 為 `user`、等級 SHALL 為 `free`。顯示名稱 SHALL NOT 要求唯一。對外識別 SHALL 使用 UUID，內部整數編號不得出現在 API 或網址。
+系統 SHALL 以 email 為帳號識別，每位會員 SHALL 具有顯示名稱、角色（`user` 或 `admin`）、會員等級（`free`、`plus`、`vip`）與帳號狀態（`active`、`suspended`、`deletion_pending`）。新會員的角色 SHALL 為 `user`、等級 SHALL 為 `free`。顯示名稱 SHALL NOT 要求唯一。對外識別 SHALL 使用 UUID，內部整數編號不得出現在 API 或網址。系統 SHALL NOT 再產生 `pending_verification` 狀態。
 
 #### Scenario: 新帳號的預設值
-- **WHEN** 成功註冊一個新帳號
-- **THEN** 該帳號的角色為 `user`、會員等級為 `free`，並具有對外的 UUID 識別碼
+- **WHEN** 玩家以 Google 首次登入並成功建立一個新帳號
+- **THEN** 該帳號的角色為 `user`、會員等級為 `free`、狀態為 `active`，並具有對外的 UUID 識別碼
 
 #### Scenario: 顯示名稱重複
-- **WHEN** 兩位不同信箱的使用者使用相同的顯示名稱註冊
-- **THEN** 兩者皆註冊成功
+- **WHEN** 兩位不同信箱的使用者的 Google 名稱相同，各自首次登入
+- **THEN** 兩者皆建立成功
 
-### Requirement: 註冊輸入驗證
-註冊 SHALL 要求 email、密碼、顯示名稱、同意條款，以及生日與年齡區間；同意條款是獨立的明確勾選，生日與年齡區間的驗證規則見 `age-confirmation`。email SHALL 為合法的英數字格式且不超過 254 字元；密碼長度 SHALL 為 8 至 128 字且不強制字元組合；顯示名稱 SHALL 為 1 至 50 字（去除頭尾空白與控制字元後）。輸入不合法時，系統 SHALL 回應 400 與繁體中文的欄位錯誤說明，且不建立帳號。所有驗證 SHALL 發生在查詢信箱是否已存在之前。
-
-#### Scenario: 密碼太短
-- **WHEN** 以 7 個字元的密碼註冊
-- **THEN** 回應 400，說明密碼長度須為 8 至 128 字，且不建立帳號
-
-#### Scenario: 密碼不要求字元組合
-- **WHEN** 以 8 個全為小寫英文字母的密碼註冊
-- **THEN** 密碼被接受
-
-#### Scenario: 未同意條款
-- **WHEN** 註冊時未勾選同意服務條款與隱私權政策
-- **THEN** 回應 400，不建立帳號
-
-#### Scenario: 未確認年滿 18 歲
-- **WHEN** 註冊時沒有填生日或沒有選年齡區間（沒有完成年齡確認）
-- **THEN** 回應 400，並指出缺少的是生日還是年齡區間，且不建立帳號
-
-#### Scenario: 生日與年齡區間不一致
-- **WHEN** 註冊時生日與所選年齡區間不一致
-- **THEN** 回應 400，訊息為「資料有誤，請重新註冊」，且不建立帳號
-
-#### Scenario: 不一致後可立即重新註冊
-- **WHEN** 註冊因生日與年齡區間不一致被拒絕後，使用者以同一個信箱與密碼、修正後的生日與區間再次註冊
-- **THEN** 註冊成功；該信箱沒有被封鎖、鎖定或標記
-
-#### Scenario: 未滿 13 歲
-- **WHEN** 由生日計算出未滿 13 歲者註冊
-- **THEN** 回應 400，代碼 `age_not_eligible`，不建立帳號
-
-#### Scenario: 兩項確認各自獨立
-- **WHEN** 註冊時只同意條款而未提供生日與區間，或只提供生日與區間而未同意條款
-- **THEN** 回應 400，並指出缺少的是哪一項
+#### Scenario: 不再產生待驗證狀態
+- **WHEN** 任何流程建立或更新帳號
+- **THEN** 帳號狀態不會被設為 `pending_verification`
 
 ### Requirement: email 正規化與唯一性
 email SHALL 先經過 Unicode NFC 正規化、去除頭尾空白並轉為小寫，才用於儲存與比對。對 `gmail.com` 與 `googlemail.com` 的信箱，系統 SHALL 另外去除本機部分的「.」與「+標籤」並統一網域後，產生用於重複判斷的正規形式。原始（小寫）地址 SHALL 保留供寄信使用。email 與其正規形式 SHALL 各自唯一，且行為在 SQLite 與 SQL Server 上一致。
 
 #### Scenario: 只差大小寫
-- **WHEN** 已有 `Alice@Example.com` 的帳號，又有人以 `alice@example.com` 註冊
-- **THEN** 視為重複，不建立新帳號
+- **WHEN** 已有 `Alice@Example.com` 的帳號，又有人以 `alice@example.com` 的 Google 帳號首次登入
+- **THEN** 視為同一個信箱，不建立新帳號
 
 #### Scenario: Gmail 別名
-- **WHEN** 已有 `john.doe@gmail.com` 的帳號，又有人以 `johndoe+news@googlemail.com` 註冊
-- **THEN** 視為重複，不建立新帳號
+- **WHEN** 已有 `john.doe@gmail.com` 的帳號，又有人以 `johndoe+news@googlemail.com` 的 Google 帳號首次登入
+- **THEN** 視為同一個信箱，不建立新帳號
 
 #### Scenario: 其他網域不去點
-- **WHEN** 已有 `a.b@example.com` 的帳號，又有人以 `ab@example.com` 註冊
-- **THEN** 兩者視為不同信箱，皆可註冊
+- **WHEN** 已有 `a.b@example.com` 的帳號，又有人以 `ab@example.com` 的 Google 帳號首次登入
+- **THEN** 兩者視為不同信箱，各自建立帳號
 
 #### Scenario: 帳號刪除後重新註冊
-- **WHEN** 某信箱對應的帳號已被刪除，之後有人以同一信箱註冊
-- **THEN** 可以註冊成功
-
-### Requirement: 註冊回應不洩漏帳號是否存在
-無論信箱是否已有帳號，註冊的回應狀態與訊息 SHALL 相同；兩種情況 SHALL 執行相同的密碼雜湊運算，且寄信 SHALL 在回應送出之後才進行，使回應時間不因此出現可辨識的差異。信箱已存在時，系統 SHALL NOT 建立新帳號，也 SHALL NOT 變更既有帳號的密碼或其他資料。
-
-#### Scenario: 信箱已有帳號
-- **WHEN** 以已被使用的信箱註冊
-- **THEN** 回應與成功註冊完全相同的狀態與訊息，既有帳號的密碼與資料不變
-
-#### Scenario: 信箱已有純 Google 帳號
-- **WHEN** 以已存在純 Google 帳號（沒有密碼）的信箱註冊
-- **THEN** 回應通用訊息，不建立新帳號，也不替既有帳號設定密碼
-
-#### Scenario: 重複註冊尚未驗證的帳號
-- **WHEN** 信箱已有待驗證的帳號，又有人以同一信箱註冊
-- **THEN** 既有帳號的密碼不被覆蓋；若信箱驗證已啟用，系統重新寄出驗證信（受重寄頻率限制）
-
-### Requirement: 註冊結果依信箱驗證設定而定
-信箱驗證開啟時，註冊成功的帳號狀態 SHALL 為 `pending_verification`，並寄出驗證信。信箱驗證關閉時（僅限 development、testing、staging），註冊成功的帳號 SHALL 直接為 `active` 且信箱驗證時間保持空值，且不寄任何信。註冊 SHALL NOT 自動登入。
-
-#### Scenario: 驗證開啟
-- **WHEN** 信箱驗證開啟，使用者註冊成功
-- **THEN** 帳號為待驗證狀態，使用者收到驗證信，且尚未登入
-
-#### Scenario: 驗證關閉
-- **WHEN** 信箱驗證關閉，使用者註冊成功
-- **THEN** 帳號直接為啟用狀態、信箱驗證時間為空，不寄信，且尚未登入
-
-### Requirement: 註冊時記錄條款同意
-註冊成功時，系統 SHALL 記錄使用者同意的條款版本與同意時間。條款版本 SHALL 為目前頁面所顯示的版本。
-
-#### Scenario: 記錄同意
-- **WHEN** 使用者勾選同意並註冊成功
-- **THEN** 帳號保存當時的條款版本與同意時間
+- **WHEN** 某信箱對應的帳號已被刪除，之後有人以同一信箱的 Google 帳號首次登入並勾選條款
+- **THEN** 可以建立新帳號
 
 ### Requirement: 服務條款與隱私權政策頁面
 系統 SHALL 提供不需登入即可瀏覽的 `/terms` 與 `/privacy` 繁體中文頁面。隱私權政策 SHALL 告知對話內容會傳送至 Google 的 Gemini 服務、資料保存期限與當事人權利。在法務覆核完成前，兩個頁面 SHALL 清楚標示為草稿。
