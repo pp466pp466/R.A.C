@@ -44,7 +44,7 @@
 
 - [X] 8.1 `login.html`／`login.js` 改為只有 Google 按鈕與條款勾選框（按鈕在未勾選時仍可按、處理中禁用、`finally` 恢復、錯誤代碼以固定繁體中文顯示，含「請先同意條款」）；移除 `register.html`／`register.js`；`/register` 導向 `/login`。驗證：改寫 `tests/test_auth_pages.py`、`tests/js/` 相關測試——頁面沒有電子郵件、密碼、生日、年齡欄位；`/register` 導向；錯誤代碼對照；`tests/test_ui_components.py` 與 `tests/architecture/test_frontend_rules.py` 通過
 - [X] 8.2 新增 `age.html`／`age.js`（生日與年齡區間、通用錯誤、`age_not_eligible` 後回 `/login`、`finally` 恢復）、`appeal.html`／`appeal.js`（字數提示、處理狀態）、`login_password.html`／`login_password.js`（密碼欄位與「忘記密碼」按鈕，寄信設定缺少時不顯示）；`account.js` 的年齡補填區塊只留給管理員。驗證：新增 `tests/test_age_page.py`、`test_appeal_page.py`、`test_admin_password_page.py` 的頁面部分；Node 測試涵蓋三個頁面的狀態機（送出中、成功、各種錯誤代碼）
-- [ ] 8.3 瀏覽器人工驗收（使用者在場，沿用 `staging-deployment` 的 ngrok 通道與預備環境專用 OAuth 用戶端）：新使用者勾選條款 → Google → 年齡確認頁 → `/cs`；登出再登入一次點擊；未勾選條款的新使用者被擋；24 小時清除（以指令預覽）；被鎖定（以 `flask` 腳本製造）→ 申訴 → 管理員解除；管理員 Google 後輸入密碼。驗證：結果逐項記入 README；使用者不在場則標為未驗證
+- [x] 8.3 瀏覽器人工驗收（封存後於 2026-11-03 完成，結果與限制見 README「驗收紀錄（google-first-login）」；使用者在場，沿用 `staging-deployment` 的 ngrok 通道與預備環境專用 OAuth 用戶端）：新使用者勾選條款 → Google → 年齡確認頁 → `/cs`；登出再登入一次點擊；未勾選條款的新使用者被擋；24 小時清除（以指令預覽）；被鎖定（以 `flask` 腳本製造）→ 申訴 → 管理員解除；管理員 Google 後輸入密碼。驗證：結果逐項記入 README；使用者不在場則標為未驗證
 
 ## 9. 告警、個資與日誌
 

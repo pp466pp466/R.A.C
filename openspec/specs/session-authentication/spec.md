@@ -3,9 +3,10 @@
 ## Purpose
 定義會員如何登入並維持登入狀態：密碼雜湊與長度規則、登入失敗的通用訊息與鎖定、簽章 session cookie 與撤銷機制、登出、改密碼，以及帳號狀態對登入的影響。
 
-> 注意（2026-11-02）：AGENTS.md 第 10 節已修訂（Google 登入改版），change ① `google-first-login` 已實作（登入、年齡確認、登入有效期、帳號鎖定、申訴與管理員二階段登入），其需求於封存時同步進本規格；本規格中與玩家端密碼註冊、密碼登入、忘記密碼、信箱驗證有關的部分描述的是目前的實作，待 change ② 更新。
+> 注意（2026-11-02）：AGENTS.md 第 10 節已修訂（Google 登入改版），change ① `google-first-login` 已實作（登入、年齡確認、登入有效期、帳號鎖定、申訴與管理員二階段登入），其需求已於 2026-11-03 封存時同步進本規格；本規格中與玩家端密碼註冊、密碼登入、忘記密碼、信箱驗證有關的部分描述的是目前的實作，待 change ② 更新。
 
 ## Requirements
+
 
 ### Requirement: 密碼以 Argon2id 雜湊
 系統 SHALL 以 Argon2id 雜湊密碼後才儲存，SHALL NOT 儲存或記錄明文密碼。密碼 SHALL 先經 Unicode NFKC 正規化再雜湊，設定與驗證使用同一規則。登入成功時，若既有雜湊的參數已低於目前設定，系統 SHALL 以新參數重新雜湊。
@@ -61,23 +62,39 @@
 - **THEN** 失敗計數隨之累積到 5，帳號被鎖定，之後以正確密碼登入仍被拒絕
 
 ### Requirement: 登入狀態使用簽章 Cookie
-登入成功後，系統 SHALL 以簽章的 session cookie 維持登入，cookie 內容 SHALL 只包含使用者內部編號與 `token_version`，SHALL NOT 使用 JWT。cookie SHALL 設定 `HttpOnly`、`SameSite=Lax`，存活 7 天（自登入時起算，不因使用而延長）；staging 與 production SHALL 另設 `Secure` 並使用 `__Host-` 前綴名稱。登入 SHALL 使用全新的 session 內容，不沿用登入前的任何內容。
+登入成功後，系統 SHALL 以簽章的 session cookie 維持登入，cookie 內容 SHALL 只包含使用者內部編號與 `token_version`（不放簽發時間或其他欄位），SHALL NOT 使用 JWT。cookie SHALL 設定 `HttpOnly`、`SameSite=Lax`；有效期為閒置 30 天、每次使用就續期，且 SHALL NOT 設絕對上限：每個辨識出登入者的回應 SHALL 以新的簽章與新的到期時間重新發出 cookie，沒有碰過登入狀態的回應（例如靜態檔、存活檢查）SHALL NOT 重發。staging 與 production SHALL 另設 `Secure` 並使用 `__Host-` 前綴名稱。登入 SHALL 使用全新的 session 內容，不沿用登入前的任何內容。撤銷 SHALL 只靠 `token_version` 與帳號狀態（cookie 被竊取後只要持續被使用就一直有效，這是已接受的取捨）。
 
 #### Scenario: 登入成功
-- **WHEN** 使用者以正確的信箱與密碼登入
+- **WHEN** 使用者通過登入
 - **THEN** 回應設定了符合上述屬性的 session cookie，內容只含使用者編號與 `token_version`
 
 #### Scenario: 正式環境的 cookie
 - **WHEN** 在 production 登入成功
 - **THEN** cookie 名稱以 `__Host-` 開頭，並帶有 `Secure`、`HttpOnly`、`SameSite=Lax`，且沒有 Domain 屬性
 
+#### Scenario: 每次使用就續期
+- **WHEN** 登入 20 天後的使用者再次請求需要登入的頁面
+- **THEN** 回應重新發出 cookie，新的到期時間是回應當下起算的 30 天，之後第 45 天仍視為已登入
+
 #### Scenario: 超過七天
-- **WHEN** 登入已超過 7 天的 cookie 被送回
+- **WHEN** 登入已超過 7 天、但期間持續使用的 cookie 被送回
+- **THEN** 仍視為已登入（不再有 7 天的絕對期限）
+
+#### Scenario: 閒置超過 30 天
+- **WHEN** 最後一次使用在 31 天前的 cookie 被送回
 - **THEN** 系統視為未登入
+
+#### Scenario: 沒有碰登入狀態的回應
+- **WHEN** 帶著有效登入 cookie 請求 `/healthz` 或靜態檔
+- **THEN** 回應沒有重發 cookie，也沒有查詢資料庫
 
 #### Scenario: 被竄改的 cookie
 - **WHEN** 送回內容被修改或簽章無效的 cookie
 - **THEN** 系統視為未登入
+
+#### Scenario: 沒有絕對上限
+- **WHEN** 使用者連續每天使用超過 100 天
+- **THEN** 仍維持登入，直到登出、`token_version` 改變或帳號被停用
 
 ### Requirement: 以 token_version 撤銷登入狀態
 每次請求辨識登入狀態時，系統 SHALL 比對 cookie 內的 `token_version` 與資料庫中的值，不一致即視為未登入。改密碼、登出所有裝置、重設密碼、綁定 Google 身分與申請刪除帳號時，系統 SHALL 使 `token_version` 加 1。帳號狀態為 `suspended` 時，既有的登入狀態 SHALL 立即失效。狀態為 `deletion_pending` 的帳號，申請當下的既有登入狀態因 `token_version` 加 1 而失效；之後重新登入得到的受限登入狀態 SHALL 有效。
@@ -179,3 +196,4 @@
 #### Scenario: 帶著登入 cookie 請求存活檢查
 - **WHEN** 資料庫停止，且請求帶有有效的登入 cookie 並呼叫存活檢查
 - **THEN** 回應 200
+
