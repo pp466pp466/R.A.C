@@ -75,7 +75,7 @@ def test_json_export_is_an_attachment_that_is_never_cached_and_contains_only_the
     assert "別人" not in body.decode("utf-8")
 
 
-def test_csv_export_is_a_zip_with_two_files(app):
+def test_csv_export_is_a_zip_with_three_files(app):
     owner = make_member(app, 1)
     add_conversation(app, owner.id, "=1+1 我的內容")
     response = logged_in_client(app, owner).post("/api/account/export", json={"format": "csv"})
@@ -83,7 +83,7 @@ def test_csv_export_is_a_zip_with_two_files(app):
     assert response.headers["Content-Disposition"] == "attachment; filename=my-data-20261027.zip"
     assert response.headers["Cache-Control"] == "no-store"
     with zipfile.ZipFile(io.BytesIO(response.get_data())) as archive:
-        assert sorted(archive.namelist()) == ["account.csv", "messages.csv"]
+        assert sorted(archive.namelist()) == ["account.csv", "appeals.csv", "messages.csv"]
         messages = archive.read("messages.csv")
     assert messages.startswith(b"\xef\xbb\xbf") and "'=1+1 我的內容".encode("utf-8") in messages
 

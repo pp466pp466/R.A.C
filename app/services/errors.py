@@ -30,6 +30,14 @@ class ValidationError(ServiceError):
         self.fields = dict(fields or {})
 
 
+class UnderageAccountErased(ValidationError):
+    """補填年齡時發現未滿 13 歲（400）：帳號與其全部個資已經抹除，Controller 據此清除目前裝置的登入狀態。
+    訊息是通用說明，不重述使用者填的內容，也不保存其生日。"""
+
+    code = "age_not_eligible"
+    default_message = "您的帳號與相關資料已刪除。"          # 帶有年齡數字的說明由呼叫端依年齡規則組出，這裡不寫死數字
+
+
 class Unauthenticated(ServiceError):
     """尚未登入，或登入資訊不正確（401）。"""
 
@@ -52,10 +60,18 @@ class AccountDeletionPending(Forbidden):
 
 
 class AgeConfirmationRequired(Forbidden):
-    """尚未完成年齡確認，不得使用會呼叫 Gemini 的功能（403）。前端依 `code` 引導使用者到帳號設定補填生日與年齡區間。"""
+    """尚未完成年齡確認（403）。玩家在補填之前除了年齡確認與登出什麼都不能做（受限登入狀態）；管理員只是不能使用會呼叫
+    Gemini 的功能。前端依 `code` 引導使用者到年齡確認頁補填生日與年齡區間。"""
 
     code = "age_confirmation_required"
-    default_message = "請先到帳號設定填寫生日並選擇年齡區間，才能使用這項功能。"
+    default_message = "請先完成年齡確認（填寫生日並選擇年齡區間），才能使用這項功能。"
+
+
+class AccountLocked(Forbidden):
+    """帳號被鎖定（403），只持有受限的登入狀態：除了申訴、查詢自己與登出，其餘功能都不可用；只有管理員能解除。"""
+
+    code = "account_locked"
+    default_message = "您的帳號已被鎖定。請到申訴頁向管理員說明，管理員解除後才能繼續使用。"
 
 
 class AgeRestricted(Forbidden):
@@ -93,6 +109,13 @@ class MessageIdReused(Conflict):
     default_message = "這則訊息的識別碼已用於不同的內容，請重新整理後再送出。"
 
 
+class AppealPending(Conflict):
+    """已有一則待處理的申訴（409）：同一時間最多一則，等管理員處理後才能再送。"""
+
+    code = "appeal_pending"
+    default_message = "您已有一則申訴正在等待管理員處理，請耐心等候。"
+
+
 class VersionConflict(Conflict):
     """版本號與後端不一致（409）：以後端為準，並附上最新的對話資訊（`conversation`）讓前端更新。"""
 
@@ -109,6 +132,13 @@ class TooManyRequests(ServiceError):
 
     code = "too_many_requests"
     default_message = "操作太頻繁，請稍後再試。"
+
+
+class AppealRateLimited(TooManyRequests):
+    """一小時內送出的申訴已達上限（429）。"""
+
+    code = "appeal_rate_limited"
+    default_message = "一小時內最多只能送出 3 則申訴，請稍後再試。"
 
 
 class RateLimited(TooManyRequests):

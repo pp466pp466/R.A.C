@@ -18,9 +18,11 @@ from datetime import datetime, timedelta, timezone
 from typing import Callable
 
 from app.config import UsageSettings
+from app.models.lock_strike import STRIKE_RATE_LIMITED
 from app.observability import usage_events
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
+from app.services.account_lock_service import AccountLockService
 from app.services.age_policy import TAIPEI
 from app.services.current_user import CurrentUser
 from app.services.errors import (
@@ -70,7 +72,9 @@ class UsageService:
         settings: UsageSettings,
         clock: Callable[[], datetime],
         processing_ttl: timedelta,
+        lock: AccountLockService | None = None,
     ) -> None:
+        self._lock = lock                                # 被每分鐘訊息數上限擋下時計入帳號鎖定的計次（洗版）
         self._ledger = ledger
         self._chats = chats
         self._settings = settings
@@ -123,6 +127,8 @@ class UsageService:
         if len(recent) < per_minute:
             return
         usage_events.log_denied(user_id=user.id, reason=usage_events.DENIED_RATE_LIMITED)
+        if self._lock is not None:                       # 429 的請求也要保留計次，否則洗版永遠累積不到門檻
+            self._lock.register_strike(user.id, STRIKE_RATE_LIMITED)
         oldest_in_window = _aware(recent[-1])               # 第 `per_minute` 新的那一則；它離開視窗就空出一個名額
         raise RateLimited(retry_after=_seconds_until(oldest_in_window + RATE_WINDOW, now))
 

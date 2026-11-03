@@ -42,10 +42,12 @@ def test_development_cookie_has_plain_name_and_no_secure_flag(env):
     assert config["SESSION_COOKIE_SAMESITE"] == "Lax"
 
 
-def test_cookie_lives_seven_days_from_login_and_is_not_extended_by_use():
-    config = make_app("testing").config
-    assert config["PERMANENT_SESSION_LIFETIME"] == timedelta(days=7) == SESSION_LIFETIME
-    assert config["SESSION_REFRESH_EACH_REQUEST"] is False
+def test_cookie_lives_thirty_idle_days_and_is_renewed_by_use():
+    app = make_app("testing")
+    assert app.config["PERMANENT_SESSION_LIFETIME"] == timedelta(days=30) == SESSION_LIFETIME
+    from app.security.session import SlidingSessionInterface
+
+    assert isinstance(app.session_interface, SlidingSessionInterface)
 
 
 def test_cookie_name_helper_follows_the_environment():

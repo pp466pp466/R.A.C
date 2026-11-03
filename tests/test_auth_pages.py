@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.models import Base
+from app.security.redirects import DEFAULT_AFTER_LOGIN
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.legal import CURRENT_TERMS_VERSION
 from tests.architecture.test_frontend_rules import own_asset_violations
@@ -17,9 +18,10 @@ from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 from tests.support.google import FakeProvider
+from tests.support.idor import logged_in_client
 
 STATE_PATTERN = re.compile(r'<script type="application/json" id="initial-state">(.*?)</script>', re.S)
-PAGES = ("/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy")
+PAGES = ("/login", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy")
 
 
 def make_app(*, verification=False, google=False, age_policy: AgePolicy | None = None):
@@ -63,6 +65,12 @@ def logged_in(app, **user_overrides):
     client = app.test_client()
     assert login(client).status_code == 200
     return client
+
+
+def logged_in_admin_without_age(app, **user_overrides):
+    """尚未補填年齡的管理員（玩家沒補填就不能開帳號頁，會被導向年齡確認頁；補填區塊只留給管理員）。"""
+    with Session(app.extensions["db_engine"]) as s:
+        return logged_in_client(app, add_user(s, 1, age=None, role="admin", **user_overrides))
 
 
 class _Collector(HTMLParser):
@@ -114,10 +122,10 @@ def test_every_local_script_and_stylesheet_a_page_references_really_exists(full_
 
 def test_vue_templates_are_not_processed_by_jinja(full_app):
     html = full_app.test_client().get("/login").get_data(as_text=True)
-    assert "{{ form.state.submitting" in html and 'id="app"' in html           # Vue 的插值原樣送到瀏覽器
+    assert "{{ google.state.submitting" in html and 'id="app"' in html         # Vue 的插值原樣送到瀏覽器
 
 
-@pytest.mark.parametrize("path", ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy"])
+@pytest.mark.parametrize("path", ["/login", "/forgot-password", "/reset-password", "/verify-email", "/terms", "/privacy"])
 def test_no_jinja_syntax_leaks_into_any_page(full_app, path):
     """{% raw %} 區塊內的 Jinja 語法不會被處理：任何頁面都不能把 {# #} 或 {% %} 原樣送給使用者。"""
     html = full_app.test_client().get(path).get_data(as_text=True)
@@ -142,25 +150,22 @@ def test_the_flags_follow_the_configuration(app):
 
 @pytest.mark.parametrize("bad", ["https://evil.example/", "//evil.example", "javascript:alert(1)", "/\\evil", "/%2f/evil"])
 def test_an_unsafe_next_never_reaches_the_page_state(app, bad):
-    for path in ("/login", "/register"):
-        assert state_of(app.test_client().get(f"{path}?next={bad}"))["next"] == "/account"
+    assert state_of(app.test_client().get(f"/login?next={bad}"))["next"] == DEFAULT_AFTER_LOGIN
 
 
 @pytest.mark.parametrize(
     ("code", "fragment"),
     [("google_state", "Google 登入的驗證"), ("google_unavailable", "暫時無法使用"), ("google_rejected", "沒有完成"),
-     ("terms_required", "勾選同意"), ("age_required", "請先完成年齡確認"), ("account_disabled", "已停用")],
+     ("terms_required", "勾選同意"), ("account_disabled", "已停用")],
 )
 def test_known_error_codes_become_chinese_notices(full_app, code, fragment):
     notice = state_of(full_app.test_client().get(f"/login?error={code}"))["notice"]
     assert fragment in notice
 
 
-def test_the_age_notice_is_distinct_from_the_terms_notice(full_app):
-    """年齡與條款是各自獨立的確認：缺哪一項就顯示哪一項的說明。"""
-    notices = {code: state_of(full_app.test_client().get(f"/login?error={code}"))["notice"] for code in ("age_required", "terms_required")}
-    assert notices["age_required"] != notices["terms_required"]
-    assert "條款" not in notices["age_required"] and "生日" not in notices["terms_required"]
+def test_the_retired_age_error_code_is_now_just_an_unknown_value(full_app):
+    """年齡確認改在登入之後的年齡確認頁，登入頁不再有「缺少年齡」的說明：舊代碼和任何未知的值一樣被忽略。"""
+    assert state_of(full_app.test_client().get("/login?error=age_required"))["notice"] is None
 
 
 @pytest.mark.parametrize("attack", ["<script>alert(1)</script>", "google_state%22%3E%3Cimg%20src=x%3E", "nope", "age_required%22%3E", "AGE_REQUIRED", ""])
@@ -170,34 +175,24 @@ def test_unknown_error_values_are_ignored_and_never_echoed(app, attack):
     assert "alert(1)" not in response.get_data(as_text=True) and "<img src=x" not in response.get_data(as_text=True)
 
 
-@pytest.mark.parametrize("path", ["/login", "/register"])
-def test_a_logged_in_member_is_sent_to_the_account_page(app, path):
+def test_a_logged_in_member_is_sent_to_the_default_page_from_the_login_page(app):
     client = logged_in(app)
-    response = client.get(path)
-    assert response.status_code == 302 and response.headers["Location"] == "/account"
-
-
-def test_the_register_page_links_to_the_terms_and_the_privacy_policy(app):
-    html = app.test_client().get("/register").get_data(as_text=True)
-    assert 'href="/terms"' in html and 'href="/privacy"' in html
-    assert 'type="checkbox"' in html and 'autocomplete="new-password"' in html and 'autocomplete="email"' in html
+    response = client.get("/login")
+    assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN
 
 
 def test_the_page_state_carries_the_age_rules_from_the_policy_and_the_dates_of_today(app):
-    for path in ("/login", "/register"):
-        rules = state_of(app.test_client().get(path))["ageRules"]
-        assert rules["minRegisterAge"] == 13 and rules["adultAge"] == 18
-        assert [r["code"] for r in rules["ranges"]] == [r.code for r in DEFAULT_AGE_POLICY.ranges]
-        assert all(set(r) == {"code", "label"} and r["label"] for r in rules["ranges"])
-        assert rules["birthDateMin"] == "1900-01-01" and rules["birthDateMax"] == "2026-10-27"      # 假時鐘的台北日期
+    rules = state_of(app.test_client().get("/login"))["ageRules"]
+    assert rules["minRegisterAge"] == 13 and rules["adultAge"] == 18
+    assert [r["code"] for r in rules["ranges"]] == [r.code for r in DEFAULT_AGE_POLICY.ranges]
+    assert all(set(r) == {"code", "label"} and r["label"] for r in rules["ranges"])
+    assert rules["birthDateMin"] == "1900-01-01" and rules["birthDateMax"] == "2026-10-27"      # 假時鐘的台北日期
 
 
 def test_a_custom_policy_changes_the_state_the_options_and_the_wording_without_touching_the_pages():
     strict = make_app(age_policy=AgePolicy(min_register_age=18, min_use_age=18, version="test"))
-    rules = state_of(strict.test_client().get("/register"))["ageRules"]
+    rules = state_of(strict.test_client().get("/login"))["ageRules"]
     assert rules["minRegisterAge"] == 18
-    register_html = strict.test_client().get("/register").get_data(as_text=True)
-    assert "{{ ageRules.minRegisterAge }}" in register_html                      # 數字由前端從狀態取，不寫死在範本
     terms = strict.test_client().get("/terms").get_data(as_text=True)
     assert "18 歲以上" in terms and "13 歲" not in terms and "至 17 歲" not in terms
 
@@ -216,50 +211,44 @@ def test_no_template_or_script_hardcodes_an_age_number():
     assert offenders == [], offenders
 
 
-def test_the_register_page_has_a_birthday_and_a_range_with_their_own_error_slots_and_no_age_checkbox(app):
-    html = app.test_client().get("/register").get_data(as_text=True)
-    assert 'id="birth_date"' in html and 'type="date"' in html and 'autocomplete="bday"' in html
-    assert 'id="age_range"' in html and "<select" in html and 'v-for="range in ageRules.ranges"' in html
-    assert 'for="birth_date"' in html and 'for="age_range"' in html
-    assert "form.fieldErrors.birth_date" in html and "form.fieldErrors.age_range" in html
-    assert "google.fieldErrors.birth_date" in html and "google.fieldErrors.age_range" in html
-    assert "confirm_adult" not in html and "我已年滿 18 歲" not in html               # 年齡勾選已移除
-    assert 'id="accept_terms"' in html                                                # 條款勾選仍然獨立存在
-
-
-def test_the_register_script_sends_the_birthday_and_range_and_resets_the_age_fields_on_a_rejection():
+def test_the_register_page_and_script_no_longer_exist():
     from app.config import PROJECT_ROOT
 
-    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "register.js").read_text(encoding="utf-8")
-    assert "birth_date: form.values.birth_date" in script and "age_range: form.values.age_range" in script
-    assert "confirm_adult" not in script
-    assert "請先勾選同意服務條款與隱私權政策。" in script and "請輸入生日。" in script and "請選擇年齡區間。" in script
-    # 對不起來或不符合資格：清空生日與區間（保留電子郵件與顯示名稱），失敗後也一律清空密碼
-    reset = script.split("function resetAgeOnRejection", 1)[1].split("// Google 註冊", 1)[0]
-    assert "age_mismatch" in reset and "age_not_eligible" in reset and "birth_date = ''" in reset and "age_range = ''" in reset
-    failure = script.split("function onRegisterError", 1)[1].split("function resetAgeOnRejection", 1)[0]
-    assert "password = ''" in failure and "email" not in failure and "display_name" not in failure
+    assert not (PROJECT_ROOT / "app" / "templates" / "auth" / "register.html").exists()
+    assert not (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "register.js").exists()
 
 
-def test_the_login_page_google_entry_has_the_terms_the_birthday_and_the_range_and_the_script_checks_all_three(full_app):
+def test_the_login_page_has_only_the_google_button_and_the_terms_checkbox(full_app):
+    html = full_app.test_client().get("/login").get_data(as_text=True)
+    # 登入與註冊合一：沒有電子郵件、密碼、顯示名稱、生日與年齡區間，也沒有註冊與忘記密碼的連結
+    for forbidden in ('type="email"', 'type="password"', 'type="date"', "<select", 'id="birth', 'id="age_range"', 'for="email"',
+                      'for="password"', 'href="/register"', 'href="/forgot-password"', "confirm_adult"):
+        assert forbidden not in html, forbidden
+    assert 'id="accept-terms"' in html and 'type="checkbox"' in html
+    assert 'href="/terms"' in html and 'href="/privacy"' in html                       # 勾選框旁有條款與隱私權政策的連結
+    assert "使用 Google 登入" in html and "第一次使用時必須勾選" in html
+
+
+def test_the_google_button_stays_clickable_when_the_terms_are_not_ticked_and_only_the_flag_and_next_are_sent(full_app):
     from app.config import PROJECT_ROOT
 
     html = full_app.test_client().get("/login").get_data(as_text=True)
-    assert 'id="google-terms"' in html and 'id="google-birth-date"' in html and 'id="google-age-range"' in html
-    assert 'v-model="google.values.birthDate"' in html and 'v-model="google.values.ageRange"' in html
-    assert "google.fieldErrors.birth_date" in html and "google.fieldErrors.age_range" in html and "confirm_adult" not in html
+    button = html.split('@click="signInWithGoogle"', 1)[0].rsplit("<button", 1)[1]
+    assert ":disabled=\"google.state.submitting\"" in button and "acceptTerms" not in button       # 只在送出中禁用，與勾選與否無關
     script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "login.js").read_text(encoding="utf-8")
-    assert "google.values.acceptTerms" in script and "google.values.birthDate" in script and "google.values.ageRange" in script
-    assert "birth_date: google.values.birthDate" in script and "age_range: google.values.ageRange" in script
-    assert "請輸入生日。" in script and "請選擇年齡區間。" in script and "confirm_adult" not in script
+    assert "Auth.googleStartBody(google.values.acceptTerms, state.next)" in script
+    assert "birth" not in script and "age_range" not in script and "password" not in script and "email" not in script
+    flows = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "auth-flows.js").read_text(encoding="utf-8")
+    body = flows.split("function googleStartBody", 1)[1].split("}", 1)[0]
+    assert "accept_terms" in body and "next" in body and "birth" not in body
 
 
-def test_the_account_page_shows_the_age_row_and_the_form_for_a_member_without_age_data(full_app):
-    client = logged_in(full_app)                                                      # 沒有年齡資料（例如升級前的帳號）
+def test_the_account_page_shows_the_age_row_and_the_form_for_an_admin_without_age_data(full_app):
+    client = logged_in_admin_without_age(full_app)                                    # 管理員由指令建立，沒有年齡資料
     page = client.get("/account")
     html = page.get_data(as_text=True)
     assert "<dt>年齡確認</dt>" in html and "尚未完成" in html and "已完成" in html
-    assert 'v-if="!ageConfirmed"' in html and 'id="account_birth_date"' in html and 'id="account_age_range"' in html
+    assert 'v-if="isAdmin && !ageConfirmed"' in html and 'id="account_birth_date"' in html and 'id="account_age_range"' in html
     assert "confirm_adult" not in html and "我已年滿" not in html
     user = state_of(page)["user"]
     assert user["age_confirmed"] is False and user["age_group"] is None
@@ -282,7 +271,7 @@ def test_a_minor_sees_the_safe_mode_notice_block_driven_by_the_age_group(full_ap
 
 
 def test_verifying_the_age_on_the_account_page_flow_updates_the_state(full_app):
-    client = logged_in(full_app)
+    client = logged_in_admin_without_age(full_app)
     body = {"birth_date": birth_date_for_age(15).isoformat(), "age_range": "13_17"}
     assert client.post("/api/auth/verify-age", json=body).status_code == 200
     user = state_of(client.get("/account"))["user"]
@@ -306,7 +295,6 @@ def test_every_password_field_states_and_enforces_the_8_to_128_range(full_app):
     """AGENTS.md 第 10 節：8 至 128 字。頁面上的說明文字與瀏覽器的 minlength 都要跟著規則走。"""
     logged = logged_in(full_app)
     pages = {
-        "/register": full_app.test_client().get("/register"),
         "/reset-password": full_app.test_client().get("/reset-password"),
         "/account": logged.get("/account"),
     }
@@ -316,7 +304,7 @@ def test_every_password_field_states_and_enforces_the_8_to_128_range(full_app):
         assert "10 至 128" not in html and 'minlength="10"' not in html, path
 
 
-@pytest.mark.parametrize("path", ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email"])
+@pytest.mark.parametrize("path", ["/login", "/forgot-password", "/reset-password", "/verify-email"])
 def test_every_vue_mount_point_is_cloaked_until_vue_has_mounted(full_app, path):
     """Vue 掛載之前，頁面內的範本（{{ }}）不能被使用者看見。"""
     assert '<div id="app" v-cloak>' in full_app.test_client().get(path).get_data(as_text=True)
@@ -339,9 +327,11 @@ def test_the_change_password_form_can_be_submitted_with_enter(full_app):
     assert "{#" not in html and "#}" not in html            # raw 區塊內的 Jinja 註解不會被處理，不能留在輸出裡
 
 
-def test_the_login_page_has_autofill_attributes_and_labels(app):
-    html = app.test_client().get("/login").get_data(as_text=True)
-    assert 'autocomplete="current-password"' in html and 'for="email"' in html and 'for="password"' in html
+def test_the_admin_password_page_has_autofill_attributes_and_labels(app):
+    from app.config import PROJECT_ROOT
+
+    html = (PROJECT_ROOT / "app" / "templates" / "auth" / "login_password.html").read_text(encoding="utf-8")
+    assert 'autocomplete="current-password"' in html and 'for="password"' in html and 'type="password"' in html
 
 
 def test_forms_restore_their_state_in_a_finally_block_and_never_use_unsafe_dom_apis():
@@ -365,9 +355,9 @@ def test_email_flow_pages_are_404_when_verification_is_off_and_never_linked(app,
     assert response.status_code == 404 and "找不到" in response.get_data(as_text=True)
 
 
-def test_the_forgot_password_entry_on_the_login_page_is_controlled_by_the_flag(app, full_app):
-    """登入頁的「忘記密碼」連結由旗標控制：驗證關閉時旗標為 false，Vue 不會渲染它。"""
-    assert 'v-if="verificationRequired" href="/forgot-password"' in app.test_client().get("/login").get_data(as_text=True)
+def test_the_login_page_state_still_reports_the_verification_flag_but_the_page_has_no_forgot_password_link(app, full_app):
+    """玩家沒有密碼，登入頁沒有「忘記密碼」；旗標仍在初始狀態裡（玩家端的密碼功能由後續的 change 移除）。"""
+    assert 'href="/forgot-password"' not in app.test_client().get("/login").get_data(as_text=True)
     assert state_of(app.test_client().get("/login"))["verificationRequired"] is False
     assert state_of(full_app.test_client().get("/login"))["verificationRequired"] is True
 
@@ -405,14 +395,15 @@ def test_the_account_page_requires_a_login_and_keeps_the_destination(app):
 
 
 def test_the_account_page_state_holds_the_members_own_profile_only(app):
-    client = logged_in(app, member_tier="plus")
+    client = logged_in_admin_without_age(app, member_tier="plus")
     state = state_of(client.get("/account"))
     user = state["user"]
     assert (user["email"], user["display_name"], user["member_tier"]) == ("user1@example.com", "使用者1", "plus")
     assert set(user) == {
         "public_id", "email", "display_name", "member_tier", "role", "status", "email_verified", "has_password",
-        "age_confirmed", "age_group", "google_linked",
+        "age_confirmed", "age_group", "google_linked", "restriction",
     }
+    assert user["restriction"] is None                                                # 管理員不會是待確認年齡的受限狀態
     assert user["age_confirmed"] is False and user["age_group"] is None
     assert "password_hash" not in json.dumps(state) and "token_version" not in json.dumps(state)
 
@@ -483,9 +474,9 @@ def test_the_terms_describe_the_service_as_ai_only(app):
 
 def test_the_terms_set_the_minimum_age_and_the_teen_safe_mode_and_say_how_age_is_declared(app):
     html = app.test_client().get("/terms").get_data(as_text=True)
-    assert "13 歲以上" in html and "未滿 13 歲者不得註冊" in html
+    assert "13 歲以上" in html and "未滿 13 歲者不得使用" in html
     assert "13 至 17 歲" in html and "只能使用安全模式" in html and "滿 18 歲之後會自動解除" in html
-    assert "年齡區間" in html and "互相對照" in html and "自行聲明" in html and "帳號設定" in html
+    assert "年齡區間" in html and "互相對照" in html and "自行聲明" in html and "年齡確認" in html
     assert "另外勾選確認" not in html and "僅供年滿 18 歲者使用" not in html            # 舊的勾選版說法已不存在
     assert "草稿" in html and CURRENT_TERMS_VERSION in html                          # 仍是草稿，版本照舊顯示
     headings = re.findall(r"<h2>(\d+)\. ", html)
@@ -495,7 +486,7 @@ def test_the_terms_set_the_minimum_age_and_the_teen_safe_mode_and_say_how_age_is
 def test_the_privacy_policy_discloses_the_birthday_its_purposes_and_its_retention(app):
     html = app.test_client().get("/privacy").get_data(as_text=True)
     assert "生日與年齡區間" in html and "不蒐集證件" in html
-    assert "未滿 13 歲者無法註冊" in html and "不會保存" in html
+    assert "發現未滿 13 歲者" in html and "立即刪除" in html and "不會保存" in html
     assert "不蒐集生日、年齡或證件" not in html and "年齡確認紀錄" not in html           # 舊的說法已不存在
     for purpose in ("年齡確認", "內容分級", "去識別的統計方式了解用戶群"):
         assert purpose in html, purpose
@@ -512,4 +503,4 @@ def test_the_privacy_policy_discloses_the_birthday_its_purposes_and_its_retentio
 def test_the_legal_pages_follow_the_policy_numbers():
     strict = make_app(age_policy=AgePolicy(min_register_age=18, min_use_age=18, adult_age=18, version="test"))
     privacy = strict.test_client().get("/privacy").get_data(as_text=True)
-    assert "未滿 18 歲者無法註冊" in privacy and "未滿 13 歲" not in privacy
+    assert "發現未滿 18 歲者" in privacy and "未滿 13 歲" not in privacy

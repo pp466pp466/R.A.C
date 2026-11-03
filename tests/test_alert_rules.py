@@ -122,7 +122,7 @@ def test_percentile_offset_rejects_an_empty_sample():
         rules.percentile_offset(0)
 
 
-# ---- 登入失敗激增 -------------------------------------------------------------------
+# ---- 帳號鎖定激增 -------------------------------------------------------------------
 
 @pytest.mark.parametrize(("locked", "severity"), [(0, None), (1, None), (4, None), (5, SEVERITY_WARNING), (40, SEVERITY_WARNING)])
 def test_lockout_threshold_counts_accounts(locked, severity):

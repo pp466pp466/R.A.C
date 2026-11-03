@@ -23,11 +23,15 @@ def test_no_command_is_both_scheduled_and_manual():
     assert set(cli.SCHEDULED_COMMANDS).isdisjoint(cli.MANUAL_COMMANDS)
 
 
-def test_the_four_scheduled_commands_and_their_frequencies():
-    assert set(cli.SCHEDULED_COMMANDS) == {"check-alerts", "execute-account-deletions", "purge-expired-data", "purge-inactive-accounts"}
+def test_the_five_scheduled_commands_and_their_frequencies():
+    assert set(cli.SCHEDULED_COMMANDS) == {
+        "check-alerts", "purge-unconfirmed-accounts", "execute-account-deletions", "purge-expired-data", "purge-inactive-accounts",
+    }
     assert cli.SCHEDULED_COMMANDS["check-alerts"] == "*/5 * * * *"
-    daily = {name: cron for name, cron in cli.SCHEDULED_COMMANDS.items() if name != "check-alerts"}
-    assert len(set(daily.values())) == 3, "三個每日指令應錯開時間"
+    # 逾時未完成年齡確認的帳號每小時清除一次（24 小時的補填期限）；其餘三個是每日、錯開時間
+    assert cli.SCHEDULED_COMMANDS["purge-unconfirmed-accounts"] == "0 * * * *"
+    daily = {name: cron for name, cron in cli.SCHEDULED_COMMANDS.items() if name not in ("check-alerts", "purge-unconfirmed-accounts")}
+    assert len(daily) == 3 and len(set(daily.values())) == 3, "三個每日指令應錯開時間"
     for cron in daily.values():
         minute, hour, day, month, weekday = cron.split()
         assert (day, month, weekday) == ("*", "*", "*") and hour == "3" and minute.isdigit()

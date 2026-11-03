@@ -16,6 +16,7 @@ from app.controllers.account_api_controller import account_api_bp
 from app.controllers.admin_api_controller import admin_api_bp
 from app.controllers.admin_page_controller import admin_pages_bp
 from app.controllers.api_controller import api_bp
+from app.controllers.appeal_api_controller import appeal_api_bp
 from app.controllers.auth_api_controller import auth_api_bp
 from app.controllers.auth_page_controller import auth_pages_bp
 from app.controllers.cs_api_controller import cs_api_bp
@@ -116,6 +117,7 @@ def create_app(
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_api_bp)
     app.register_blueprint(account_api_bp)
+    app.register_blueprint(appeal_api_bp)
     app.register_blueprint(cs_api_bp)
     app.register_blueprint(cs_pages_bp)
     app.register_blueprint(admin_api_bp)

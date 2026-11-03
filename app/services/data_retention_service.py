@@ -7,8 +7,10 @@
 | 失敗的模型原文 | 建立早於 14 天 | 原文清為空值，帳本那一筆保留 |
 | 驗證權杖 | 到期早於 7 天（不論是否已使用） | 刪除 |
 | 管理稽核紀錄 | 建立早於 730 天（24 個月） | 刪除 |
+| 帳號鎖定計次 | 建立早於 7 天（計次視窗只有 15 分鐘） | 刪除 |
 
-帳號刪除紀錄（`deletion_tombstones`）**不納入**：它不含個資，而且備份還原後要靠它重新執行刪除。月以天計（與閒置帳號清除相同）。
+帳號刪除紀錄（`deletion_tombstones`）**不納入**：它不含個資，而且備份還原後要靠它重新執行刪除。**申訴也不納入**：它的保存期限與所屬帳號
+相同（帳號刪除時一併刪除），不由這裡清除。月以天計（與閒置帳號清除相同）。
 這些數值要與 `/privacy` 的保存期限表一致，`tests/test_legal_pages.py` 比對。
 
 每一類獨立、分批（500）、每批各自提交；某一類發生資料庫錯誤時回復該批、記錄類別（不含任何內容）、繼續其餘類別，
@@ -29,6 +31,7 @@ LEDGER_RETENTION = timedelta(days=365)
 ERROR_DETAIL_RETENTION = timedelta(days=14)
 AUTH_TOKEN_RETENTION = timedelta(days=7)
 ADMIN_AUDIT_RETENTION = timedelta(days=730)
+LOCK_STRIKE_RETENTION = timedelta(days=7)
 BATCH_SIZE = 500
 
 
@@ -72,6 +75,7 @@ class DataRetentionService:
             (lifecycle_events.CATEGORY_LEDGER, LEDGER_RETENTION, r.find_ledger, r.count_ledger, r.purge_ledger),
             (lifecycle_events.CATEGORY_AUTH_TOKENS, AUTH_TOKEN_RETENTION, r.find_auth_tokens, r.count_auth_tokens, r.purge_auth_tokens),
             (lifecycle_events.CATEGORY_ADMIN_AUDIT, ADMIN_AUDIT_RETENTION, r.find_admin_audit, r.count_admin_audit, r.purge_admin_audit),
+            (lifecycle_events.CATEGORY_LOCK_STRIKES, LOCK_STRIKE_RETENTION, r.find_lock_strikes, r.count_lock_strikes, r.purge_lock_strikes),
         )
 
     def run(self, *, dry_run: bool = False) -> RetentionReport:

@@ -91,3 +91,51 @@ def test_the_404_for_a_non_admin_is_also_no_store(app):
 
 def test_a_post_to_the_page_is_not_allowed(app):
     assert client_for(app, "admin").post("/admin", json={}).status_code == 405
+
+
+# ---- 被鎖定的帳號與申訴（google-first-login）-------------------------------------------------------------
+
+def _frontend(name: str) -> str:
+    from app.config import PROJECT_ROOT
+
+    paths = {
+        "template": PROJECT_ROOT / "app" / "templates" / "admin" / "console.html",
+        "script": PROJECT_ROOT / "app" / "static" / "js" / "admin" / "admin.js",
+    }
+    return paths[name].read_text(encoding="utf-8")
+
+
+def test_the_console_has_the_locked_accounts_and_appeals_tabs_and_the_unlock_confirmation():
+    script, template = _frontend("script"), _frontend("template")
+    assert "{ id: 'locked', label: '被鎖定的帳號' }" in script and "{ id: 'appeals', label: '申訴' }" in script
+    assert "locked: { path: '/locked', key: 'accounts', paged: true }" in script
+    assert "appeals: { path: '/appeals', key: 'appeals', paged: true }" in script
+    assert "unlock: {" in script and "'/users/' + encodeURIComponent(id) + '/unlock'" in script
+    assert "tab === 'locked'" in template and "tab === 'appeals'" in template and "askUnlock(" in template
+
+
+def test_the_unlock_goes_through_the_shared_password_confirmation_that_clears_the_password():
+    script = _frontend("script")
+    spec = script.split("unlock: {", 1)[1].split("remove: {", 1)[0]
+    assert "needsReason: false" in spec and "needsTier: false" in spec        # 只需要密碼
+    submit = script.split("function submitConfirm()", 1)[1].split("// ---- 啟動", 1)[0]
+    assert submit.index("confirmState.password = ''") < submit.index("request('post', spec.path(targetId)")    # 送出的當下立即清空
+
+
+def test_after_an_unlock_the_account_and_its_appeals_leave_both_lists():
+    script = _frontend("script")
+    body = script.split("function removeUnlockedFromLists", 1)[1].split("function applyConfirmError", 1)[0]
+    assert "lists.locked.items" in body and "lists.appeals.items" in body and "user_public_id" in body
+
+
+def test_appeal_text_is_rendered_as_plain_text_never_as_markup():
+    template = _frontend("template")
+    section = template.split("<!-- ===== 申訴 ===== -->", 1)[1].split("<!-- ===== 使用者 ===== -->", 1)[0]
+    assert "{{ row.content }}" in section and "v-html" not in template and "innerHTML" not in _frontend("script")
+    assert "admin-appeal__text" in section                                           # 與對話訊息相同的純文字樣式（保留換行）
+
+
+def test_the_appeals_view_says_what_it_does_and_does_not_show():
+    template = _frontend("template")
+    section = template.split("<!-- ===== 申訴 ===== -->", 1)[1].split("<!-- ===== 使用者 ===== -->", 1)[0]
+    assert "只有目前被鎖定的帳號" in section and "不提供該帳號的任何對話" in section

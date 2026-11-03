@@ -12,7 +12,10 @@ from sqlalchemy import Column, ForeignKey, Integer, MetaData, Table
 
 from app.models import Base
 
-CASCADED_FROM_USERS = {"user_identities.user_id", "auth_tokens.user_id", "chat_conversations.user_id"}
+CASCADED_FROM_USERS = {
+    "user_identities.user_id", "auth_tokens.user_id", "chat_conversations.user_id",
+    "lock_strikes.user_id", "lock_appeals.user_id",     # google-first-login：鎖定計次與申訴（申訴是個資，隨帳號刪除）
+}
 CASCADED_FROM_CONVERSATIONS = {"chat_messages.conversation_id"}
 ANONYMISED_WITH_SET_NULL = {"llm_call_logs.user_id", "admin_audit_logs.admin_user_id"}
 UNLINKED_REFERENCES = {"llm_call_logs.conversation_id", "deletion_tombstones.user_id"}

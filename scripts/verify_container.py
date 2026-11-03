@@ -177,10 +177,49 @@ report("after logout /api/auth/me is 401", status == 401, str(status))
 status, _, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "25_34"})
 report("verify-age needs a login", status == 401, str(status))
 
-# create-admin is run in the container beforehand and deliberately does not fill in the age: the admin has no birthday yet
+# new pages of the Google-first login: the login page is only the Google button and the terms checkbox, /register leads to it
+status, body, _ = call("GET", "/login")
+report("the login page has the terms checkbox and no password, email or birthday field",
+       status == 200 and "accept-terms" in body and 'type="password"' not in body and 'type="email"' not in body and 'type="date"' not in body)
+status, _, headers = call("GET", "/register")
+report("/register leads to /login", status == 302 and headers.get("Location") == "/login", headers.get("Location", ""))
+for page in ("/age", "/appeal"):
+    status, _, headers = call("GET", page)
+    report("an anonymous " + page + " redirects to /login keeping next", status == 302 and headers.get("Location", "").startswith("/login?next="), headers.get("Location", ""))
+status, _, headers = call("GET", "/login/password")
+report("the admin password page needs the step cookie, otherwise it leads back to /login", status == 302 and headers.get("Location") == "/login", headers.get("Location", ""))
+status, body, _ = call("POST", "/api/auth/admin-password", {"password": "x"})
+report("the admin password endpoint without the step cookie is 401", status == 401 and body["error"]["code"] == "unauthorized", str(status))
+status, body, _ = call("POST", "/api/appeals", {"content": "x"})
+report("the appeal API needs a login", status == 401, str(status))
+status, _, _ = call("GET", "/")
+report("the home page is public for an anonymous visitor", status == 200)
+
+# create-admin is run in the container beforehand and deliberately does not fill in the age: the admin has no birthday yet.
+# An admin can no longer log in with only the password: Google comes first and then the password.
 status, body, _ = call("POST", "/api/auth/login", {"email": "%(admin_email)s", "password": "%(admin_password)s"})
-report("the admin created by the command can log in", status == 200 and body["user"]["role"] == "admin", str(status))
-report("the admin starts without any age data", body["user"].get("age_confirmed") is False and body["user"].get("age_group") is None)
+report("the admin created by the command cannot log in with only the password (generic 401)", status == 401 and body["error"]["code"] == "invalid_credentials", str(status))
+report("... and no session cookie is issued", "__Host-session" not in cookies)
+# Google is not configured in this run, so the two-step login cannot be walked through here (tests cover it with a fake provider).
+# The remaining checks need an admin session, so one is signed with the server's own secret: the same cookie the real login sets.
+import os
+from flask import Flask
+from flask.sessions import SecureCookieSessionInterface
+from sqlalchemy import select
+from app import create_app
+from app.models.user import User
+
+server = create_app()
+with server.extensions["db_session_factory"]() as db_session:
+    admin_row = db_session.scalar(select(User).where(User.role == "admin"))
+    admin_uid, admin_tv = admin_row.id, admin_row.token_version
+signer = Flask("signer")
+signer.secret_key = os.environ["SECRET_KEY"]
+cookies["__Host-session"] = SecureCookieSessionInterface().get_signing_serializer(signer).dumps({"uid": admin_uid, "tv": admin_tv})
+status, body, _ = call("GET", "/api/auth/me")
+report("the signed admin session is accepted", status == 200 and body["user"]["role"] == "admin", str(status))
+report("the admin starts without any age data and is not in a restricted state",
+       body["user"].get("age_confirmed") is False and body["user"].get("age_group") is None and body["user"].get("restriction") is None)
 status, body, _ = call("POST", "/api/cs/conversations", {"client_id": "00000000-0000-4000-8000-000000000001"})
 report("chat: an admin without age data cannot create a conversation (403 age_confirmation_required)", status == 403 and body["error"]["code"] == "age_confirmation_required", str(status))
 status, body, _ = call("POST", "/api/cs/conversations/00000000-0000-4000-8000-0000000000aa/messages", {"client_msg_id": "00000000-0000-4000-8000-000000000002", "content": "hi"})
@@ -399,7 +438,7 @@ def verify_member_flow(image: str) -> None:
 
         code, out = docker("exec", "-i", name, "python", "-", stdin=AUTH_FLOW, timeout=120)
         flow = [line.split("|", 3) for line in out.splitlines() if line.startswith("RESULT|")]
-        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 41, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 41 else f"{len(flow)} 項")
+        check("[會員流程] 流程腳本有跑完並回報結果", len(flow) >= 51, f"{len(flow)} 項；{out[-200:]!r}" if len(flow) < 51 else f"{len(flow)} 項")
         for _, label, ok, detail in flow:
             check(f"[會員流程] {label}", ok == "1", detail)
 
@@ -408,6 +447,7 @@ def verify_member_flow(image: str) -> None:
               not any(secret in logs for secret in (MEMBER_EMAIL, MEMBER_PASSWORD, ADMIN_EMAIL, ADMIN_PASSWORD, FAKE_SECRET, FAKE_GEMINI_KEY)))
         events = re.findall(r'"event":"([a-z_.]+)"', logs)
         check("[會員流程] 日誌有註冊、登入、登出的安全事件", {"auth.register", "auth.login_success", "auth.logout"} <= set(events), ", ".join(sorted(set(events))))
+        check("[會員流程] 日誌有管理員不能只靠密碼登入的警告事件", "auth.login_failed.admin_password_only" in set(events), ", ".join(sorted(set(events))))
         check("[會員流程] 日誌有註冊、補填年齡，以及不一致與未滿 13 歲被拒絕的安全事件",
               {"auth.age_confirmed.register", "auth.age_confirmed.later", "auth.age_rejected.mismatch", "auth.age_rejected.underage"} <= set(events),
               ", ".join(sorted(set(events))))
@@ -466,6 +506,13 @@ def verify_retention_commands(name: str) -> None:
     check("[保存期限] 刪除後剩 2 個（管理員與會員都保留）", "合計：2" in after and "尚未完成年齡確認：0" in after, after.strip()[-120:].replace("\n", " | "))
     code, again = docker(*flask, "purge-inactive-accounts", timeout=120)
     check("[保存期限] 重複執行不會再刪任何帳號", code == 0 and "已刪除 0 個" in again, again.strip())
+    # 逾時未完成年齡確認的清除（每小時的排程指令）：沒有期限記錄的帳號（管理員與舊帳號）不會被刪
+    code, unconfirmed_preview = docker(*flask, "purge-unconfirmed-accounts", "--dry-run", timeout=120)
+    check("[保存期限] purge-unconfirmed-accounts 預覽只報告筆數", code == 0 and "預覽" in unconfirmed_preview and "0 個" in unconfirmed_preview and "未刪除" in unconfirmed_preview, unconfirmed_preview.strip())
+    code, unconfirmed = docker(*flask, "purge-unconfirmed-accounts", timeout=120)
+    check("[保存期限] purge-unconfirmed-accounts 不會刪沒有期限記錄的帳號", code == 0 and "已刪除 0 個" in unconfirmed, unconfirmed.strip())
+    code, kept = docker(*flask, "age-stats", timeout=120)
+    check("[保存期限] 執行之後帳號仍是 2 個", "合計：2" in kept, kept.strip()[-120:].replace("\n", " | "))
     # 指令是另一個 docker exec 行程，結構化日誌寫在它自己的標準輸出，不在容器主行程的日誌裡
     check("[保存期限] 清除指令輸出了清除事件的日誌，且沒有被刪帳號的信箱",
           '"event":"account.inactive_purged"' in purged and "stale.container" not in purged, purged.strip()[-200:].replace("\n", " | "))

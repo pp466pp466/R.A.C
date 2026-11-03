@@ -19,7 +19,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Callable
 
-from app.models.deletion_tombstone import REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED
+from app.models.deletion_tombstone import (
+    REASON_AGE_UNCONFIRMED, REASON_INACTIVE_12_MONTHS, REASON_UNDERAGE, REASON_USER_REQUESTED,
+)
 from app.observability import security_events
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.user_repository import UserRepository
@@ -75,6 +77,26 @@ class AccountErasureService:
             reason=REASON_INACTIVE_12_MONTHS,
             now=now,
             on_erased=lambda uid: security_events.log_event(security_events.ACCOUNT_INACTIVE_PURGED, user_id=uid),
+        )
+
+    def erase_underage(self, user_id: int, *, now: datetime) -> bool:
+        """補填年齡時發現未滿 13 歲的玩家帳號（還沒有生日、非管理員；條件在刪除當下再確認一次）。"""
+        return self.erase(
+            user_id,
+            delete=self._users.delete_unconfirmed_player,
+            reason=REASON_UNDERAGE,
+            now=now,
+            on_erased=lambda uid: security_events.log_event(security_events.ACCOUNT_UNDERAGE_ERASED, user_id=uid),
+        )
+
+    def erase_unconfirmed(self, user_id: int, *, now: datetime) -> bool:
+        """建立後 24 小時內沒有完成年齡確認的玩家帳號（期限已到、仍沒有生日；管理員與沒有期限記錄的帳號不納入）。"""
+        return self.erase(
+            user_id,
+            delete=lambda uid: self._users.delete_overdue_unconfirmed(uid, now),
+            reason=REASON_AGE_UNCONFIRMED,
+            now=now,
+            on_erased=lambda uid: security_events.log_event(security_events.ACCOUNT_UNCONFIRMED_PURGED, user_id=uid),
         )
 
     def erase_pending_due(

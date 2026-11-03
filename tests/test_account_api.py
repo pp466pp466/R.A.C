@@ -7,7 +7,7 @@ from app import create_app
 from app.config import load_config
 from app.models import Base, User
 from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING
-from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user, sign_in_as
 from tests.support.client import raw_client
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
@@ -104,7 +104,7 @@ def test_a_google_only_account_confirms_with_the_text(app):
 def test_an_admin_cannot_delete_the_account(app):
     user_id = make_member(app, role="admin")
     client = app.test_client()
-    login(client)
+    sign_in_as(client, user_id)                                      # 管理員不能只靠密碼登入
     response = client.post("/api/account/delete", json={"password": GOOD_PASSWORD})
     assert response.status_code == 403 and "admin_delete_forbidden" in response.get_data(as_text=True)
     assert row(app, user_id).status == STATUS_ACTIVE

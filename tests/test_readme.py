@@ -189,7 +189,7 @@ def test_readme_admin_endpoint_tables_list_exactly_the_registered_routes():
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/admin/") or rule.endpoint.startswith("admin_pages."):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 13, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 16, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 
@@ -240,8 +240,8 @@ def test_readme_privacy_lifecycle_section_documents_the_commands_the_periods_and
                    "受限登入狀態預設拒絕", "單一抹除出口", "已知限制", "C-4d", "recreate=\"never\"", "`0008`"):
         assert phrase in section, phrase
     assert (retention.CONVERSATION_RETENTION.days, retention.LEDGER_RETENTION.days, retention.ERROR_DETAIL_RETENTION.days,
-            retention.AUTH_TOKEN_RETENTION.days, retention.ADMIN_AUDIT_RETENTION.days) == (365, 365, 14, 7, 730)
-    assert set(RETENTION_LABELS) == {"conversations", "error_detail", "ledger", "auth_tokens", "admin_audit"}
+            retention.AUTH_TOKEN_RETENTION.days, retention.ADMIN_AUDIT_RETENTION.days, retention.LOCK_STRIKE_RETENTION.days) == (365, 365, 14, 7, 730, 7)
+    assert set(RETENTION_LABELS) == {"conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes"}
     for path in ("app/static/js/auth/account-lifecycle.js", "tests/js/account-lifecycle.test.js", "tests/test_restricted_session.py",
                  "tests/test_privacy_lifecycle_flow.py", "tests/architecture/test_account_erasure_coverage.py"):
         assert (PROJECT_ROOT / path).is_file(), path

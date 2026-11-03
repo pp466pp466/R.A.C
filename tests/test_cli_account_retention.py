@@ -221,7 +221,7 @@ def test_age_stats_prints_only_counts_per_range_including_empty_ones(app, runner
         add_user(s, 1, age=15)
         add_user(s, 2, age=15)
         add_user(s, 3, age=30)
-        add_user(s, 4)                                         # 尚未完成
+        add_user(s, 4, age=None)                               # 尚未完成
         s.commit()
     result = runner.invoke(args=["age-stats"])
     assert result.exit_code == 0, result.output

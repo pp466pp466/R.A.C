@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 from app.models.user import (
-    STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, TOKEN_RESET_PASSWORD,
+    ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, TOKEN_RESET_PASSWORD,
     TOKEN_VERIFY_EMAIL, User,
 )
 from app.observability import security_events
@@ -115,6 +115,18 @@ class EmailFlowService:
         if not isinstance(email, str) or not is_valid_email(email):
             raise ValidationError(fields={"email": "請輸入有效的電子郵件地址。"})
         user = self._users.get_by_canonical_email(canonical_email(email))
+        self._send_reset_link(user)
+
+    def request_admin_password_reset(self, user_id: int, token_version: int) -> None:
+        """管理員在密碼驗證步驟按「忘記密碼」。對象由簽章的中間狀態（`user_id`、`token_version`）決定，不是請求內容；
+        中間狀態對不上目前的帳號（不是管理員、`token_version` 已變）時什麼也不寄。回應與結果無關（沒有回傳值）。"""
+        user = self._users.get_by_id(user_id)
+        if user is not None and (user.role != ROLE_ADMIN or user.token_version != token_version):
+            user = None
+        self._send_reset_link(user)
+
+    def _send_reset_link(self, user: User | None) -> None:
+        """寄重設密碼的信（玩家的忘記密碼與管理員的忘記密碼共用）：帳號不存在、被停用或被頻率限制時不寄，結果一樣不外露。"""
         if user is None or user.status in _BLOCKED_FROM_RESET:
             security_events.log_event(security_events.PASSWORD_RESET_REQUESTED, user_id=user.id if user else None)
             return

@@ -202,6 +202,7 @@
         passwordForm: passwordForm,
         ageForm: ageForm,
         ageConfirmed: ageConfirmed,
+        isAdmin: user.role === 'admin',          // 年齡補填區塊只留給管理員：玩家沒完成年齡確認之前連這一頁都進不來（被導向 /age）
         ageGroup: ageGroup,
         ageRules: state.ageRules,
         logoutAllOpen: logoutAllOpen,

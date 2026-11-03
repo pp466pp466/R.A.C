@@ -44,8 +44,10 @@ def test_only_the_dangerous_actions_can_fail_reauthentication(log_lines, action)
     assert log_lines() == []
 
 
-def test_the_dangerous_actions_are_exactly_the_four_that_need_a_password():
-    assert set(DANGEROUS_ACTIONS) == {"user.suspend", "user.unsuspend", "user.change_tier", "conversation.delete"}
+def test_the_dangerous_actions_are_exactly_the_five_that_need_a_password():
+    assert set(DANGEROUS_ACTIONS) == {
+        "user.suspend", "user.unsuspend", "user.change_tier", "conversation.delete", "account.unlock",
+    }
 
 
 @pytest.mark.parametrize("action", AUDIT_ACTIONS)

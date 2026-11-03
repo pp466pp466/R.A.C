@@ -24,6 +24,7 @@ TOMBSTONE_TABLE = "deletion_tombstones"
 CHAT_TABLES = ("chat_conversations", "chat_messages", "llm_call_logs")
 ADMIN_TABLES = ("admin_audit_logs",)
 ALERT_TABLES = ("alert_states",)
+LOCK_TABLES = ("lock_strikes", "lock_appeals")
 
 
 def alembic_config(url: str) -> Config:
@@ -45,7 +46,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -310,6 +311,49 @@ def test_0009_adds_only_the_alert_state_table_without_foreign_keys_and_keeps_eve
     engine.dispose()
 
 
+def test_0010_adds_three_nullable_user_columns_two_indexes_and_two_tables_and_keeps_every_row(tmp_path):
+    """google-first-login：users 新增三個可為空的欄位與兩個索引，新增 lock_strikes 與 lock_appeals（各一個 CASCADE 外鍵）；回復只移除新增的部分。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'lock.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0010_google_first_login")
+    assert revision.down_revision == "0009_alert_states" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0009_alert_states")
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        conn.execute(users.insert().values(
+            public_id="00000000-0000-4000-8000-000000000010", email="old@example.com", email_canonical="old@example.com",
+            display_name="舊帳號", role="user", member_tier="free", status="active", failed_login_count=0, token_version=1,
+            created_at=utcnow().replace(tzinfo=None), updated_at=utcnow().replace(tzinfo=None),
+        ))
+    before_tables = set(inspect(engine).get_table_names())
+    before_user_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+
+    command.upgrade(cfg, "0010_google_first_login")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(LOCK_TABLES)
+    new_columns = {c["name"]: c for c in inspector.get_columns("users")}
+    assert set(new_columns) - before_user_columns == {"age_deadline_at", "locked_at", "lock_reason"}
+    assert all(new_columns[name]["nullable"] for name in ("age_deadline_at", "locked_at", "lock_reason"))
+    index_names = {i["name"] for i in inspector.get_indexes("users")}
+    assert {"ix_users_age_deadline_at", "ix_users_locked_at"} <= index_names
+    for table in LOCK_TABLES:
+        foreign_keys = inspector.get_foreign_keys(table)
+        assert len(foreign_keys) == 1 and foreign_keys[0]["referred_table"] == "users"
+        assert foreign_keys[0]["options"].get("ondelete") == "CASCADE"
+    assert [sorted(u["column_names"]) for u in inspector.get_unique_constraints("lock_appeals")] == [["public_id"]]
+    with engine.connect() as conn:
+        row = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().one()
+        assert row["email"] == "old@example.com" and row["age_deadline_at"] is None and row["locked_at"] is None
+
+    command.downgrade(cfg, "0009_alert_states")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    assert {c["name"] for c in inspector.get_columns("users")} == before_user_columns
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -348,7 +392,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):

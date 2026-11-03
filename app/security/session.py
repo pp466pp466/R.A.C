@@ -1,10 +1,14 @@
 """登入狀態（見 AGENTS.md 第 10 節與 session-authentication 規格）。
 
 - 登入 cookie 是 Flask 的簽章 session，**內容只有 `uid`（使用者內部編號）與 `tv`（token_version）**，不使用 JWT。
-  存活 7 天，自登入時起算、不因使用而延長；到期時間固定寫在 cookie 上，不需要 Flask 的 `_permanent` 旗標。
+  有效期是「閒置 30 天、每次使用就續期」，不設絕對上限：每個辨識出登入者的回應都以新的簽章與新的到期時間重發 cookie
+  （Flask 讀取時用簽章時間戳加 `PERMANENT_SESSION_LIFETIME` 判斷是否過期，所以簽章時間就是「最後一次使用」，
+  cookie 內容不需要加簽發時間）。沒有碰過 session 的回應（`/healthz`、靜態檔、匿名頁面）不重發。
+  代價：被竊取的 cookie 只要持續被使用就一直有效，撤銷靠 `token_version` 與帳號狀態。
 - `current_user()` 是惰性的：只有端點或 `login_required_*` 呼叫時才讀資料庫，因此 `/healthz` 與靜態檔
   不會因為帶著 cookie 就去碰資料庫。每次辨識都比對 `token_version` 與帳號狀態，這是可以撤銷登入的代價。
 - 登入時一律先清空 session 再寫入（不沿用登入前的任何內容），並換發 CSRF 權杖。
+- 受限登入狀態（等待刪除、待確認年齡、被鎖定）一律預設拒絕，見 `require_login` 與 `login_required_page`。
 """
 from __future__ import annotations
 
@@ -17,8 +21,10 @@ from flask import Flask, Response, current_app, g, redirect, request, session
 from flask.sessions import SecureCookieSessionInterface, SessionMixin
 
 from app.security.csrf import rotate_csrf_token
-from app.services.current_user import CurrentUser
-from app.services.errors import AccountDeletionPending, Unauthenticated
+from app.services.current_user import (
+    RESTRICTION_AGE_PENDING, RESTRICTION_DELETION_PENDING, RESTRICTION_LOCKED, CurrentUser,
+)
+from app.services.errors import AccountDeletionPending, AccountLocked, AgeConfirmationRequired, Unauthenticated
 from app.services.registry import get_auth_service
 
 SESSION_USER_KEY = "uid"
@@ -31,19 +37,23 @@ _UNSET = object()
 ViewT = TypeVar("ViewT", bound=Callable[..., Any])
 
 
-class AbsoluteExpirySessionInterface(SecureCookieSessionInterface):
-    """到期時間一律是「寫入 cookie 的當下加 7 天」，不依賴 session 的 permanent 旗標。
+class SlidingSessionInterface(SecureCookieSessionInterface):
+    """到期時間一律是「寫入 cookie 的當下加 30 天」，不依賴 session 的 permanent 旗標，並在每次使用時重發。
 
     Flask 預設只有 permanent 的 session 才有到期時間，而 permanent 會在 cookie 內多寫一個 `_permanent`；
-    規格要求內容只含使用者編號與 token_version，所以改由這裡固定到期時間。
+    規格要求內容只含使用者編號與 token_version，所以改由這裡決定到期時間與是否重發。
+    只有「這個請求碰過 session」（`accessed`，也就是辨識過登入者）才重發：session 是空的（匿名）時 Flask 根本不會呼叫這裡。
     """
 
     def get_expiration_time(self, app: Flask, session: SessionMixin) -> datetime | None:
         return datetime.now(timezone.utc) + app.permanent_session_lifetime
 
+    def should_set_cookie(self, app: Flask, session: SessionMixin) -> bool:
+        return bool(session.modified or session.accessed)
+
 
 def init_login_session(app: Flask) -> None:
-    app.session_interface = AbsoluteExpirySessionInterface()
+    app.session_interface = SlidingSessionInterface()
 
 
 # ---- 讀取 -------------------------------------------------------------------
@@ -80,18 +90,31 @@ def current_user() -> CurrentUser | None:
     return user
 
 
-def require_login(*, allow_pending_deletion: bool = False) -> CurrentUser:
+def _refuse_restricted(user: CurrentUser, *, allow_pending_deletion: bool, allow_age_pending: bool, allow_locked: bool) -> None:
+    """受限登入狀態預設拒絕：只有明確允許該狀態的端點能通過，其餘拋出該狀態對應的 403。"""
+    restriction = user.restriction
+    if restriction == RESTRICTION_LOCKED and not allow_locked:
+        raise AccountLocked()
+    if restriction == RESTRICTION_AGE_PENDING and not allow_age_pending:
+        raise AgeConfirmationRequired()
+    if restriction == RESTRICTION_DELETION_PENDING and not allow_pending_deletion:
+        raise AccountDeletionPending()
+
+
+def require_login(*, allow_pending_deletion: bool = False, allow_age_pending: bool = False, allow_locked: bool = False) -> CurrentUser:
     """已登入就回傳使用者，否則拋出 `Unauthenticated`（API 回 401 JSON）。
 
-    **受限登入狀態預設拒絕**：帳號正在等待刪除（寬限期內）的人可以登入，但只為了撤銷刪除。所以所有透過這裡取得使用者的端點
-    對這類使用者一律回 403 `account_deletion_pending`，只有明確傳入 `allow_pending_deletion=True` 的端點例外
-    （查詢自己、撤銷刪除）。新增的端點不必記得檢查，漏掉也是安全的一邊；`tests/test_restricted_session.py` 掃描全部路由證明這一點。
+    **受限登入狀態預設拒絕**（access-control 規格）：等待刪除的帳號只為了撤銷刪除、待確認年齡的玩家只為了補填年齡、
+    被鎖定的玩家只為了申訴，所以所有透過這裡取得使用者的端點對這三類人一律回 403
+    （`account_deletion_pending`、`age_confirmation_required`、`account_locked`），只有明確傳入對應 `allow_*=True` 的端點例外。
+    新增的端點不必記得檢查，漏掉也是安全的一邊；`tests/test_restricted_session.py` 掃描全部路由證明這一點。
     """
     user = current_user()
     if user is None:
         raise Unauthenticated()
-    if user.awaiting_deletion and not allow_pending_deletion:
-        raise AccountDeletionPending()
+    _refuse_restricted(
+        user, allow_pending_deletion=allow_pending_deletion, allow_age_pending=allow_age_pending, allow_locked=allow_locked
+    )
     return user
 
 
@@ -141,13 +164,24 @@ def login_required_api(view: ViewT) -> ViewT:
 
 
 ACCOUNT_PATH = "/account"
+AGE_PATH = "/age"
+APPEAL_PATH = "/appeal"
+# 各受限登入狀態被拒絕時導向的頁面
+RESTRICTION_PAGES = {
+    RESTRICTION_LOCKED: APPEAL_PATH,
+    RESTRICTION_AGE_PENDING: AGE_PATH,
+    RESTRICTION_DELETION_PENDING: ACCOUNT_PATH,
+}
 
 
-def login_required_page(view: ViewT | None = None, *, allow_pending_deletion: bool = False):
+def login_required_page(
+    view: ViewT | None = None, *, allow_pending_deletion: bool = False, allow_age_pending: bool = False, allow_locked: bool = False,
+):
     """頁面端點：未登入導向登入頁，並以 `next` 保留原本要去的站內位置（登入後由伺服器再驗證一次）。
 
-    與 `require_login` 相同，**受限登入狀態（等待刪除的帳號）預設被導向 `/account`**，只有 `/account` 自己明確允許。
-    可直接當裝飾器用（`@login_required_page`），也可帶參數（`@login_required_page(allow_pending_deletion=True)`）。
+    與 `require_login` 相同，**受限登入狀態預設被導向各自的頁面**（等待刪除 → `/account`、待確認年齡 → `/age`、
+    被鎖定 → `/appeal`），只有明確允許該狀態的頁面自己能通過。
+    可直接當裝飾器用（`@login_required_page`），也可帶參數（`@login_required_page(allow_age_pending=True)`）。
     """
 
     def decorate(inner: ViewT) -> ViewT:
@@ -160,8 +194,14 @@ def login_required_page(view: ViewT | None = None, *, allow_pending_deletion: bo
                     target += "?" + request.query_string.decode("utf-8", "replace")
                 response: Response = redirect(f"{LOGIN_PATH}?next={quote(target, safe='')}")
                 return response
-            if user.awaiting_deletion and not allow_pending_deletion:
-                return redirect(ACCOUNT_PATH)
+            restriction = user.restriction
+            allowed = {
+                RESTRICTION_DELETION_PENDING: allow_pending_deletion,
+                RESTRICTION_AGE_PENDING: allow_age_pending,
+                RESTRICTION_LOCKED: allow_locked,
+            }
+            if restriction is not None and not allowed[restriction]:
+                return redirect(RESTRICTION_PAGES[restriction])
             return inner(*args, **kwargs)
 
         return wrapper  # type: ignore[return-value]

@@ -9,11 +9,13 @@
   （例如容器的一次性工作）用 `--password-stdin` 從標準輸入讀取。信箱與密碼都不會寫入日誌或輸出。
 - `purge-inactive-accounts`：由平台排程器觸發（不使用行程內計時器），刪除連續 12 個月未登入的一般帳號；
   `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
+- `purge-unconfirmed-accounts`：由平台排程器**每小時**觸發，刪除玩家首次以 Google 登入後 24 小時內沒有完成年齡確認的帳號
+  （管理員與沒有期限記錄的舊帳號不納入）；`--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
 - `check-alerts`：由平台排程器每 5 分鐘觸發，評估五項只靠資料庫量得到的營運告警（全站用量、模型錯誤率、模型設定錯誤、
-  對話延遲 p95、登入失敗激增），狀態變化時寄電子郵件給 `ALERT_EMAIL_TO`（進入、升級、每 6 小時提醒、恢復各一封）；
+  對話延遲 p95、帳號鎖定激增），狀態變化時寄電子郵件給 `ALERT_EMAIL_TO`（進入、升級、每 6 小時提醒、恢復各一封）；
   `--dry-run` 與沒有設定收件人時只評估並顯示結果，不寄信也不改變狀態。輸出只有告警名稱、狀態與數值；寄信失敗或某項評估失敗時以非零代碼結束。
 - `purge-expired-data`：由平台排程器觸發，清除超過保存期限的資料（對話與訊息 12 個月、用量帳本 12 個月、失敗的模型原文 14 天、
-  驗證權杖到期後 7 天、管理稽核 24 個月）；`--dry-run` 只列出各類筆數。輸出只有各類的筆數，不含任何內容；有任一類失敗時以非零代碼結束。
+  驗證權杖到期後 7 天、管理稽核 24 個月、帳號鎖定計次 7 天）；`--dry-run` 只列出各類筆數。輸出只有各類的筆數，不含任何內容；有任一類失敗時以非零代碼結束。
 - `execute-account-deletions`：由平台排程器觸發，刪除「申請刪除、寬限期（7 天）已滿」的帳號（與閒置清除共用同一個抹除出口）；
   `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
 - `age-stats`：各年齡區間的人數（供定期察看用戶群），只有計數，沒有任何個別使用者的資料。
@@ -47,6 +49,7 @@ from app.services.deletion_replay_service import ReplayFileError, parse_replay_f
 # 每日的三個錯開時間，避免同時佔用資料庫連線；check-alerts 的窗口刻意重疊（見營運文件）。
 SCHEDULED_COMMANDS: dict[str, str] = {
     "check-alerts": "*/5 * * * *",
+    "purge-unconfirmed-accounts": "0 * * * *",          # 每小時：24 小時的補填期限，逾時帳號不該停留太久
     "purge-inactive-accounts": "0 3 * * *",
     "execute-account-deletions": "20 3 * * *",
     "purge-expired-data": "40 3 * * *",
@@ -73,6 +76,7 @@ RETENTION_LABELS = {
     "error_detail": "失敗的模型原文",
     "auth_tokens": "驗證權杖",
     "admin_audit": "管理稽核紀錄",
+    "lock_strikes": "帳號鎖定計次",
 }
 
 
@@ -213,6 +217,18 @@ def register_cli(app: Flask) -> None:
             click.echo(f"預覽：符合條件的帳號 {result.matched} 個（未刪除任何資料）。")
         else:
             click.echo(f"已刪除 {result.deleted} 個連續 12 個月未登入的帳號。")
+
+    @app.cli.command("purge-unconfirmed-accounts")
+    @click.option("--dry-run", is_flag=True, help="只列出逾時未完成年齡確認的帳號數量，不刪除任何資料。")
+    def purge_unconfirmed_accounts(dry_run: bool) -> None:
+        """刪除建立後 24 小時內沒有完成年齡確認的玩家帳號。管理員與沒有期限記錄的帳號不納入；可重複執行，結果相同。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            result = build_account_retention_service(session, clock=get_clock()).purge_unconfirmed(dry_run=dry_run)
+        if dry_run:
+            click.echo(f"預覽：逾時未完成年齡確認的帳號 {result.matched} 個（未刪除任何資料）。")
+        else:
+            click.echo(f"已刪除 {result.deleted} 個逾時未完成年齡確認的帳號。")
 
     @app.cli.command("execute-account-deletions")
     @click.option("--dry-run", is_flag=True, help="只列出寬限期已滿、待刪除的帳號數量，不刪除任何資料。")

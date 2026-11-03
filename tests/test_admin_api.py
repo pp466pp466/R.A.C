@@ -14,12 +14,16 @@ from app.config import load_config
 from app.models import AdminAuditLog, Base, ChatConversation, LlmCallLog, User
 from app.models.user import STATUS_ACTIVE, STATUS_SUSPENDED
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.lock_appeal_repository import LockAppealRepository
 from tests.support.admin import STATE
 from tests.support.auth import GOOD_PASSWORD, START, FakeClock, add_user
 from tests.support.client import raw_client
 from tests.support.idor import logged_in_client
 
-ENDPOINTS = ("overview", "audit", "lookup", "user", "suspend", "unsuspend", "tier", "feedback", "flagged", "read", "delete", "failures")
+ENDPOINTS = (
+    "overview", "audit", "lookup", "user", "suspend", "unsuspend", "tier", "feedback", "flagged", "read", "delete", "failures",
+    "locked", "appeals", "unlock",
+)
 
 
 class World:
@@ -34,6 +38,8 @@ class World:
             self.target_id = add_user(session, 2, age=30).id
             self.vip_id = add_user(session, 3, age=30, member_tier="vip").id
             self.suspended_id = add_user(session, 4, age=30, status=STATUS_SUSPENDED).id
+            self.locked_id = add_user(session, 5, age=30, locked_at=START, lock_reason="rate_limited").id
+            LockAppealRepository(session).create(self.locked_id, "請幫我解除鎖定", START)
             target = session.get(User, self.target_id)
             chats = ChatRepository(session)
             conv = chats.create_conversation(target.id, client_id="1" * 36, state=STATE, now=START)
@@ -47,6 +53,7 @@ class World:
             self.target_public, self.target_email = target.public_id, target.email
             self.conversation_public = conv.public_id
             self.suspended_public = session.get(User, self.suspended_id).public_id
+            self.locked_public = session.get(User, self.locked_id).public_id
 
     def client(self, who):
         if who == "anonymous":
@@ -71,6 +78,9 @@ class World:
             "read": ("GET", f"/api/admin/conversations/{self.conversation_public}", None),
             "delete": ("POST", f"/api/admin/conversations/{self.conversation_public}/delete", {**password, "reason": "違規"}),
             "failures": ("GET", "/api/admin/failures", None),
+            "locked": ("GET", "/api/admin/locked", None),
+            "appeals": ("GET", "/api/admin/appeals", None),
+            "unlock": ("POST", f"/api/admin/users/{self.locked_public}/unlock", password),
         }[name]
 
     def send(self, who, name, **overrides):
@@ -83,7 +93,7 @@ class World:
     def user(self, user_id):
         with Session(self.engine) as session:
             row = session.get(User, user_id)
-            return row.status, row.member_tier, row.token_version
+            return row.status, row.member_tier, row.token_version, row.locked_at
 
     def count(self, model):
         with Session(self.engine) as session:
@@ -110,15 +120,15 @@ def test_an_anonymous_visitor_gets_401_json(world, name):
 @pytest.mark.parametrize("who", ["member", "vip"])
 @pytest.mark.parametrize("name", ENDPOINTS)
 def test_a_logged_in_non_admin_gets_the_same_404_as_a_missing_endpoint_and_nothing_changes(world, who, name):
-    before = (world.user(world.target_id), world.user(world.suspended_id), world.count(ChatConversation), world.count(AdminAuditLog))
+    before = (world.user(world.target_id), world.user(world.suspended_id), world.user(world.locked_id), world.count(ChatConversation), world.count(AdminAuditLog))
     response = world.send(who, name)
     missing = not_found_body(world)
     assert response.status_code == 404
     assert response.get_json() == missing.get_json()
-    assert (world.user(world.target_id), world.user(world.suspended_id), world.count(ChatConversation), world.count(AdminAuditLog)) == before
+    assert (world.user(world.target_id), world.user(world.suspended_id), world.user(world.locked_id), world.count(ChatConversation), world.count(AdminAuditLog)) == before
 
 
-@pytest.mark.parametrize("name", [n for n in ENDPOINTS if n in ("lookup", "suspend", "unsuspend", "tier", "delete")])
+@pytest.mark.parametrize("name", [n for n in ENDPOINTS if n in ("lookup", "suspend", "unsuspend", "tier", "delete", "unlock")])
 @pytest.mark.parametrize("body", [{"data": "not json"}, None])
 def test_a_non_admin_with_a_malformed_body_still_only_sees_404_never_415_or_400(world, name, body):
     method, path, _ = world.request(name)
@@ -170,15 +180,15 @@ def test_a_missing_admin_path_is_no_store_too(world):
     assert not_found_body(world).headers.get("Cache-Control") == "no-store"
 
 
-@pytest.mark.parametrize("name", ["lookup", "suspend", "unsuspend", "tier", "delete"])
+@pytest.mark.parametrize("name", ["lookup", "suspend", "unsuspend", "tier", "delete", "unlock"])
 def test_a_write_without_a_csrf_token_is_403_and_changes_nothing(world, name):
     method, path, body = world.request(name)
     client = raw_client(world.app)
     with client.session_transaction() as session:
         session["uid"], session["tv"] = world.admin_id, 1
-    before = (world.user(world.target_id), world.user(world.suspended_id), world.count(ChatConversation), world.count(AdminAuditLog))
+    before = (world.user(world.target_id), world.user(world.suspended_id), world.user(world.locked_id), world.count(ChatConversation), world.count(AdminAuditLog))
     assert client.open(path, method=method, json=body).status_code == 403
-    assert (world.user(world.target_id), world.user(world.suspended_id), world.count(ChatConversation), world.count(AdminAuditLog)) == before
+    assert (world.user(world.target_id), world.user(world.suspended_id), world.user(world.locked_id), world.count(ChatConversation), world.count(AdminAuditLog)) == before
 
 
 # ---- 不存在的端點 ----------------------------------------------------------------------------
@@ -200,7 +210,7 @@ def test_there_are_no_endpoints_for_listing_users_changing_the_audit_or_deleting
     assert world.client("admin").open(path, method=method, json={} if method != "GET" else None).status_code in (404, 405)
 
 
-def test_the_registered_admin_routes_are_exactly_the_twelve_documented_ones(world):
+def test_the_registered_admin_routes_are_exactly_the_fifteen_documented_ones(world):
     routes = {(rule.rule, method) for rule in world.app.url_map.iter_rules() if rule.rule.startswith("/api/admin") for method in rule.methods - {"HEAD", "OPTIONS"}}
     assert routes == {
         ("/api/admin/overview", "GET"), ("/api/admin/audit", "GET"), ("/api/admin/users/lookup", "POST"),
@@ -208,6 +218,7 @@ def test_the_registered_admin_routes_are_exactly_the_twelve_documented_ones(worl
         ("/api/admin/users/<public_id>/unsuspend", "POST"), ("/api/admin/users/<public_id>/tier", "POST"),
         ("/api/admin/feedback", "GET"), ("/api/admin/flagged", "GET"), ("/api/admin/conversations/<public_id>", "GET"),
         ("/api/admin/conversations/<public_id>/delete", "POST"), ("/api/admin/failures", "GET"),
+        ("/api/admin/locked", "GET"), ("/api/admin/appeals", "GET"), ("/api/admin/users/<public_id>/unlock", "POST"),
     }
 
 

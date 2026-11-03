@@ -1,21 +1,23 @@
 """google-sign-in 規格：發起與回呼端點（授權碼流程的防護、選用功能、結果導向）。以假的身分供應商端到端測試。"""
+from datetime import timedelta
+
 import pytest
 from sqlalchemy.orm import Session
 
 from app import create_app
 from app.config import load_config
-from app.models import Base, User, UserIdentity
+from app.models import Base, LockStrike, User, UserIdentity
 from app.models.user import STATUS_SUSPENDED
 from app.security.cookies import SignedCookies
 from app.security.oauth_cookie import OAUTH_SALT
+from app.security.redirects import DEFAULT_AFTER_LOGIN
 from app.services.google_oidc import GoogleAuthError, GoogleProfile
 from tests.support.age import age_fields
 from tests.support.auth import FakeClock, add_user
 from tests.support.client import raw_client
 from tests.support.google import SUB, FakeProvider
 
-NO_AGE = {"birth_date": None, "age_range": None}
-FIXED_CODES = {"google_state", "google_unavailable", "google_rejected", "terms_required", "age_required", "account_disabled"}
+FIXED_CODES = {"google_state", "google_unavailable", "google_rejected", "terms_required", "account_disabled"}
 
 
 @pytest.fixture()
@@ -40,7 +42,7 @@ def db(app) -> Session:
 
 
 def start(client, **body):
-    return client.post("/api/auth/google/start", json={"accept_terms": True, **age_fields(30), **body})
+    return client.post("/api/auth/google/start", json={"accept_terms": True, **body})
 
 
 def transaction_of(app, client) -> dict:
@@ -79,11 +81,35 @@ def test_start_returns_the_authorization_url_and_binds_the_transaction_to_this_b
     body = response.get_json()
     assert set(body) == {"authorization_url"} and body["authorization_url"].startswith("https://accounts.example/auth?")
     tx = transaction_of(app, client)
-    assert set(tx) == {"s", "n", "v", "t", "b", "r", "x"} and tx["t"] is True and tx["x"] == "/account"
-    assert tx["b"] == age_fields(30)["birth_date"] and tx["r"] == "25_34"
-    assert tx["b"] not in body["authorization_url"] and tx["b"] not in response.get_data(as_text=True)    # 生日不回傳給前端
+    assert set(tx) == {"s", "n", "v", "t", "x"} and tx["t"] is True and tx["x"] == "/account"      # 交易裡沒有年齡資料
     assert f"state={tx['s']}" in body["authorization_url"]
     assert tx["v"] not in response.get_data(as_text=True)                                  # PKCE 驗證碼不回傳給前端
+
+
+def test_a_birthday_and_range_in_the_start_request_are_ignored_and_never_saved(app, log_lines):
+    """年齡確認改在登入之後才填：發起不要求、不驗證，請求即使仍帶著這兩個欄位（甚至是未滿 13 歲的值）也一律忽略。"""
+    client = app.test_client()
+    for fields in (age_fields(30), age_fields(12), age_fields(30, age_range="13_17"), {"birth_date": "2026-02-30", "age_range": None}):
+        response = start(client, **fields)
+        assert response.status_code == 200 and set(response.get_json()) == {"authorization_url"}
+        tx = transaction_of(app, client)
+        assert not {"b", "r", "birth_date", "age_range"} & set(tx)
+    assert age_fields(12)["birth_date"] not in log_lines.raw()
+    with db(app) as s:
+        assert s.query(User).count() == 0
+
+
+def test_a_returning_member_signs_in_from_an_empty_request_without_being_asked_for_the_terms(app, provider):
+    with db(app) as s:
+        add_user(s, 1, email_verified_at=app.extensions["clock"]())
+    provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
+    client = app.test_client()
+    response = client.post("/api/auth/google/start", json={})
+    assert response.status_code == 200 and response.get_json()["authorization_url"].startswith("https://accounts.example/auth?")
+    assert transaction_of(app, client)["t"] is False                                       # 沒有勾選，也沒有被要求
+    done = callback(client, transaction_of(app, client)["s"])
+    assert done.status_code == 302 and done.headers["Location"] == DEFAULT_AFTER_LOGIN
+    assert client.get("/api/auth/me").get_json()["user"]["email"] == "user1@example.com"
 
 
 def test_the_transaction_cookie_is_httponly_lax_and_expires_in_ten_minutes(app):
@@ -102,7 +128,7 @@ def test_start_needs_csrf_and_a_json_object(app):
 def test_an_unsafe_next_is_replaced_by_the_default_when_the_flow_starts(app, bad_next):
     client = app.test_client()
     start(client, next=bad_next)
-    assert transaction_of(app, client)["x"] == "/account"
+    assert transaction_of(app, client)["x"] == DEFAULT_AFTER_LOGIN
 
 
 # =============================================================================
@@ -114,10 +140,11 @@ def test_a_successful_callback_logs_in_redirects_and_deletes_the_transaction(app
     start(client, next="/account?tab=security")
     csrf_before = client.get_cookie("csrf").value
     response = callback(client, transaction_of(app, client)["s"])
-    assert response.status_code == 302 and response.headers["Location"] == "/account?tab=security"
+    # 新帳號還沒有年齡資料：先去年齡確認頁，補填之後才回到原本要去的位置
+    assert response.status_code == 302 and response.headers["Location"] == "/age?next=%2Faccount%3Ftab%3Dsecurity"
     me = client.get("/api/auth/me").get_json()["user"]
     assert me["email"] == "person@example.com" and me["google_linked"] is True and me["has_password"] is False
-    assert me["age_confirmed"] is True and me["age_group"] == "adult"                       # 首次以 Google 註冊時已完成
+    assert me["age_confirmed"] is False and me["age_group"] is None and me["restriction"] == "age_pending"
     assert client.get_cookie("oauth_tx") is None                                           # 交易 cookie 已刪除
     assert any(h.startswith("oauth_tx=;") for h in response.headers.getlist("Set-Cookie"))
     assert client.get_cookie("csrf").value != csrf_before                                   # 與密碼登入一樣換發 CSRF 權杖
@@ -130,18 +157,18 @@ def test_the_callback_url_cannot_be_used_twice(app):
     client = app.test_client()
     start(client)
     state = transaction_of(app, client)["s"]
-    assert callback(client, state).headers["Location"] == "/account"
+    assert callback(client, state).headers["Location"] == "/age"
     assert error_of(callback(client, state)) == "google_state"                               # 綁定已刪除
 
 
 def test_an_existing_verified_member_is_linked_and_logged_in(app, provider):
     with db(app) as s:
-        add_user(s, 1, email_verified_at=app.extensions["clock"]())
+        add_user(s, 1, age=None, email_verified_at=app.extensions["clock"]())
     provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
     client = app.test_client()
-    start(client, accept_terms=False, **NO_AGE)                                             # 已有帳號：不必勾選條款與提供年齡
+    start(client, accept_terms=False)                                                       # 已有帳號：不必勾選條款
     response = callback(client, transaction_of(app, client)["s"])
-    assert response.headers["Location"] == "/account"
+    assert response.headers["Location"] == "/age"                                           # 沒有年齡資料：只能去年齡確認頁
     me = client.get("/api/auth/me").get_json()["user"]
     assert me["has_password"] is True                                                       # 原有密碼仍在
     assert me["age_confirmed"] is False and me["age_group"] is None                         # 登入不會順便標記為已完成
@@ -223,48 +250,26 @@ def test_a_new_member_who_did_not_accept_the_terms_is_sent_back_and_nothing_is_c
         assert s.query(User).count() == 0 and s.query(UserIdentity).count() == 0
 
 
-def test_a_new_member_who_gave_no_age_is_sent_back_and_nothing_is_created(app):
+def test_a_new_member_who_accepted_the_terms_gets_an_account_without_age_data_and_goes_to_the_age_page(app):
     client = app.test_client()
-    assert error_of(run_flow(app, client, **NO_AGE)) == "age_required"
-    assert client.get("/api/auth/me").status_code == 401
+    response = run_flow(app, client)
+    assert response.status_code == 302 and response.headers["Location"] == "/age"
     with db(app) as s:
-        assert s.query(User).count() == 0 and s.query(UserIdentity).count() == 0
-
-
-def test_the_terms_and_the_age_are_independent_and_the_missing_one_is_named(app):
-    assert error_of(run_flow(app, app.test_client(), **NO_AGE)) == "age_required"                # 只缺年齡
-    assert error_of(run_flow(app, app.test_client(), accept_terms=False)) == "terms_required"    # 只缺條款
-    assert error_of(run_flow(app, app.test_client(), accept_terms=False, **NO_AGE)) == "terms_required"
-    with db(app) as s:
-        assert s.query(User).count() == 0
-
-
-@pytest.mark.parametrize(
-    ("age_input", "code"),
-    [(age_fields(12), "age_not_eligible"), (age_fields(30, age_range="13_17"), "age_mismatch"),
-     ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error"), ({"birth_date": age_fields(30)["birth_date"], "age_range": None}, "validation_error")],
-)
-def test_start_refuses_bad_age_input_with_a_400_and_never_sets_the_transaction_cookie(app, age_input, code):
-    """不一致或未滿 13 歲：在離開本站之前就被擋下，沒有授權網址、沒有 cookie、沒有任何資料；也不封鎖之後的重試。"""
-    client = app.test_client()
-    response = start(client, **age_input)
-    assert response.status_code == 400 and response.get_json()["error"]["code"] == code
-    assert "authorization_url" not in response.get_json() and client.get_cookie("oauth_tx") is None
-    with db(app) as s:
-        assert s.query(User).count() == 0
-    assert start(client).status_code == 200                                    # 立刻重試，用修正後的資料
-
-
-def test_a_refused_start_leaves_no_birthday_in_the_logs_or_the_response(app, log_lines):
-    response = start(app.test_client(), **age_fields(12))
-    assert age_fields(12)["birth_date"] not in response.get_data(as_text=True) + log_lines.raw()
-
-
-def test_a_minor_can_register_through_google_and_is_a_minor_afterwards(app):
-    client = app.test_client()
-    assert run_flow(app, client, **age_fields(15)).headers["Location"] == "/account"
+        (user,) = s.query(User).all()
+        assert user.birth_date is None and user.age_range is None and user.age_confirmed_at is None
+        assert user.age_deadline_at == app.extensions["clock"]() + timedelta(hours=24)
+        assert user.terms_version and user.terms_accepted_at is not None
+        assert s.query(UserIdentity).count() == 1
     me = client.get("/api/auth/me").get_json()["user"]
-    assert me["age_confirmed"] is True and me["age_group"] == "minor"
+    assert me["restriction"] == "age_pending"
+
+
+def test_a_new_member_who_is_still_a_child_is_not_detected_here_that_happens_at_the_age_step(app):
+    """發起與回呼都不再看年齡：未滿 13 歲的判斷在年齡確認頁（見 `AuthService.verify_age`）。"""
+    client = app.test_client()
+    assert run_flow(app, client, **age_fields(12)).headers["Location"] == "/age"
+    with db(app) as s:
+        assert s.query(User).one().birth_date is None
 
 
 def test_a_suspended_member_is_sent_back_and_not_logged_in(app, provider):
@@ -292,9 +297,77 @@ def test_every_error_code_is_from_the_fixed_set(app, provider):
         seen.add(error_of(run_flow(app, app.test_client())))
     provider.error = None
     seen.add(error_of(run_flow(app, app.test_client(), accept_terms=False)))
-    seen.add(error_of(run_flow(app, app.test_client(), **NO_AGE)))
     seen.add(error_of(callback(app.test_client(), "nope")))
-    assert seen <= FIXED_CODES and len(seen) == 5
+    assert seen <= FIXED_CODES and len(seen) == 4
+
+
+# =============================================================================
+# 帳號鎖定計次：只有「已辨識出帳號卻被拒絕」才計次（account-lockout 規格）
+# =============================================================================
+
+def lock_state(app, email="user1@example.com"):
+    with db(app) as s:
+        user = s.query(User).filter_by(email=email).one()
+        return user.locked_at, user.lock_reason, s.query(LockStrike).filter_by(user_id=user.id).count()
+
+
+def test_refusals_of_an_identified_account_are_counted_and_the_fifth_within_fifteen_minutes_locks_it(app, provider, clock):
+    with db(app) as s:
+        add_user(s, 1, status=STATUS_SUSPENDED, email_verified_at=clock())
+    provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
+    for attempt in range(1, 6):
+        assert error_of(run_flow(app, app.test_client())) == "account_disabled"
+        locked_at, reason, strikes = lock_state(app)
+        assert strikes == attempt                                                    # 回應是 302，計次仍然保留
+        assert (locked_at is not None) == (attempt == 5)
+    assert reason == "identity_rejected"
+
+
+def test_refusals_spread_over_more_than_fifteen_minutes_do_not_lock(app, provider, clock):
+    with db(app) as s:
+        add_user(s, 1, status=STATUS_SUSPENDED, email_verified_at=clock())
+    provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
+    for _ in range(4):
+        run_flow(app, app.test_client())
+    clock.advance(minutes=16)
+    run_flow(app, app.test_client())
+    assert lock_state(app)[0] is None
+
+
+def test_a_conflict_with_another_google_identity_is_counted_too(app, provider, clock):
+    with db(app) as s:
+        user = add_user(s, 1, email_verified_at=clock())
+        s.add(UserIdentity(user_id=user.id, provider="google", provider_subject="the-original-subject"))
+        s.commit()
+    provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")           # 同信箱、不同的 Google 身分
+    assert error_of(run_flow(app, app.test_client())) == "google_rejected"
+    assert lock_state(app) == (None, None, 1)
+
+
+def test_failures_that_cannot_be_tied_to_an_account_are_never_counted(app, provider, clock):
+    with db(app) as s:
+        add_user(s, 1, email_verified_at=clock())
+    for _ in range(12):
+        client = app.test_client()
+        start(client)
+        callback(client, "forged-state")                                             # 狀態不符
+    provider.error = GoogleAuthError("token")
+    for _ in range(12):
+        run_flow(app, app.test_client())                                             # 授權碼或憑證無效
+    provider.error = None
+    for _ in range(12):
+        run_flow(app, app.test_client(), accept_terms=False)                         # 還沒有帳號的身分（沒勾條款）
+    assert lock_state(app) == (None, None, 0)
+    with db(app) as s:
+        assert s.query(LockStrike).count() == 0 and s.query(User).count() == 1
+
+
+def test_a_successful_sign_in_adds_no_strike(app, provider, clock):
+    with db(app) as s:
+        add_user(s, 1, email_verified_at=clock())
+    provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
+    assert run_flow(app, app.test_client()).headers["Location"] == DEFAULT_AFTER_LOGIN
+    assert lock_state(app) == (None, None, 0)
 
 
 # =============================================================================
@@ -319,9 +392,7 @@ def test_the_flow_is_logged_without_state_subject_code_or_address(app, log_lines
     callback(client, state, code="very-secret-authorization-code")
     callback(client, "forged-state-value")
     events = [line["event"] for line in log_lines() if "event" in line]
-    assert events == [
-        "auth.google_started", "auth.age_confirmed.google", "auth.google_registered", "auth.google_rejected.state",
-    ]
+    assert events == ["auth.google_started", "auth.google_registered", "auth.google_rejected.state"]
     raw = log_lines.raw()
     for secret in (state, "very-secret-authorization-code", "forged-state-value", SUB, "person@example.com"):
         assert secret not in raw

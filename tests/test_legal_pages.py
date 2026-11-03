@@ -98,8 +98,56 @@ def test_the_rights_section_describes_the_real_features_and_no_longer_says_they_
 
 def test_the_privacy_page_numbers_for_age_still_come_from_the_policy_not_the_text(client):
     html = client.get("/privacy").get_data(as_text=True)
-    assert re.search(r"未滿 \d+ 歲者無法註冊", html)
+    assert re.search(r"發現未滿 \d+ 歲者", html)
 
 
 def test_the_terms_version_names_the_new_draft_and_the_registration_records_it():
-    assert CURRENT_TERMS_VERSION == "2026-10-30-draft-3" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION == "2026-11-02-draft-4" and len(CURRENT_TERMS_VERSION) <= 40
+
+
+# ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
+
+def test_the_privacy_policy_says_the_account_is_created_at_the_first_google_sign_in_with_the_google_email_and_name(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    assert "第一次以 Google 登入" in html and "建立帳號" in html and "Google 提供的電子郵件與名稱" in html
+    assert "玩家帳號沒有密碼" in html and "只有管理員帳號有密碼" in html
+
+
+def test_the_privacy_policy_says_the_age_is_declared_after_signing_in_and_unfinished_or_underage_accounts_are_deleted_at_once(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    assert "登入之後" in html and "年齡確認" in html
+    assert "24 小時內沒有完成年齡確認，帳號與資料會立即刪除" in html
+    assert re.search(r"發現未滿 \d+ 歲者，帳號與全部資料也會(?:<strong>)?立即刪除", html)
+    table = retention_table(html)
+    (account_row,) = [value for key, value in table.items() if key.startswith("帳號資料")]
+    assert "24 小時內未完成年齡確認" in account_row and "立即刪除" in account_row
+
+
+def test_the_retention_table_lists_the_lock_strikes_with_the_purge_period_and_the_appeals_with_their_account(client):
+    table = retention_table(client.get("/privacy").get_data(as_text=True))
+    (strike_label,) = [key for key in table if key.startswith("帳號鎖定計次")]
+    assert period_text(retention.LOCK_STRIKE_RETENTION) in table[strike_label] and "只含帳號編號" in strike_label
+    (appeal_label,) = [key for key in table if key.startswith("申訴")]
+    assert "帳號刪除時一併刪除" in table[appeal_label] and "與所屬帳號相同" in table[appeal_label]
+
+
+def test_the_privacy_policy_discloses_appeals_as_personal_data_only_the_admin_can_read_while_locked(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    assert "申訴" in html and "只有管理員在您的帳號被鎖定期間看得到" in html and "不會出現在日誌" in html
+    assert "鎖定的計次" in html                                                     # 使用紀錄裡也揭露了計次
+    assert "以及您送出的申訴" in html                                               # 匯出的內容包含申訴
+
+
+def test_the_terms_describe_the_google_first_flow_the_age_step_the_deadline_and_the_automatic_lock(client):
+    html = client.get("/terms").get_data(as_text=True)
+    assert "第一次以 Google 登入時會建立您的帳號" in html and "不另外設定密碼" in html
+    assert "24 小時內沒有完成年齡確認，帳號與其資料會被刪除" in html and "立即刪除" in html
+    assert "自動鎖定" in html and "只有管理員能解除" in html and "帳號申訴" in html
+    assert "閒置 30 天" in html
+
+
+def test_the_terms_no_longer_point_to_a_registration_page(client):
+    html = client.get("/terms").get_data(as_text=True)
+    assert 'href="/register"' not in html and "前往註冊" not in html
+    assert 'href="/login"' in html and 'href="/privacy"' in html
+    assert "請到「帳號設定」補填" not in html                                       # 舊的補填說法已不存在

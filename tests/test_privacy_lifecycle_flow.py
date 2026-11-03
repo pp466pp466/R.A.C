@@ -101,7 +101,8 @@ def test_the_whole_privacy_lifecycle_from_signup_to_erasure_and_expiry_without_l
     assert data["account"]["birth_date"] == birth_date_for_age(30).isoformat()
     assert len(data["conversations"][0]["messages"]) == 24 and SECRET_USER_TEXT in data["conversations"][0]["messages"][0]["content"]
     archive = zipfile.ZipFile(io.BytesIO(client.post("/api/account/export", json={"format": "csv"}).get_data()))
-    assert sorted(archive.namelist()) == ["account.csv", "messages.csv"]
+    assert sorted(archive.namelist()) == ["account.csv", "appeals.csv", "messages.csv"]
+    assert data["appeals"] == []
 
     # ---- 申請刪除：所有裝置登出、通知信 ----
     other_device = app.test_client()

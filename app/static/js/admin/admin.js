@@ -4,9 +4,11 @@
  *   這裡只負責顯示與收集輸入，前端的任何檢查（例如原因不可空白）都只是為了少打一次請求。
  * - Modal、Toast 的顯示完全由 Vue 的響應式變數接管（v-if／v-show），不使用 Bootstrap 的 JavaScript。
  * - 所有文字（使用者、模型、管理員填寫的原因）都以 {{ }} 插值當作純文字顯示，不使用 v-html。
- * - 危險操作（停權、解除停權、調整等級、刪除對話）共用一個確認視窗。密碼只存在輸入框的響應式欄位：送出的當下立即清空，
+ * - 危險操作（停權、解除停權、調整等級、刪除對話、解除帳號鎖定）共用一個確認視窗。密碼只存在輸入框的響應式欄位：送出的當下立即清空，
  *   取消、關閉視窗也清空，不寫入 localStorage、IndexedDB 或任何其他儲存體。
  * - 「看使用者」會依對外識別碼取得使用者（寫稽核）；信箱查詢是次要入口，標明「供客服反應時使用」。沒有使用者清單。
+ * - 「被鎖定的帳號」與「申訴」：申訴只有目前被鎖定的帳號送出的才看得到（解除之後從兩個清單消失），內容以純文字顯示；
+ *   讀取申訴會寫稽核（只記筆數），所以和「模型失敗」一樣，進入分頁時才載入、不因切換分頁而重複讀取。
  * - 清單依分頁載入：進入分頁時才載入一次（模型失敗每次讀取都會寫稽核，所以不因切換分頁而重複讀取），
  *   「重新整理」才會重新讀取；做了會改變資料的操作之後，相關的分頁標記為過期，下次進入時重新載入。
  */
@@ -27,6 +29,8 @@
     { id: 'overview', label: '總覽' },
     { id: 'flagged', label: '被標記對話' },
     { id: 'feedback', label: '意見回饋' },
+    { id: 'locked', label: '被鎖定的帳號' },
+    { id: 'appeals', label: '申訴' },
     { id: 'users', label: '使用者' },
     { id: 'failures', label: '模型失敗' },
     { id: 'audit', label: '稽核' }
@@ -37,10 +41,12 @@
     flagged: { path: '/flagged', key: 'conversations', paged: true },
     feedback: { path: '/feedback', key: 'conversations', paged: true },
     audit: { path: '/audit', key: 'entries', paged: true },
-    failures: { path: '/failures', key: 'failures', paged: false }
+    failures: { path: '/failures', key: 'failures', paged: false },
+    locked: { path: '/locked', key: 'accounts', paged: true },
+    appeals: { path: '/appeals', key: 'appeals', paged: true }
   };
 
-  /* 四個危險操作。needsReason：停權與刪除對話必須填原因；needsTier：調整等級要選新的等級。 */
+  /* 五個危險操作。needsReason：停權與刪除對話必須填原因；needsTier：調整等級要選新的等級。 */
   var CONFIRMS = {
     suspend: {
       code: 'ADMIN_SUSPEND_USER', title: '停權這位使用者？', confirmText: '確認停權', needsReason: true, needsTier: false,
@@ -56,6 +62,11 @@
       code: 'ADMIN_CHANGE_TIER', title: '調整會員等級', confirmText: '確認調整', needsReason: false, needsTier: true,
       intro: '等級只影響額度（每日對話輪數、每分鐘訊息數、對話數上限），調整後立即生效。',
       path: function (id) { return '/users/' + encodeURIComponent(id) + '/tier'; }, done: '已調整會員等級。'
+    },
+    unlock: {
+      code: 'ADMIN_UNLOCK_ACCOUNT', title: '解除這個帳號的鎖定？', confirmText: '確認解除', needsReason: false, needsTier: false,
+      intro: '解除後，這位玩家可以再次使用全部功能，目前的登入狀態立即恢復；該帳號的鎖定計次會清除，待處理的申訴會標為已處理。',
+      path: function (id) { return '/users/' + encodeURIComponent(id) + '/unlock'; }, done: '已解除鎖定。'
     },
     remove: {
       code: 'ADMIN_DELETE_CONVERSATION', title: '刪除這個對話？', confirmText: '確認刪除', needsReason: true, needsTier: false,
@@ -148,7 +159,7 @@
       function reloadOverview() { overviewState.loaded = false; return fetchOverview(); }
 
       // ---- 清單 -----------------------------------------------------------------------------
-      var lists = { flagged: newList(), feedback: newList(), audit: newList(), failures: newList() };
+      var lists = { flagged: newList(), feedback: newList(), audit: newList(), failures: newList(), locked: newList(), appeals: newList() };
 
       function fetchList(id, more) {
         var list = lists[id];
@@ -343,6 +354,7 @@
       function askSuspend() { if (user.value) { openConfirm('suspend', userTarget()); } }
       function askUnsuspend() { if (user.value) { openConfirm('unsuspend', userTarget()); } }
       function askTier() { if (user.value) { openConfirm('tier', userTarget()); } }
+      function askUnlock(publicId, displayName) { openConfirm('unlock', { id: publicId, label: displayName }); }
       function askDeleteConversation() {
         if (!conv.data) { return; }
         var id = conv.data.conversation.id;
@@ -361,6 +373,11 @@
         ['flagged', 'feedback'].forEach(function (id) {
           lists[id].items = lists[id].items.filter(function (row) { return row.conversation !== publicId; });
         });
+      }
+
+      function removeUnlockedFromLists(publicId) {
+        lists.locked.items = lists.locked.items.filter(function (row) { return row.public_id !== publicId; });
+        lists.appeals.items = lists.appeals.items.filter(function (row) { return row.user_public_id !== publicId; });
       }
 
       function applyConfirmError(error) {
@@ -407,6 +424,9 @@
           if (kind === 'remove') {
             removeConversationFromLists(targetId);
             markStale('audit');
+          } else if (kind === 'unlock') {
+            removeUnlockedFromLists(targetId);                 // 解除之後，帳號與它的申訴都從管理員的檢視消失
+            markStale('overview', 'audit');
           } else {
             user.value = data.user;
             markStale('overview', 'audit');
@@ -432,7 +452,8 @@
         openUserById: openUserById, refreshUser: refreshUser, lookupUser: lookupUser,
         convOpen: convOpen, conv: conv, openConversation: openConversation, viewConversationUser: viewConversationUser,
         confirmOpen: confirmOpen, confirmState: confirmState, confirmSpec: confirmSpec, tierOptions: tierOptions,
-        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askDeleteConversation: askDeleteConversation,
+        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askUnlock: askUnlock,
+        askDeleteConversation: askDeleteConversation,
         onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm
       };
     }

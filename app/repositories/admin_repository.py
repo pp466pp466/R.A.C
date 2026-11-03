@@ -19,9 +19,13 @@ from sqlalchemy.orm import Session
 
 from app.models.chat import ROLE_ASSISTANT, ChatConversation, ChatMessage
 from app.models.llm_call_log import KIND_CHAT, STATUS_BLOCKED, STATUS_VALIDATION_FAILED, LlmCallLog
+from app.models.lock_appeal import LockAppeal
 from app.models.user import (
     MEMBER_TIERS, STATUS_ACTIVE, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED, User,
 )
+from app.repositories.lock_appeal_repository import LockAppealRepository
+from app.repositories.lock_strike_repository import LockStrikeRepository
+from app.repositories.user_repository import UserRepository
 
 
 @dataclass(frozen=True)
@@ -77,6 +81,28 @@ class MessageRow:
 
 
 @dataclass(frozen=True)
+class LockedRow:
+    """被鎖定帳號的一列：只有對外識別碼、顯示名稱、鎖定時間與原因類別（固定列舉），沒有 email 或內部編號。"""
+
+    user_public_id: str
+    display_name: str
+    locked_at: datetime
+    lock_reason: str | None
+
+
+@dataclass(frozen=True)
+class AppealRow:
+    """被鎖定帳號送出的申訴。內容由使用者撰寫，只在管理員檢視時出現，不進日誌與稽核。"""
+
+    appeal_public_id: str
+    user_public_id: str
+    display_name: str
+    content: str
+    created_at: datetime
+    handled_at: datetime | None
+
+
+@dataclass(frozen=True)
 class FailureRow:
     """模型輸出驗證失敗的原文（僅管理員可讀）；沒有使用者與對話的任何識別。"""
 
@@ -102,6 +128,16 @@ class AdminRepository:
 
     def find_user_by_public_id(self, public_id: str) -> User | None:
         return self._session.scalar(select(User).where(User.public_id == public_id))
+
+    # ---- 帳號鎖定：解除 -------------------------------------------------------------------
+
+    def unlock_account(self, user: User, *, now: datetime) -> int | None:
+        """解除玩家帳號的鎖定：條件式 UPDATE（兩位管理員同時解除只有一位成功），成功時一併清除該帳號的計次、
+        把待處理的申訴標為已處理。回傳被標為已處理的申訴數；帳號已不是鎖定狀態時回傳 None（什麼也沒改）。"""
+        if not UserRepository(self._session).unlock_player(user.id):
+            return None
+        LockStrikeRepository(self._session).clear_for_user(user.id)
+        return LockAppealRepository(self._session).mark_pending_handled(user.id, now)
 
     # ---- 彙總（只有計數，沒有任何個別使用者的資料）------------------------------------------------
 
@@ -252,6 +288,31 @@ class AdminRepository:
         return [FailureRow(_aware(r.created_at), r.kind, r.model, r.error_detail or "") for r in rows]
 
     # ---- 使用者：條件式改變 ----------------------------------------------------------------
+
+    # ---- 帳號鎖定與申訴（account-lockout、lockout-appeals 規格）--------------------------------------
+
+    def locked_accounts(self, *, limit: int, offset: int) -> list[LockedRow]:
+        """目前被鎖定的玩家帳號（由最近鎖定的開始）。"""
+        rows = self._session.execute(
+            select(User.public_id, User.display_name, User.locked_at, User.lock_reason)
+            .where(User.locked_at.is_not(None))
+            .order_by(User.locked_at.desc(), User.id.desc())
+            .limit(limit).offset(offset)
+        )
+        return [LockedRow(public_id, name, locked_at, reason) for public_id, name, locked_at, reason in rows]
+
+    def appeals_of_locked_accounts(self, *, limit: int, offset: int) -> list[AppealRow]:
+        """只回傳「目前被鎖定的帳號」所送出的申訴；帳號解除鎖定之後它的申訴不再出現（資料仍隨帳號保存）。"""
+        rows = self._session.execute(
+            select(
+                LockAppeal.public_id, User.public_id, User.display_name, LockAppeal.content, LockAppeal.created_at, LockAppeal.handled_at,
+            )
+            .join(User, User.id == LockAppeal.user_id)
+            .where(User.locked_at.is_not(None))
+            .order_by(LockAppeal.created_at.desc(), LockAppeal.id.desc())
+            .limit(limit).offset(offset)
+        )
+        return [AppealRow(*row) for row in rows]
 
     def _update_user(self, user: User, statement) -> bool:
         """先 flush 以保留尚未寫入的修改，執行條件式 UPDATE，讓物件在下次存取時重新讀取；回傳是否真的寫入。"""

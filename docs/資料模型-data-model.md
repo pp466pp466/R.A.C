@@ -1,7 +1,7 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-10-30 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness ｜ 資料庫版本：`0009_alert_states` ｜ 規範依據：AGENTS.md 第 4、10、11 節
-> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。本文件描述的是**目前的實作**，涉及上述的部分尚未更新，待 change ① 與 ② 完成後同步；決定見 [report.md](report.md) 的 U-12 至 U-19 與 [路線圖](路線圖-roadmap.md)。
+> 狀態：已實作 ｜ 最後更新：2026-11-02 ｜ 對應 change：member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0010_google_first_login` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 注意（2026-11-02）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）；change ② 移除玩家端密碼功能時，`users.password_hash` 與信箱驗證相關欄位的角色會再調整。
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
@@ -12,6 +12,8 @@ erDiagram
     users ||--o{ user_identities : "擁有 CASCADE"
     users ||--o{ auth_tokens : "擁有 CASCADE"
     users ||--o{ chat_conversations : "擁有 CASCADE"
+    users ||--o{ lock_strikes : "鎖定計次 CASCADE"
+    users ||--o{ lock_appeals : "申訴 CASCADE"
     chat_conversations ||--o{ chat_messages : "包含 CASCADE"
     users |o--o{ llm_call_logs : "產生 SET NULL 匿名化"
     chat_conversations ||..o{ llm_call_logs : "只存編號 無外鍵"
@@ -43,6 +45,23 @@ erDiagram
         datetime last_login_at
         datetime deletion_requested_at "申請刪除的時間 只有待刪除才有值"
         string status_before_deletion "申請前的狀態 撤銷時還原用"
+        datetime age_deadline_at "玩家補填年齡的期限 建立後 24 小時 補填後清空 可為空"
+        datetime locked_at "玩家帳號被鎖定的時間 只有管理員能解除 可為空"
+        string lock_reason "鎖定原因的固定列舉 可為空"
+    }
+    lock_strikes {
+        int id PK
+        int user_id FK "CASCADE"
+        string kind "identity_rejected 或 rate_limited"
+        datetime created_at "視窗內計次 15 分鐘 保存 7 天"
+    }
+    lock_appeals {
+        int id PK
+        string public_id UK "對外識別碼 UUID"
+        int user_id FK "CASCADE"
+        text content "玩家撰寫 上限 1000 字 視為個資"
+        datetime created_at
+        datetime handled_at "解除鎖定時標記 可為空"
     }
     user_identities {
         int id PK
@@ -119,7 +138,7 @@ erDiagram
     admin_audit_logs {
         int id PK
         int admin_user_id FK "可為空 SET NULL"
-        string action "8 個固定動作"
+        string action "12 個固定動作"
         string target_user_public_id "對外識別碼 無外鍵"
         string target_conversation_public_id "對外識別碼 無外鍵"
         string reason "管理員填寫 至多 200 字"
@@ -143,6 +162,8 @@ erDiagram
 | 期限清除的索引 | `ix_chat_conversations_updated_at`（`0008`） | 依最後活動時間全表找出 12 個月前的對話；既有索引以 `user_id` 開頭，用不上 |
 | 抹除的涵蓋由測試守住 | 每張指向使用者或對話的資料表都要登記在 `tests/architecture/test_account_erasure_coverage.py`；沒有外鍵的整數參照（`llm_call_logs.conversation_id`）由抹除流程明確清除 | 新增資料表時，漏掉「刪除一個人」會讓測試失敗，而不是默默留下個資 |
 | 告警狀態獨立成表 | `alert_states`（`0009`）至多 5 列，沒有外鍵、不含個資，`alert_key` 唯一；狀態轉換以條件式 UPDATE 搶佔（比對 `state`、`severity`、`last_notified_at`），所以兩個檢查行程重疊時只有一個寄信 | 通知不隨檢查頻率重複；不指向使用者或對話，所以不需要保存期限清除，也不在抹除流程的登記清單內 |
+| 玩家鎖定與補填期限（`0010`） | `users.age_deadline_at`、`locked_at`、`lock_reason` 皆可為空且各自有索引或不進索引：期限與鎖定都只對少數列有值；鎖定以條件式 UPDATE（`locked_at IS NULL`）搶佔，並行請求只鎖一次；沒有 `age_deadline_at` 的舊帳號與管理員不會被逾時清除 | 補填期限與鎖定狀態是帳號的屬性，不是歷史；expand 階段只新增可為空的欄位，舊版程式不受影響 |
+| 鎖定計次與申訴各自成表（`0010`） | `lock_strikes` 只存（使用者、類別、時間），視窗內計數靠 `(user_id, created_at)` 索引；`lock_appeals` 有 `public_id`，內容視為個資；兩者都對 `users.id` `CASCADE`，並登記在抹除涵蓋測試的清單 | 計次不依內容查詢，不放 JSON；刪除帳號時申訴與計次一起消失 |
 | 稽核只有一個外鍵 | `admin_audit_logs.admin_user_id → users.id`（`SET NULL`）；目標使用者與對話只存對外識別碼（UUID，不是個資），不設外鍵 | SQL Server 不允許同一張表有兩個指向同一個父表且帶動作的外鍵（錯誤 1785）；管理員或目標被刪除後，「誰對誰做了什麼」仍然成立，這正是稽核該有的性質 |
 | 稽核不可變 | 動作是固定列舉；`detail_json` 只放列舉值與整數；`AdminAuditRepository` 只有 `add` 與 `list`（測試以反射守住） | 紀錄不能被改寫；不記錄 email、訊息、模型原文與密碼 |
 | 字串型別 | 一律 `Unicode` 與 `UnicodeText` | SQL Server 對應 NVARCHAR，中文不亂碼 |
@@ -162,10 +183,11 @@ flowchart LR
     M6 --> M7["0007 admin_audit_logs<br/>管理員稽核紀錄與兩個索引"]
     M7 --> M8["0008 privacy_lifecycle<br/>users 的兩個待刪除欄位、對話最後活動的索引"]
     M8 --> M9["0009 alert_states<br/>營運告警的狀態資料表"]
+    M9 --> M10["0010 google_first_login<br/>users 的補填期限與鎖定欄位、lock_strikes、lock_appeals"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
-- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
+- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。
 
@@ -175,15 +197,19 @@ flowchart LR
 flowchart TD
     Msg["對話與訊息"] -->|"使用者主動刪除，或最後活動後 365 天（purge-expired-data）"| Del1["永久刪除，帳本的對話編號先清為空值"]
     Acc["帳號（含生日與年齡區間）"] -->|"連續 12 個月未登入（purge-inactive-accounts，管理員不納入）"| Era["抹除一個人（AccountErasureService）"]
+    Acc -->|"建立後 24 小時內未完成年齡確認（purge-unconfirmed-accounts，每小時；管理員與沒有期限記錄的舊帳號不納入）"| Era
+    Acc -->|"補填年齡時發現未滿 13 歲（立即，不保存生日）"| Era
     Acc -->|"使用者申請刪除"| Pend["deletion_pending：立即停用，所有裝置登出，7 天寬限期"]
     Pend -->|"7 天內登入並撤銷"| Acc
     Pend -->|"寬限期滿（execute-account-deletions）"| Era
     Era --> Wipe["刪除使用者；對話、訊息、第三方身分、驗證權杖串聯刪除；帳本與稽核的使用者欄位變空值"]
-    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months、user_requested，或備份還原後補上的 restore_replay），不納入期限清除"]
+    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months、user_requested、underage、age_unconfirmed，或備份還原後補上的 restore_replay），不納入期限清除"]
     Err["error_detail（失敗原文）"] -->|"14 天（purge-expired-data）"| Del4["清為空值，帳本那一筆保留；僅管理員可讀"]
     Log["llm_call_logs"] -->|"365 天（purge-expired-data）"| Del3["刪除"]
     Tok["auth_tokens"] -->|"到期後 7 天（purge-expired-data）"| Del5["刪除，不論是否已使用"]
     Aud["admin_audit_logs"] -->|"730 天（purge-expired-data）"| Del6["刪除（唯一的清除途徑在 RetentionRepository）"]
+    Strike["lock_strikes"] -->|"7 天（purge-expired-data）"| Del7["刪除（鎖定計次，視窗只有 15 分鐘）"]
+    Appeal["lock_appeals（申訴）"] -->|"與帳號同進退，不由期限清除"| Era
 ```
 
 三個排程指令都已實作（`flask purge-inactive-accounts`、`execute-account-deletions`、`purge-expired-data`），設定排程屬 C-5。**抹除一個人只有一個出口**：每個帳號在一個交易內依序「把帳本的對話編號清為空值 → 條件式刪除（當下再確認一次條件）→ 寫刪除紀錄 → 提交」，條件不成立時整個回復。順序不能反過來：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列；帳本的 `conversation_id` 沒有外鍵，不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。管理員在後台刪除違規對話、使用者自己刪除對話與期限清除對話，都是同一個原則：先清帳本的對話編號再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。

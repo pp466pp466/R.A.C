@@ -4,17 +4,18 @@ from sqlalchemy.orm import Session
 
 from app import create_app
 from app.config import load_config
-from app.models import Base, User
+from app.models import Base, LockStrike, User
 from app.models.user import STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED
 from tests.support.age import age_fields, birth_date_for_age
 from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.client import raw_client
+from tests.support.idor import logged_in_client
 
 NEW_PASSWORD = "a-brand-new-password"
 FORBIDDEN_KEYS = {"id", "token_version", "password_hash", "password", "tv"}
 PROFILE_KEYS = {
     "public_id", "email", "display_name", "member_tier", "role", "status",
-    "email_verified", "has_password", "age_confirmed", "age_group", "google_linked",
+    "email_verified", "has_password", "age_confirmed", "age_group", "google_linked", "restriction",
 }
 AGE_SECRETS = ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult")
 
@@ -171,10 +172,10 @@ def test_login_returns_the_profile_and_sets_the_login_cookie(client):
 def unverified_member_client(app):
     """升級前就存在、沒有年齡資料的帳號（直接寫入資料庫，再以 API 登入）。"""
     with db(app) as s:
-        add_user(s, 1)
+        add_user(s, 1, age=None)
     client = app.test_client()
     user = login(client, email="user1@example.com").get_json()["user"]
-    assert user["age_confirmed"] is False and user["age_group"] is None
+    assert user["age_confirmed"] is False and user["restriction"] == "age_pending" and user["age_group"] is None
     return client
 
 
@@ -206,7 +207,6 @@ def test_verify_age_records_everything_and_returns_the_fresh_profile_without_the
         ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error", {"birth_date"}),
         (age_fields(30, age_range=None), "validation_error", {"age_range"}),
         (age_fields(30, age_range="13_17"), "age_mismatch", None),
-        (age_fields(12), "age_not_eligible", {"birth_date"}),
     ],
 )
 def test_verify_age_with_invalid_input_is_a_400_and_writes_nothing(app, body, code, fields):
@@ -217,6 +217,50 @@ def test_verify_age_with_invalid_input_is_a_400_and_writes_nothing(app, body, co
     assert error["code"] == code and (set(error["fields"]) == fields if fields else "fields" not in error)
     (stored,) = users_in(app)
     assert stored.birth_date is None and stored.age_range is None and stored.age_confirmed_at is None
+
+
+def test_a_mismatch_at_the_age_step_gets_the_generic_message_and_the_strike_survives_the_400(app):
+    client = unverified_member_client(app)
+    response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="13_17"))
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert error == {"code": "age_mismatch", "message": "資料有誤，請重新填寫。"}
+    with db(app) as s:
+        assert s.query(LockStrike).count() == 1                       # 4xx 的請求也保留計次
+
+
+def test_five_mismatches_lock_the_account_and_the_next_request_is_account_locked(app):
+    client = unverified_member_client(app)
+    for _ in range(5):
+        assert client.post("/api/auth/verify-age", json=age_fields(30, age_range="13_17")).status_code == 400
+    with db(app) as s:
+        assert s.query(User).one().locked_at is not None
+    again = client.get("/api/cs/conversations")
+    assert again.status_code == 403 and again.get_json()["error"]["code"] == "account_locked"
+    me = client.get("/api/auth/me").get_json()["user"]
+    assert me["restriction"] == "locked"
+
+
+@pytest.mark.parametrize("body", [age_fields(12), age_fields(12, age_range="18_24"), age_fields(30, age_range="under_13")])
+def test_a_player_under_13_at_the_age_step_is_erased_and_signed_out_with_a_generic_400(app, body, log_lines):
+    client = unverified_member_client(app)
+    response = client.post("/api/auth/verify-age", json=body)
+    assert response.status_code == 400
+    error = response.get_json()["error"]
+    assert error["code"] == "age_not_eligible" and "fields" not in error
+    assert users_in(app) == []                                                        # 帳號與個資已抹除
+    assert client.get("/api/auth/me").status_code == 401                              # 目前裝置的登入狀態已清除
+    assert any(h.startswith("session=;") for h in response.headers.getlist("Set-Cookie"))
+    assert body["birth_date"] not in response.get_data(as_text=True) + log_lines.raw()
+
+
+def test_an_admin_under_13_at_the_age_step_is_refused_but_stays_signed_in(app):
+    with db(app) as s:
+        admin = add_user(s, 9, age=None, role="admin")
+        client = logged_in_client(app, admin)
+    response = client.post("/api/auth/verify-age", json=age_fields(12))
+    assert response.status_code == 400 and response.get_json()["error"]["code"] == "age_not_eligible"
+    assert len(users_in(app)) == 1 and client.get("/api/auth/me").status_code == 200
 
 
 def test_verify_age_needs_a_login(app, client):
@@ -252,7 +296,7 @@ def test_verify_age_without_csrf_is_rejected_and_writes_nothing(app):
 
 def test_verify_age_only_changes_the_callers_own_account(app):
     with db(app) as s:
-        add_user(s, 2)
+        add_user(s, 2, age=None)
     client = unverified_member_client(app)
     client.post("/api/auth/verify-age", json=age_fields(30))
     done = {user.email: user.birth_date is not None for user in users_in(app)}
@@ -265,7 +309,7 @@ def test_no_auth_response_ever_contains_the_birthday_or_the_range(app):
     texts = [register(client, **age_fields(15)).get_data(as_text=True), login(client).get_data(as_text=True)]
     texts.append(client.get("/api/auth/me").get_data(as_text=True))
     with db(app) as s:
-        add_user(s, 5)
+        add_user(s, 5, age=None)
     other = app.test_client()
     login(other, email="user5@example.com")
     texts.append(other.post("/api/auth/verify-age", json=age_fields(40)).get_data(as_text=True))

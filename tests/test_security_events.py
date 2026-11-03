@@ -54,10 +54,8 @@ def test_failures_are_warnings_and_successes_are_info(log_lines):
 
 AGE_EVENTS = {
     security_events.AGE_CONFIRMED_REGISTER: ("auth.age_confirmed.register", "INFO"),
-    security_events.AGE_CONFIRMED_GOOGLE: ("auth.age_confirmed.google", "INFO"),
     security_events.AGE_CONFIRMED_LATER: ("auth.age_confirmed.later", "INFO"),
     security_events.AGE_GATE_DENIED: ("auth.age_gate_denied", "INFO"),
-    security_events.GOOGLE_REJECTED_AGE: ("auth.google_rejected.age", "WARNING"),
     security_events.AGE_REJECTED_UNDERAGE: ("auth.age_rejected.underage", "WARNING"),
     security_events.AGE_REJECTED_MISMATCH: ("auth.age_rejected.mismatch", "WARNING"),
     security_events.ACCOUNT_INACTIVE_PURGED: ("account.inactive_purged", "INFO"),

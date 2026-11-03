@@ -129,8 +129,10 @@ class AccessPolicy:
     def require_chat_access(self, user: CurrentUser) -> None:
         """每個會呼叫 Gemini 的端點在做任何事之前先呼叫這裡；不允許時拋出錯誤。
 
-        年齡的兩種拒絕不同：尚未完成確認 → `AgeConfirmationRequired`（前端引導到帳號設定補填）；
-        年齡低於最低使用年齡 → `AgeRestricted`（補填也沒有用，所以不引導）。兩者都記錄一筆資訊層級的事件。
+        年齡的兩種拒絕不同：尚未完成確認 → `AgeConfirmationRequired`；年齡低於最低使用年齡 → `AgeRestricted`
+        （補填也沒有用，所以不引導）。兩者都記錄一筆資訊層級的事件。
+        玩家沒完成年齡確認時，在登入檢查（`CurrentUser.restriction` 的待確認年齡狀態）就被擋下並導向 `/age`，不會走到這裡；
+        走到這裡而被這個代碼拒絕的是管理員（沒有受限狀態，到帳號設定頁補填）。
         """
         denied = self.chat_gate(user)
         if denied is None:

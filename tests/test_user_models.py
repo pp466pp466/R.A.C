@@ -56,7 +56,7 @@ def test_nullable_columns_are_exactly_the_documented_ones():
     assert nullable == {
         "password_hash", "email_verified_at", "locked_until", "terms_version", "terms_accepted_at",
         "age_confirmed_at", "age_policy_version", "birth_date", "age_range", "is_adult_at_confirmation", "last_login_at",
-        "deletion_requested_at", "status_before_deletion",
+        "deletion_requested_at", "status_before_deletion", "age_deadline_at", "locked_at", "lock_reason",
     }
     tokens = {c.name for c in Base.metadata.tables["auth_tokens"].columns if c.nullable}
     assert tokens == {"used_at"}

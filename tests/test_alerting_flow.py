@@ -123,7 +123,7 @@ def test_the_whole_alert_lifecycle_with_real_traffic_and_no_leak(log_lines):
     # ---- 5 個帳號因連續登入失敗被鎖定 ----
     lock(2, 6)
     assert check().exit_code == 0
-    assert subjects()[-1] == "【智能客服】告警：登入失敗激增（進入告警）" and len(sender.sent) == 4
+    assert subjects()[-1] == "【智能客服】告警：帳號鎖定激增（進入告警）" and len(sender.sent) == 4
 
     # ---- 用量越過 100%：升級 ----
     say(conversation)                                                     # 這一輪 200 token：860 → 1060
@@ -140,7 +140,7 @@ def test_the_whole_alert_lifecycle_with_real_traffic_and_no_leak(log_lines):
     assert check().exit_code == 0
     assert sorted(subjects()[5:]) == sorted([
         "【智能客服】告警：全站用量（已恢復）", "【智能客服】告警：模型錯誤率（已恢復）",
-        "【智能客服】告警：模型設定錯誤（已恢復）", "【智能客服】告警：登入失敗激增（已恢復）",
+        "【智能客服】告警：模型設定錯誤（已恢復）", "【智能客服】告警：帳號鎖定激增（已恢復）",
     ])
     clock.advance(minutes=5)
     assert check().exit_code == 0 and len(sender.sent) == 9               # 恢復之後不再寄
@@ -149,11 +149,11 @@ def test_the_whole_alert_lifecycle_with_real_traffic_and_no_leak(log_lines):
     lock(7, 11)
     sender.fail = True
     failed = check()
-    assert failed.exit_code != 0 and "以下告警失敗：登入失敗激增" in failed.output and len(sender.sent) == 9
+    assert failed.exit_code != 0 and "以下告警失敗：帳號鎖定激增" in failed.output and len(sender.sent) == 9
     sender.fail = False
     clock.advance(minutes=5)
     assert check().exit_code == 0
-    assert subjects()[-1] == "【智能客服】告警：登入失敗激增（進入告警）" and len(sender.sent) == 10
+    assert subjects()[-1] == "【智能客服】告警：帳號鎖定激增（進入告警）" and len(sender.sent) == 10
 
     # ---- 掃描：日誌、指令輸出與信件內容 ----
     assert {m["to"] for m in sender.sent} == {RECIPIENT}

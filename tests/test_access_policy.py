@@ -131,19 +131,19 @@ def test_chat_gate_returns_the_documented_codes():
     assert OFF.chat_gate(member(email_verified=False)) is None
 
 
-def test_a_missing_age_check_raises_the_dedicated_error_code_that_points_to_the_account_page():
+def test_a_missing_age_check_raises_the_dedicated_error_code_that_points_to_the_age_step():
     with pytest.raises(AgeConfirmationRequired) as denied:
         ON.require_chat_access(member(age=None))
     assert isinstance(denied.value, Forbidden) and not isinstance(denied.value, AgeRestricted)
     assert denied.value.code == "age_confirmation_required"
-    assert "生日" in denied.value.message and "帳號設定" in denied.value.message
+    assert "生日" in denied.value.message and "年齡確認" in denied.value.message
 
 
 def test_a_too_young_member_gets_a_different_code_that_does_not_point_to_the_account_page():
     with pytest.raises(AgeRestricted) as denied:
         ON.require_chat_access(member(age=12))
     assert isinstance(denied.value, Forbidden) and not isinstance(denied.value, AgeConfirmationRequired)
-    assert denied.value.code == "age_restricted" and "帳號設定" not in denied.value.message
+    assert denied.value.code == "age_restricted" and "年齡確認" not in denied.value.message
 
 
 def test_raising_the_minimum_age_to_18_in_the_policy_blocks_teens_and_nobody_else():

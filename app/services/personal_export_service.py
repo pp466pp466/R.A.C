@@ -5,8 +5,8 @@
   讓 Excel 開啟繁體中文不亂碼。儲存格以 `=`、`+`、`-`、`@`、Tab 或歸位字元開頭時，前面加單引號，避免被試算表當成公式執行
   （訊息內容是使用者與模型寫的，不可信任）。
 - 訊息以序號為游標每頁 500 則讀取，寫入 `SpooledTemporaryFile`（超過 8 MB 才落地），所以記憶體用量與訊息總數無關。
-- 範圍：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間。**不含**密碼雜湊、`token_version`、驗證權杖、Google 的識別值、
-  內部整數編號，以及意圖、實體、信心值、建議動作與對話狀態等模型內部欄位（不是使用者提供的資料，而是系統推論的副產品）。
+- 範圍：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間，以及**自己送出的申訴**（內容、時間、處理狀態；CSV 為 `appeals.csv`）。**不含**密碼雜湊、`token_version`、驗證權杖、Google 的識別值、
+  內部整數編號、帳號鎖定的計次，以及意圖、實體、信心值、建議動作與對話狀態等模型內部欄位（不是使用者提供的資料，而是系統推論的副產品）。
 """
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ from typing import Any, BinaryIO, Callable
 from app.models.user import PROVIDER_GOOGLE, User
 from app.observability import lifecycle_events
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.services.age_policy import taipei_today
@@ -40,6 +41,7 @@ ACCOUNT_COLUMNS = (
     "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "google_linked",
 )
 MESSAGE_COLUMNS = ("conversation_id", "conversation_title", "seq", "role", "content", "created_at")
+APPEAL_COLUMNS = ("appeal_id", "content", "created_at", "status")
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -67,8 +69,10 @@ class PersonalExportService:
         users: UserRepository,
         identities: UserIdentityRepository,
         chats: ChatRepository,
+        appeals: LockAppealRepository,
         clock: Callable[[], datetime],
     ) -> None:
+        self._appeals = appeals
         self._users = users
         self._identities = identities
         self._chats = chats
@@ -120,6 +124,16 @@ class PersonalExportService:
             "google_linked": self._identities.get_for_user(user.id, PROVIDER_GOOGLE) is not None,
         }
 
+    def _appeal_rows(self, user_id: int) -> list[dict[str, Any]]:
+        """自己送出的申訴（由舊到新）；內容是使用者撰寫的個資，匯出時原樣交還給本人。"""
+        return [
+            {
+                "id": appeal.public_id, "content": appeal.content, "created_at": iso_utc(appeal.created_at),
+                "status": "handled" if appeal.handled_at is not None else "pending",
+            }
+            for appeal in self._appeals.list_for_user(user_id)
+        ]
+
     def _messages(self, user_id: int, conversation):
         """依序號由小到大逐頁讀取一個對話的全部訊息。"""
         after = 0
@@ -159,7 +173,9 @@ class PersonalExportService:
             for position, message in enumerate(self._messages(user.id, conversation)):
                 put(("," if position else "") + dump(message))
             put("]}")
-        put("]}")
+        put(']')
+        put(',"appeals":' + dump(self._appeal_rows(user.id)))
+        put('}')
 
     # ---- CSV（zip）------------------------------------------------------------------
 
@@ -170,6 +186,12 @@ class PersonalExportService:
                     writer = csv.writer(text)
                     writer.writerow(ACCOUNT_COLUMNS)
                     writer.writerow([csv_safe(account[name]) for name in ACCOUNT_COLUMNS])
+            with archive.open("appeals.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(APPEAL_COLUMNS)
+                    for row in self._appeal_rows(user.id):
+                        writer.writerow([row["id"], csv_safe(row["content"]), row["created_at"], row["status"]])
             with archive.open("messages.csv", "w") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
                     writer = csv.writer(text)

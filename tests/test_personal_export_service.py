@@ -13,12 +13,15 @@ import pytest
 from app.models import AuthToken, ChatConversation, ChatMessage, User, UserIdentity
 from app.models.user import PROVIDER_GOOGLE, TOKEN_VERIFY_EMAIL
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.services import personal_export_service
 from app.services.current_user import CurrentUser
 from app.services.errors import ValidationError
-from app.services.personal_export_service import ACCOUNT_COLUMNS, MESSAGE_COLUMNS, PersonalExportService, csv_safe
+from app.services.personal_export_service import (
+    ACCOUNT_COLUMNS, APPEAL_COLUMNS, MESSAGE_COLUMNS, PersonalExportService, csv_safe,
+)
 from tests.support.auth import FAST_HASHER, GOOD_PASSWORD, START, FakeClock, add_user
 from tests.support.age import birth_date_for_age
 
@@ -32,7 +35,8 @@ TEXT = "繁體中文 😀 的訊息，含逗號、\"引號\"與\n換行"
 
 def service_for(session) -> PersonalExportService:
     return PersonalExportService(
-        users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session), clock=FakeClock()
+        users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
+        appeals=LockAppealRepository(session), clock=FakeClock(),
     )
 
 
@@ -129,7 +133,7 @@ def test_the_export_never_contains_credentials_internal_ids_or_model_internals(m
 
 
 def test_a_user_with_no_conversations_still_gets_a_valid_file(member_session):
-    user = add_user(member_session, 1)
+    user = add_user(member_session, 1, age=None)
     data = read_json(service_for(member_session).build(me(member_session, user), "json"))
     assert data["conversations"] == [] and data["account"]["birth_date"] is None and data["account"]["google_linked"] is False
 
@@ -167,13 +171,13 @@ def test_every_message_is_exported_in_order_across_page_boundaries(member_sessio
 
 # ---- CSV --------------------------------------------------------------------------
 
-def test_csv_is_a_zip_of_two_utf8_sig_files_that_excel_can_read(member_session):
+def test_csv_is_a_zip_of_three_utf8_sig_files_that_excel_can_read(member_session):
     user = rich_user(member_session)
     seed_conversation(member_session, user.id, 1, title="含,逗號的標題")
     result = service_for(member_session).build(me(member_session, user), "csv")
     assert result.mimetype == "application/zip" and result.filename == "my-data-20261027.zip"
     files = read_zip(result)
-    assert sorted(files) == ["account.csv", "messages.csv"]
+    assert sorted(files) == ["account.csv", "appeals.csv", "messages.csv"]
 
     account_rows = csv_rows(files["account.csv"])
     assert account_rows[0] == list(ACCOUNT_COLUMNS) and len(account_rows) == 2
@@ -245,3 +249,69 @@ def test_a_failure_while_writing_closes_the_temporary_file(member_session, monke
     with pytest.raises(RuntimeError):
         service_for(member_session).build(me(member_session, user), "json")
     assert len(opened) == 1 and opened[0].closed
+
+
+# ---- 申訴（google-first-login）--------------------------------------------------------------
+
+APPEAL_TEXT = "我是不小心連按了很多次 😀，請解除鎖定。\n謝謝，=SUM(A1)"
+
+
+def seed_appeals(session, user: User, other: User) -> None:
+    repo = LockAppealRepository(session)
+    first = repo.create(user.id, APPEAL_TEXT, START)
+    first.handled_at = START + timedelta(hours=1)
+    repo.create(user.id, "第二則", START + timedelta(hours=2))
+    repo.create(other.id, "別人的申訴，不該出現", START)
+    session.commit()
+
+
+def test_the_json_export_has_my_appeals_oldest_first_with_their_status_and_nobody_elses(member_session):
+    user, other = rich_user(member_session), add_user(member_session, 2)
+    seed_appeals(member_session, user, other)
+    data = read_json(service_for(member_session).build(me(member_session, user), "json"))
+    assert [(a["content"], a["status"]) for a in data["appeals"]] == [(APPEAL_TEXT, "handled"), ("第二則", "pending")]
+    assert set(data["appeals"][0]) == {"id", "content", "created_at", "status"} and len(data["appeals"][0]["id"]) == 36
+    assert data["appeals"][0]["created_at"] == "2026-10-27T12:00:00Z"
+    assert "別人的申訴" not in json.dumps(data, ensure_ascii=False)
+
+
+def test_the_json_has_an_empty_appeals_list_when_there_are_none(member_session):
+    user = rich_user(member_session)
+    assert read_json(service_for(member_session).build(me(member_session, user), "json"))["appeals"] == []
+
+
+def test_the_csv_export_has_an_appeals_file_with_neutralised_formulas_and_nobody_elses(member_session):
+    user, other = rich_user(member_session), add_user(member_session, 2)
+    seed_appeals(member_session, user, other)
+    files = read_zip(service_for(member_session).build(me(member_session, user), "csv"))
+    rows = csv_rows(files["appeals.csv"])
+    assert rows[0] == list(APPEAL_COLUMNS) and len(rows) == 3
+    first = dict(zip(rows[0], rows[1]))
+    assert first["content"] == APPEAL_TEXT and first["status"] == "handled"           # 開頭不是公式字元；換行與表情符號往返無損
+    assert dict(zip(rows[0], rows[2]))["status"] == "pending"
+    assert b"\xe5\x88\xa5\xe4\xba\xba\xe7\x9a\x84\xe7\x94\xb3\xe8\xa8\xb4" not in files["appeals.csv"]    # 「別人的申訴」
+    assert files["appeals.csv"].startswith(UTF8_BOM)
+
+
+def test_an_appeal_that_starts_like_a_formula_is_neutralised_in_the_csv(member_session):
+    user = rich_user(member_session)
+    LockAppealRepository(member_session).create(user.id, "=HYPERLINK(\"http://evil\")", START)
+    member_session.commit()
+    rows = csv_rows(read_zip(service_for(member_session).build(me(member_session, user), "csv"))["appeals.csv"])
+    assert rows[1][1] == "'=HYPERLINK(\"http://evil\")"
+
+
+def test_lock_strikes_and_lock_state_are_not_part_of_the_export(member_session):
+    from app.models import LockStrike
+
+    user = add_user(member_session, 1, locked_at=START, lock_reason="rate_limited")
+    member_session.add(LockStrike(user_id=user.id, kind="rate_limited", created_at=START))
+    member_session.commit()
+    for fmt in ("json", "csv"):
+        result = service_for(member_session).build(me(member_session, user), fmt)
+        raw = result.handle.read()
+        if fmt == "csv":
+            raw = b"".join(read_zip(type("R", (), {"handle": io.BytesIO(raw)})()).values())
+        text = raw.decode("utf-8-sig", "ignore")
+        for hidden in ("lock_strikes", "locked_at", "lock_reason", "rate_limited", "identity_rejected", "age_deadline_at"):
+            assert hidden not in text, (fmt, hidden)

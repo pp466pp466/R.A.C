@@ -5,16 +5,17 @@
 這個端點也回報 `content_ceiling`，證明內容上限在 HTTP 層同樣由當下的年齡決定。
 """
 import pytest
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app import create_app
 from app.config import load_config
-from app.models import Base
+from app.models import Base, User
 from app.models.user import ROLE_ADMIN, ROLE_USER, STATUS_PENDING_VERIFICATION
 from app.services.age_policy import AgePolicy
 from tests.support.age import age_fields, birth_date_for_age
 from tests.support.age_gate import ENDPOINT, add_ai_endpoint
-from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user, sign_in_as
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 
@@ -38,9 +39,11 @@ def seed(app, n: int, **overrides):
 
 
 def signed_in(app, n: int):
+    """直接寫入登入狀態（管理員不能只靠密碼登入，所以不經過登入端點）。"""
+    with Session(app.extensions["db_engine"]) as session:
+        user_id = session.scalar(select(User.id).where(User.email == f"user{n}@example.com"))
     client = app.test_client()
-    response = client.post("/api/auth/login", json={"email": f"user{n}@example.com", "password": GOOD_PASSWORD})
-    assert response.status_code == 200, response.get_data(as_text=True)
+    sign_in_as(client, user_id)
     return client
 
 
@@ -53,17 +56,17 @@ def verify(client, age: int = 30):
 # =============================================================================
 
 def test_a_member_without_age_data_gets_403_with_the_dedicated_code_and_the_work_never_runs(app):
-    seed(app, 1)
+    seed(app, 1, age=None)
     response = signed_in(app, 1).post(ENDPOINT, json={})
     assert response.status_code == 403
     error = response.get_json()["error"]
     assert error["code"] == "age_confirmation_required"
-    assert "生日" in error["message"] and "帳號設定" in error["message"]
+    assert "生日" in error["message"] and "年齡確認" in error["message"]
     assert app.work_done == []
 
 
 def test_verifying_later_opens_the_same_endpoint_without_logging_in_again(app):
-    seed(app, 1)
+    seed(app, 1, age=None)
     client = signed_in(app, 1)
     assert client.post(ENDPOINT, json={}).status_code == 403
     verify(client, 30)
@@ -91,7 +94,7 @@ def test_being_signed_out_is_still_a_401_not_an_age_error(app):
 
 @pytest.mark.parametrize(("role", "tier"), [(ROLE_USER, "free"), (ROLE_USER, "vip"), (ROLE_ADMIN, "free"), (ROLE_ADMIN, "vip")])
 def test_neither_admins_nor_vip_members_skip_the_age_gate(app, role, tier):
-    seed(app, 1, role=role, member_tier=tier)
+    seed(app, 1, role=role, member_tier=tier, age=None)
     client = signed_in(app, 1)
     response = client.post(ENDPOINT, json={})
     assert response.status_code == 403 and response.get_json()["error"]["code"] == "age_confirmation_required"
@@ -100,8 +103,8 @@ def test_neither_admins_nor_vip_members_skip_the_age_gate(app, role, tier):
 
 
 def test_verifying_one_member_does_not_open_the_gate_for_another(app):
-    seed(app, 1)
-    seed(app, 2)
+    seed(app, 1, age=None)
+    seed(app, 2, age=None)
     verify(signed_in(app, 1), 30)
     assert signed_in(app, 2).post(ENDPOINT, json={}).status_code == 403
     assert app.work_done == []
@@ -169,9 +172,12 @@ def test_raising_the_minimum_age_to_18_blocks_existing_teens_with_their_own_code
 # 日誌
 # =============================================================================
 
-@pytest.mark.parametrize(("age", "code"), [(None, "age_confirmation_required"), (12, "age_restricted")])
-def test_a_denial_is_logged_with_the_internal_user_id_and_nothing_personal(app, log_lines, age, code):
-    user_id = seed(app, 1, age=age)
+# 沒有年齡資料的玩家在登入檢查就被擋下（受限登入狀態，不經過 AccessPolicy），所以記錄拒絕事件的是管理員這一條路
+@pytest.mark.parametrize(
+    ("age", "role", "code"), [(None, ROLE_ADMIN, "age_confirmation_required"), (12, ROLE_USER, "age_restricted")]
+)
+def test_a_denial_is_logged_with_the_internal_user_id_and_nothing_personal(app, log_lines, age, role, code):
+    user_id = seed(app, 1, age=age, role=role)
     response = signed_in(app, 1).post(ENDPOINT, json={})
     assert response.get_json()["error"]["code"] == code
     denials = [line for line in log_lines() if line.get("event") == "auth.age_gate_denied"]

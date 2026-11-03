@@ -2,7 +2,7 @@
 
 事件名稱是**固定列舉**，失敗原因寫在名稱的最後一段（例如 `auth.login_failed.bad_password`），
 因此日誌裡不可能夾帶自由文字，也就不會夾帶 email、密碼、權杖、授權碼或 Cookie。
-這些名稱是「登入失敗激增」等告警的資料來源。
+這些名稱是「帳號鎖定激增」等告警的資料來源。
 """
 from __future__ import annotations
 
@@ -18,6 +18,9 @@ LOGIN_FAILED_UNKNOWN_USER = "auth.login_failed.unknown_user"
 LOGIN_FAILED_BAD_PASSWORD = "auth.login_failed.bad_password"
 LOGIN_FAILED_NO_PASSWORD = "auth.login_failed.no_password"
 LOGIN_FAILED_LOCKED = "auth.login_failed.locked"
+LOGIN_FAILED_ADMIN_PASSWORD_ONLY = "auth.login_failed.admin_password_only"     # 管理員不能只靠密碼登入
+ADMIN_GOOGLE_PASSED = "auth.admin_google_passed"                               # 管理員通過 Google，等待密碼驗證
+ADMIN_STEP_EXPIRED = "auth.admin_step_expired"
 LOGIN_REFUSED_DISABLED = "auth.login_refused.disabled"
 ACCOUNT_LOCKED = "auth.locked"
 LOGOUT = "auth.logout"
@@ -47,11 +50,9 @@ GOOGLE_REJECTED_UNAVAILABLE = "auth.google_rejected.unavailable"
 GOOGLE_REJECTED_TERMS = "auth.google_rejected.terms"
 GOOGLE_REJECTED_DISABLED = "auth.google_rejected.disabled"
 GOOGLE_REJECTED_CONFLICT = "auth.google_rejected.conflict"
-GOOGLE_REJECTED_AGE = "auth.google_rejected.age"
 
 # ---- 年齡確認（age-gate）----
 AGE_CONFIRMED_REGISTER = "auth.age_confirmed.register"
-AGE_CONFIRMED_GOOGLE = "auth.age_confirmed.google"
 AGE_CONFIRMED_LATER = "auth.age_confirmed.later"
 AGE_GATE_DENIED = "auth.age_gate_denied"
 # 被拒絕註冊或補填：只有事件名稱，不帶任何輸入（生日與區間都不得進入日誌）
@@ -60,6 +61,14 @@ AGE_REJECTED_MISMATCH = "auth.age_rejected.mismatch"
 
 # ---- 帳號保存期限 ----
 ACCOUNT_INACTIVE_PURGED = "account.inactive_purged"
+
+# ---- 帳號鎖定與年齡確認後的抹除（google-first-login）----
+# 只有事件名稱與內部編號；原因類別放在稽核紀錄的細節，不放在日誌
+PLAYER_LOCKED = "account.player_locked"
+PLAYER_UNLOCKED = "account.player_unlocked"
+ACCOUNT_UNDERAGE_ERASED = "account.underage_erased"
+ACCOUNT_UNCONFIRMED_PURGED = "account.unconfirmed_purged"
+APPEAL_SUBMITTED = "account.appeal_submitted"
 
 # ---- 其他安全事件 ----
 CSRF_REJECTED = "security.csrf_rejected"

@@ -1,4 +1,4 @@
-"""data-retention 規格：五類資料的期限清除（邊界、帳號刪除紀錄不納入、近期紀錄與額度不受影響、一類失敗不阻止其餘、分批、重跑、事件）。
+"""data-retention 規格：六類資料的期限清除（邊界、帳號刪除紀錄不納入、近期紀錄與額度不受影響、一類失敗不阻止其餘、分批、重跑、事件）。
 
 以 `member_session` 同時在 SQLite 與真實 SQL Server 上執行。
 """
@@ -8,18 +8,19 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import (
-    AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User,
+    AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, LockAppeal, LockStrike, User,
 )
 from app.models.user import TOKEN_VERIFY_EMAIL
 from app.repositories.retention_repository import RetentionRepository
 from app.services.data_retention_service import (
     ADMIN_AUDIT_RETENTION, AUTH_TOKEN_RETENTION, CONVERSATION_RETENTION, ERROR_DETAIL_RETENTION, LEDGER_RETENTION,
-    DataRetentionService,
+    LOCK_STRIKE_RETENTION, DataRetentionService,
 )
 from tests.support.auth import START, FakeClock, add_user
 
 SECOND = timedelta(seconds=1)
-CATEGORIES = ["conversations", "error_detail", "ledger", "auth_tokens", "admin_audit"]
+CATEGORIES = ["conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes"]
+EVERY_ONE = {"conversations": 1, "ledger": 1, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1, "lock_strikes": 1}
 
 
 def make_service(session, **kwargs) -> DataRetentionService:
@@ -77,6 +78,13 @@ def seed_every_category(session) -> dict[str, tuple]:
         session.flush()
         audits.append(row.id)
     out["admin_audit"] = tuple(audits)
+    strikes = []
+    for created in (START - LOCK_STRIKE_RETENTION - SECOND, START - LOCK_STRIKE_RETENTION + SECOND):
+        row = LockStrike(user_id=user, kind="rate_limited", created_at=created)
+        session.add(row)
+        session.flush()
+        strikes.append(row.id)
+    out["lock_strikes"] = tuple(strikes)
     session.commit()
     return out
 
@@ -86,7 +94,7 @@ def seed_every_category(session) -> dict[str, tuple]:
 def test_the_periods_are_the_documented_ones():
     assert CONVERSATION_RETENTION == LEDGER_RETENTION == timedelta(days=365)
     assert ERROR_DETAIL_RETENTION == timedelta(days=14) and AUTH_TOKEN_RETENTION == timedelta(days=7)
-    assert ADMIN_AUDIT_RETENTION == timedelta(days=730)
+    assert ADMIN_AUDIT_RETENTION == timedelta(days=730) and LOCK_STRIKE_RETENTION == timedelta(days=7)
 
 
 def test_each_category_removes_only_what_is_past_its_own_period(member_session):
@@ -95,7 +103,7 @@ def test_each_category_removes_only_what_is_past_its_own_period(member_session):
     report = make_service(s).run()
 
     assert [r.category for r in report.results] == CATEGORIES and report.failed == []
-    assert counts(report) == {"conversations": 1, "ledger": 1, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1}
+    assert counts(report) == EVERY_ONE
     s.expire_all()
     assert set(s.scalars(select(ChatConversation.id))) == {ids["conversations"][1]}
     assert s.scalar(select(func.count(ChatMessage.id))) == 1
@@ -105,6 +113,7 @@ def test_each_category_removes_only_what_is_past_its_own_period(member_session):
     assert remaining[ids["error_detail"][0]].error_detail is None and remaining[ids["error_detail"][1]].error_detail == "未過期原文"
     assert set(s.scalars(select(AuthToken.id))) == {ids["auth_tokens"][1]}
     assert set(s.scalars(select(AdminAuditLog.id))) == {ids["admin_audit"][1]}
+    assert set(s.scalars(select(LockStrike.id))) == {ids["lock_strikes"][1]}        # 8 天前的計次清除，6 天前的保留
 
 
 def test_running_it_twice_leaves_nothing_for_the_second_run(member_session):
@@ -118,11 +127,12 @@ def test_running_it_twice_leaves_nothing_for_the_second_run(member_session):
 def test_the_dry_run_counts_every_category_and_changes_nothing(member_session, log_lines):
     s = member_session
     seed_every_category(s)
-    before = [s.scalar(select(func.count(model.id))) for model in (ChatConversation, LlmCallLog, AuthToken, AdminAuditLog)]
+    models = (ChatConversation, LlmCallLog, AuthToken, AdminAuditLog, LockStrike)
+    before = [s.scalar(select(func.count(model.id))) for model in models]
     report = make_service(s).run(dry_run=True)
     s.expire_all()
-    after = [s.scalar(select(func.count(model.id))) for model in (ChatConversation, LlmCallLog, AuthToken, AdminAuditLog)]
-    assert report.dry_run and counts(report) == {"conversations": 1, "ledger": 1, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1}
+    after = [s.scalar(select(func.count(model.id))) for model in models]
+    assert report.dry_run and counts(report) == EVERY_ONE
     assert before == after and s.scalar(select(LlmCallLog.error_detail).where(LlmCallLog.error_detail == "過期原文")) == "過期原文"
     assert [line for line in log_lines() if line.get("event", "").startswith("retention.")] == []
 
@@ -180,7 +190,7 @@ def test_a_failing_category_does_not_stop_the_others_and_is_named_in_the_report(
     report = make_service(s, repository=LedgerBreaks(s)).run()
 
     assert report.failed == ["ledger"]
-    assert counts(report) == {"conversations": 1, "ledger": 0, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1}
+    assert counts(report) == {**EVERY_ONE, "ledger": 0}
     s.expire_all()
     assert s.scalar(select(func.count(ChatConversation.id))) == 1 and s.scalar(select(func.count(AuthToken.id))) == 1
     failures = [line for line in log_lines() if line.get("event") == "retention.purge_failed"]
@@ -224,6 +234,45 @@ def test_events_carry_only_the_category_and_the_count(member_session, log_lines)
     seed_every_category(s)
     make_service(s).run()
     purged = [(line["reason"], line["count"]) for line in log_lines() if line.get("event") == "retention.purged"]
-    assert purged == [("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1)]
+    assert purged == [("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1)]
     for secret in ("機密訊息", "過期原文", "user1@example.com", "使用者1"):
         assert secret not in log_lines.raw()
+
+
+# ---- 帳號鎖定計次與申訴（google-first-login）--------------------------------------------------
+
+def test_strikes_are_purged_only_after_seven_days_and_only_that_old(member_session):
+    s = member_session
+    user = add_user(s, 1)
+    for age in (timedelta(days=8), timedelta(days=7, seconds=1), timedelta(days=7), timedelta(days=6), timedelta(minutes=5)):
+        s.add(LockStrike(user_id=user.id, kind="identity_rejected", created_at=START - age))
+    s.commit()
+    report = make_service(s).run()
+    assert counts(report)["lock_strikes"] == 2                         # 8 天前與恰好超過 7 天；恰好 7 天的（界線）保留
+    s.expire_all()
+    assert s.scalar(select(func.count(LockStrike.id))) == 3
+
+
+def test_strikes_of_every_account_are_handled_and_the_accounts_themselves_are_untouched(member_session):
+    s = member_session
+    first, second = add_user(s, 1), add_user(s, 2, locked_at=START - timedelta(days=40), lock_reason="rate_limited")
+    for user in (first, second):
+        s.add(LockStrike(user_id=user.id, kind="rate_limited", created_at=START - timedelta(days=30)))
+    s.commit()
+    make_service(s).run()
+    s.expire_all()
+    assert s.scalar(select(func.count(LockStrike.id))) == 0 and s.scalar(select(func.count(User.id))) == 2
+    assert s.get(User, second.id).locked_at is not None                      # 計次清了，鎖定不會因此解除
+
+
+def test_appeals_are_never_purged_by_the_retention_command(member_session):
+    from app.repositories.lock_appeal_repository import LockAppealRepository
+
+    s = member_session
+    user = add_user(s, 1, locked_at=START - timedelta(days=900), lock_reason="rate_limited")
+    LockAppealRepository(s).create(user.id, "很久以前的申訴", START - timedelta(days=900))
+    s.commit()
+    report = make_service(s).run()
+    assert report.failed == [] and "appeals" not in [r.category for r in report.results]
+    s.expire_all()
+    assert s.scalar(select(func.count(LockAppeal.id))) == 1                  # 與所屬帳號同進退：帳號刪除時才一併刪除

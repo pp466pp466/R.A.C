@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Callable, Protocol
 
+from app.models.lock_strike import STRIKE_IDENTITY_REJECTED
 from app.models.user import (
     PROVIDER_GOOGLE, ROLE_ADMIN, STATUS_ACTIVE, STATUS_PENDING_VERIFICATION,
     STATUS_SUSPENDED, User,
@@ -19,8 +20,10 @@ from app.observability import security_events
 from app.repositories.errors import DuplicateUserError
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
+from app.services.account_erasure_service import AccountErasureService
+from app.services.account_lock_service import AccountLockService
 from app.services.current_user import CurrentUser
-from app.services.errors import Conflict, Forbidden, Unauthenticated, ValidationError
+from app.services.errors import Conflict, Forbidden, UnderageAccountErased, Unauthenticated, ValidationError
 from app.services.input_cleaning import clean_single_line
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, VerifiedAge, age_group, taipei_today, validate_age_input
 from app.services.legal import CURRENT_TERMS_VERSION
@@ -34,6 +37,8 @@ MAX_DISPLAY_NAME_LENGTH = 50
 # 所有「登入不成功」共用的訊息：不透露是信箱不存在、密碼錯誤，還是帳號被鎖定
 INVALID_CREDENTIALS_MESSAGE = "信箱或密碼不正確，或登入嘗試過多而暫時鎖定，請稍後再試。"
 ACCOUNT_DISABLED_MESSAGE = "此帳號已停用，無法登入。"
+# 補填年齡時生日與區間對不起來：通用說明，不指出是哪個欄位，也不暗示可以改填其他值
+AGE_STEP_MISMATCH_MESSAGE = "資料有誤，請重新填寫。"
 
 # 停權的帳號不能登入；待刪除的帳號可以登入，但只得到受限的登入狀態（只能撤銷刪除，見 session.require_login）
 _DISABLED_STATUSES = (STATUS_SUSPENDED,)
@@ -63,8 +68,12 @@ class AuthService:
         mailer: AccountMailer | None = None,
         persist_failures: Callable[[], None] | None = None,
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
+        erasure: AccountErasureService | None = None,
+        lock: AccountLockService | None = None,
     ) -> None:
         self._age_policy = age_policy
+        self._erasure = erasure          # 補填年齡時發現未滿 13 歲的玩家：走單一抹除出口
+        self._lock = lock                # 補填年齡時的不一致：計入帳號鎖定的計次
         self._users = users
         self._identities = identities
         self._hasher = hasher
@@ -167,7 +176,31 @@ class AuthService:
             self._hasher.burn(password)
             security_events.log_event(security_events.LOGIN_FAILED_UNKNOWN_USER)
             raise _invalid_credentials()
+        if user.role == ROLE_ADMIN:
+            # 管理員不能只靠密碼登入（要先通過 Google，再到 `verify_admin_password`）：與密碼錯誤相同的通用回應，
+            # 不計入失敗次數（否則任何人都能靠亂猜管理員信箱鎖住它）
+            self._hasher.burn(password)
+            security_events.log_event(security_events.LOGIN_FAILED_ADMIN_PASSWORD_ONLY, user_id=user.id)
+            raise _invalid_credentials()
+        return self._authenticate(user, password, now)
 
+    def verify_admin_password(self, user_id: int, token_version: int, password: object) -> CurrentUser:
+        """管理員通過 Google 之後的密碼驗證步驟。`user_id` 與 `token_version` 來自簽章的中間狀態 cookie。
+
+        中間狀態對不上目前的帳號（不存在、不是管理員、`token_version` 已變、被停權）時回 401 `unauthorized`，
+        要求重新以 Google 登入；密碼不對則與登入相同：通用訊息、失敗次數累計、連續 5 次鎖定 15 分鐘（計數在資料庫）。
+        """
+        if not isinstance(password, str) or not password:
+            raise ValidationError("請輸入密碼。", fields={"password": "請輸入密碼。"})
+        user = self._users.get_by_id(user_id)
+        if user is None or user.role != ROLE_ADMIN or user.token_version != token_version or user.status in _DISABLED_STATUSES:
+            self._hasher.burn(password)
+            security_events.log_event(security_events.ADMIN_STEP_EXPIRED, user_id=user.id if user else None)
+            raise Unauthenticated()
+        return self._authenticate(user, password, self._clock())
+
+    def _authenticate(self, user: User, password: str, now: datetime) -> CurrentUser:
+        """密碼驗證與失敗鎖定（密碼登入與管理員的密碼驗證步驟共用）。失敗一律拋出同一個 `invalid_credentials`（401）。"""
         if user.locked_until is not None:
             if user.locked_until > now:
                 self._hasher.burn(password)
@@ -229,10 +262,13 @@ class AuthService:
         return current.public_dict(age_group=group, google_linked=linked)
 
     def verify_age(self, current: CurrentUser, *, birth_date: object, age_range: object) -> CurrentUser:
-        """已登入、尚未完成年齡確認的使用者補填生日與年齡區間（管理員指令建立的帳號、勾選版時代的帳號都走這裡）。
+        """已登入、尚未完成年齡確認的使用者補填生日與年齡區間（玩家首次以 Google 登入後的年齡確認頁、管理員的帳號設定頁）。
 
         - 已完成的帳號再次提交一律成功、完全不改動原本的紀錄，也不再記錄事件（即使內容不同）。
-        - 驗證規則與註冊相同；不通過時不寫入任何東西，日誌只記事件名稱。
+        - 驗證規則與註冊相同；不通過時不寫入任何年齡資料，日誌只記事件名稱。
+        - **未滿 13 歲的玩家**（生日算出的年齡，或所選區間為未滿 13 歲）：立即抹除帳號與全部個資，不保存填寫的生日，
+          拋出 `UnderageAccountErased`（400，Controller 據此清除目前裝置的登入狀態）。管理員只拒絕、不抹除。
+        - **不一致**：回應通用的「資料有誤」，不指出是哪個欄位；帳號保留、可立即重填，並計入帳號鎖定的計次。
         - 回傳最新的帳號快照，讓前端立刻知道已完成。
         """
         user = self._require_user(current)
@@ -241,7 +277,7 @@ class AuthService:
         verified, error = self._check_age_input(birth_date, age_range)
         if error is not None:
             security_events.log_age_rejection(error.code)
-            raise error
+            raise self._age_step_error(user, error)
         assert verified is not None
         if self._users.complete_age_verification_if_unset(
             user,
@@ -253,6 +289,19 @@ class AuthService:
         ):
             security_events.log_event(security_events.AGE_CONFIRMED_LATER, user_id=user.id)
         return CurrentUser.from_model(user)
+
+    def _age_step_error(self, user: User, error: ValidationError) -> ValidationError:
+        """補填年齡不通過時要拋出的錯誤；未滿 13 歲的玩家會在這裡被抹除，不一致會在這裡計次。"""
+        if error.code == "age_not_eligible" and user.role != ROLE_ADMIN:
+            if self._erasure is None:
+                raise RuntimeError("沒有設定帳號抹除元件，無法處理未滿 13 歲的帳號。")
+            self._erasure.erase_underage(user.id, now=self._clock())
+            return UnderageAccountErased(f"本服務僅供 {self._age_policy.min_register_age} 歲以上使用，您的帳號與相關資料已刪除。")
+        if error.code == "age_mismatch":
+            if self._lock is not None:
+                self._lock.register_strike(user.id, STRIKE_IDENTITY_REJECTED)
+            return ValidationError(AGE_STEP_MISMATCH_MESSAGE, code="age_mismatch")
+        return error
 
     def record_logout(self, current: CurrentUser) -> None:
         security_events.log_event(security_events.LOGOUT, user_id=current.id)

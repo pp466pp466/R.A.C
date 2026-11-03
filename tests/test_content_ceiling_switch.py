@@ -14,7 +14,7 @@ from app.services.access_policy import (
 )
 from tests.support.age import TODAY_UTC
 from tests.support.age_gate import ENDPOINT, add_ai_endpoint
-from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
+from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user, sign_in_as
 from tests.test_access_policy import member
 
 FREE_MODEL = "vendor/narrator:free"
@@ -74,9 +74,9 @@ def make_app(**environ):
 
 def ceiling_for(app, n: int, **user_overrides) -> dict:
     with Session(app.extensions["db_engine"]) as session:
-        add_user(session, n, **user_overrides)
+        user_id = add_user(session, n, **user_overrides).id
     client = app.test_client()
-    assert client.post("/api/auth/login", json={"email": f"user{n}@example.com", "password": GOOD_PASSWORD}).status_code == 200
+    sign_in_as(client, user_id)                                     # 管理員不能只靠密碼登入，所以直接寫入登入狀態
     response = client.post(ENDPOINT, json={})
     assert response.status_code == 200, response.get_data(as_text=True)
     return response.get_json()["ceiling"]

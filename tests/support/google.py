@@ -24,3 +24,24 @@ class FakeProvider:
         if self.error:
             raise self.error
         return self.profile
+
+
+# ---- 走完整的 Google 登入流程（發起 → 回呼）-----------------------------------------------------------------
+
+def google_sign_in(app, client, **start_body):
+    """以假的供應商走一遍 Google 登入：發起（預設勾選條款）再以正確的 state 完成回呼。回傳回呼的回應（302）。"""
+    from app.security.cookies import SignedCookies
+    from app.security.oauth_cookie import OAUTH_SALT
+
+    started = client.post("/api/auth/google/start", json={"accept_terms": True, **start_body})
+    assert started.status_code == 200, started.get_data(as_text=True)
+    cookies = SignedCookies(app.extensions["app_config"], app.extensions["clock"])
+    transaction = cookies.loads(OAUTH_SALT, client.get_cookie("oauth_tx").value, max_age_seconds=600)
+    return client.get(f"/auth/google/callback?code=code-from-google&state={transaction['s']}")
+
+
+def admin_sign_in(app, client, password: str, **start_body):
+    """管理員的完整登入：先通過 Google，再輸入密碼（兩者都通過才有登入 session）。回傳密碼驗證的回應。"""
+    step = google_sign_in(app, client, **start_body)
+    assert step.status_code == 302 and step.headers["Location"] == "/login/password", step.headers.get("Location")
+    return client.post("/api/auth/admin-password", json={"password": password})

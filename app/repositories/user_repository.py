@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import case, delete, func, select, update
+from sqlalchemy import and_, case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.models.llm_call_log import LlmCallLog
@@ -137,6 +137,7 @@ class UserRepository(BaseRepository[User]):
                 is_adult_at_confirmation=is_adult,
                 age_confirmed_at=confirmed_at,
                 age_policy_version=policy_version,
+                age_deadline_at=None,                    # 完成了，不再有逾時清除的期限
             ),
         )
         return changed == 1
@@ -215,10 +216,77 @@ class UserRepository(BaseRepository[User]):
         return result.rowcount == 1
 
     def count_locked(self, now: datetime) -> int:
-        """目前被鎖定（鎖定期間尚未結束）的帳號數；營運告警「登入失敗激增」的指標。同一個帳號只算一個。"""
+        """目前被鎖定的帳號數；營運告警「帳號鎖定激增」的指標。同一個帳號只算一個。
+
+        兩種鎖定合計：管理員密碼連續失敗的鎖定（`locked_until` 尚未到期，15 分鐘後自動解除），
+        與玩家帳號的自動鎖定（`locked_at` 有值，只有管理員能解除）。
+        """
+        password_locked = and_(User.locked_until.is_not(None), User.locked_until > now)
         return self._session.execute(
-            select(func.count(User.id)).where(User.locked_until.is_not(None), User.locked_until > now)
+            select(func.count(User.id)).where(or_(password_locked, User.locked_at.is_not(None)))
         ).scalar_one()
+
+    # ---- 待確認年齡的帳號（post-login-age-confirmation 與 account-retention 規格）-------------------------
+
+    @staticmethod
+    def _overdue_unconfirmed(now: datetime):
+        """逾時未補填：玩家、沒有生日、有期限記錄且期限已到。管理員與沒有期限記錄的舊帳號不納入。"""
+        return and_(
+            User.role != ROLE_ADMIN,
+            User.birth_date.is_(None),
+            User.age_deadline_at.is_not(None),
+            User.age_deadline_at <= now,
+        )
+
+    def count_overdue_unconfirmed(self, now: datetime) -> int:
+        return self._session.execute(select(func.count(User.id)).where(self._overdue_unconfirmed(now))).scalar_one()
+
+    def find_overdue_unconfirmed_ids(self, now: datetime, *, limit: int = 200) -> list[int]:
+        """逾時未補填的玩家帳號的內部編號（由小到大，最多 `limit` 個）。只回編號，不載入任何個資。"""
+        statement = select(User.id).where(self._overdue_unconfirmed(now)).order_by(User.id).limit(limit)
+        return list(self._session.scalars(statement))
+
+    def delete_overdue_unconfirmed(self, user_id: int, now: datetime) -> bool:
+        """條件式 DELETE：條件在刪除當下再確認一次（剛好完成年齡確認的帳號不會被刪）。回傳是否真的刪除。
+
+        串聯與不同步 Session 的注意事項同 `delete_inactive`。
+        """
+        result = self._session.execute(
+            delete(User).where(User.id == user_id).where(self._overdue_unconfirmed(now)).execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
+    def delete_unconfirmed_player(self, user_id: int) -> bool:
+        """補填時發現未滿 13 歲：條件式刪除「還沒有生日的非管理員帳號」。管理員絕不抹除。回傳是否真的刪除。"""
+        result = self._session.execute(
+            delete(User)
+            .where(User.id == user_id, User.role != ROLE_ADMIN, User.birth_date.is_(None))
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
+    # ---- 玩家帳號鎖定（account-lockout 規格）-------------------------------------------------------
+
+    def lock_player(self, user: User, *, reason: str, now: datetime) -> bool:
+        """條件式 UPDATE：只鎖定「角色為玩家且尚未鎖定」的帳號，並行達門檻時只有一個請求回傳真（只記錄一次鎖定）。"""
+        changed = self._run_update(
+            user,
+            update(User)
+            .where(User.id == user.id, User.role != ROLE_ADMIN, User.locked_at.is_(None))
+            .values(locked_at=now, lock_reason=reason),
+        )
+        return changed == 1
+
+    def unlock_player(self, user_id: int) -> bool:
+        """條件式 UPDATE：解除玩家帳號的鎖定。回傳是否真的解除（本來就沒鎖定則為假）。"""
+        self._session.flush()
+        result = self._session.execute(
+            update(User)
+            .where(User.id == user_id, User.locked_at.is_not(None))
+            .values(locked_at=None, lock_reason=None)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
 
     # ---- 抹除（account-deletion 與 account-retention 規格；流程見 AccountErasureService）----------
 

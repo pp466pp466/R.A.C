@@ -20,6 +20,12 @@ def iso_utc(moment: datetime) -> str:
     return moment.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# 受限登入狀態（見 access-control 規格「受限登入狀態預設拒絕」）。同時符合多種時，被鎖定優先於待確認年齡，待確認年齡優先於等待刪除。
+RESTRICTION_LOCKED = "locked"
+RESTRICTION_AGE_PENDING = "age_pending"
+RESTRICTION_DELETION_PENDING = "deletion_pending"
+
+
 @dataclass(frozen=True)
 class CurrentUser:
     id: int
@@ -34,6 +40,7 @@ class CurrentUser:
     birth_date: date | None        # 內部欄位；None = 尚未完成年齡確認
     token_version: int
     deletion_requested_at: datetime | None = None    # 只有待刪除的帳號有值；用來算出預定刪除的時間
+    locked_at: datetime | None = None                # 只有被鎖定的玩家帳號有值（管理員不會被這種鎖定）
 
     @property
     def age_confirmed(self) -> bool:
@@ -57,7 +64,25 @@ class CurrentUser:
             birth_date=user.birth_date if complete else None,
             token_version=user.token_version,
             deletion_requested_at=user.deletion_requested_at,
+            locked_at=user.locked_at,
         )
+
+    @property
+    def restriction(self) -> str | None:
+        """目前的受限登入狀態，沒有受限時為 None。管理員不會被鎖定，也不會是待確認年齡（只是未確認前不能用 AI 功能）。"""
+        if self.role != ROLE_ADMIN:
+            if self.locked_at is not None:
+                return RESTRICTION_LOCKED
+            if self.birth_date is None:
+                return RESTRICTION_AGE_PENDING
+        if self.awaiting_deletion:
+            return RESTRICTION_DELETION_PENDING
+        return None
+
+    @property
+    def needs_password_step(self) -> bool:
+        """管理員通過 Google 之後還必須再通過密碼驗證，兩者都通過才建立登入 session（玩家沒有密碼）。"""
+        return self.role == ROLE_ADMIN
 
     @property
     def may_delete_account(self) -> bool:
@@ -93,6 +118,7 @@ class CurrentUser:
             "has_password": self.has_password,
             "age_confirmed": self.age_confirmed,
             "age_group": age_group,
+            "restriction": self.restriction,
         }
         if google_linked is not None:
             data["google_linked"] = google_linked

@@ -20,7 +20,7 @@ ALERT_NAMES = {
     ALERT_LLM_ERROR_RATE: "模型錯誤率",
     ALERT_LLM_CONFIG_ERROR: "模型設定錯誤",
     ALERT_LLM_LATENCY_P95: "對話延遲（p95）",
-    ALERT_LOGIN_LOCKOUTS: "登入失敗激增",
+    ALERT_LOGIN_LOCKOUTS: "帳號鎖定激增",
 }
 
 # 處理建議：一句話，告訴值班的人第一步該看哪裡
@@ -29,7 +29,7 @@ ALERT_HINTS = {
     ALERT_LLM_ERROR_RATE: "近 5 分鐘有超過一成的對話呼叫因速率限制、逾時或伺服器錯誤失敗。請查看供應商的服務狀態與配額，備援模型是否已接手。",
     ALERT_LLM_CONFIG_ERROR: "模型供應商回應了設定錯誤（請求不合法或無權限），多半是金鑰被撤銷、過期或模型名稱失效。請立即檢查金鑰與模型設定。",
     ALERT_LLM_LATENCY_P95: "近 15 分鐘完成的對話呼叫，有 5% 以上超過 10 秒。請查看供應商的延遲與是否已觸發逾時備援。",
-    ALERT_LOGIN_LOCKOUTS: "目前有多個帳號因連續登入失敗而被鎖定，可能有人在大量試探密碼。請查看入口層與日誌中的登入失敗事件，必要時啟用更嚴格的限流。",
+    ALERT_LOGIN_LOCKOUTS: "目前有多個帳號被鎖定：管理員密碼連續失敗（15 分鐘後自動解除），或玩家帳號因多次登入被拒、訊息洗版而被自動鎖定（只有管理員能解除）。請到管理後台的「被鎖定的帳號」查看原因與申訴；若集中在管理員帳號，請檢查入口層與日誌中的登入失敗事件，必要時啟用更嚴格的限流。",
 }
 
 SEVERITY_LABELS = {SEVERITY_WARNING: "警告", SEVERITY_CRITICAL: "嚴重"}

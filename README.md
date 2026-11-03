@@ -2,7 +2,7 @@
 
 以 LLM 驅動的雙核心平台。開發規範以根目錄的 [AGENTS.md](AGENTS.md) 為唯一權威來源；設計決策見 [docs/report.md](docs/report.md)，變更提案見 `openspec/changes/`。
 
-> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。本 README 的「會員驗證（C-2）」、「環境變數與機密」（`EMAIL_VERIFICATION_REQUIRED`）、登入狀態存活 7 天、年齡確認與帳號刪除等段落描述的是**目前的實作**，尚未更新，待 change ① 與 ② 完成後同步；決定見 [docs/report.md](docs/report.md) 的 U-12 至 U-19 與[路線圖](docs/路線圖-roadmap.md)。
+> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。change ① `google-first-login` 已實作（登入頁只有 Google 與條款、年齡確認改在登入之後、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入、預設頁面 `/cs`），本 README 已同步；**玩家端的密碼註冊／登入／忘記密碼／信箱驗證（含 `EMAIL_VERIFICATION_REQUIRED` 與 production 必須設定寄信服務的規則）仍在程式中，待 change ② 移除**；決定見 [docs/report.md](docs/report.md) 的 U-12 至 U-19 與[路線圖](docs/路線圖-roadmap.md)。
 
 目前進度：C-1 `platform-foundation`（專案地基）、C-2 `member-auth`（會員驗證）、`age-gate`（年齡確認閘門，勾選版）與 `age-verification-birthdate`（年齡確認改為生日加年齡區間、閒置帳號清除）都已封存；後續為 C-3 客服對話（見 `docs/report.md` 第 5 章）。**目前的年齡設定與 Gemini 條款不符**（條款只有 18 歲門檻），僅限個人測試（見「年齡規則與帳號保存期限」）。
 
@@ -129,23 +129,29 @@ node --test "tests/js/**/*.test.js"
 | 端點 | 方法 | 用途 | 需要登入 |
 |---|---|---|---|
 | `/api/auth/register` | POST | 註冊（不論信箱是否已存在，回應完全相同；不自動登入）。請求欄位 `email`、`password`、`display_name`、`accept_terms`（必須明確為 `true`）、`birth_date`（`YYYY-MM-DD`）、`age_range`（列舉代碼）。生日與區間不一致回 400 `age_mismatch`「資料有誤，請重新註冊。」，未滿最低年齡回 400 `age_not_eligible`；兩者都不建立帳號、不封鎖信箱，可立刻以同一信箱重新註冊 | 否 |
-| `/api/auth/login` | POST | 登入（失敗一律是同一則通用訊息） | 否 |
+| `/api/auth/login` | POST | 密碼登入（失敗一律是同一則通用訊息）。**管理員不能只靠密碼登入**：管理員帳號一律得到與密碼錯誤相同的失敗，且不計入失敗次數 | 否 |
+| `/api/auth/admin-password` | POST | 管理員通過 Google 之後的密碼驗證（請求 `password`；沒有或已過期的中間狀態回 401，密碼錯誤與登入相同：通用訊息、連續 5 次鎖定 15 分鐘）。成功才建立登入 session，回應 `next` | 否（需中間狀態 cookie） |
+| `/api/auth/admin-password/forgot` | POST | 管理員在密碼驗證那一步按「忘記密碼」：寄重設信到該管理員的信箱（與營運告警信走同一組寄信設定）。**只接受持有有效中間狀態的請求**，匿名請求與沒有寄信設定時一律 404；回應與結果無關。重設連結的規則同玩家端（32 位元組隨機值、只存雜湊、單次使用、1 小時失效、GET 只顯示確認頁，成功後 `token_version` 加 1 並寄通知信，中間狀態與既有 session 同時失效）；`/reset-password` 與 `POST /api/auth/reset-password` 因此在「信箱驗證開啟或有寄信設定」時可用 | 否（需中間狀態 cookie） |
 | `/api/auth/logout` | POST | 登出目前裝置 | 否 |
 | `/api/auth/logout-all` | POST | 登出所有裝置（含目前這一台） | 是 |
 | `/api/auth/me` | GET | 目前登入者本人的資料：`public_id`、`email`、`display_name`、`member_tier`、`role`、`status`、`email_verified`、`has_password`、`age_confirmed`（布林）、`age_group`（`minor`、`adult`，尚未完成為 `null`）、`google_linked`，待刪除的帳號另有 `deletion_scheduled_at`；**生日、年齡區間、確認時間與政策版本一律不對外** | 是 |
-| `/api/auth/verify-age` | POST | 補填生日與年齡區間（請求 `birth_date`、`age_range`，驗證規則同註冊，回應最新的帳號資料；已完成的帳號再次提交一律成功但不改動原紀錄）。取代舊的 `/api/auth/confirm-adult`（已移除） | 是 |
+| `/api/auth/verify-age` | POST | 補填生日與年齡區間（請求 `birth_date`、`age_range`，驗證規則同註冊，回應最新的帳號資料；**未滿 13 歲的玩家立即抹除帳號與全部個資**並清除登入狀態（400 `age_not_eligible`，管理員只拒絕不抹除）；生日與區間不一致回通用的 400 `age_mismatch` 並計入帳號鎖定的計次；已完成的帳號再次提交一律成功但不改動原紀錄）。取代舊的 `/api/auth/confirm-adult`（已移除） | 是 |
 | `/api/auth/change-password` | POST | 變更密碼（其他裝置被登出，目前裝置維持登入） | 是 |
 | `/api/auth/verify-email` | POST | 以權杖完成信箱驗證（驗證關閉時 404） | 否 |
 | `/api/auth/resend-verification` | POST | 重寄驗證信（驗證關閉時 404） | 是 |
 | `/api/auth/forgot-password` | POST | 忘記密碼（回應與信箱是否存在無關；驗證關閉時 404） | 否 |
 | `/api/auth/reset-password` | POST | 以權杖設定新密碼（驗證關閉時 404） | 否 |
-| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位 `accept_terms`、`birth_date`、`age_range`、`next`；生日與區間若有提供就在這裡驗證（未滿最低年齡或不一致直接回 400，使用者不會被導向 Google）；第一次以 Google 註冊時需要，既有帳號登入不需要 | 否 |
+| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位只有 `accept_terms`（新使用者必須勾選，回訪的使用者不必）與 `next`；**不再收生日與年齡區間**（請求若仍帶著就忽略、不保存），年齡確認改在登入之後的 `/age` 補填。空的請求（`{}`）也可以 | 否 |
 
 | 頁面 | 說明 |
 |---|---|
-| `/login`、`/register` | 登入、註冊（已登入者導向 `/account`） |
+| `/login` | 登入與註冊合一（Google 登入與服務條款勾選；已登入者導向登入後的預設頁面，受限登入狀態各導向自己的頁面） |
+| `/login/password` | 管理員通過 Google 之後的密碼驗證頁：只接受持有 10 分鐘簽章中間狀態 cookie 的請求，其餘導向 `/login` |
+| `/register` | 一律導向 `/login`（玩家沒有密碼註冊流程；舊連結與書籤仍可用） |
+| `/age` | 年齡確認（需登入，玩家首次以 Google 登入後唯一能開的頁面）：填寫生日並選擇年齡區間；已完成者導向預設頁面。**未滿 13 歲立即抹除帳號**，24 小時內未完成由排程刪除 |
 | `/forgot-password`、`/reset-password`、`/verify-email` | 信箱驗證開啟時才存在；權杖在網址片段，頁面載入時不會自動完成動作 |
 | `/account` | 帳號設定（需登入）：顯示會員等級標籤與年齡確認狀態（尚未完成時可在此補填生日與年齡區間；13 至 17 歲顯示安全模式提示，**不顯示生日**）、變更密碼、登出、登出所有裝置、匯出我的資料、刪除帳號（管理員沒有）；帳號等待刪除者只看到撤銷與登出（見「個資生命週期（C-4c）」） |
+| `/appeal` | 帳號申訴（需登入，被鎖定的玩家唯一能開的頁面）：向管理員說明情況；沒有被鎖定的人導向預設頁面 |
 | `/terms`、`/privacy` | 服務條款與隱私權政策（**草稿**，待法務覆核） |
 | `/auth/google/callback` | Google 登入的回呼（回傳重新導向，不是 JSON） |
 
@@ -153,24 +159,25 @@ node --test "tests/js/**/*.test.js"
 
 ### 設計重點與已知限制
 
-- **登入狀態**：簽章 cookie，內容只有使用者編號與 `token_version`，存活 7 天（自登入起算，不隨使用延長）；改密碼、登出所有裝置、重設密碼、綁定 Google 時 `token_version` 加 1，既有登入狀態立即失效。
+- **登入狀態**：簽章 cookie，內容只有使用者編號與 `token_version`，**閒置 30 天、每次使用就續期**（`SlidingSessionInterface`，不設絕對上限：cookie 被竊取後只要持續被使用就一直有效，撤銷靠 `token_version`、停權與管理員的鎖定）；改密碼、登出所有裝置、重設密碼、綁定 Google 時 `token_version` 加 1，既有登入狀態立即失效。沒有登出的玩家，下次打開直接進入帳號。
 - **不洩漏帳號是否存在**：註冊、忘記密碼、登入失敗的回應完全相同；信箱不存在與密碼錯誤的運算量相當；寄信在回應送出之後才進行。
 - **登入失敗**：同一帳號連續 5 次失敗鎖定 15 分鐘，計數存放於資料庫。請求交易在 4xx 時預設回復，所以失敗的記帳會明確要求保留（見 `keep_changes_on_error`）。
 - **預先佔用信箱**：待驗證帳號被重複註冊時不覆蓋原密碼；受害者可用「忘記密碼」取回（成功後攻擊者的登入狀態與密碼都失效）；Google 登入合併時會清除未驗證帳號的密碼並撤銷其登入狀態。**殘留風險**：受害者若點了攻擊者觸發的驗證信又不察覺，攻擊者仍可登入——這是「先註冊後驗證」模式的固有限制。
 - **Google-only 帳號**：目前沒有「在帳號頁設定密碼」的功能（延後）；信箱驗證開啟時，可用「忘記密碼」流程設定密碼。
 - **年齡規則與帳號保存期限（age-verification-birthdate）**：
-  - 註冊（含首次以 Google 註冊）填生日並選年齡區間，兩者都是**自行聲明**，不核實、不收證件；伺服器依生日（Asia/Taipei 的日期）計算年齡並對照。未滿 13 歲不得註冊（生日不保存）；13 至 17 歲可以使用但固定安全模式；滿 18 歲後由生日即時計算而自動解除，不需要任何操作。
+  - 玩家**首次以 Google 登入就建立帳號**，登入之後才在 `/age` 填生日並選年齡區間，兩者都是**自行聲明**，不核實、不收證件；伺服器依生日（Asia/Taipei 的日期）計算年齡並對照。完成之前除了年齡確認與登出什麼都不能做（受限登入狀態），**帳號最多保留 24 小時**（逾時由 `purge-unconfirmed-accounts` 每小時清除）；補填時發現未滿 13 歲，**立即抹除帳號與個資**（不保存生日）；（密碼註冊仍在程式中，待 ② 移除，其規則不變）。13 至 17 歲可以使用但固定安全模式；滿 18 歲後由生日即時計算而自動解除，不需要任何操作。
   - **所有年齡數字只在 `app/services/age_policy.py` 的 `AgePolicy`**（最低註冊年齡、最低使用年齡、成年門檻、區間選項、版本），頁面、條款與腳本都從它取值。日後換 LLM 供應商而要把最低年齡改為 18，只需換一個 `AgePolicy` 並提高版本：13 至 17 歲者無法註冊，既有的 13 至 17 歲帳號呼叫 AI 功能回 403 `age_restricted`，不必刪帳號或改資料。
   - **目前的設定（13 歲以上可用）與 Gemini API 條款不符**（條款只有 18 歲門檻、沒有 13 歲例外），僅限個人測試（只有本人、已成年）；對外開放前必須以實際使用的供應商條款重新確認（見 `docs/RPG.md` T-10）。
   - **生日是個資**：不進 API 回應、日誌與模型（`/api/auth/me` 只回 `age_confirmed` 與 `age_group`），管理員也看不到個別生日；只用於年齡確認、內容分級與去識別的統計。匯出個人資料時含生日與年齡區間。
   - **「資料有誤」不鎖信箱**：常是輸入太快，不累計次數、不封鎖、不標記；頁面回到註冊頁的初始狀態（清空生日、區間與密碼，保留電子郵件與顯示名稱），可立刻重新送出。自行聲明本來就無法防止未成年者改填成年資料，這是已知的固有限制（入口層限流屬 C-5）。
   - **連續 12 個月未登入的帳號直接刪除**（連同生日與年齡區間，不經 7 天寬限期；管理員不納入）：
     - `flask --app wsgi purge-inactive-accounts [--dry-run]`：由平台排程器觸發（C-5 設定），**不使用行程內計時器**。每個被刪帳號在同一個交易留下一筆只含內部編號、時間與原因的 `deletion_tombstones`；可重複執行，輸出與日誌只有筆數與內部編號。
+    - `flask --app wsgi purge-unconfirmed-accounts [--dry-run]`：**每小時**一次（Google 登入改版新增）。玩家首次以 Google 登入建立的帳號有 24 小時的年齡確認期限（`users.age_deadline_at`），逾時仍沒有生日就直接刪除（連同 Google 綁定；管理員與沒有期限記錄的舊帳號不納入），原因記為 `age_unconfirmed`；輸出只有筆數。
     - `flask --app wsgi age-stats`：各年齡區間的人數（供定期察看用戶群），沒有任何個別使用者的資料。
     - 使用者自助刪除的 `execute-account-deletions` 與各類資料的 `purge-expired-data` 見「個資生命週期（C-4c）」；閒置清除現在與它們共用同一個抹除出口，也會先把帳本的對話編號清為空值。
     - 之後（C-3、C-4）新增指向 `users.id` 的資料表，外鍵必須是 `ON DELETE CASCADE` 或 `SET NULL`，否則 `tests/architecture/test_user_foreign_keys.py` 會失敗。
-- **預設登入後頁面**是 `/account`（C-3 完成後改為 `/cs`，在 `app/security/redirects.py` 一個常數）。
-- **登入鎖定可被用於阻斷特定帳號**（每 15 分鐘一次）：這是規範指定的行為，緩解靠入口層的 IP 限流（C-5）。
+- **預設登入後頁面**是 `/cs`（`app/security/redirects.py` 的單一常數 `DEFAULT_AFTER_LOGIN`；RPG 上線後改為選擇劇本的首頁）。首頁、登入頁與 Google 回呼共用 `landing_for`：已登入者開首頁或登入頁會被導向預設頁面，受限登入狀態各導向自己的頁面（待確認年齡 `/age`、被鎖定 `/appeal`、等待刪除 `/account`）。
+- **登入鎖定可被用於阻斷特定帳號**：管理員密碼連續失敗 5 次鎖定 15 分鐘（到期自動解除）；玩家帳號則是 15 分鐘內 5 次「已辨識出帳號卻被拒絕」（Google 登入被拒、補填年齡不一致）或 10 次被每分鐘訊息數上限擋下就**自動鎖定，只有管理員能解除**（被鎖定者仍可登入，但只能申訴）。攻擊者無法替別人的 Google 身分製造計次（辨識出帳號需要通過 Google 驗證）；緩解其餘濫用靠入口層的 IP 限流（尚未做，見未滿足項目）。
 - **開發資料庫不可啟用 SQL Server 的帳本（Ledger）**：帳本會把資料列的更新與刪除永久保留在歷史表，讓「刪除帳號時真的刪除個資」（C-4）無法成立，也會讓失敗次數這類頻繁更新的欄位累積大量歷史列，而且建立後無法關閉。本機原本的 `project` 就是啟用帳本建立的，已在 2026-10-28 重建：舊的改名保留為 `project_old_ledger`（沒有任何資料，確認不需要後可自行刪除），新的 `project` 以 `Chinese_Taiwan_Stroke_CI_AS` 定序、不啟用帳本，並已升級到最新 migration。新建資料庫時請**不要**勾選「啟用帳本」（`CREATE DATABASE` 預設不啟用）。Cloud SQL 是否支援或預設啟用帳本，C-5 要確認。
 
 ### 瀏覽器驗收紀錄（2026-10-28）
@@ -453,6 +460,9 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 | `/api/admin/conversations/<public_id>` | GET | 讀取一個「可讀」對話的全文（最多 200 則，`has_more` 告知還有更多）。先寫稽核（`conversation.read`）再回傳；稽核寫入失敗就不回傳 | 是（管理員） |
 | `/api/admin/conversations/<public_id>/delete` | POST | 刪除整個可讀對話（不提供刪除單則）：請求 `reason`、`password`。用量帳本保留 | 是（管理員） |
 | `/api/admin/failures` | GET | 最近 14 天模型輸出驗證失敗的原文（最多 100 筆，`error_detail`）。寫稽核（`failures.read`） | 是（管理員） |
+| `/api/admin/locked` | GET | 目前被鎖定的玩家帳號：對外識別碼、顯示名稱、鎖定時間、原因類別（固定列舉）；沒有 email 與內部編號 | 是（管理員） |
+| `/api/admin/appeals` | GET | **只有目前被鎖定的帳號**送出的申訴（解除之後不再出現；不開放讀取任何對話）。寫稽核（`appeal.read`，只記筆數） | 是（管理員） |
+| `/api/admin/users/<public_id>/unlock` | POST | 解除玩家帳號的鎖定（**高風險：重新輸入密碼**，失敗寫 `reauth.failed`）。條件式更新，兩位管理員同時解除只有一位成功（另一位 409 `not_locked`）；成功時清除該帳號的計次、把待處理的申訴標為已處理，目標的登入狀態立刻恢復。寫稽核（`account.unlock`） | 是（管理員） |
 
 | 頁面 | 說明 |
 |---|---|
@@ -463,7 +473,7 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 - **找使用者的方式**：平常只透過警告（總覽的「今日警告」→ 被標記對話 → 看對話、看使用者）；以信箱查詢只在客服反應時使用，介面標明用途，稽核的細節註明是以信箱或識別碼。
 - **危險操作要重新輸入密碼**：停權、解除停權、調整等級、刪除對話。密碼錯誤沿用登入的失敗計數與鎖定（**連續 5 次鎖定 15 分鐘，計數與登入共用**），鎖定中即使密碼正確也拒絕，且訊息與密碼錯誤相同（不洩漏是否被鎖定）；成功**不**重設計數（只有登入成功才重設）。失敗寫 `reauth.failed` 並保存（請求是 400，交易預設會回復，所以明確以 `keep_changes_on_error` 保存）。只靠 Google 登入、沒有設定密碼的管理員不能執行這些操作（`no_password`）。讀取類操作不需要密碼，但每次都有稽核。
 - **只能操作一般使用者**：目標若是管理員（含自己）回 403 `admin_target_forbidden`；`deletion_pending` 回 409 `target_pending_deletion`；狀態與等級以單一條件式 `UPDATE` 改寫，兩位管理員同時操作不會互相覆蓋（409 `already_suspended`、`not_suspended`、`tier_unchanged`、`state_changed`）。
-- **稽核**（`admin_audit_logs`，migration `0007`）：8 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
+- **稽核**（`admin_audit_logs`，migration `0007`）：12 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及 Google 登入改版新增的帳號鎖定與申訴 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`；鎖定與申訴提交由系統或玩家觸發，管理員欄位為空）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
 - **分層由測試守住**（`tests/architecture/test_admin_boundaries.py`，AST）：`AdminService` 的每個公開方法第一個陳述式是 `require_admin`；後台專用的 Repository（`admin_repository.py`、`admin_audit_repository.py`）只被 `admin_service.py` 與 `registry.py` 匯入；測試本身有自我驗證（餵它故意違規的原始碼必須失敗並指出方法或檔案）。一般使用者的 `ChatRepository`「第一個參數必須是 `user_id`」規則完全不變。
 - **日誌**：只有 `admin.access_denied`、`admin.reauth_failed`、`admin.action` 三種事件，欄位是內部編號與固定列舉（動作名稱或 `not_admin`），列舉以外的值立刻出錯；沒有 email、訊息與原因文字（整段流程以日誌掃描驗證）。
 - **前端**：`app/static/js/admin/admin-format.js`（日期以台灣時間、列舉的中文標籤、用量百分比與警示等級；純函式，`tests/js/admin-format.test.js`，`tests/test_admin_format_labels.py` 比對標籤與後端列舉）、`admin.js`（Vue 應用）、`app/static/css/admin.css`。六個分頁：總覽（最上面是可點擊的「今日警告」）、被標記對話、意見回饋、使用者、模型失敗、稽核。Modal 與 Toast 完全由 Vue 狀態接管；所有文字以插值顯示為純文字。確認視窗的密碼欄位在**送出的當下與關閉時立即清空**，不存進任何儲存體。進入分頁時才載入一次（模型失敗每次讀取都寫稽核，所以不因切換分頁而重複讀取），「重新整理」才重新讀取。
@@ -513,6 +523,7 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 | 用量帳本 | 建立早於 365 天 | 刪除 |
 | 驗證權杖 | 到期早於 7 天（不論是否已使用） | 刪除 |
 | 管理稽核紀錄 | 建立早於 730 天 | 刪除（稽核 Repository 仍然沒有更新與刪除；清除只在 `RetentionRepository`） |
+| 帳號鎖定計次（`lock_strikes`） | 建立早於 7 天（計次視窗只有 15 分鐘） | 刪除（Google 登入改版新增；**申訴不在這裡清除**：保存期限與所屬帳號相同，帳號刪除時一併刪除，並納入個人資料匯出的 `appeals`／`appeals.csv`） |
 
 `deletion_tombstones`（只含內部編號、時間與原因）**不納入**清除。失敗原文排在帳本之前：同時符合兩者的舊紀錄先清原文、再刪整筆，預覽與實際的筆數才一致。以上期限與 `/privacy` 的保存期限表由 `tests/test_legal_pages.py` 比對。
 
@@ -666,7 +677,7 @@ change `ops-alerting`。讓營運上的異常在使用者抱怨之前被人知�
 | `llm_error_rate` | 模型錯誤率 | 近 5 分鐘對話呼叫的（429＋逾時＋伺服器錯誤＋網路錯誤）／全部**超過 10%**；安全過濾阻擋與設定錯誤不計入分子 | 警告 | 10 次 |
 | `llm_config_error` | 模型設定錯誤 | 近 5 分鐘出現**任何一次**設定錯誤（400、403，多半是金鑰被撤銷） | 嚴重 | 無 |
 | `llm_latency_p95` | 對話延遲 | 近 15 分鐘完成的對話呼叫（成功或輸出驗證失敗）的 p95 **超過 10 秒**（最近排名法） | 警告 | 20 次 |
-| `login_lockouts` | 登入失敗激增 | 目前被鎖定的帳號達 **5 個**（鎖定 15 分鐘，等同近 15 分鐘新增的鎖定；同一帳號只算一個） | 警告 | 無 |
+| `login_lockouts` | 帳號鎖定激增 | 目前被鎖定的帳號達 **5 個**，合計兩種鎖定：管理員密碼連續失敗（鎖定 15 分鐘，到期自動解除）與玩家帳號的自動鎖定（`users.locked_at`，管理員解除前一直計入）；同一帳號只算一個。代碼維持 `login_lockouts`（`alert_states` 不需要遷移），只有顯示名稱與處理建議改了 | 警告 | 無 |
 
 **樣本不足就維持原狀**：不憑少數樣本宣告告警，也不因為沒有流量就宣告恢復（所以流量停止後，錯誤率告警要等下一批有足夠樣本的資料才會恢復；仍在告警中的項目由 6 小時提醒負責）。
 
@@ -684,7 +695,7 @@ change `ops-alerting`。讓營運上的異常在使用者抱怨之前被人知�
 
 ### 已知限制
 
-- ①**登入失敗激增用「被鎖定的帳號數」代理**：慢速、分散、每個帳號少於 5 次的嘗試看不到；規範的「單一 IP」沒有資料（資料庫沒有 IP），由入口層限流與平台日誌補足（C-5）。
+- ①**帳號鎖定激增用「被鎖定的帳號數」代理**：慢速、分散、每個帳號少於 5 次的嘗試看不到；規範的「單一 IP」沒有資料（資料庫沒有 IP），由入口層限流與平台日誌補足（C-5）。
 - ②**至多一次的通知**：行程在「搶佔之後、寄信之前」被殺掉，這一封會遺失；6 小時的提醒是安全網。
 - ③**這個指令依賴資料庫與寄信**：資料庫不通時它也跑不動，寄信服務掛掉時告警寄不出去。所以 **5xx 比率、服務存活與就緒（`/healthz`、`/readyz` 的外部探測）、寄信失敗（`mail.send_failed`）、排程工作失敗與 `check-alerts` 停擺（15 分鐘沒有 `alert.check_completed` 心跳）必須由平台負責**。C-5a 已把這些寫成 `python scripts/gcp_launch.py alerts ... --notify-email <收件人>` 產生的告警定義（預設只預覽，條件見營運文件「告警條件一覽」，由 `tests/test_platform_alerts.py` 比對；尚未對真實雲端執行，C-5b 才實際建立）。
 - ④門檻是初值，未經真實流量驗證；上線後第一週檢視告警頻率再調整。⑤`usage.global_budget_warning` 日誌事件維持原樣（每個請求一筆），但**不再是通知來源**，通知由 `usage_budget` 的狀態去重負責。⑥沒有 webhook、後台的告警頁面與可由環境變數調整的門檻（刻意不做）。⑦排程尚未設定（C-5）；容器驗收沒有為這個 change 重跑。
@@ -929,6 +940,30 @@ app.mount('#app');
 
 **仍需你目視確認**：整體質感與美感是否符合你想要的電影感。可執行 `flask run` 後開啟 `/dev/components` 自行操作。
 
+### 驗收紀錄（google-first-login，2026-11-03，實作完成、待檢視與提交）
+
+日期 2026-11-03；對應的 commit：`f5e9ae0` 之上的工作樹（**尚未提交**）。依規範分成兩欄，**沒有實際執行的項目一律標為未驗證，不以預期結果代替**。
+
+| 已驗證 | 結果 |
+|---|---|
+| 自動化測試與驗證 | pytest **6050 項通過**（含真實 SQL Server `project_test`，SQLite 與 SQL Server 各跑一次，沒有略過；上次 5664）；`node --test "tests/js/*.test.js"` **197 項通過**（上次 175，新增 `auth-flows.test.js` 22 項）；`openspec validate google-first-login --strict` 通過；`openspec validate --specs` 44 項通過 |
+| 容器驗收（WSL Docker，`scripts/verify_container.py`） | **109 / 109 項通過**（上次 95）。管理員流程已改寫：容器沒有設定 Google，所以先驗證「管理員只靠密碼登入得到通用的 401、沒有 session cookie」，再以伺服器自己的 `SECRET_KEY` 簽出與真實登入相同的 session cookie 繼續後續檢查；新增登入頁（只有條款勾選框、沒有密碼／信箱／生日欄位）、`/register` 導向、`/age`、`/appeal`、`/login/password` 的存取規則，以及 `purge-unconfirmed-accounts` 在容器內的預覽與實際執行（沒有期限記錄的帳號不會被刪） |
+| Alembic migration `0010_google_first_login` | SQLite 升到最新並可降回（`recreate="never"` 的降級不清空 `users` 的串聯資料）；真實 SQL Server `project_test` 升級成功；`tests/architecture/test_user_foreign_keys.py`、`test_account_erasure_coverage.py` 納入 `lock_strikes` 與 `lock_appeals` 後通過 |
+| 受限登入狀態（三種各掃描全部路由） | `tests/test_restricted_session.py`：對等待刪除、待確認年齡、被鎖定各自掃描 `app.url_map` 的每條需要登入的端點，只有各自的允許清單通過，其餘 API 回 403 與該狀態的代碼、頁面導向該狀態的頁面；加一個故意漏檢查的探針端點，證明掃描本身會抓到漏洞 |
+| 計次與鎖定（SQLite 與 SQL Server） | 15 分鐘內 5 次身分被拒（含補填不一致）或 10 次訊息被限流就鎖定；視窗邊界（恰好 15 分鐘不計）、管理員永不鎖定、已鎖定不再計次、8 個執行緒同時達門檻只鎖定一次且只有一筆 `account.lock` 稽核（管理員欄位為空）；回應 4xx 後計次仍在資料庫；48 小時後仍鎖定 |
+| 登入有效期 | 內容仍只有 `uid` 與 `tv`；第 20 天使用會重發 cookie、第 45 天仍有效、連續使用 100 天仍有效、閒置 31 天失效；`/healthz` 與靜態檔不重發 cookie 且不查詢資料庫 |
+| 管理員二階段登入 | 通過 Google 但沒輸入密碼時所有需要登入的端點都是 401；中間狀態 10 分鐘後失效；管理員只靠密碼端點得到與密碼錯誤相同的回應且不計失敗；連續 5 次錯誤鎖定 15 分鐘（正確密碼也被拒）；忘記密碼只接受持有中間狀態的請求，匿名與沒有寄信設定一律 404，重設後既有 session 與中間狀態失效 |
+| 日誌掃描（完整流程） | 註冊、驗證、登入、重設、Google、管理員二階段登入、申訴、解除鎖定、補填時未滿 13 歲抹除、逾時未補填清除、閒置清除都走完一遍後，日誌與指令輸出找不到任何信箱、密碼、權杖、申訴文字或生日 |
+| 個資 | 申訴納入匯出（JSON 的 `appeals`、CSV 的 `appeals.csv`，不含計次與他人資料）；`purge-expired-data` 清除 7 天前的鎖定計次、不清除申訴；補填時未滿 13 歲者的生日在資料庫與日誌都找不到 |
+
+| 未驗證 | 說明 |
+|---|---|
+| **第 8.3 項：瀏覽器人工驗收**（新使用者勾選條款 → Google → 年齡確認頁 → `/cs`；登出再登入一次點擊；未勾選條款的新使用者被擋；被鎖定 → 申訴 → 管理員解除；管理員 Google 之後輸入密碼） | **未做**：需要使用者在場，並使用 ngrok 通道（`C:\ngrok\ngrok.exe http --url=acre-walrus-jelly.ngrok-free.dev 5000`）與預備環境專用的 OAuth 用戶端。Google 的真實授權畫面與同意流程沒有被任何自動化測試涵蓋（測試使用假的供應商） |
+| 頁面在真實瀏覽器中的外觀 | 未檢視：四個新頁面（登入、年齡確認、申訴、管理員密碼驗證）與後台新增的兩個分頁只有範本、腳本與狀態邏輯的自動化測試，沒有截圖 |
+| 本機開發環境的管理員登入 | 管理員現在必須先通過 Google，所以本機開發需要一個允許 `http://localhost` 回呼網址的 OAuth 用戶端；尚未設定，本機沒有 Google 時管理員無法登入（測試與容器驗收用假供應商或簽出的 cookie） |
+
+已知取捨與限制（本 change 新增）：①**沒有絕對上限的登入**：cookie 被竊取後只要持續被使用就一直有效，撤銷靠 `token_version`、停權與管理員鎖定（使用者已接受）；②**鎖定可能誤傷**：重複的 `account_disabled` 拒絕會累積計次，被誤鎖者只能申訴等管理員解除；③**未滿 13 歲者可立刻用 Google 重新登入再填假資料**（自行聲明的既有限制，抹除只保證不保存其資料）；④**條款版本提升但不重新徵求既有使用者同意**（列入法務覆核關卡）；⑤玩家端的密碼註冊／登入／忘記密碼／信箱驗證仍在程式中，待 change ② 移除。
+
 ## 容器建置與驗收
 
 正式環境以 Docker 映像部署（見 AGENTS.md 第 9 節）。映像以 `python:3.14-slim-bookworm` 為基底（Python 版本與 `.python-version` 一致；明確指定 Debian 12，因為 Microsoft ODBC Driver 18 官方支援它），內含 `unixodbc` 與 `msodbcsql18`、前端資產與 108 個字型切片，約 277 MB。
@@ -945,7 +980,7 @@ app.mount('#app');
 
 ### 建置與驗收
 
-Docker 在 WSL 內，每次使用前先啟動服務（見下一節）。驗收腳本會建置映像並檢查 56 個項目：
+Docker 在 WSL 內，每次使用前先啟動服務（見下一節）。驗收腳本會建置映像並檢查 109 個項目（google-first-login 之後；最初為 56 個）：
 
 ```powershell
 .\scripts\verify-container.ps1               # 建置並驗收

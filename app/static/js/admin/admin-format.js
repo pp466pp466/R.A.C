@@ -32,8 +32,11 @@
     action: {
       'user.lookup': '查詢使用者', 'user.suspend': '停權', 'user.unsuspend': '解除停權', 'user.change_tier': '調整會員等級',
       'conversation.read': '讀取對話', 'conversation.delete': '刪除對話', 'failures.read': '查看模型失敗原文',
-      'reauth.failed': '重新輸入密碼失敗'
+      'reauth.failed': '重新輸入密碼失敗',
+      'account.lock': '帳號自動鎖定', 'appeal.submit': '玩家送出申訴', 'appeal.read': '檢視申訴', 'account.unlock': '解除帳號鎖定'
     },
+    /* 鎖定原因（app/models/lock_strike.py 的計次類別，也是 users.lock_reason 的值） */
+    lockReason: { identity_rejected: '登入或年齡確認多次被拒', rate_limited: '短時間內訊息過多' },
     kind: { chat: '客服對話', summary: '對話摘要' },
     messageRole: { user: '使用者', assistant: '客服' },
     messageStatus: { ok: '正常', fallback: '降級回覆' },
@@ -103,6 +106,7 @@
   function kindLabel(value) { return label('kind', value); }
   function messageRoleLabel(value) { return label('messageRole', value); }
   function messageStatusLabel(value) { return label('messageStatus', value); }
+  function lockReasonLabel(value) { return label('lockReason', value); }
 
   /* 比例（0 到 1，可超過 1）轉成百分比文字。無條件捨去：0.998 顯示 99% 而不是 100%，
      這樣「100%」只在真的用滿時出現，與 ratioLevel 的界線一致。資料不是有限的非負數時回傳「—」。 */
@@ -152,6 +156,9 @@
     if (action === 'user.lookup') { return label('via', d.via) + (d.found === 0 ? '，查無此人' : ''); }
     if (action === 'failures.read') { return typeof d.count === 'number' ? d.count + ' 筆' : ''; }
     if (action === 'reauth.failed') { return d.attempted ? '嘗試：' + actionLabel(d.attempted) : ''; }
+    if (action === 'account.lock') { return d.reason ? '原因：' + lockReasonLabel(d.reason) : ''; }
+    if (action === 'appeal.submit') { return typeof d.length === 'number' ? d.length + ' 字' : ''; }
+    if (action === 'appeal.read') { return typeof d.count === 'number' ? d.count + ' 則' : ''; }
     return '';
   }
 
@@ -159,7 +166,7 @@
     LABELS: LABELS, EMPTY: EMPTY, WARN_RATIO: WARN_RATIO, FULL_RATIO: FULL_RATIO,
     parseTime: parseTime, taipeiDate: taipeiDate, taipeiDateTime: taipeiDateTime, taipeiClock: taipeiClock, shortDate: shortDate,
     statusLabel: statusLabel, tierLabel: tierLabel, roleLabel: roleLabel, actionLabel: actionLabel, kindLabel: kindLabel,
-    messageRoleLabel: messageRoleLabel, messageStatusLabel: messageStatusLabel,
+    messageRoleLabel: messageRoleLabel, messageStatusLabel: messageStatusLabel, lockReasonLabel: lockReasonLabel,
     ratioPercent: ratioPercent, ratioLevel: ratioLevel, ratioWidth: ratioWidth, count: count, shortId: shortId,
     suspensionText: suspensionText, auditDetailText: auditDetailText
   };

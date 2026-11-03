@@ -389,7 +389,7 @@ def test_after_a_refusal_the_same_address_and_password_can_register_immediately(
 
 
 def test_registering_an_existing_address_never_touches_its_age_record(member_session):
-    existing = add_user(member_session, 1)                        # 沒有年齡資料的既有帳號
+    existing = add_user(member_session, 1, age=None)              # 沒有年齡資料的既有帳號
     register(make_auth_service(member_session), email="user1@example.com", **age_fields(30))
     member_session.refresh(existing)
     assert existing.birth_date is None and existing.age_range is None and existing.age_confirmed_at is None

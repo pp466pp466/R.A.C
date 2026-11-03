@@ -60,9 +60,9 @@ def test_the_dry_run_lists_every_alert_and_the_action_it_would_take_without_touc
     result = runner.invoke(args=["check-alerts", "--dry-run"])
     assert result.exit_code == 0, result.output
     assert "預覽" in result.output and "沒有寄信" in result.output
-    for name in ("全站用量", "模型錯誤率", "模型設定錯誤", "對話延遲（p95）", "登入失敗激增"):
+    for name in ("全站用量", "模型錯誤率", "模型設定錯誤", "對話延遲（p95）", "帳號鎖定激增"):
         assert name in result.output, name
-    assert "登入失敗激增：警告（目前 5 個帳號，門檻 5 個帳號）；正式執行會：進入告警" in result.output
+    assert "帳號鎖定激增：警告（目前 5 個帳號，門檻 5 個帳號）；正式執行會：進入告警" in result.output
     assert "模型錯誤率：樣本不足，維持原狀" in result.output and "全站用量：正常" in result.output
     assert sender.sent == [] and states(app) == 0
     assert [line for line in log_lines() if line.get("event", "").startswith("alert.")] == []
@@ -73,8 +73,8 @@ def test_a_real_run_notifies_once_and_a_second_run_stays_silent(world):
     lock_five(app, clock)
     first = runner.invoke(args=["check-alerts"])
     assert first.exit_code == 0 and "告警檢查結果" in first.output
-    assert "登入失敗激增：警告（目前 5 個帳號，門檻 5 個帳號）；進入告警，已通知" in first.output
-    assert [m["to"] for m in sender.sent] == [RECIPIENT] and sender.sent[0]["subject"].endswith("登入失敗激增（進入告警）")
+    assert "帳號鎖定激增：警告（目前 5 個帳號，門檻 5 個帳號）；進入告警，已通知" in first.output
+    assert [m["to"] for m in sender.sent] == [RECIPIENT] and sender.sent[0]["subject"].endswith("帳號鎖定激增（進入告警）")
 
     clock.advance(minutes=5)
     second = runner.invoke(args=["check-alerts"])
@@ -97,7 +97,7 @@ def test_a_delivery_failure_exits_nonzero_names_the_alert_and_the_next_run_retri
     lock_five(app, clock)
     sender.fail = True
     failed = runner.invoke(args=["check-alerts"])
-    assert failed.exit_code != 0 and "以下告警失敗：登入失敗激增" in failed.output and "通知失敗" in failed.output
+    assert failed.exit_code != 0 and "以下告警失敗：帳號鎖定激增" in failed.output and "通知失敗" in failed.output
     assert [line["reason"] for line in log_lines() if line.get("event") == "alert.delivery_failed"] == ["login_lockouts"]
 
     sender.fail = False
@@ -116,7 +116,7 @@ def test_one_failing_evaluation_exits_nonzero_but_the_rest_are_still_reported(wo
     monkeypatch.setattr(LlmCallLogRepository, "chat_status_counts", broken)
     result = runner.invoke(args=["check-alerts"])
     assert result.exit_code != 0 and "模型錯誤率：評估失敗" in result.output and "以下告警失敗：模型錯誤率" in result.output
-    assert "登入失敗激增" in result.output and len(sender.sent) == 1
+    assert "帳號鎖定激增" in result.output and len(sender.sent) == 1
 
 
 def test_without_recipients_it_says_so_and_changes_nothing():
@@ -125,7 +125,7 @@ def test_without_recipients_it_says_so_and_changes_nothing():
     lock_five(app, clock)
     result = app.test_cli_runner().invoke(args=["check-alerts"])
     assert result.exit_code == 0 and "沒有設定告警收件人" in result.output and "不寄信也不改變狀態" in result.output
-    assert "登入失敗激增：警告" in result.output and states(app) == 0
+    assert "帳號鎖定激增：警告" in result.output and states(app) == 0
 
 
 def test_a_recovered_alert_is_reported_and_mailed_once(world):

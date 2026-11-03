@@ -94,7 +94,7 @@ def test_the_cookie_attributes_in_development(app):
     assert "HttpOnly" in header and "SameSite=Lax" in header and "Path=/" in header
     assert "Secure" not in header and "Domain" not in header and header.startswith("session=")
     expires = parsedate_to_datetime(next(p.split("=", 1)[1] for p in header.split("; ") if p.startswith("Expires=")))
-    assert abs((expires - (datetime.now(timezone.utc) + timedelta(days=7))).total_seconds()) < 120
+    assert abs((expires - (datetime.now(timezone.utc) + timedelta(days=30))).total_seconds()) < 120
 
 
 @pytest.mark.parametrize("env", ["production", "staging"])
@@ -108,13 +108,24 @@ def test_the_cookie_attributes_in_production_like_environments(env):
     assert "Domain" not in header
 
 
-def test_the_cookie_is_not_extended_by_use(app):
+def test_every_use_renews_the_cookie_with_a_fresh_signature_and_expiry(app):
     client = app.test_client()
     login(client)
     for _ in range(3):
         response = client.get("/api/_t/me")
         assert response.status_code == 200
-        assert session_cookie_header(response) is None        # 之後的請求不會重寫 cookie，到期時間固定在登入當下
+        header = session_cookie_header(response)
+        assert header is not None                              # 每次辨識出登入者的回應都重發
+        expires = parsedate_to_datetime(next(p.split("=", 1)[1] for p in header.split("; ") if p.startswith("Expires=")))
+        assert abs((expires - (datetime.now(timezone.utc) + timedelta(days=30))).total_seconds()) < 120
+        assert set(serializer(app).loads(client.get_cookie("session").value)) == {"uid", "tv"}      # 內容仍只有 uid、tv
+
+
+def test_a_response_that_never_touched_the_session_does_not_reissue_the_cookie(app):
+    client = app.test_client()
+    login(client)
+    assert session_cookie_header(client.get("/healthz")) is None
+    assert session_cookie_header(client.get("/static/css/theme.css")) is None
 
 
 def test_login_discards_anything_the_session_held_before(app):
@@ -177,13 +188,32 @@ def test_a_validly_signed_cookie_with_the_wrong_shape_is_not_a_login(app, payloa
     assert client.get("/api/_t/me").status_code == 401
 
 
-def test_after_seven_days_the_cookie_no_longer_works(app, monkeypatch):
+def test_the_cookie_expires_after_thirty_idle_days_but_use_keeps_it_alive(app, monkeypatch):
     client = app.test_client()
     login(client)
     real_time = time.time
-    monkeypatch.setattr(time, "time", lambda: real_time() + 6 * 86400)
+    offset = [0]
+    monkeypatch.setattr(time, "time", lambda: real_time() + offset[0])
+    for day in (20, 45, 70, 95, 120):                # 每次相隔 25 天：持續使用，總共超過 100 天仍有效（沒有絕對上限）
+        offset[0] = day * 86400
+        assert client.get("/api/_t/me").status_code == 200, f"第 {day} 天應仍登入"
+
+
+def test_thirty_one_idle_days_log_the_member_out(app, monkeypatch):
+    client = app.test_client()
+    login(client)
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 29 * 86400)
     assert client.get("/api/_t/me").status_code == 200
-    monkeypatch.setattr(time, "time", lambda: real_time() + 8 * 86400)
+    monkeypatch.setattr(time, "time", lambda: real_time() + (29 + 31) * 86400)     # 上次使用之後閒置 31 天
+    assert client.get("/api/_t/me").status_code == 401
+
+
+def test_a_cookie_that_was_never_used_again_dies_after_thirty_days(app, monkeypatch):
+    client = app.test_client()
+    login(client)
+    real_time = time.time
+    monkeypatch.setattr(time, "time", lambda: real_time() + 31 * 86400)
     assert client.get("/api/_t/me").status_code == 401
 
 
@@ -267,4 +297,4 @@ def test_liveness_and_static_requests_never_touch_the_database_even_with_a_cooki
     assert client.get("/healthz").status_code == 200
     assert client.get("/static/css/theme.css").status_code == 200
     assert client.get("/favicon.ico").status_code == 204
-    assert client.get("/").status_code == 200
+    assert client.get("/terms").status_code == 200                     # 公開頁面不辨識登入者（首頁要，因為已登入者會被導向）

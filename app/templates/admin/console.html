@@ -180,6 +180,56 @@
       <admin-list-foot :list="lists.feedback" empty-text="目前沒有意見回饋對話。" @retry="reload('feedback')" @more="loadMore('feedback')"></admin-list-foot>
     </section>
 
+    <!-- ===== 被鎖定的帳號 ===== -->
+    <section v-if="tab === 'locked'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">被鎖定的帳號</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reload('locked')" :disabled="lists.locked.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">玩家在 15 分鐘內多次被拒絕登入或年齡確認不一致，或短時間內傳送過多訊息，會被自動鎖定；鎖定不會自動解除，只有您能解除（需要重新輸入密碼）。被鎖定的玩家只能向您申訴。</p>
+      <ul class="admin-rows" v-if="lists.locked.items.length">
+        <li v-for="row in lists.locked.items" :key="row.public_id" class="admin-row">
+          <div class="admin-row__main">
+            <p class="admin-row__line">
+              <strong>{{ row.display_name }}</strong>
+              <span class="admin-chip admin-chip--alert">{{ fmt.lockReasonLabel(row.reason) }}</span>
+              <span class="admin-row__muted">鎖定於 {{ fmt.taipeiDateTime(row.locked_at) }}</span>
+            </p>
+            <p class="admin-row__line"><span class="admin-row__muted">使用者</span> <code :title="row.public_id">{{ fmt.shortId(row.public_id) }}</code></p>
+          </div>
+          <div class="admin-row__actions">
+            <button type="button" class="ui-btn admin-btn-sm" @click="selectTab('appeals')">看申訴</button>
+            <button type="button" class="ui-btn admin-btn-sm" @click="askUnlock(row.public_id, row.display_name)">解除鎖定</button>
+          </div>
+        </li>
+      </ul>
+      <admin-list-foot :list="lists.locked" empty-text="目前沒有被鎖定的帳號。" @retry="reload('locked')" @more="loadMore('locked')"></admin-list-foot>
+    </section>
+
+    <!-- ===== 申訴 ===== -->
+    <section v-if="tab === 'appeals'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">申訴</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reload('appeals')" :disabled="lists.appeals.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">只有目前被鎖定的帳號送出的申訴；解除鎖定後就不再出現。申訴內容是個人資料，請只在處理申訴時查看；每次讀取都會留下稽核紀錄（只記筆數）。這裡不提供該帳號的任何對話。</p>
+      <ul class="admin-rows" v-if="lists.appeals.items.length">
+        <li v-for="row in lists.appeals.items" :key="row.id" class="admin-row admin-row--block">
+          <p class="admin-row__line">
+            <strong>{{ row.display_name }}</strong>
+            <span class="admin-chip" :class="{ 'admin-chip--alert': row.status === 'pending' }">{{ row.status === 'pending' ? '待處理' : '已處理' }}</span>
+            <span class="admin-row__muted">{{ fmt.taipeiDateTime(row.created_at) }}</span>
+            <span class="admin-row__muted">使用者</span> <code :title="row.user_public_id">{{ fmt.shortId(row.user_public_id) }}</code>
+          </p>
+          <p class="admin-msg__text admin-appeal__text">{{ row.content }}</p>
+          <div class="admin-actions">
+            <button type="button" class="ui-btn admin-btn-sm" @click="askUnlock(row.user_public_id, row.display_name)">解除鎖定</button>
+          </div>
+        </li>
+      </ul>
+      <admin-list-foot :list="lists.appeals" empty-text="目前沒有被鎖定帳號的申訴。" @retry="reload('appeals')" @more="loadMore('appeals')"></admin-list-foot>
+    </section>
+
     <!-- ===== 使用者 ===== -->
     <section v-if="tab === 'users'">
       <div class="admin-section-head">

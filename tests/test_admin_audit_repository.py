@@ -44,10 +44,11 @@ def test_a_row_keeps_every_documented_field(repo, member_session, admin):
     assert stored.detail_json == {"from_tier": "free", "to_tier": "plus", "count": 3}
 
 
-def test_the_documented_actions_are_exactly_the_eight_in_the_specification():
+def test_the_documented_actions_are_exactly_the_twelve_in_the_specification():
     assert set(AUDIT_ACTIONS) == {
         "user.lookup", "user.suspend", "user.unsuspend", "user.change_tier",
         "conversation.read", "conversation.delete", "failures.read", "reauth.failed",
+        "account.lock", "appeal.submit", "appeal.read", "account.unlock",
     }
 
 

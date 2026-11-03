@@ -311,3 +311,70 @@ a.ui-btn {
     margin-bottom: 0.625rem;
   }
 }
+
+/* ---- 看起來像連結的按鈕（登出、重新整理、忘記密碼）；不使用 Bootstrap 的 JavaScript，狀態由 Vue 接管 -------------------- */
+.auth-linkbtn {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--color-text-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.auth-linkbtn:hover,
+.auth-linkbtn:focus-visible {
+  color: var(--color-accent);
+}
+
+.auth-linkbtn:disabled {
+  opacity: 0.55;
+  cursor: progress;
+}
+
+/* ---- 申訴頁 ------------------------------------------------------------- */
+.appeal-textarea {
+  min-height: 9rem;
+  resize: vertical;
+  line-height: 1.7;
+}
+
+.appeal-list {
+  margin: 0 0 1.25rem;
+  padding: 0;
+  list-style: none;
+}
+
+.appeal-item {
+  padding: 0.75rem 0;
+  border-bottom: var(--border-hairline);
+}
+
+.appeal-item__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  margin: 0 0 0.375rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.appeal-item__text {
+  margin: 0;
+  white-space: pre-wrap;        /* 純文字，保留換行 */
+  overflow-wrap: anywhere;
+  line-height: 1.7;
+}
+
+.appeal-chip {
+  padding: 0.0625rem 0.5rem;
+  border: var(--border-hairline);
+  border-radius: 999px;
+}
+
+.appeal-chip--pending {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}

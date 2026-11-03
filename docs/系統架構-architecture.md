@@ -1,7 +1,7 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-02 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
-> 注意（2026-11-02）：AGENTS.md 第 3、8、9、10、11 節已修訂（Google 登入改版：玩家只用 Google 登入、年齡確認改在登入之後、登入有效期改為閒置 30 天並續期、管理員 Google 加密碼、帳號鎖定與申訴）。本文件描述的是**目前的實作**，涉及上述的部分尚未更新，待 change ① 與 ② 完成後同步；決定見 [report.md](report.md) 的 U-12 至 U-19 與 [路線圖](路線圖-roadmap.md)。
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-02 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 注意（2026-11-02）：Google 登入改版的 change ① `google-first-login` 已實作，本文已納入其分層變化（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）；玩家端密碼註冊與信箱驗證仍待 change ② 移除。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -93,16 +93,28 @@ flowchart TD
 
 `AdminService` 依賴 `AccessPolicy`、兩個後台 Repository、`UsageService`（用量快照）、`AgeStatsService`（年齡區間人數）與兩個注入的可呼叫物件：`AuthService.confirm_password`（重新輸入密碼）與 `keep_changes_on_error`（失敗的重新驗證也要保存稽核），由 `registry.get_admin_service()` 組裝。回傳的資料一律是明確組出來的字典，不是 ORM 物件，所以內部編號、密碼雜湊與 `token_version` 不可能意外外露。
 
+### 帳號鎖定、申訴與受限登入狀態（google-first-login）
+
+| 元件 | 角色與規則 | 守法 |
+|---|---|---|
+| `AccountLockService`（`app/services/account_lock_service.py`） | 兩類計次（`identity_rejected` 15 分鐘 5 次、`rate_limited` 15 分鐘 10 次）寫入 `lock_strikes`，達門檻以條件式 UPDATE 鎖定並寫 `account.lock` 稽核（管理員欄位為空）。呼叫點只有三處：Google 回呼的拒絕（`GoogleSignInService._refuse`，已辨識出帳號者）、補填年齡不一致（`AuthService.verify_age`）、被每分鐘訊息數上限擋下（`UsageService._check_rate`）。計次寫入後呼叫 `keep_changes_on_error`，所以 4xx 的請求也保留 | `tests/test_account_lock_service.py`（SQLite 與 SQL Server、並行只鎖一次）；`tests/test_chat_usage_limits.py`、`test_google_endpoints.py` 證明三個呼叫點 |
+| 稽核以注入的函式寫入 | `AccountLockService` 與 `AppealService` 拿到的是 `registry._system_audit` 產生的函式，不直接匯入後台專用的 `AdminAuditRepository`，所以後台專用 Repository 仍只被 `admin_service.py` 與 `registry.py` 匯入 | `tests/architecture/test_admin_boundaries.py` |
+| `AppealService`（`app/services/appeal_service.py`） | 只有被鎖定的玩家能申訴（其他人 404）；1000 字、每小時 3 則、同時 1 則待處理；內容是個資，稽核與日誌只有字數 | `tests/test_appeal_api.py` |
+| 受限登入狀態 | `CurrentUser.restriction` 回傳 `locked`／`age_pending`／`deletion_pending`（依此優先順序），`require_login`／`login_required_page` 預設拒絕，只有明確傳入 `allow_*` 的端點通過；管理員不會是 `locked` 或 `age_pending` | `tests/test_restricted_session.py` 對三種狀態各掃描一次全部路由，並有自我驗證 |
+| `SlidingSessionInterface` | session 到期時間一律是「寫入的當下加 30 天」，辨識過登入者的回應才重發 cookie；取代絕對期限的實作 | `tests/test_session_security.py`（第 20 天使用會續期、連續使用 100 天仍有效、閒置 31 天失效） |
+| 管理員的中間狀態 cookie | `app/security/admin_step.py`：10 分鐘的簽章 cookie，不被 `current_user()` 辨識；`POST /api/auth/admin-password` 與 `/forgot` 是登入之前的端點，不在受限狀態掃描的範圍（明列於測試） | `tests/test_admin_two_step_login.py` |
+| `landing_for(user, next)`（`app/security/redirects.py`） | 首頁、登入頁與 Google 回呼共用：受限狀態各去自己的頁面，待確認年齡帶著已驗證的 `next` 去 `/age`，否則 `next` 或預設頁面 | `tests/test_landing.py` |
+
 ### 抹除的單一出口與期限清除的專用 Repository（C-4c）
 
 「刪除一個人」只有一個出口，期限清除的刪除能力只放在一個專用的 Repository，兩者都由架構測試守住：
 
 | 規則 | 守法 |
 |---|---|
-| 閒置清除與自助刪除共用 `AccountErasureService`：先清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
+| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 13 歲的立即抹除，都共用 `AccountErasureService`：先清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
 | 每張指向使用者或對話的資料表都要登記，沒有外鍵的整數參照必須由抹除流程明確清除 | `tests/architecture/test_account_erasure_coverage.py`（新增資料表漏掉就失敗，並有自我驗證） |
-| `RetentionRepository`（依期限刪除對話、帳本、權杖與稽核）只被 `data_retention_service.py` 與 `registry.py` 匯入；`AdminAuditRepository` 仍沒有更新與刪除 | `tests/architecture/test_retention_boundaries.py` |
-| 需要登入的端點預設拒絕受限登入狀態（帳號等待刪除），只有明確允許的端點可用 | `tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則（見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 7a 節） |
+| `RetentionRepository`（依期限刪除對話、帳本、權杖、稽核與鎖定計次）只被 `data_retention_service.py` 與 `registry.py` 匯入；`AdminAuditRepository` 仍沒有更新與刪除 | `tests/architecture/test_retention_boundaries.py` |
+| 需要登入的端點預設拒絕三種受限登入狀態（等待刪除、待確認年齡、被鎖定），只有明確允許的端點可用 | `tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則（見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 7a、7b 節） |
 
 匯出（`PersonalExportService`）只透過 `ChatRepository` 與 `UserRepository` 讀取，沿用「擁有者條件寫進簽名」的規則（訊息以 `messages_after` 分頁，簽名第一個參數是 `user_id`），不需要新的繞過路徑。
 
@@ -186,8 +198,8 @@ flowchart LR
 | 擁有者條件寫進簽名 | 對話相關的 Repository 方法第一個參數都是 `user_id` | 避免只憑識別碼取資料；AST 測試守住                          |
 | 後台走專用路徑     | 管理員讀他人資料只能經 `AdminService` 與後台專用 Repository，每個方法先 `require_admin`、每次讀取先寫稽核 | 不放寬一般路徑的隔離保證；「只有管理員」與「後台資料只走後台路徑」由測試守住，不靠審查 |
 | 非擁有者一律 404   | 他人的資源與不存在的回應逐字相同                     | 不洩漏資源是否存在                                          |
-| 抹除只有一個出口   | 閒置清除與自助刪除都走 `AccountErasureService`；新增資料表要登記 | 避免每個功能各做一套刪除而漏掉某張表；帳本的對話編號沒有外鍵，順序錯了就會留下錯指的參照 |
-| 受限登入狀態預設拒絕 | 待刪除的帳號可登入但只能撤銷；`require_login` 預設拒絕，允許清單明確列出 | 新增端點漏了檢查也是安全的一邊；以掃描全部路由的測試證明 |
+| 抹除只有一個出口   | 閒置清除、自助刪除、逾時未補填年齡與未滿 13 歲都走 `AccountErasureService`；新增資料表要登記 | 避免每個功能各做一套刪除而漏掉某張表；帳本的對話編號沒有外鍵，順序錯了就會留下錯指的參照 |
+| 受限登入狀態預設拒絕 | 待刪除、待確認年齡與被鎖定的帳號可登入但只能做各自的一小組事情；`require_login` 預設拒絕，允許清單明確列出 | 新增端點漏了檢查也是安全的一邊；以掃描全部路由的測試證明 |
 
 ## 7. 規劃中的 RPG 模組
 

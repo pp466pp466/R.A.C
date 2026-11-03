@@ -1,6 +1,7 @@
 # 前端架構
 
-> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-10-30 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（RPG 的 `/game` 為規劃中） ｜ 最後更新：2026-11-02 ｜ 對應 change：platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 注意（2026-11-02）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）；玩家端密碼相關頁面（忘記密碼、重設密碼、信箱驗證）仍待 change ② 移除。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
@@ -13,7 +14,7 @@ flowchart TD
     Base --> Vendor["vendor：vue.global.prod.js → axios.min.js"]
     Base --> Ui["共用：typewriter.js → toast-store.js → ui-components.js"]
     Ui --> Page{"頁面"}
-    Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → 各頁腳本<br/>（login、register、account…；account 另先載入 account-lifecycle.js）"]
+    Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → auth-flows.js → 各頁腳本<br/>（login、age、appeal、login-password、account…；account 另先載入 account-lifecycle.js）"]
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
 ```
@@ -30,6 +31,7 @@ flowchart TD
 | `js/ui/toast-store.js` | Toast 的狀態庫（與框架無關） | `tests/js/toast-store.test.js` |
 | `js/ui/typewriter.js` | 打字機緩衝區：以字素為單位、積壓越多越快、`finish()` 後加速補完、可 `flush()` 與 `cancel()` | `tests/js/typewriter.test.js` |
 | `js/auth/auth-common.js` | CSRF 標頭、初始狀態讀取、錯誤整理（`describeError`）、登入導向 | `tests/js/auth-common.test.js` |
+| `js/auth/auth-flows.js` | 登入、年齡確認、申訴與管理員密碼驗證頁的判斷邏輯（純函式，`Auth.*`）：安全的導向位置、Google 發起的請求內容（只有條款旗標與 `next`）、檢查輸入、每種錯誤代碼的處理結果（顯示欄位錯誤、清空欄位、導向、結束流程）、申訴字數以 Unicode 字元計 | `tests/js/auth-flows.test.js`（22 項） |
 | `js/auth/account-lifecycle.js` | 帳號頁匯出與刪除的純函式（`Auth.lifecycle`）：確認文字比對、送出條件、檔名、預定刪除時間（台灣時間）、錯誤代碼說明、Blob 錯誤整理 | `tests/js/account-lifecycle.test.js` |
 
 ## 3. 客服頁面（`/cs`）的模組關係
@@ -63,7 +65,7 @@ flowchart LR
 ```mermaid
 flowchart LR
     Html["templates/admin/console.html<br/>外殼 + initial-state JSON（只有管理員的顯示名稱）"] --> Admin
-    Admin["admin.js<br/>Vue 3 應用：六個分頁、確認視窗、對話全文視窗"]
+    Admin["admin.js<br/>Vue 3 應用：八個分頁（含被鎖定的帳號與申訴）、確認視窗、對話全文視窗"]
     Admin --> Fmt["admin-format.js<br/>台灣時間、中文標籤、用量百分比與警示等級（純函式）"]
     Admin --> Ui["ui-components.js<br/>Modal 與 Toast"]
     Admin --> Common["auth-common.js<br/>CSRF 標頭、describeError、登入導向"]
@@ -78,6 +80,31 @@ flowchart LR
 - **錯誤處理**：`Auth.describeError` 整理後端的錯誤；401 導向登入；欄位錯誤（`password`、`reason`、`tier`）顯示在對應欄位，其餘顯示在視窗內；視窗已被關掉時改用 Toast。
 - **版面**：頂欄與分頁列與內容區左右對齊（最大寬度 64rem）；手機寬度時分頁列自己橫向捲動、頁面不會；清單的每一列改為直向排列；用量以長條加百分比與文字說明呈現，**不單靠顏色**（達 80% 長條為琥珀橙並寫明「已達 80% 告警線」）。
 
+## 3a. 登入、年齡確認、申訴與管理員密碼驗證頁（google-first-login）
+
+```mermaid
+flowchart LR
+    Login["login.js<br/>Google 按鈕＋條款勾選框"] -->|"POST /api/auth/google/start<br/>只送 accept_terms 與 next"| Provider["導向 Google（https 才導向）"]
+    Provider --> Callback["/auth/google/callback"]
+    Callback -->|"新帳號"| Age["age.js<br/>生日＋年齡區間"]
+    Callback -->|"被鎖定"| Appeal["appeal.js<br/>申訴＋自己的申訴狀態"]
+    Callback -->|"管理員"| Pw["login-password.js<br/>密碼＋忘記密碼按鈕"]
+    Callback -->|"其他"| Cs["/cs（預設頁面）"]
+    Age -->|"POST /api/auth/verify-age"| Done["導向 next 或 /cs"]
+    Age -.->|"age_not_eligible：帳號已抹除"| Final["只留說明與回登入頁的連結"]
+    Pw -->|"POST /api/auth/admin-password"| Done
+    Flows["auth-flows.js（純函式）"] -.-> Login
+    Flows -.-> Age
+    Flows -.-> Appeal
+    Flows -.-> Pw
+```
+
+- **登入頁只有 Google 與條款**：沒有電子郵件、密碼、生日與年齡欄位，也沒有註冊與忘記密碼的連結；按鈕在條款沒勾選時仍可按（回訪的使用者不必勾選，新使用者沒勾由伺服器擋下並導回提示），只在送出中禁用。`/register` 與註冊頁的範本、腳本已移除。
+- **年齡確認頁**：伺服器提供年齡規則（區間選項與範圍）放在初始狀態，沒有任何個人資料；`age_mismatch` 顯示通用說明並清空兩個欄位；`age_not_eligible`（帳號已抹除）只顯示說明與回登入頁的連結；登入逾時導向登入頁。生日只存在輸入框的響應式欄位，不寫入任何瀏覽器儲存體。
+- **申訴頁**：字數提示（以 Unicode 字元計）、自己的申訴與處理狀態、已有待處理的申訴時不顯示表單；申訴內容一律純文字；沒有被鎖定時 API 回 404，頁面導向預設頁面。
+- **管理員密碼驗證頁**：密碼在送出的當下立即清空；沒有或已過期的中間狀態導回 `/login?error=google_state`；「忘記密碼」只在伺服器說有寄信設定時顯示。
+- 所有頁面都遵守前端規範：無 `v-html`、無 Bootstrap 的 JavaScript、處理中禁用按鈕並在 `finally` 恢復（`Auth.useForm`）。
+
 ## 3b. 帳號頁（`/account`）的匯出、刪除與撤銷（C-4c）
 
 ```mermaid
@@ -91,6 +118,7 @@ flowchart LR
     Acc -.->|"撤銷成功"| Reload["Toast 後重新載入 /account"]
 ```
 
+- 年齡補填區塊只留給管理員（玩家沒完成年齡確認之前連這一頁都進不來，會被導向 `/age`）。
 - **匯出**：`POST /api/account/export` 以 `responseType: 'blob'`、逾時 60 秒、`AbortController` 送出（離開頁面時中止），回應轉成物件網址以 `<a download>` 下載；無論成功、失敗或中斷，`finally` 恢復按鈕。失敗時錯誤本文也是 Blob，`unwrapBlobError` 先讀成 JSON 再交給共用的錯誤整理。
 - **刪除**：自製 Modal（Vue 狀態接管）說明 7 天寬限、抹除範圍並建議先匯出；有密碼者輸入密碼，其餘輸入確認文字（文字由伺服器放進初始狀態，前端不寫死第二份）。**確認前不送出請求**；送出後密碼欄位立即清空；成功後所有裝置登出並導向登入頁，登入頁以固定列舉的代碼顯示寬限期說明。
 - **等待刪除**：另一份 HTML 只有預定刪除時間（台灣時間）、撤銷與登出；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕；頁面開著時剛好過期則由前端處理 `grace_expired`（顯示說明、按鈕恢復）。登入頁與 Google 回呼在 `deletion_pending` 時一律去 `/account`，不依 `next`。

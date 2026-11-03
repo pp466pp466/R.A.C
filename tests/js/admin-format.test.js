@@ -7,7 +7,8 @@ const Format = require('../../app/static/js/admin/admin-format.js');
 
 const STATUSES = ['pending_verification', 'active', 'suspended', 'deletion_pending'];
 const TIERS = ['free', 'plus', 'vip'];
-const ACTIONS = ['user.lookup', 'user.suspend', 'user.unsuspend', 'user.change_tier', 'conversation.read', 'conversation.delete', 'failures.read', 'reauth.failed'];
+const ACTIONS = ['user.lookup', 'user.suspend', 'user.unsuspend', 'user.change_tier', 'conversation.read', 'conversation.delete', 'failures.read', 'reauth.failed',
+  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock'];
 
 test('every status, tier, role, action, kind and message value has a Chinese label', () => {
   for (const value of STATUSES) { assert.notEqual(Format.statusLabel(value), value, value); }
@@ -149,6 +150,14 @@ test('audit details are turned into one readable line and never throw on odd sha
   assert.equal(Format.auditDetailText('user.lookup', { via: 'id', found: 0 }), '以識別碼，查無此人');
   assert.equal(Format.auditDetailText('failures.read', { count: 3 }), '3 筆');
   assert.equal(Format.auditDetailText('reauth.failed', { attempted: 'user.suspend' }), '嘗試：停權');
+  assert.equal(Format.auditDetailText('reauth.failed', { attempted: 'account.unlock' }), '嘗試：解除帳號鎖定');
+  assert.equal(Format.auditDetailText('account.lock', { reason: 'rate_limited' }), '原因：短時間內訊息過多');
+  assert.equal(Format.auditDetailText('account.lock', { reason: 'identity_rejected' }), '原因：登入或年齡確認多次被拒');
+  assert.equal(Format.auditDetailText('appeal.submit', { length: 42 }), '42 字');
+  assert.equal(Format.auditDetailText('appeal.read', { count: 2 }), '2 則');
+  assert.equal(Format.auditDetailText('account.unlock', {}), '');
+  assert.equal(Format.lockReasonLabel('rate_limited'), '短時間內訊息過多');
+  assert.equal(Format.lockReasonLabel('something_new'), 'something_new');          // 不認得的值退回原始代碼
   for (const detail of [null, undefined, {}, [], 'text', 5]) {
     for (const action of ACTIONS.concat(['something.else'])) {
       assert.equal(typeof Format.auditDetailText(action, detail), 'string', action + ' ' + JSON.stringify(detail));

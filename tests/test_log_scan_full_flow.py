@@ -23,6 +23,10 @@ MEMBER_EMAIL = "scan.member@example.com"
 GOOGLE_EMAIL = "scan.google@example.com"
 ADMIN_EMAIL = "scan.admin@example.com"
 STALE_EMAIL = "scan.stale@example.com"
+LOCKED_EMAIL = "scan.locked@example.com"
+CHILD_EMAIL = "scan.child@example.com"
+UNFINISHED_EMAIL = "scan.unfinished@example.com"
+APPEAL_TEXT = "只該出現在申訴與管理員檢視裡的私密說明SCAN-APPEAL-TEXT"
 GOOGLE_SUB = "sub-9876543210-scan"
 PASSWORDS = {
     "first": "scan-first-password-A1",
@@ -60,7 +64,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     secrets_seen: set[str] = set()
 
     def remember_cookies(client):
-        for name in ("session", "csrf", "oauth_tx"):
+        for name in ("session", "csrf", "oauth_tx", "admin_step"):
             cookie = client.get_cookie(name)
             if cookie:
                 secrets_seen.add(cookie.value)
@@ -106,19 +110,19 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     remember_cookies(google)
     google.get(f"/auth/google/callback?code={AUTH_CODE}&state=forged-state-for-scan")          # 被拒絕的一次
 
-    # Google 登入（新帳號但沒有確認年滿 18 歲）：被拒絕，導向登入頁
+    # Google 登入（新帳號但沒有勾選條款）：被拒絕，導向登入頁
     provider.profile = GoogleProfile(GOOGLE_SUB + "-b", "scan.google.b@example.com", True, "掃描用 Google 使用者 B")
     refused = app.test_client()
-    assert refused.post(f"{api}/google/start", json={"accept_terms": True, "birth_date": None, "age_range": None}).status_code == 200
+    assert refused.post(f"{api}/google/start", json={"accept_terms": False}).status_code == 200
     refused_tx = SignedCookies(app.extensions["app_config"], app.extensions["clock"]).loads(
         OAUTH_SALT, refused.get_cookie("oauth_tx").value, max_age_seconds=600
     )
     secrets_seen.update({refused_tx["s"], refused_tx["n"], refused_tx["v"]})
-    assert refused.get(f"/auth/google/callback?code={AUTH_CODE}&state={refused_tx['s']}").headers["Location"] == "/login?error=age_required"
+    assert refused.get(f"/auth/google/callback?code={AUTH_CODE}&state={refused_tx['s']}").headers["Location"] == "/login?error=terms_required"
 
     # 升級前就存在、沒有年齡確認紀錄的帳號：登入後被年齡閘門擋下，補確認之後通過
     with Session(app.extensions["db_engine"]) as s:
-        add_user(s, 7, email="scan.legacy@example.com", email_canonical="scan.legacy@example.com", email_verified_at=clock())
+        add_user(s, 7, age=None, email="scan.legacy@example.com", email_canonical="scan.legacy@example.com", email_verified_at=clock())
     legacy = app.test_client()
     assert legacy.post(f"{api}/login", json={"email": "scan.legacy@example.com", "password": GOOD_PASSWORD}).status_code == 200
     remember_cookies(legacy)
@@ -133,18 +137,56 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     result = app.test_cli_runner().invoke(args=["create-admin", "--email", ADMIN_EMAIL, "--display-name", "掃描管理員", "--password-stdin"], input=f"{PASSWORDS['admin']}\n")
     assert result.exit_code == 0, result.output
 
-    # 年齡閘門：管理員第一次登入後被擋（會呼叫 Gemini 的端點先問政策）、補確認、再通過
+    # 管理員二階段登入：先通過 Google（拿到中間狀態 cookie，不是登入狀態），再輸入密碼（錯一次、對一次）
+    provider.profile = GoogleProfile(GOOGLE_SUB + "-admin", ADMIN_EMAIL, True, "掃描管理員")
     admin_client = app.test_client()
-    assert admin_client.post(f"{api}/login", json={"email": ADMIN_EMAIL, "password": PASSWORDS["admin"]}).status_code == 200
+    assert admin_client.post(f"{api}/google/start", json={}).status_code == 200
+    admin_tx = SignedCookies(app.extensions["app_config"], app.extensions["clock"]).loads(
+        OAUTH_SALT, admin_client.get_cookie("oauth_tx").value, max_age_seconds=600
+    )
+    secrets_seen.update({admin_tx["s"], admin_tx["n"], admin_tx["v"]})
+    step = admin_client.get(f"/auth/google/callback?code={AUTH_CODE}&state={admin_tx['s']}")
+    assert step.headers["Location"] == "/login/password"
     remember_cookies(admin_client)
+    assert admin_client.get(f"{api}/me").status_code == 401                                   # 中間狀態不是登入狀態
+    assert admin_client.post(f"{api}/admin-password", json={"password": PASSWORDS["wrong"]}).status_code == 401
+    assert admin_client.post(f"{api}/admin-password", json={"password": PASSWORDS["admin"]}).status_code == 200
+    remember_cookies(admin_client)
+
+    # 年齡閘門：管理員第一次登入後被擋（會呼叫 Gemini 的端點先問政策）、補確認、再通過
     assert admin_client.post("/api/_t/ai", json={}).status_code == 403
     assert admin_client.post(f"{api}/verify-age", json=age_fields(52)).status_code == 200
     assert admin_client.post("/api/_t/ai", json={}).status_code == 200
 
-    # 閒置帳號清除：一個超過 12 個月沒登入、資料齊全的帳號被刪除；輸出與日誌都不得出現它的任何個資
+    # 被鎖定的玩家申訴、管理員檢視與解除；補填年齡時未滿 13 歲被抹除；逾時未補填的帳號被清除（日誌與輸出都不得出現個資）
     from datetime import timedelta
 
-    from tests.support.auth import START
+    from sqlalchemy import select
+
+    from app.models import User
+    from tests.support.auth import START, sign_in_as
+
+    with Session(app.extensions["db_engine"]) as s:
+        locked_id = add_user(s, 9, email=LOCKED_EMAIL, email_canonical=LOCKED_EMAIL, display_name="被鎖定的人", locked_at=clock(), lock_reason="rate_limited").id
+        child_id = add_user(s, 10, age=None, password=None, email=CHILD_EMAIL, email_canonical=CHILD_EMAIL, display_name="太小的人").id
+        add_user(
+            s, 11, age=None, password=None, email=UNFINISHED_EMAIL, email_canonical=UNFINISHED_EMAIL, display_name="沒填完的人",
+            age_deadline_at=clock() - timedelta(hours=1),
+        )
+        locked_public = s.scalar(select(User.public_id).where(User.id == locked_id))
+    locked_client = app.test_client()
+    sign_in_as(locked_client, locked_id)
+    assert locked_client.post("/api/appeals", json={"content": APPEAL_TEXT}).status_code == 201
+    assert admin_client.get("/api/admin/appeals").get_json()["appeals"][0]["content"] == APPEAL_TEXT       # 只有管理員的檢視看得到內容
+    assert admin_client.post(f"/api/admin/users/{locked_public}/unlock", json={"password": PASSWORDS["admin"]}).status_code == 200
+    child_client = app.test_client()
+    sign_in_as(child_client, child_id)
+    assert child_client.post(f"{api}/verify-age", json=age_fields(12)).status_code == 400                   # 未滿 13 歲：帳號立即抹除
+    unconfirmed_preview = app.test_cli_runner().invoke(args=["purge-unconfirmed-accounts", "--dry-run"])
+    unconfirmed_purge = app.test_cli_runner().invoke(args=["purge-unconfirmed-accounts"])
+    assert unconfirmed_preview.exit_code == 0 and unconfirmed_purge.exit_code == 0 and "已刪除 1 個" in unconfirmed_purge.output
+
+    # 閒置帳號清除：一個超過 12 個月沒登入、資料齊全的帳號被刪除；輸出與日誌都不得出現它的任何個資
 
     with Session(app.extensions["db_engine"]) as s:
         add_user(
@@ -156,7 +198,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     assert preview.exit_code == 0 and purged.exit_code == 0 and "已刪除 1 個" in purged.output
     stats = app.test_cli_runner().invoke(args=["age-stats"])
     assert stats.exit_code == 0
-    cli_output = preview.output + purged.output + stats.output
+    cli_output = preview.output + purged.output + stats.output + unconfirmed_preview.output + unconfirmed_purge.output
 
     # ---- 掃描 ----
     raw = log_lines.raw()
@@ -164,7 +206,7 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     samples = {
         MEMBER_EMAIL, GOOGLE_EMAIL, ADMIN_EMAIL, GOOGLE_SUB, AUTH_CODE, BEARER, verify_token, reset_token,
         "forged-state-for-scan", "scan.google.b@example.com", "scan.legacy@example.com", GOOGLE_SUB + "-b", STALE_EMAIL,
-        age_fields(22)["birth_date"],
+        age_fields(22)["birth_date"], age_fields(12)["birth_date"], APPEAL_TEXT, LOCKED_EMAIL, CHILD_EMAIL, UNFINISHED_EMAIL,
         GOOD_PASSWORD, *PASSWORDS.values(), *secrets_seen,
         *(age_fields(age)["birth_date"] for age in (30, 41, 52)),                 # 所有人的生日都不得出現在日誌
     }
@@ -182,9 +224,10 @@ def test_a_complete_tour_of_every_flow_leaves_no_secret_in_the_logs(world, log_l
     assert {
         "auth.register", "auth.verification_sent", "auth.email_verified", "auth.login_failed.bad_password", "auth.login_success",
         "auth.password_changed", "auth.logout", "auth.password_reset_requested", "auth.password_reset", "auth.logout_all",
-        "auth.google_started", "auth.google_registered", "auth.google_rejected.state", "auth.admin_created",
-        "auth.age_confirmed.register", "auth.age_confirmed.google", "auth.age_confirmed.later", "auth.age_gate_denied",
-        "auth.google_rejected.age", "account.inactive_purged",
+        "auth.google_started", "auth.google_registered", "auth.google_rejected.state", "auth.admin_created", "auth.admin_google_passed",
+        "auth.age_confirmed.register", "auth.age_confirmed.later", "auth.age_gate_denied",
+        "auth.google_rejected.terms", "account.inactive_purged", "account.appeal_submitted", "account.player_unlocked",
+        "account.underage_erased", "account.unconfirmed_purged", "auth.age_rejected.underage",
     } <= events
     # 請求日誌的路徑只有路由規則，不含查詢字串（Google 回呼的 code 與 state 在查詢字串裡）
     assert all("?" not in line.get("path", "") for line in lines)

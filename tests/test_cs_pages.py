@@ -43,7 +43,8 @@ def world():
     with Session(app.extensions["db_engine"]) as session:
         app.accounts = {
             "usable": add_user(session, 1, age=30, email_verified_at=verified).id,
-            "no-birthday": add_user(session, 2, email_verified_at=verified).id,
+            # 玩家沒有生日時在登入檢查就被導向年齡確認頁；頁面回報閘門結果的是管理員（不會是待確認年齡的受限狀態）
+            "no-birthday": add_user(session, 2, age=None, role="admin", email_verified_at=verified).id,
             "too-young": add_user(session, 3, age=12, email_verified_at=verified).id,
             "unverified": add_user(session, 4, age=30).id,
         }

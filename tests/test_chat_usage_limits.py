@@ -8,11 +8,11 @@ import json
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.llm.types import LLMBlockedError
-from app.models import ChatConversation, ChatMessage, LlmCallLog
+from app.models import AdminAuditLog, ChatConversation, ChatMessage, LlmCallLog, LockStrike, User
 from tests.support.llm import FakeLLMProvider, Step
 from tests.test_cs_api import (
     BASE, client_for, count, make_app, new_conversation, reply_json, send, smart_provider, uid, user_of,
@@ -115,6 +115,72 @@ def test_plus_members_get_the_larger_per_minute_limit(app):
     for n in range(1, 11):
         assert send(app, public_id, n=n).status_code == 200
     assert send(app, public_id, n=11).status_code == 429
+
+
+# ---- 洗版：被每分鐘訊息數上限擋下會計次，達門檻鎖定帳號（account-lockout）---------------------------
+
+def lock_state(app, name="alice"):
+    with Session(app.extensions["db_engine"]) as session:
+        user = session.get(User, app.ids[name])
+        return user.locked_at, user.lock_reason, session.scalar(select(func.count()).select_from(LockStrike).where(LockStrike.user_id == user.id))
+
+
+def test_a_rate_limited_request_leaves_a_strike_that_survives_the_429(app):
+    public_id = new_conversation(app)
+    for n in range(1, 7):
+        send(app, public_id, n=n)
+    assert send(app, public_id, n=7).status_code == 429
+    assert lock_state(app) == (None, None, 1)                               # 回應是 4xx，計次仍然寫入了
+
+
+def test_ten_rate_limited_requests_lock_the_account_and_everything_after_that_is_account_locked(app):
+    public_id = new_conversation(app)
+    for n in range(1, 7):
+        send(app, public_id, n=n)
+    for n in range(7, 16):
+        assert send(app, public_id, n=n).status_code == 429
+    assert lock_state(app) == (None, None, 9)                               # 第 9 次：還沒到門檻
+    assert send(app, public_id, n=16).status_code == 429                    # 第 10 次仍是 429，但這一次鎖定了帳號
+    locked_at, reason, strikes = lock_state(app)
+    assert locked_at is not None and reason == "rate_limited" and strikes == 10
+
+    after = send(app, public_id, n=17)
+    assert after.status_code == 403 and error_of(after)["code"] == "account_locked"
+    assert client_for(app, "alice").get(BASE).status_code == 403            # 連列表也不行：只剩申訴
+    with Session(app.extensions["db_engine"]) as session:
+        (audit,) = session.scalars(select(AdminAuditLog).where(AdminAuditLog.action == "account.lock"))
+        assert audit.admin_user_id is None and audit.detail_json == {"reason": "rate_limited"}
+
+
+def test_other_users_are_not_affected_by_someones_spam(app):
+    mine, theirs = new_conversation(app, "alice", 100), new_conversation(app, "bob", 101)
+    for n in range(1, 17):
+        send(app, mine, n=n)
+    assert lock_state(app)[0] is not None
+    assert send(app, theirs, n=1, name="bob").status_code == 200
+    assert lock_state(app, "bob") == (None, None, 0)
+
+
+def test_strikes_older_than_fifteen_minutes_do_not_add_up_to_a_lock(app):
+    public_id = new_conversation(app)
+    for n in range(1, 7):
+        send(app, public_id, n=n)
+    for n in range(7, 13):                                                  # 6 次被擋
+        assert send(app, public_id, n=n).status_code == 429
+    clock_of(app).advance(minutes=16)
+    for n in range(100, 106):                                               # 視窗滑過去後再 6 次（先把名額用完）
+        send(app, public_id, n=n)
+    for n in range(200, 205):
+        send(app, public_id, n=n)
+    assert lock_state(app)[0] is None
+
+
+def test_other_usage_rejections_are_not_counted_as_spam(app):
+    public_id = new_conversation(app)
+    seed_calls(app, "alice", 30)                                            # 今天的輪數已用完
+    response = send(app, public_id, n=1)
+    assert response.status_code == 429 and error_of(response)["code"] == "daily_quota_exceeded"
+    assert lock_state(app) == (None, None, 0)
 
 
 # ---- 每日輪數 -------------------------------------------------------------------------------

@@ -81,6 +81,30 @@ def change_tier(public_id: str):
     return jsonify(user=service.change_tier(admin, public_id, tier=body.get("tier"), password=body.get("password")))
 
 
+# ---- 帳號鎖定與申訴 ---------------------------------------------------------------------------
+
+@admin_api_bp.get("/locked")
+def locked_accounts():
+    admin, service = _admin()
+    limit, offset = _page()
+    return jsonify(accounts=service.locked_accounts(admin, limit=limit, offset=offset))
+
+
+@admin_api_bp.get("/appeals")
+def appeals():
+    """被鎖定帳號送出的申訴（解除之後不再出現）。這是管理員唯一能讀到的使用者撰寫內容之外的另一類，不含任何對話。"""
+    admin, service = _admin()
+    limit, offset = _page()
+    return jsonify(appeals=service.appeals(admin, limit=limit, offset=offset))
+
+
+@admin_api_bp.post("/users/<public_id>/unlock")
+def unlock_account(public_id: str):
+    admin, service = _admin()
+    body = read_json_object()
+    return jsonify(user=service.unlock_account(admin, public_id, password=body.get("password")))
+
+
 # ---- 對話與模型失敗的原文 ---------------------------------------------------------------------------
 
 @admin_api_bp.get("/feedback")

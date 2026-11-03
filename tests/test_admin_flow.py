@@ -10,8 +10,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.llm.types import LLMBlockedError
-from app.models import AdminAuditLog, ChatConversation, LlmCallLog
-from tests.support.auth import GOOD_PASSWORD
+from app.models import AdminAuditLog, ChatConversation, LlmCallLog, User
+from app.services.google_oidc import GoogleProfile
+from tests.support.auth import GOOD_PASSWORD, START
+from tests.support.google import SUB, FakeProvider, admin_sign_in
 from tests.support.llm import FakeLLMProvider, Step
 from tests.test_cs_api import BASE, client_for, make_app, reply_json, send, uid, user_of
 
@@ -26,7 +28,14 @@ def app():
         Step(json.loads(reply_json(intent="human_handoff", text="目前沒有真人客服，請直接說出問題。"))),
         Step(LLMBlockedError("input")), Step(LLMBlockedError("input")), Step(LLMBlockedError("input")),
     )
-    return make_app(provider=provider)
+    identity = FakeProvider()
+    identity.profile = GoogleProfile(SUB, "user3@example.com", True, "管理員")             # test_cs_api 的 admin 是第 3 位使用者
+    application = make_app(provider=provider, identity_provider=identity)
+    with Session(application.extensions["db_engine"]) as session:
+        # 與 `create-admin` 建立的管理員相同：信箱已驗證（否則 Google 的合併規則會把未驗證信箱帳號的密碼清掉）
+        session.get(User, application.ids["admin"]).email_verified_at = START
+        session.commit()
+    return application
 
 
 def count(app, model):
@@ -35,7 +44,11 @@ def count(app, model):
 
 
 def admin_client(app):
-    return client_for(app, "admin")
+    """真實的管理員登入：先 Google、再輸入密碼，兩者都通過才有登入 session。"""
+    client = app.test_client()
+    response = admin_sign_in(app, client, GOOD_PASSWORD)
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return client
 
 
 def bob_status(app):

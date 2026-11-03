@@ -1,81 +1,33 @@
 {% extends "auth/auth_base.html" %}
 {% block title %}登入{% endblock %}
 {% block status_code %}AUTH_LOGIN{% endblock %}
-{% block heading %}登入{% endblock %}
+{% block heading %}登入／註冊{% endblock %}
 {% block page_body %}
 {% raw %}
 <div id="app" v-cloak>
   <p v-if="notice" class="auth-form-error" role="alert">{{ notice }}</p>
   <div v-if="info" class="auth-notice" role="status"><p>{{ info }}</p></div>
 
-  <form @submit.prevent="submit" novalidate>
-    <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
-
-    <div class="auth-field">
-      <label class="auth-label" for="email">電子郵件</label>
-      <input id="email" name="email" type="email" class="auth-input" autocomplete="email" inputmode="email" required
-             v-model.trim="form.values.email" :disabled="form.state.submitting"
-             :aria-invalid="form.fieldErrors.email ? 'true' : 'false'" :aria-describedby="form.fieldErrors.email ? 'email-error' : null">
-      <p v-if="form.fieldErrors.email" id="email-error" class="auth-error" role="alert">{{ form.fieldErrors.email }}</p>
-    </div>
-
-    <div class="auth-field">
-      <label class="auth-label" for="password">密碼</label>
-      <input id="password" name="password" type="password" class="auth-input" autocomplete="current-password" required
-             v-model="form.values.password" :disabled="form.state.submitting"
-             :aria-invalid="form.fieldErrors.password ? 'true' : 'false'" :aria-describedby="form.fieldErrors.password ? 'password-error' : null">
-      <p v-if="form.fieldErrors.password" id="password-error" class="auth-error" role="alert">{{ form.fieldErrors.password }}</p>
-    </div>
-
-    <div class="auth-actions">
-      <button type="submit" class="ui-btn ui-btn--primary" :disabled="form.state.submitting" :aria-busy="form.state.submitting ? 'true' : 'false'">
-        {{ form.state.submitting ? '登入中…' : '登入' }}
-      </button>
-    </div>
-  </form>
-
   <template v-if="googleEnabled">
-    <div class="auth-divider"><span>或</span></div>
-    <label class="auth-check" for="google-terms">
-      <input id="google-terms" type="checkbox" v-model="google.values.acceptTerms" :disabled="google.state.submitting">
-      <span>我同意<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>（首次使用 Google 註冊時必須勾選）</span>
+    <p class="auth-lead">使用 Google 帳號登入。第一次使用會自動建立帳號；登入後再填寫生日與年齡區間。</p>
+    <label class="auth-check" for="accept-terms">
+      <input id="accept-terms" type="checkbox" v-model="google.values.acceptTerms" :disabled="google.state.submitting">
+      <span>我同意<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>（第一次使用時必須勾選，已有帳號的話不必）</span>
     </label>
-    <p v-if="google.fieldErrors.accept_terms" class="auth-error" role="alert">{{ google.fieldErrors.accept_terms }}</p>
-    <div class="auth-field">
-      <label class="auth-label" for="google-birth-date">生日</label>
-      <input id="google-birth-date" type="date" class="auth-input" autocomplete="bday"
-             :min="ageRules.birthDateMin" :max="ageRules.birthDateMax"
-             v-model="google.values.birthDate" :disabled="google.state.submitting"
-             :aria-invalid="google.fieldErrors.birth_date ? 'true' : 'false'" :aria-describedby="google.fieldErrors.birth_date ? 'google-birth-date-error' : null">
-      <p v-if="google.fieldErrors.birth_date" id="google-birth-date-error" class="auth-error" role="alert">{{ google.fieldErrors.birth_date }}</p>
-    </div>
-    <div class="auth-field">
-      <label class="auth-label" for="google-age-range">年齡區間</label>
-      <select id="google-age-range" class="auth-input" v-model="google.values.ageRange" :disabled="google.state.submitting"
-              :aria-invalid="google.fieldErrors.age_range ? 'true' : 'false'" :aria-describedby="google.fieldErrors.age_range ? 'google-age-range-error' : 'google-age-hint'">
-        <option value="" disabled>請選擇</option>
-        <option v-for="range in ageRules.ranges" :key="range.code" :value="range.code">{{ range.label }}</option>
-      </select>
-      <p v-if="google.fieldErrors.age_range" id="google-age-range-error" class="auth-error" role="alert">{{ google.fieldErrors.age_range }}</p>
-      <p id="google-age-hint" class="auth-hint">使用 Google 登入前請先填寫生日與年齡區間（首次註冊時用於年齡確認；本服務僅供 {{ ageRules.minRegisterAge }} 歲以上使用）。</p>
-    </div>
     <p v-if="google.state.formError" class="auth-form-error" role="alert">{{ google.state.formError }}</p>
     <div class="auth-actions">
-      <button type="button" class="ui-btn" :disabled="google.state.submitting" :aria-busy="google.state.submitting ? 'true' : 'false'" @click="signInWithGoogle">
+      <button type="button" class="ui-btn ui-btn--primary" :disabled="google.state.submitting" :aria-busy="google.state.submitting ? 'true' : 'false'" @click="signInWithGoogle">
         {{ google.state.submitting ? '前往 Google…' : '使用 Google 登入' }}
       </button>
     </div>
   </template>
-
-  <div class="auth-links">
-    <a href="/register">還沒有帳號？註冊</a>
-    <a v-if="verificationRequired" href="/forgot-password">忘記密碼？</a>
-  </div>
+  <p v-else class="auth-notice" role="status">Google 登入尚未啟用，目前無法登入。</p>
 
   <ui-toast-region></ui-toast-region>
 </div>
 {% endraw %}
 {% endblock %}
 {% block page_script %}
+  <script src="{{ url_for('static', filename='js/auth/auth-flows.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/login.js') }}"></script>
 {% endblock %}

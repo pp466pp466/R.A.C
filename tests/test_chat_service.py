@@ -675,7 +675,7 @@ def test_a_long_conversation_sends_the_summary_and_only_the_latest_ten_rounds(me
 
 
 def test_a_member_without_the_age_check_is_refused_before_anything_is_written_or_called(member_session):
-    unconfirmed = CurrentUser.from_model(add_user(member_session, 5))                    # 預設尚未完成年齡確認
+    unconfirmed = CurrentUser.from_model(add_user(member_session, 5, age=None))              # 尚未完成年齡確認
     provider = provider_with()
     service = make_service(member_session, provider)
     with pytest.raises(AgeConfirmationRequired):

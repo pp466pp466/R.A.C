@@ -20,7 +20,11 @@ from app.models.base import Base, UTCDateTime, utcnow
 REASON_INACTIVE_12_MONTHS = "inactive_12_months"
 REASON_USER_REQUESTED = "user_requested"
 REASON_RESTORE_REPLAY = "restore_replay"   # 備份還原後依日誌取出的紀錄補上的刪除（原因已不可考，見 deletion-replay 規格）
-DELETION_REASONS = (REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED, REASON_RESTORE_REPLAY)
+REASON_UNDERAGE = "underage"               # 補填年齡時發現未滿 13 歲，立即抹除（google-first-login）
+REASON_AGE_UNCONFIRMED = "age_unconfirmed"  # 建立後 24 小時內沒有完成年齡確認，由排程抹除（google-first-login）
+DELETION_REASONS = (
+    REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED, REASON_RESTORE_REPLAY, REASON_UNDERAGE, REASON_AGE_UNCONFIRMED,
+)
 
 
 class DeletionTombstone(Base):

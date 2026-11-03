@@ -83,13 +83,13 @@ def test_logout_events_are_logged(member_session, log_lines):
 # ---- 查詢目前登入者 -----------------------------------------------------------
 
 def test_the_profile_has_the_members_own_data_and_nothing_internal(member_session):
-    user = add_user(member_session, 1, member_tier="plus")
+    user = add_user(member_session, 1, member_tier="plus", age=None)
     service = make_auth_service(member_session)
     profile = service.profile(service.resolve_session(user.id, 1))
     assert profile == {
         "public_id": user.public_id, "email": "user1@example.com", "display_name": "使用者1", "member_tier": "plus",
         "role": "user", "status": "active", "email_verified": False, "has_password": True, "age_confirmed": False,
-        "age_group": None, "google_linked": False,
+        "age_group": None, "google_linked": False, "restriction": "age_pending",
     }
     assert not (FORBIDDEN_KEYS & set(profile))
     assert user.password_hash not in str(profile)
@@ -131,7 +131,7 @@ def test_a_minor_becomes_an_adult_in_the_profile_when_the_clock_passes_the_birth
 # ---- 補填生日與年齡區間 --------------------------------------------------------
 
 def test_verifying_the_age_records_every_field_and_returns_the_fresh_snapshot(member_session):
-    user = add_user(member_session, 1)
+    user = add_user(member_session, 1, age=None)
     service = make_auth_service(member_session, clock=FakeClock())
     current = service.resolve_session(user.id, 1)
     assert current.age_confirmed is False
@@ -151,11 +151,10 @@ def test_verifying_the_age_records_every_field_and_returns_the_fresh_snapshot(me
         ({"birth_date": None, "age_range": None}, "validation_error"),
         ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error"),
         (age_fields(30, age_range="13_17"), "age_mismatch"),
-        (age_fields(12), "age_not_eligible"),
     ],
 )
 def test_every_kind_of_invalid_input_is_refused_and_writes_nothing(member_session, age_input, code):
-    user = add_user(member_session, 1)
+    user = add_user(member_session, 1, age=None)
     service = make_auth_service(member_session)
     with pytest.raises(ValidationError) as exc:
         service.verify_age(service.resolve_session(user.id, 1), **age_input)
@@ -166,7 +165,7 @@ def test_every_kind_of_invalid_input_is_refused_and_writes_nothing(member_sessio
 
 
 def test_after_a_refusal_the_same_account_can_verify_immediately(member_session):
-    user = add_user(member_session, 1)
+    user = add_user(member_session, 1, age=None)
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     with pytest.raises(ValidationError):
@@ -175,7 +174,7 @@ def test_after_a_refusal_the_same_account_can_verify_immediately(member_session)
 
 
 def test_an_account_with_only_the_old_checkbox_time_can_still_verify(member_session):
-    user = add_user(member_session, 1, age_confirmed_at=START, age_policy_version="2026-10-28-self-declared")
+    user = add_user(member_session, 1, age=None, age_confirmed_at=START, age_policy_version="2026-10-28-self-declared")
     service = make_auth_service(member_session)
     assert service.resolve_session(user.id, 1).age_confirmed is False
     service.verify_age(service.resolve_session(user.id, 1), **age_fields(30))
@@ -184,7 +183,7 @@ def test_an_account_with_only_the_old_checkbox_time_can_still_verify(member_sess
 
 
 def test_submitting_again_succeeds_and_keeps_every_original_value_even_if_the_content_differs(member_session):
-    user = add_user(member_session, 1)
+    user = add_user(member_session, 1, age=None)
     clock = FakeClock()
     service = make_auth_service(member_session, clock=clock)
     service.verify_age(service.resolve_session(user.id, 1), **age_fields(30))
@@ -206,7 +205,7 @@ def test_even_garbage_after_completion_changes_nothing_and_is_not_an_error(membe
 
 
 def test_the_event_is_logged_only_for_the_first_verification_and_never_carries_personal_data(member_session, log_lines):
-    user = add_user(member_session, 1)
+    user = add_user(member_session, 1, age=None)
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     with pytest.raises(ValidationError):
@@ -221,7 +220,7 @@ def test_the_event_is_logged_only_for_the_first_verification_and_never_carries_p
 
 
 def test_verifying_the_age_touches_nobody_else(member_session):
-    me, other = add_user(member_session, 1), add_user(member_session, 2)
+    me, other = add_user(member_session, 1, age=None), add_user(member_session, 2, age=None)
     service = make_auth_service(member_session)
     service.verify_age(service.resolve_session(me.id, 1), **age_fields(30))
     stored = reload(member_session, other)

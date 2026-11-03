@@ -48,15 +48,21 @@ def smart_provider():
     return FakeLLMProvider(default=Step(respond))
 
 
-def make_app(*, provider="default", environ=None):
+def make_app(*, provider="default", environ=None, identity_provider=None):
     config = load_config(environ={"APP_ENV": "testing", **(environ or {})})
     kwargs = {} if provider is None else {"llm_provider": smart_provider() if provider == "default" else provider}
+    if identity_provider is not None:
+        kwargs["identity_provider"] = identity_provider
     app = create_app(config, clock=FakeClock(), **kwargs)
     Base.metadata.create_all(app.extensions["db_engine"])
     with Session(app.extensions["db_engine"]) as session:
         ids = {
             "alice": add_user(session, 1, age=30).id, "bob": add_user(session, 2, age=30).id,
-            "admin": add_user(session, 3, age=30, role="admin").id, "fresh": add_user(session, 4).id,
+            "admin": add_user(session, 3, age=30, role="admin").id,
+            # 管理員沒有「待確認年齡」的登入狀態，只是沒確認前不能用會呼叫模型的功能（由 AccessPolicy 判斷）
+            "fresh": add_user(session, 4, age=None, role="admin").id,
+            # 玩家沒確認年齡時，除了年齡確認與登出什麼都不能做（受限登入狀態，在登入檢查就被擋下）
+            "pending": add_user(session, 5, age=None).id,
         }
     app.ids = ids
     return app
@@ -154,6 +160,15 @@ def test_a_bad_client_id_is_400_naming_the_field(app, body):
 def test_a_member_who_has_not_confirmed_their_age_gets_403_with_the_dedicated_code(app):
     response = client_for(app, "fresh").post(BASE, json={"client_id": uid(1)})
     assert response.status_code == 403 and response.get_json()["error"]["code"] == "age_confirmation_required"
+    assert count(app, ChatConversation) == 0
+
+
+def test_a_player_without_the_age_confirmation_is_stopped_at_the_login_gate_everywhere_under_api_cs(app):
+    client = client_for(app, "pending")
+    for response in (client.post(BASE, json={"client_id": uid(1)}), client.get(BASE)):
+        assert response.status_code == 403 and response.get_json()["error"]["code"] == "age_confirmation_required"
+    page = client.get("/cs")
+    assert page.status_code == 302 and page.headers["Location"] == "/age"
     assert count(app, ChatConversation) == 0
 
 

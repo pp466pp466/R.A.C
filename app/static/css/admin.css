@@ -266,6 +266,7 @@
 .admin-msg--user { border-color: var(--color-text-muted); background: transparent; }
 .admin-msg__meta { margin: 0 0 0.25rem; color: var(--color-text-muted); font-size: 0.75rem; }
 .admin-msg__text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }   /* 純文字，保留換行 */
+.admin-appeal__text { margin: 0.5rem 0 0.75rem; padding-left: 0.75rem; border-left: var(--border-hairline); }   /* 申訴內容：純文字 */
 
 /* ---- 窄螢幕（手機）-------------------------------------------------------- */
 @media (max-width: 575.98px) {

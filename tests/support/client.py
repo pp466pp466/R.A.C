@@ -4,7 +4,7 @@
 1. 請求以 `buffered=True` 開啟：Werkzeug 會在讀完回應本文後呼叫應用程式回傳物件的 `close()`，
    這正是「回應送出之後才執行」的延後動作（例如寄信）被觸發的時機。沒有這樣做的 client 看不到寄信的結果。
    **不要**用 `with client:` 包住請求：那會讓請求內容在請求結束後繼續存在，改變延後動作實際執行時的環境。
-2. 非 GET 請求自動帶上同源的 `Origin` 與目前的 CSRF 權杖（沒有權杖時先 GET 首頁取得），
+2. 非 GET 請求自動帶上同源的 `Origin` 與目前的 CSRF 權杖（沒有權杖時先 GET `/terms` 取得），
    讓一般測試不必每次重寫；專門測試 CSRF 的測試請用 `raw_client()`，它不做任何自動處理。
 `tests/conftest.py` 把它設為所有 `app.test_client()` 的預設 client。
 """
@@ -23,13 +23,16 @@ class BufferedClient(FlaskClient):
     auto_csrf = True
 
     def csrf_token(self) -> str:
-        """目前 cookie jar 裡的 CSRF 權杖；沒有就先請求首頁取得。"""
+        """目前 cookie jar 裡的 CSRF 權杖；沒有就先請求一個永遠公開的頁面（`/terms`）取得。
+
+        不能用首頁：已登入的 client 打首頁會被導向預設頁面，那個回應沒有發放 CSRF cookie。
+        """
         name = cookie_name(self.application.extensions["app_config"], "csrf")
         cookie = self.get_cookie(name)
         if cookie is None:
-            super().open("/", buffered=True)
+            super().open("/terms", buffered=True)
             cookie = self.get_cookie(name)
-        assert cookie is not None, "首頁沒有發放 CSRF cookie"
+        assert cookie is not None, "公開頁面沒有發放 CSRF cookie"
         return cookie.value
 
     def open(self, *args, **kwargs):  # type: ignore[override]

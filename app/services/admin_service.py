@@ -17,14 +17,15 @@ from typing import Any, Callable
 
 from app.config import UsageSettings
 from app.models.admin_audit_log import (
-    ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ, ACTION_REAUTH_FAILED, ACTION_USER_CHANGE_TIER,
-    ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND, MAX_REASON_CHARS,
+    ACTION_ACCOUNT_UNLOCK, ACTION_APPEAL_READ, ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ,
+    ACTION_REAUTH_FAILED, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
+    MAX_REASON_CHARS,
 )
 from app.models.user import (
     MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_PENDING_VERIFICATION, STATUS_SUSPENDED,
     USER_STATUSES, User,
 )
-from app.observability import admin_events
+from app.observability import admin_events, security_events
 from app.repositories.admin_audit_repository import AdminAuditRepository
 from app.repositories.admin_repository import AdminRepository, ReviewableConversation
 from app.services.access_policy import AccessPolicy
@@ -217,6 +218,51 @@ class AdminService:
             raise Conflict("這位使用者的等級已經改變，請重新整理後再試。", code="state_changed")
         self._record(admin, ACTION_USER_CHANGE_TIER, target_user=user, detail={"from_tier": previous, "to_tier": tier}, changed=True)
         return self._user_view(user)
+
+    # =========================================================================
+    # 帳號鎖定與申訴（google-first-login）
+    # =========================================================================
+
+    def locked_accounts(self, admin: CurrentUser, *, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0) -> list[dict[str, Any]]:
+        """目前被鎖定的玩家帳號：只有對外識別碼、顯示名稱、鎖定時間與原因類別（固定列舉）。"""
+        self._policy.require_admin(admin)
+        limit, offset = self._page(limit, offset)
+        return [
+            {"public_id": row.user_public_id, "display_name": row.display_name, "locked_at": _iso(row.locked_at), "reason": row.lock_reason}
+            for row in self._admins.locked_accounts(limit=limit, offset=offset)
+        ]
+
+    def appeals(self, admin: CurrentUser, *, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0) -> list[dict[str, Any]]:
+        """**只有「目前被鎖定的帳號」送出的申訴**（解除之後不再出現；這不開放讀取任何對話）。內容是個資：只出現在這個回應，
+        稽核只記筆數。先寫稽核再回傳。"""
+        self._policy.require_admin(admin)
+        limit, offset = self._page(limit, offset)
+        rows = self._admins.appeals_of_locked_accounts(limit=limit, offset=offset)
+        self._record(admin, ACTION_APPEAL_READ, detail={"count": len(rows)})
+        return [
+            {
+                "id": row.appeal_public_id, "user_public_id": row.user_public_id, "display_name": row.display_name,
+                "content": row.content, "created_at": _iso(row.created_at), "status": "handled" if row.handled_at else "pending",
+            }
+            for row in rows
+        ]
+
+    def unlock_account(self, admin: CurrentUser, public_id: str, *, password: object) -> dict[str, Any]:
+        """解除玩家帳號的鎖定（高風險操作：重新輸入密碼）。成功時清除該帳號的計次、把待處理的申訴標為已處理，
+        目標之後的登入狀態立刻恢復（不需要重新登入）。"""
+        self._policy.require_admin(admin)
+        user = self._find_user(public_id)
+        if user.role != ROLE_USER:
+            raise AdminTargetForbidden()
+        if user.locked_at is None:
+            raise Conflict("這個帳號目前沒有被鎖定。", code="not_locked")
+        self._confirm(admin, password, ACTION_ACCOUNT_UNLOCK, target_user=user)
+        handled = self._admins.unlock_account(user, now=self._clock())
+        if handled is None:
+            raise Conflict("這個帳號的狀態已經改變，請重新整理後再試。", code="state_changed")
+        self._record(admin, ACTION_ACCOUNT_UNLOCK, target_user=user, detail={"handled_appeals": handled}, changed=True)
+        security_events.log_event(security_events.PLAYER_UNLOCKED, user_id=user.id)
+        return {"public_id": user.public_id, "display_name": user.display_name, "locked": False}
 
     # =========================================================================
     # 對話與模型失敗的原文

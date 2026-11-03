@@ -1,6 +1,6 @@
 """Cookie 的共同規則：命名、登入 cookie 的 Flask 設定（見 AGENTS.md 第 10 節）。
 
-- 登入 cookie：簽章、HttpOnly、SameSite=Lax、存活 7 天（自登入時起算，不隨使用延長）；
+- 登入 cookie：簽章、HttpOnly、SameSite=Lax、閒置 30 天（每次使用就續期，不設絕對上限，見 `session.py`）；
   staging 與 production 另設 Secure 並使用 `__Host-` 前綴（要求 Secure、Path=/、無 Domain，三者皆符合）。
 - 內容只含使用者內部編號與 `token_version`，不使用 JWT；CSRF 與 OAuth 交易各用獨立的 cookie，
   不放進登入 cookie。
@@ -16,7 +16,7 @@ from itsdangerous import BadSignature, TimestampSigner, URLSafeTimedSerializer
 from app.config import AppConfig
 
 HOST_PREFIX = "__Host-"
-SESSION_LIFETIME = timedelta(days=7)
+SESSION_LIFETIME = timedelta(days=30)   # 閒置期限；每次使用就續期（SlidingSessionInterface）
 
 
 def cookie_name(config: AppConfig, base: str) -> str:
@@ -34,8 +34,7 @@ def flask_session_settings(config: AppConfig) -> dict[str, Any]:
         "SESSION_COOKIE_PATH": "/",
         "SESSION_COOKIE_DOMAIN": None,  # 不設 Domain：cookie 只屬於目前主機（__Host- 的要求）
         "PERMANENT_SESSION_LIFETIME": SESSION_LIFETIME,
-        # 不隨使用延長：到期時間固定在登入當下，「存活 7 天」取絕對期限
-        "SESSION_REFRESH_EACH_REQUEST": False,
+        # 閒置 30 天、每次使用就續期（SlidingSessionInterface 決定何時重發）；Flask 用它當讀取時的簽章 max_age
         "SECRET_KEY_FALLBACKS": [secret.reveal() for secret in config.secret_key_fallbacks],
     }
 

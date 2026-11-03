@@ -12,8 +12,13 @@ from app.controllers.request_helpers import read_json_object
 from app.runtime import get_config, get_identity_provider
 from app.security.oauth_cookie import store_transaction
 from app.security.redirects import safe_next
+from app.security.admin_step import clear_admin_step, read_admin_step
+from app.security.redirects import landing_for
 from app.security.session import current_user, login_user, logout_user, renew_login_session, require_login
-from app.services.registry import get_auth_service, get_email_flow_service, get_google_sign_in_service
+from app.services.errors import Unauthenticated, UnderageAccountErased
+from app.services.registry import (
+    admin_password_reset_available, get_auth_service, get_email_flow_service, get_google_sign_in_service,
+)
 
 auth_api_bp = Blueprint("auth_api", __name__, url_prefix="/api/auth")
 
@@ -70,17 +75,56 @@ def logout_all():
 
 @auth_api_bp.get("/me")
 def me():
-    user = require_login(allow_pending_deletion=True)        # 等待刪除的人要靠它得知預定刪除的時間
+    # 三種受限登入狀態都要靠它得知自己的狀態（預定刪除的時間、該去哪一頁）
+    user = require_login(allow_pending_deletion=True, allow_age_pending=True, allow_locked=True)
     return jsonify(user=get_auth_service().profile(user))
+
+
+@auth_api_bp.post("/admin-password")
+def admin_password():
+    """管理員通過 Google 之後的密碼驗證：成功才建立登入 session（並清除中間狀態）。
+
+    沒有中間狀態（沒通過 Google、已過 10 分鐘、被竄改）一律 401，要求重新以 Google 登入；密碼不對的回應與一般登入失敗相同。
+    """
+    step = read_admin_step()
+    if step is None:
+        raise Unauthenticated()
+    body = read_json_object()
+    user = get_auth_service().verify_admin_password(step.user_id, step.token_version, body.get("password"))
+    login_user(user)
+    response = jsonify(ok=True, next=landing_for(user, step.next_url))
+    clear_admin_step(response)
+    return response
+
+
+# 管理員忘記密碼的回應：與結果無關（寄了、被頻率限制、對象已變動都一樣）
+ADMIN_FORGOT_MESSAGE = "已寄出重設密碼的信件到您的信箱，請於 1 小時內點擊信中的連結。"
+
+
+@auth_api_bp.post("/admin-password/forgot")
+def admin_password_forgot():
+    """管理員在密碼驗證步驟按「忘記密碼」：寄重設信到該管理員的信箱。
+
+    只接受持有有效中間狀態的請求（對象由它決定，不收請求內容）；匿名請求，以及沒有寄信設定時，一律 404。
+    """
+    step = read_admin_step()
+    if step is None or not admin_password_reset_available():
+        abort(404)
+    get_email_flow_service().request_admin_password_reset(step.user_id, step.token_version)
+    return jsonify(ok=True, message=ADMIN_FORGOT_MESSAGE)
 
 
 @auth_api_bp.post("/verify-age")
 def verify_age():
     """已登入的使用者補填生日與年齡區間。`token_version` 沒有變，所以不需要換發登入 cookie。"""
-    user = require_login()
+    user = require_login(allow_age_pending=True)             # 待確認年齡的玩家唯一能做的事（登出本來就不需要登入）
     body = read_json_object()
     service = get_auth_service()
-    updated = service.verify_age(user, birth_date=body.get("birth_date"), age_range=body.get("age_range"))
+    try:
+        updated = service.verify_age(user, birth_date=body.get("birth_date"), age_range=body.get("age_range"))
+    except UnderageAccountErased:
+        logout_user()          # 帳號已抹除：目前裝置的登入狀態一併清除（錯誤回應照常由錯誤處理器產生）
+        raise
     return jsonify(user=service.profile(updated))
 
 
@@ -92,6 +136,12 @@ FORGOT_PASSWORD_MESSAGE = "若這個信箱已註冊，我們已寄出重設密�
 
 def _require_email_flows_enabled() -> None:
     if not get_config().email_verification_required:
+        abort(404)
+
+
+def _require_reset_available() -> None:
+    """重設密碼的連結流程：信箱驗證開啟時（玩家）或有寄信設定時（管理員的忘記密碼）可用，否則 404。"""
+    if not (get_config().email_verification_required or admin_password_reset_available()):
         abort(404)
 
 
@@ -121,11 +171,13 @@ def forgot_password():
 
 @auth_api_bp.post("/reset-password")
 def reset_password():
-    _require_email_flows_enabled()
+    _require_reset_available()
     body = read_json_object()
     get_email_flow_service().reset_password(body.get("token"), body.get("new_password"))
     logout_user()          # 這台裝置的舊登入狀態一併清除（token_version 已加 1，其他裝置也已失效）
-    return jsonify(ok=True, message="密碼已重設，請使用新密碼登入。")
+    response = jsonify(ok=True, message="密碼已重設，請使用新密碼登入。")
+    clear_admin_step(response)          # 管理員的中間狀態同樣作廢（token_version 加 1 之後它本來就對不上）
+    return response
 
 
 # ---- Google 登入（未啟用時整組不存在，一律 404）---------------------------------
@@ -136,9 +188,8 @@ def google_start():
     if get_identity_provider() is None:
         abort(404)
     body = read_json_object()
-    start = get_google_sign_in_service().begin(
-        accept_terms=body.get("accept_terms"), birth_date=body.get("birth_date"), age_range=body.get("age_range")
-    )
+    # 只收條款旗標；請求若仍帶著生日與年齡區間，一律忽略（年齡確認在登入之後才填）
+    start = get_google_sign_in_service().begin(accept_terms=body.get("accept_terms"))
     transaction = {**start.transaction, "x": safe_next(body.get("next"))}     # 登入後的返回位置：此時就先驗證
     response = jsonify(authorization_url=start.authorization_url)
     store_transaction(response, transaction)

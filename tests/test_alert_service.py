@@ -135,7 +135,7 @@ def test_a_reminder_is_sent_after_six_hours_but_not_before(member_session):
     lock_accounts(member_session, clock, 5)
     service = make(member_session, clock, sender)
     service.run()
-    assert sender.subjects() == ["【智能客服】告警：登入失敗激增（進入告警）"]
+    assert sender.subjects() == ["【智能客服】告警：帳號鎖定激增（進入告警）"]
 
     clock.advance(hours=6, seconds=-1)
     assert result_of(service.run(), "login_lockouts").outcome == svc.OUTCOME_UNCHANGED and len(sender.sent) == 1
@@ -158,7 +158,7 @@ def test_recovery_sends_one_resolved_mail_then_nothing(member_session):
     clock.advance(minutes=5)
     resolved = result_of(service.run(), "login_lockouts")
     assert (resolved.action, resolved.outcome) == ("resolve", svc.OUTCOME_NOTIFIED)
-    assert sender.subjects()[-1] == "【智能客服】告警：登入失敗激增（已恢復）" and "恢復時間" in sender.sent[-1]["body"]
+    assert sender.subjects()[-1] == "【智能客服】告警：帳號鎖定激增（已恢復）" and "恢復時間" in sender.sent[-1]["body"]
     row = state_of(member_session, "login_lockouts")
     assert (row.state, row.severity) == (STATE_OK, None)
     clock.advance(minutes=5)
@@ -313,7 +313,7 @@ def test_after_recipients_are_configured_an_already_active_alert_is_notified_nor
     lock_accounts(member_session, clock, 5)
     make(member_session, clock, sender, recipients=()).run()
     make(member_session, clock, sender).run()
-    assert sender.subjects() == ["【智能客服】告警：登入失敗激增（進入告警）"]
+    assert sender.subjects() == ["【智能客服】告警：帳號鎖定激增（進入告警）"]
 
 
 def test_recipients_without_a_sender_is_a_programming_error(member_session):
@@ -356,3 +356,53 @@ def test_two_checks_at_the_same_time_send_a_single_mail(concurrent_engine):
     assert len(sender.sent) == 1 and sender.sent[0]["subject"].endswith("（進入告警）")
     notified = [r for report in reports for r in report.results if r.key == "login_lockouts" and r.outcome == svc.OUTCOME_NOTIFIED]
     assert len(notified) == 1
+
+
+# ---- 帳號鎖定激增：兩種鎖定合計（google-first-login）-------------------------------------------------
+
+def lock_players(session, clock, count: int, *, first: int) -> None:
+    for n in range(first, first + count):
+        add_user(session, n, locked_at=clock() - timedelta(days=2), lock_reason="rate_limited")
+
+
+def test_password_locks_and_player_locks_add_up_to_the_threshold(member_session):
+    clock, sender = FakeClock(), Sender()
+    lock_accounts(member_session, clock, 2)                                  # 管理員密碼鎖定中
+    lock_players(member_session, clock, 3, first=10)                         # 玩家帳號被自動鎖定
+    result = result_of(make(member_session, clock, sender).run(), "login_lockouts")
+    assert result.evaluation.severity == "warning" and result.evaluation.value == 5
+    assert sender.subjects() == ["【智能客服】告警：帳號鎖定激增（進入告警）"]
+
+
+def test_four_accounts_are_not_an_alert_and_one_account_with_both_kinds_counts_once(member_session):
+    clock, sender = FakeClock(), Sender()
+    lock_players(member_session, clock, 3, first=1)
+    add_user(member_session, 20, locked_until=clock() + timedelta(days=1), locked_at=clock(), lock_reason="identity_rejected")   # 兩種同時
+    result = result_of(make(member_session, clock, sender).run(), "login_lockouts")
+    assert result.evaluation.severity is None and result.evaluation.value == 4 and sender.sent == []
+
+
+def test_an_expired_password_lock_is_not_counted_but_a_player_lock_never_expires(member_session):
+    clock, sender = FakeClock(), Sender()
+    for n in range(1, 6):
+        add_user(member_session, n, locked_until=clock() - timedelta(minutes=1), failed_login_count=5)      # 密碼鎖定都已到期
+    lock_players(member_session, clock, 4, first=10)
+    assert result_of(make(member_session, clock, sender).run(), "login_lockouts").evaluation.value == 4
+    clock.advance(days=30)                                                    # 玩家鎖定過再久也不會自動解除
+    assert result_of(make(member_session, clock, sender).run(), "login_lockouts").evaluation.value == 4
+
+
+def test_unlocking_players_resolves_the_alert(member_session):
+    from app.repositories.admin_repository import AdminRepository
+
+    clock, sender = FakeClock(), Sender()
+    lock_players(member_session, clock, 5, first=1)
+    service = make(member_session, clock, sender)
+    service.run()
+    assert sender.subjects() == ["【智能客服】告警：帳號鎖定激增（進入告警）"]
+    admin = AdminRepository(member_session)
+    assert admin.unlock_account(member_session.get(User, 1), now=clock()) == 0
+    member_session.commit()
+    clock.advance(minutes=5)
+    resolved = result_of(service.run(), "login_lockouts")
+    assert resolved.action == "resolve" and sender.subjects()[-1] == "【智能客服】告警：帳號鎖定激增（已恢復）"

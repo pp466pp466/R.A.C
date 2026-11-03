@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable, Mapping
 
 from sqlalchemy.orm import Session
 
@@ -20,6 +20,8 @@ from app.repositories.chat_repository import ChatRepository
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.health_repository import HealthRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
+from app.repositories.lock_appeal_repository import LockAppealRepository
+from app.repositories.lock_strike_repository import LockStrikeRepository
 from app.repositories.alert_state_repository import AlertStateRepository
 from app.repositories.retention_repository import RetentionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
@@ -34,9 +36,11 @@ from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.account_deletion_executor import AccountDeletionExecutor
 from app.services.account_deletion_service import AccountDeletionService
 from app.services.account_erasure_service import AccountErasureService
+from app.services.account_lock_service import AccountLockService
 from app.services.deletion_replay_service import DeletionReplayService
 from app.services.account_retention_service import AccountRetentionService
 from app.services.alert_service import AlertService
+from app.services.appeal_service import AppealService
 from app.services.data_retention_service import DataRetentionService
 from app.services.personal_export_service import PersonalExportService
 from app.services.age_stats_service import AgeStatsService
@@ -66,8 +70,9 @@ def build_auth_service(
     persist_failures: Callable[[], None] | None = None,
     age_policy: AgePolicy = DEFAULT_AGE_POLICY,
 ) -> AuthService:
+    users = UserRepository(session)
     return AuthService(
-        users=UserRepository(session),
+        users=users,
         identities=UserIdentityRepository(session),
         hasher=PasswordHasherService(parameters_for_env(config.env)),
         clock=clock,
@@ -75,7 +80,42 @@ def build_auth_service(
         mailer=mailer,
         persist_failures=persist_failures,
         age_policy=age_policy,
+        erasure=AccountErasureService(
+            users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
+        ),
+        lock=build_account_lock_service(session, clock=clock, persist=persist_failures),
     )
+
+
+def build_account_lock_service(
+    session: Session, *, clock: Callable[[], datetime], persist: Callable[[], None] | None = None
+) -> AccountLockService:
+    """鎖定計次與自動鎖定；稽核（管理員欄位為空）以注入的函式寫入，所以這個 Service 不直接依賴後台專用的 Repository。"""
+    return AccountLockService(
+        users=UserRepository(session), strikes=LockStrikeRepository(session), audit=_system_audit(session, clock), clock=clock,
+        persist=persist or (lambda: None),
+    )
+
+
+def _system_audit(session: Session, clock: Callable[[], datetime]):
+    """系統或玩家觸發的稽核寫入（管理員欄位為空）：鎖定與申訴提交。傳給 Service 的是函式，不是後台專用的 Repository。"""
+    audits = AdminAuditRepository(session)
+
+    def write_audit(action: str, target_user_public_id: str, detail: Mapping[str, Any]) -> None:
+        audits.add(admin_user_id=None, action=action, now=clock(), target_user_public_id=target_user_public_id, detail=detail)
+
+    return write_audit
+
+
+def get_appeal_service() -> AppealService:
+    session, clock = get_session(), get_clock()
+    return AppealService(
+        users=UserRepository(session), appeals=LockAppealRepository(session), audit=_system_audit(session, clock), clock=clock,
+    )
+
+
+def get_account_lock_service() -> AccountLockService:
+    return build_account_lock_service(get_session(), clock=get_clock(), persist=keep_changes_on_error)
 
 
 def get_google_sign_in_service() -> GoogleSignInService:
@@ -84,9 +124,10 @@ def get_google_sign_in_service() -> GoogleSignInService:
     if provider is None:
         raise RuntimeError("Google 登入未啟用，沒有身分供應商。")
     session = get_session()
+    clock = get_clock()
     return GoogleSignInService(
-        users=UserRepository(session), identities=UserIdentityRepository(session), provider=provider, clock=get_clock(),
-        age_policy=get_age_policy(),
+        users=UserRepository(session), identities=UserIdentityRepository(session), provider=provider, clock=clock,
+        lock=build_account_lock_service(session, clock=clock, persist=keep_changes_on_error),
     )
 
 
@@ -135,6 +176,11 @@ def get_email_flow_service() -> EmailFlowService:
     )
 
 
+def admin_password_reset_available() -> bool:
+    """管理員的「忘記密碼」（寄重設信）是否可用：只需要寄信設定（寄信器與對外網址），不受信箱驗證開關控制。"""
+    return get_mail_sender() is not None and bool(get_config().base_url)
+
+
 def get_auth_service() -> AuthService:
     """目前請求的 AuthService；信箱驗證開啟時，註冊與變更密碼會經由 EmailFlowService 寄信。"""
     config = get_config()
@@ -179,16 +225,22 @@ def get_rpg_llm_service() -> LlmService | None:
     return build_llm_service(get_session(), provider=provider, settings=settings, clock=get_clock())
 
 
-def build_usage_service(session: Session, *, settings: UsageSettings, clock: Callable[[], datetime]) -> UsageService:
+def build_usage_service(
+    session: Session, *, settings: UsageSettings, clock: Callable[[], datetime], lock: AccountLockService | None = None
+) -> UsageService:
     """用量檢查：帳本與訊息表的彙總都用同一個 Session（讀取為主，不寫入任何資料）。"""
     return UsageService(
         ledger=LlmCallLogRepository(session), chats=ChatRepository(session), settings=settings, clock=clock,
-        processing_ttl=PROCESSING_STALE_AFTER,
+        processing_ttl=PROCESSING_STALE_AFTER, lock=lock,
     )
 
 
 def get_usage_service() -> UsageService:
-    return build_usage_service(get_session(), settings=get_config().usage, clock=get_clock())
+    session, clock = get_session(), get_clock()
+    return build_usage_service(
+        session, settings=get_config().usage, clock=clock,
+        lock=build_account_lock_service(session, clock=clock, persist=keep_changes_on_error),
+    )
 
 
 def build_summary_service(
@@ -265,7 +317,8 @@ def get_personal_export_service() -> PersonalExportService:
     """目前請求的匯出服務：只讀取呼叫者本人的帳號與對話（Repository 的方法都以 `user_id` 為第一個參數）。"""
     session = get_session()
     return PersonalExportService(
-        users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session), clock=get_clock()
+        users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
+        appeals=LockAppealRepository(session), clock=get_clock(),
     )
 
 

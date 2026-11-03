@@ -1,0 +1,56 @@
+{% extends "auth/auth_base.html" %}
+{% block title %}帳號申訴{% endblock %}
+{% block status_code %}AUTH_APPEAL{% endblock %}
+{% block heading %}帳號申訴{% endblock %}
+{% block page_body %}
+{% raw %}
+<div id="app" v-cloak>
+  <p class="auth-lead">您的帳號目前被鎖定。請向管理員說明情況，管理員解除鎖定之後才能繼續使用。申訴內容只有管理員看得到，請勿填寫密碼或其他不必要的個人資料。</p>
+
+  <section v-if="appeals.length" aria-labelledby="appeal-history-title">
+    <h2 id="appeal-history-title" class="account-notice-title">您送出的申訴</h2>
+    <ul class="appeal-list">
+      <li v-for="item in appeals" :key="item.id" class="appeal-item">
+        <p class="appeal-item__meta">
+          <span class="appeal-chip" :class="{ 'appeal-chip--pending': item.status === 'pending' }">{{ statusLabel(item.status) }}</span>
+          <span>{{ timeText(item.created_at) }}</span>
+        </p>
+        <p class="appeal-item__text">{{ item.content }}</p>
+      </li>
+    </ul>
+  </section>
+  <p v-if="loadError" class="auth-form-error" role="alert">{{ loadError }}</p>
+
+  <p v-if="hasPending" class="auth-notice" role="status">您已有一則申訴等待管理員處理。管理員解除鎖定之後，重新整理本頁即可繼續使用。</p>
+
+  <form v-else @submit.prevent="submit" novalidate>
+    <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
+    <div class="auth-field">
+      <label class="auth-label" for="appeal-content">申訴內容</label>
+      <textarea id="appeal-content" name="content" class="auth-input appeal-textarea" rows="6" required
+                v-model="form.values.content" :disabled="form.state.submitting"
+                :aria-invalid="form.fieldErrors.content || counter.over ? 'true' : 'false'"
+                :aria-describedby="form.fieldErrors.content ? 'appeal-content-error' : 'appeal-counter'"></textarea>
+      <p id="appeal-counter" class="auth-hint" :class="{ 'auth-error': counter.over }">{{ counter.text }}（每小時最多送出 {{ limits.hourlyLimit }} 則）</p>
+      <p v-if="form.fieldErrors.content" id="appeal-content-error" class="auth-error" role="alert">{{ form.fieldErrors.content }}</p>
+    </div>
+    <div class="auth-actions">
+      <button type="submit" class="ui-btn ui-btn--primary" :disabled="form.state.submitting" :aria-busy="form.state.submitting ? 'true' : 'false'">
+        {{ form.state.submitting ? '送出中…' : '送出申訴' }}
+      </button>
+    </div>
+  </form>
+
+  <div class="auth-links">
+    <button type="button" class="auth-linkbtn" @click="refresh">重新整理</button>
+    <button type="button" class="auth-linkbtn" @click="logout">登出</button>
+  </div>
+
+  <ui-toast-region></ui-toast-region>
+</div>
+{% endraw %}
+{% endblock %}
+{% block page_script %}
+  <script src="{{ url_for('static', filename='js/auth/auth-flows.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auth/appeal.js') }}"></script>
+{% endblock %}

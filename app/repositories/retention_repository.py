@@ -21,6 +21,7 @@ from sqlalchemy.orm import Session
 from app.models.admin_audit_log import AdminAuditLog
 from app.models.chat import ChatConversation
 from app.models.llm_call_log import LlmCallLog
+from app.models.lock_strike import LockStrike
 from app.models.user import AuthToken
 
 
@@ -38,6 +39,19 @@ class RetentionRepository:
 
     def _run(self, statement) -> int:
         return self._session.execute(statement.execution_options(synchronize_session=False)).rowcount
+
+    # ---- 帳號鎖定計次：建立早於 cutoff（只有帳號編號、類別與時間；視窗只有 15 分鐘，保留 7 天只為了除錯）----------------
+
+    def find_lock_strikes(self, cutoff: datetime, limit: int) -> list[int]:
+        return self._ids(select(LockStrike.id).where(LockStrike.created_at < cutoff).order_by(LockStrike.id), limit)
+
+    def count_lock_strikes(self, cutoff: datetime) -> int:
+        return self._count(select(func.count(LockStrike.id)).where(LockStrike.created_at < cutoff))
+
+    def purge_lock_strikes(self, ids: Sequence[int]) -> int:
+        if not ids:
+            return 0
+        return self._run(delete(LockStrike).where(LockStrike.id.in_(ids)))
 
     # ---- 對話與訊息：最後活動早於 cutoff -----------------------------------------------
 

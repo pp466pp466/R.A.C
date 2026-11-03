@@ -78,7 +78,8 @@ class Member:
 
     # ---- CSRF ----
     def refresh_csrf(self) -> bool:
-        page = self.session.get("/", name="GET /")
+        # 用永遠公開的頁面：已登入者打首頁會被導向預設頁面，不是這裡要的內容
+        page = self.session.get("/terms", name="GET /terms")
         match = CSRF_META.search(page.text)
         self.csrf = match.group(1) if match else ""
         return bool(self.csrf)

@@ -8,9 +8,11 @@ from app.models.base import Base
 from app.models.chat import ChatConversation, ChatMessage
 from app.models.deletion_tombstone import DeletionTombstone
 from app.models.llm_call_log import LlmCallLog
+from app.models.lock_appeal import LockAppeal
+from app.models.lock_strike import LockStrike
 from app.models.user import AuthToken, User, UserIdentity
 
 __all__ = [
     "Base", "User", "UserIdentity", "AuthToken", "DeletionTombstone", "ChatConversation", "ChatMessage", "LlmCallLog",
-    "AdminAuditLog", "AlertState",
+    "AdminAuditLog", "AlertState", "LockStrike", "LockAppeal",
 ]

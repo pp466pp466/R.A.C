@@ -131,13 +131,14 @@ def test_a_success_does_not_reset_the_failure_counter(member_session, admin):
     assert failures(member_session, admin)[0] == 3
 
 
-def test_the_counter_is_shared_with_logging_in(member_session, admin):
+def test_the_counter_is_shared_with_the_admin_password_step(member_session, admin):
+    """管理員不能只靠密碼登入，所以與「重新輸入密碼」共用計數的是 Google 之後的密碼驗證步驟。"""
     service, _, _ = build(member_session)
     for _ in range(2):
         with pytest.raises(ValidationError):
             service.confirm_password(as_current(member_session, admin), "wrong-password-123")
     with pytest.raises(Exception):
-        service.login(email=admin.email, password="wrong-password-123")
+        service.verify_admin_password(admin.id, admin.token_version, "wrong-password-123")
     assert failures(member_session, admin)[0] == 3
 
 
