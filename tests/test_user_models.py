@@ -57,7 +57,11 @@ def test_nullable_columns_are_exactly_the_documented_ones():
         "password_hash", "email_verified_at", "locked_until", "terms_version", "terms_accepted_at",
         "age_confirmed_at", "age_policy_version", "birth_date", "age_range", "is_adult_at_confirmation", "last_login_at",
         "deletion_requested_at", "status_before_deletion", "age_deadline_at", "locked_at", "lock_reason",
+        "adult_confirmed_at", "adult_rules_version", "adult_confirm_method",       # rpg-data-and-script：成年確認紀錄
     }
+    # 內容模式偏好不可為空，且預設是最保守的 safe（伺服器端與資料庫預設都是）
+    preference = columns["content_tier_preference"]
+    assert not preference.nullable and preference.default.arg == "safe" and str(preference.server_default.arg) == "safe"
     tokens = {c.name for c in Base.metadata.tables["auth_tokens"].columns if c.nullable}
     assert tokens == {"used_at"}
 

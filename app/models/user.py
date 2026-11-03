@@ -46,6 +46,16 @@ DELETION_GRACE_PERIOD = timedelta(days=7)
 TOKEN_RESET_PASSWORD = "reset_password"       # 管理員的重設密碼；信箱驗證權杖已退役（遷移前遺留的只等著過期被清除）
 TOKEN_PURPOSES = (TOKEN_RESET_PASSWORD,)
 
+# 內容模式（content-tier-modes 規格、AGENTS.md 第 7 節），由保守到寬鬆。順序與取較保守者的邏輯在 `app/services/content_tier.py`；
+# 常數放在這裡是因為資料模型不得匯入 Service，而存檔、劇本與使用者偏好的欄位預設值都要用到它們。
+CONTENT_TIER_SAFE = "safe"
+CONTENT_TIER_STANDARD = "standard"
+CONTENT_TIER_ADULT = "adult"
+CONTENT_TIERS = (CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIER_ADULT)
+
+# 成年確認的方式（目前只有自行聲明：勾選「我確定已滿 18 歲」與同意安全規範，不蒐集證件）
+ADULT_CONFIRM_SELF_DECLARED = "self_declared"
+
 
 class User(Base, PublicIdMixin, TimestampMixin):
     """會員。`status` 沒有預設值：由 Service 明確指定（玩家與管理員建立時都是 `active`）。"""
@@ -90,6 +100,16 @@ class User(Base, PublicIdMixin, TimestampMixin):
     age_deadline_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     locked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     lock_reason: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
+    # 內容模式（rpg-data-and-script）：
+    # - `content_tier_preference`：玩家選擇的模式。年齡確認成功時依當下的年齡設定（成年 `standard`、未成年 `safe`），
+    #   之後**不因年齡增加而自動改變**（滿 18 歲要自行切換）。伺服器端預設與資料庫預設都是最保守的 `safe`，
+    #   所以舊版程式的 INSERT 在新結構上仍然有效且保守。
+    # - `adult_confirmed_at`、`adult_rules_version`、`adult_confirm_method`：切換為成人模式時的成年確認紀錄
+    #   （確認時間、當時的安全規範版本、方式）；只保存「目前這一次」，規範版本改變後視為失效、須重新確認。
+    content_tier_preference: Mapped[str] = mapped_column(Unicode(10), default=CONTENT_TIER_SAFE, server_default=CONTENT_TIER_SAFE)
+    adult_confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    adult_rules_version: Mapped[str | None] = mapped_column(Unicode(40), nullable=True)
+    adult_confirm_method: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
 
 
 class UserIdentity(Base):

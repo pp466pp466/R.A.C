@@ -41,6 +41,10 @@ class CurrentUser:
     token_version: int
     deletion_requested_at: datetime | None = None    # 只有待刪除的帳號有值；用來算出預定刪除的時間
     locked_at: datetime | None = None                # 只有被鎖定的玩家帳號有值（管理員不會被這種鎖定）
+    # 內容模式（只給伺服器內部的權限政策使用，**不進** `public_dict` 與 `/api/auth/me`）
+    content_tier_preference: str = "safe"
+    adult_confirmed_at: datetime | None = None
+    adult_rules_version: str | None = None
 
     @property
     def age_confirmed(self) -> bool:
@@ -65,6 +69,9 @@ class CurrentUser:
             token_version=user.token_version,
             deletion_requested_at=user.deletion_requested_at,
             locked_at=user.locked_at,
+            content_tier_preference=user.content_tier_preference,
+            adult_confirmed_at=user.adult_confirmed_at,
+            adult_rules_version=user.adult_rules_version,
         )
 
     @property

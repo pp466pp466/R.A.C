@@ -25,6 +25,8 @@ CHAT_TABLES = ("chat_conversations", "chat_messages", "llm_call_logs")
 ADMIN_TABLES = ("admin_audit_logs",)
 ALERT_TABLES = ("alert_states",)
 LOCK_TABLES = ("lock_strikes", "lock_appeals")
+RPG_TABLES = ("scripts", "script_versions", "script_version_tags", "sessions", "memory_logs")
+CONTENT_MODE_COLUMNS = ("content_tier_preference", "adult_confirmed_at", "adult_rules_version", "adult_confirm_method")
 
 
 def alembic_config(url: str) -> Config:
@@ -46,7 +48,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -417,6 +419,74 @@ def test_0011_clears_player_passwords_and_retires_pending_verification_but_leave
     engine.dispose()
 
 
+def test_0012_adds_the_content_mode_columns_and_five_rpg_tables_backfills_the_preference_and_keeps_every_row(tmp_path):
+    """rpg-data-and-script：users 新增四欄（偏好 NOT NULL 並有伺服器預設）、新增五張資料表；既有帳號的偏好依確認當時是否成年回填；
+    回復只移除新增的東西；再升級一次回填結果相同。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'rpg.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0012_rpg_data_and_script")
+    assert revision.down_revision == "0011_remove_player_passwords" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0011_remove_player_passwords")
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        _insert_user(conn, users, 1, is_adult_at_confirmation=True, birth_date=None)               # 確認當時已成年
+        _insert_user(conn, users, 2, is_adult_at_confirmation=False)                              # 確認當時未成年
+        _insert_user(conn, users, 3)                                                              # 勾選版時代：此欄為空
+        _insert_user(conn, users, 4, role="admin")                                                # 管理員沒有年齡確認
+    before_tables = set(inspect(engine).get_table_names())
+    before_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+
+    def preferences() -> dict[str, str]:
+        with engine.connect() as conn:
+            table = Table("users", MetaData(), autoload_with=conn)
+            return {r["email"]: r["content_tier_preference"] for r in conn.execute(select(table)).mappings()}
+
+    command.upgrade(cfg, "0012_rpg_data_and_script")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(RPG_TABLES)
+    columns = {c["name"]: c for c in inspector.get_columns("users")}
+    assert set(columns) - before_columns == set(CONTENT_MODE_COLUMNS)
+    assert not columns["content_tier_preference"]["nullable"] and "safe" in str(columns["content_tier_preference"]["default"])
+    assert all(columns[name]["nullable"] for name in CONTENT_MODE_COLUMNS[1:])
+    # 滿 18 歲不會自動調高：只有「確認當時已成年」的帳號是 standard，其餘（含舊版此欄為空、管理員）維持最保守的 safe
+    assert preferences() == {"u1@example.com": "standard", "u2@example.com": "safe", "u3@example.com": "safe", "u4@example.com": "safe"}
+
+    for table, column, referred, action in (
+        ("scripts", "creator_id", "users", "CASCADE"),
+        ("script_versions", "script_id", "scripts", "CASCADE"),
+        ("script_version_tags", "version_id", "script_versions", "CASCADE"),
+        ("sessions", "user_id", "users", "CASCADE"),
+        ("memory_logs", "session_id", "sessions", "CASCADE"),
+        ("sessions", "source_version_id", "script_versions", None),        # 無動作：SQL Server 不允許多重串聯路徑（錯誤 1785）
+    ):
+        matches = [fk for fk in inspector.get_foreign_keys(table) if fk["constrained_columns"] == [column]]
+        assert len(matches) == 1 and matches[0]["referred_table"] == referred, (table, column)
+        assert matches[0]["options"].get("ondelete") == action, (table, column)
+    index_names = {i["name"] for t in RPG_TABLES for i in inspector.get_indexes(t)}
+    assert {
+        "uq_scripts_seed_key", "uq_script_versions_live_script", "uq_script_versions_open_script",
+        "ix_script_versions_status_content_tier", "ix_script_version_tags_tag", "ix_sessions_user_id_last_active_at",
+        "ix_sessions_last_active_at", "ix_memory_logs_session_id_turn_number", "ix_memory_logs_turn_status_updated_at",
+    } <= index_names
+    partial = {i["name"] for t in RPG_TABLES for i in inspector.get_indexes(t) if i["unique"]}
+    assert {"uq_scripts_seed_key", "uq_script_versions_live_script", "uq_script_versions_open_script"} <= partial
+    assert sorted(sorted(u["column_names"]) for u in inspector.get_unique_constraints("memory_logs")) == [["client_msg_id", "session_id"], ["seq", "session_id"]]
+    assert sorted(sorted(u["column_names"]) for u in inspector.get_unique_constraints("script_versions") if "version_no" in u["column_names"]) == [["script_id", "version_no"]]
+
+    command.downgrade(cfg, "0011_remove_player_passwords")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    assert {c["name"] for c in inspector.get_columns("users")} == before_columns
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 4
+
+    command.upgrade(cfg, "0012_rpg_data_and_script")                                                # 再升級一次，回填結果相同
+    assert preferences() == {"u1@example.com": "standard", "u2@example.com": "safe", "u3@example.com": "safe", "u4@example.com": "safe"}
+    engine.dispose()
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -455,7 +525,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):

@@ -10,9 +10,12 @@ from app.models.deletion_tombstone import DeletionTombstone
 from app.models.llm_call_log import LlmCallLog
 from app.models.lock_appeal import LockAppeal
 from app.models.lock_strike import LockStrike
+from app.models.rpg_session import MemoryLog, RpgSession
+from app.models.script import Script, ScriptVersion, ScriptVersionTag
 from app.models.user import AuthToken, User, UserIdentity
 
 __all__ = [
     "Base", "User", "UserIdentity", "AuthToken", "DeletionTombstone", "ChatConversation", "ChatMessage", "LlmCallLog",
-    "AdminAuditLog", "AlertState", "LockStrike", "LockAppeal",
+    "AdminAuditLog", "AlertState", "LockStrike", "LockAppeal", "Script", "ScriptVersion", "ScriptVersionTag",
+    "RpgSession", "MemoryLog",
 ]

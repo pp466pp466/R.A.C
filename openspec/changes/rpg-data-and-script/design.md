@@ -44,12 +44,12 @@
 
 ### D3. 存檔複製劇本內容
 
-`sessions.script_snapshot_json` 存開存檔當時該版本標準化後的全部內容（含 `spec_version`），`source_version_id` 是可為空的外鍵（`ON DELETE SET NULL`）。存檔之後不讀取劇本。
+`sessions.script_snapshot_json` 存開存檔當時該版本標準化後的全部內容（含 `spec_version`），`source_version_id` 是可為空的外鍵（**無動作**，不是 `SET NULL`：SQL Server 不允許刪除使用者時有多重串聯路徑到達 `sessions`，錯誤 1785；所以刪除版本與抹除帳號的流程要先把參照清為空值）。存檔之後不讀取劇本。
 
 - **為什麼複製**：作者可以改版、下架或刪帳號（連同所有版本一起刪），存檔不能因此壞掉或變得無法刪除；也讓「作者刪除帳號時，別人的存檔保留」成立。
 - **代價**：每個存檔多約 9 KB（欄位上限加總約 9,300 字，總量上限 8,000 字），JSON 欄位在 SQL Server 是 `NVARCHAR(MAX)`，不被查詢也不建索引。
 - 回合引擎之後把劇本內容以資料區塊放進使用者內容區（AGENTS.md 第 10 節），不從複本以外的地方讀。
-- `source_version_id` 指向 `script_versions`，不指向 `users`，所以不觸發抹除守門測試的「指向使用者」分類；但「來源被刪除時存檔仍在」要有測試。
+- `source_version_id` 指向 `script_versions`，不指向 `users`，所以不觸發抹除守門測試的「指向使用者」分類，守門測試另列「無動作的外鍵」一類；「來源被刪除時存檔仍在、參照為空值」要有測試。選無動作的外鍵而不是完全沒有外鍵，是因為有外鍵才不會出現指向已刪除（甚至被重用）編號的懸空參照，忘了清空時刪除會直接失敗而不是悄悄留下資料。
 
 ### D4. 回合（`memory_logs`）的唯一性、輪數與冪等
 
@@ -91,8 +91,8 @@
 
 ### D9. 生命週期：抹除、匯出、保存期限
 
-- **抹除**：`scripts.creator_id`、`sessions.user_id` 都是 `ON DELETE CASCADE`；`script_versions.script_id`、`script_version_tags.version_id`、`memory_logs.session_id` 也串聯；`sessions.source_version_id` 為 `SET NULL`。「匿名保留已發佈劇本」的偏好與抹除分支屬 RC-8；這裡的串聯讓「沒做到」時偏向刪除。
-- **守門測試擴充**：`test_account_erasure_coverage.py` 的分類從「只認 `users` 與 `chat_conversations`」改為記錄任意父表的串聯與 `SET NULL`，新增 `CASCADED_FROM_SESSIONS`、`CASCADED_FROM_SCRIPTS`、`CASCADED_FROM_VERSIONS`、`SET_NULL_TO_VERSIONS`；並新增行為測試（抹除作者後別人的存檔仍在）。
+- **抹除**：`scripts.creator_id`、`sessions.user_id` 都是 `ON DELETE CASCADE`；`script_versions.script_id`、`script_version_tags.version_id`、`memory_logs.session_id` 也串聯；`sessions.source_version_id` 是無動作的外鍵，抹除與刪除版本的流程先清空它（見 D3）。「匿名保留已發佈劇本」的偏好與抹除分支屬 RC-8；這裡的串聯讓「沒做到」時偏向刪除。
+- **守門測試擴充**：`test_account_erasure_coverage.py` 的分類從「只認 `users` 與 `chat_conversations`」改為記錄任意父表的串聯與無動作的外鍵，新增 `CASCADED_FROM_SESSIONS`、`CASCADED_FROM_SCRIPTS`、`CASCADED_FROM_VERSIONS`、`NO_ACTION_REFERENCES`；並新增行為測試（抹除作者後別人的存檔仍在）。
 - **匯出**：JSON 在 `account` 與 `conversations` 之外新增 `scripts` 與 `sessions` 兩個陣列，以產生器逐筆串流；CSV zip 新增 `scripts.csv`、`sessions.csv`、`turns.csv`，沿用公式字元中和與 UTF-8-sig。存檔內的劇本複本不匯出，世界狀態只在 JSON。
 - **保存期限**：`DataRetentionService` 的清單新增兩個類別 `sessions`（最後活動 365 天）與 `turn_content`（中斷或被擋的回合超過 14 天，把 `llm_raw_response` 清為空字串）；`RetentionRepository` 新增對應的找出、計數與處理方法；沿用預覽與分批。
 
