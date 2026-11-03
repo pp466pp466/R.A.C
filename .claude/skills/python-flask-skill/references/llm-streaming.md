@@ -4,7 +4,7 @@
 
 ## 模型選用與調用規範
 
-- 預設核心模型：客服（會員制智能客服對話與客服對話摘要壓縮）使用 Gemini，預設調用 gemini-3.8-flash（環境變數 GEMINI_MODEL）；RPG 用途（開放世界文字 RPG 劇情生成、SSE 串流打字機特效與記事簿重點抓取）使用 OpenAI 相容端點，模型為環境變數 OPENROUTER_MODEL（備援為 OPENROUTER_FALLBACK_MODEL），不使用 Gemini；只有客服使用 GEMINI_MODEL。兩者皆以確保最低的首字延遲（TTFT）與高性價比為目標。模型名稱為環境變數設定值，不寫死於程式，且可依用途指定不同模型；每次呼叫實際使用的模型須記入 llm_call_logs。
+- 預設核心模型：客服（會員制智能客服對話與客服對話摘要壓縮）使用 Gemini，預設調用 gemini-3.8-flash（環境變數 GEMINI_MODEL）；RPG 用途（開放世界文字 RPG 劇情生成、SSE 串流打字機特效、記事簿重點抓取與劇本審查的模型層）使用 OpenAI 相容端點，模型為環境變數 OPENROUTER_MODEL（備援為 OPENROUTER_FALLBACK_MODEL），不使用 Gemini；只有客服使用 GEMINI_MODEL。兩者皆以確保最低的首字延遲（TTFT）與高性價比為目標。模型名稱為環境變數設定值，不寫死於程式，且可依用途指定不同模型；每次呼叫實際使用的模型須記入 llm_call_logs。
 - 備援模型：主要模型發生 429、5xx 或單次呼叫逾時 20 秒時，一律切換到備援模型：客服為 gemini-3.5-flash-lite（GEMINI_FALLBACK_MODEL），RPG 為 OPENROUTER_FALLBACK_MODEL（RPG 不切換到 Gemini），皆為環境變數設定值，切換不等待 retryDelay；安全過濾阻擋與 400、403（設定錯誤）不切換。備援呼叫的逾時取後端單次請求總預算的剩餘時間，備援模型也失敗時回覆降級文案。串流呼叫的切換時機依 docs/RPG.md。
 
 ## SSE 串流（RPG 適用）

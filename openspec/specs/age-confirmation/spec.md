@@ -3,6 +3,8 @@
 ## Purpose
 定義使用者對「已年滿 18 歲」的確認：如何記錄（不蒐集年齡）、既有帳號如何補確認、未確認時不得使用 AI 功能，以及條款與隱私權政策中的揭露，使服務符合 Gemini API 條款對成年使用者的要求，並預留日後改用更嚴格確認方式的路徑。
 
+> 注意（2026-11-03）：AGENTS.md 第 7 節的內容分級已改為 safe／standard／adult 三種模式（`content_tier`），並新增暱稱於初次設定頁填寫；本規格中的 `sexual_content_level` 0 至 3 與「成年者最高為 2」描述的是目前的實作，待後續的 change（content-tier-modes）更新。
+
 ## Requirements
 
 ### Requirement: 年齡確認的紀錄

@@ -28,11 +28,12 @@ SYNCED_RULES = [
     (5, "後端單次請求總預算（含重試與切換備援）30 秒", "references/llm-streaming.md"),
     (6, "RPG 的「當前世界狀態」包含在場 NPC 的角色卡切片", "references/llm-streaming.md"),
     (7, "NPC 角色卡：NPC 的特質（表層或隱藏）、弧線階段", "references/business-encoding.md"),
-    (7, "內容分級：存檔帶 content_tier 與 sexual_content_level（0 至 3）旗標", "references/business-encoding.md"),
+    # 2026-11-03：分級由 sexual_content_level 0 至 3 改為三種模式（安全、一般、成人），成人模式是玩家個人頁面的開關
+    (7, "內容分級：內容程度為三種模式，以單一欄位 content_tier 表示", "references/business-encoding.md"),
     # 2026-10-28 後續修訂：年齡確認改為生日加年齡區間，未滿 13 歲不得註冊，13 至 17 歲只能使用安全模式
-    (7, "未滿 18 歲者一律為安全模式，sexual_content_level 固定為 0", "references/business-encoding.md"),
-    (7, "成年者由玩家主動在 sexual_content_level 1（浪漫、曖昧）與 2（感官但不露骨）之間切換，預設從 0 開始", "references/business-encoding.md"),
-    (7, "系統只提醒玩家可切換分級，不得自動調高", "references/business-encoding.md"),
+    (7, "未滿 18 歲者一律為安全模式，不論任何設定都不得提高", "references/business-encoding.md"),
+    (7, "玩家在個人頁面以開關決定是否開啟成人模式，預設關閉，未開啟時為一般模式", "references/business-encoding.md"),
+    (7, "系統只提醒玩家可調整，不得自動調高", "references/business-encoding.md"),
     (10, "年齡確認：玩家以 Google 首次登入建立帳號後，須立即填寫生日，並從下拉式選項選擇年齡區間", "references/auth-security.md"),
     (10, "未滿 13 歲者不得使用本平台，發現時立即抹除該帳號與其全部個資", "references/auth-security.md"),
     (10, "13 至 17 歲者可以使用本平台（含 AI 功能），但只能使用安全模式", "references/auth-security.md"),
@@ -100,6 +101,29 @@ SYNCED_RULES = [
     (10, "使用者主動提交的意見回饋對話、被鎖定帳號送出的申訴、被內容安全過濾標記的對話", "references/auth-security.md"),
     (11, "申訴（帳號鎖定）：內容由使用者撰寫，視為個資", "references/privacy-observability.md"),
     (11, "帳號鎖定激增（Google 登入被拒與洗版造成的鎖定）", "references/privacy-observability.md"),
+    # 2026-11-03：玩家創作並公開分享劇本（先審後發）、暱稱與筆名、自訂結局與已完結的存檔、劇本的個資與刪帳號保留偏好
+    (5, "記事簿重點抓取與劇本審查的模型層", "references/llm-streaming.md"),
+    (7, "到結局時存檔進入「已完結」", "references/business-encoding.md"),
+    (7, "Milestone 的觸發由 Service 依玩家年齡或遊戲內年份", "references/business-encoding.md"),
+    (7, "存檔開局時複製劇本內容，之後劇本的修改、下架或刪除不影響進行中的存檔", "references/business-encoding.md"),
+    (7, "角色年齡為錨定事實，模型與玩家都不能直接寫入；成年角色不得被改成未成年", "references/business-encoding.md"),
+    (7, "玩家創作劇本：v1 開放玩家依固定規格創作劇本並可公開分享", "references/business-encoding.md"),
+    (7, "公開分享採先審後發", "references/business-encoding.md"),
+    (7, "一般的未成年角色（如親子、育兒、校園日常）不得誤擋", "references/business-encoding.md"),
+    (7, "規則層於每次儲存時執行，模型層於開存檔或送出公開且內容有變動時執行，未通過者不得用來開存檔", "references/business-encoding.md"),
+    (7, "安全模式須嚴格執行，由伺服器端的 system_instruction、安全設定與審查層共同套用", "references/business-encoding.md"),
+    (7, "牽手、擁抱、告白與簡短的親吻等一般的親密情感表達允許", "references/business-encoding.md"),
+    (7, "界線不明確時一律以較保守的判定處理", "references/business-encoding.md"),
+    (7, "玩家已在切換為成人模式時完成成年確認：須勾選「我確定已滿 18 歲」與同意安全規範兩項", "references/business-encoding.md"),
+    (7, "滿 18 歲後該限制自動解除，但玩家的模式與既有存檔的旗標不自動調高，介面提示玩家可自行切換", "references/business-encoding.md"),
+    (7, "一般模式可有性暗示、深吻與情慾張力，但性行為與性器官只能淡出或暗示，不得描寫", "references/business-encoding.md"),
+    (10, "暱稱與筆名：玩家有公開暱稱，於年齡確認的同一頁（初次設定頁）填寫", "references/auth-security.md"),
+    (10, "筆名於劇本第一次發佈（審核通過）時鎖定", "references/auth-security.md"),
+    (10, "劇本設定，含狀態轉移規則、結局說明與初始對話，亦同", "references/auth-security.md"),
+    (10, "使用者送審公開的劇本與被檢舉的劇本", "references/auth-security.md"),
+    (11, "玩家創作的劇本與暱稱：劇本設定", "references/privacy-observability.md"),
+    (11, "匿名保留我已發佈的劇本", "references/privacy-observability.md"),
+    (11, "劇本設定全文、暱稱與筆名", "references/privacy-observability.md"),
 ]
 
 
@@ -117,6 +141,14 @@ def test_the_retired_password_registration_and_email_verification_rules_are_gone
         "管理員忘記密碼的處理另訂",
         "以及 /login、/register 等帳號頁面",
         "登入失敗激增",
+        # 2026-11-03：分級改為三種模式，舊的 0 至 3 等級文字不得殘留
+        "存檔帶 content_tier 與 sexual_content_level（0 至 3）旗標",
+        "未滿 18 歲者一律為安全模式，sexual_content_level 固定為 0",
+        "成年者由玩家主動在 sexual_content_level 1（浪漫、曖昧）與 2（感官但不露骨）之間切換",
+        "系統只提醒玩家可切換分級",
+        "浪漫僅限不含身體描寫的情感表達",
+        "玩家已通過強化成年驗證",
+        "須先於第 10 節訂定強化成年驗證的做法",
     )
     corpus = {"AGENTS.md": AGENTS}
     for path in [SKILL_DIR / "SKILL.md", *sorted((SKILL_DIR / "references").glob("*.md"))]:
@@ -152,19 +184,30 @@ def test_every_bullet_of_section_10_is_mirrored_verbatim_in_the_auth_security_re
     assert not stale, f"references/auth-security.md 沒有與 AGENTS.md 第 10 節逐字一致：{stale}"
 
 
-@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作"])
+@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱："])
 def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
-    """第 11 節的這四條在 reference 裡是逐字鏡像（「絕不記錄」在 reference 是摘要版，另以片段檢查）。"""
+    """第 11 節的這幾條在 reference 裡是逐字鏡像（「絕不記錄」在 reference 是摘要版，另以片段檢查）。"""
     agents_lines = [line.strip() for line in agents_section(11).split("\n") if line.strip().startswith(key)]
     assert len(agents_lines) == 1, key
     mirror = (SKILL_DIR / "references" / "privacy-observability.md").read_text(encoding="utf-8-sig")
     assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"privacy-observability.md 沒有逐字鏡像：{key}"
 
 
-def test_the_section_7_content_rating_bullet_is_mirrored_verbatim():
-    agents_line = next(line.strip() for line in agents_section(7).split("\n") if line.strip().startswith("- 內容分級："))
+@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本"])
+def test_the_section_7_rpg_bullets_are_mirrored_verbatim(key):
+    """第 7 節 RPG 這幾條在 reference 裡是逐字鏡像（分級、劇本創作、結局與角色卡改動頻繁，整行比對才抓得到只改一邊）。"""
+    agents_lines = [line.strip() for line in agents_section(7).split("\n") if line.strip().startswith(key)]
+    assert len(agents_lines) == 1, key
     mirror = (SKILL_DIR / "references" / "business-encoding.md").read_text(encoding="utf-8-sig")
-    assert agents_line in {line.strip() for line in mirror.split("\n")}
+    assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"business-encoding.md 沒有逐字鏡像：{key}"
+
+
+def test_the_three_content_modes_are_defined_once_and_the_levels_zero_to_three_are_not_mentioned_as_the_rule():
+    """分級是 safe／standard／adult 三種模式；等級 3 的舊說法不得再當成規則出現（程式的舊 0 至 3 由後續的 change 改掉）。"""
+    section7 = agents_section(7)
+    for mode in ("safe（安全模式）", "standard（一般模式", "adult（成人模式"):
+        assert mode in section7, mode
+    assert "sexual_content_level" not in section7
 
 
 def test_the_birthday_and_age_range_are_never_logged_and_the_old_checkbox_rule_is_gone_everywhere():

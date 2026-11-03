@@ -1,6 +1,7 @@
 # 模型呼叫層
 
 > 狀態：已實作（串流呼叫由 RPG 實作） ｜ 最後更新：2026-11-02 ｜ 對應 change：cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**尚未實作**（屬 RC-7），本文件描述目前的實作。
 
 本文件說明業務邏輯如何呼叫模型：供應商中立的介面、重試與備援的決策、斷路、預算、用量帳本、提示詞結構、依用途指定供應商（第 10 節），以及日後更換供應商的步驟。客服如何使用它見 [客服對話-chat-service.md](客服對話-chat-service.md)。
 

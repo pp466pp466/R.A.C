@@ -31,6 +31,10 @@ flowchart LR
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
     RC5["RC-5 rpg-persona-library<br/>性格原型庫"]:::plan
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
+    RC7["RC-7 rpg-script-authoring<br/>玩家創作劇本、固定規格、硬性檢查"]:::plan
+    RC8["RC-8 rpg-script-publishing<br/>先審後發、目錄、上下架、檢舉"]:::plan
+    CT["content-tier-modes<br/>程式改為安全、一般、成人三種模式"]:::plan
+    WL["W1 token-wallet<br/>代幣帳本與簽到（金流、訂閱另行探索）"]:::plan
 
     C1 --> C2 --> AG --> AB --> C3
     C3 --> C4A --> C4B --> C4C --> C4D --> C5A --> C5B --> C5C --> C5D
@@ -39,6 +43,9 @@ flowchart LR
     C3 --> OC --> RC2
     C4C --> RC1 --> RC2 --> RC3 --> RC4
     RC2 --> RC5
+    RC1 --> RC7 --> RC8
+    CT --> RC1
+    WL --> RC2
     C4C --> RC6
 
     classDef done fill:#1f3d2b,stroke:#4c9a6a,color:#e2e4e9
@@ -65,8 +72,13 @@ flowchart LR
 | google-first-login（①） | **已封存**（2026-11-03，實作 commit `35020b7`：25／26 項；封存時新增 4 個主規格 `account-lockout`、`admin-two-step-login`、`lockout-appeals`、`post-login-age-confirmation`，修改 10 個既有規格；pytest 6050、Node 197、容器驗收 109／109、`openspec validate --strict` 通過；第 8.3 項瀏覽器人工驗收封存時未做（使用者同意照樣封存），**同日封存後補做並逐項通過，26／26**，結果見 README） | 2026-11-03 | 玩家只用 Google 登入：登入頁只有 Google 按鈕與條款勾選框，生日與年齡區間改在登入後的 `/age` 補填（24 小時內未完成即刪除、未滿 13 歲立即抹除）；登入有效期改為閒置 30 天、每次使用就續期；帳號鎖定（5 次 Google 登入被拒或 10 次被訊息數上限擋下）與申訴頁、管理員後台解除；管理員每次先 Google 登入再輸入密碼，並可在密碼那一步寄重設信；登入後的預設頁面改為 `/cs`。**不移除**玩家端的密碼註冊與信箱驗證（② 才移除）。資料庫升到 `0010` |
 | remove-player-password-auth（②） | **已封存**（2026-11-03，24／24 項；封存時修改 17 個既有規格，合計新增 16、修改 27、移除 20 項需求；pytest 5585、Node 197、容器驗收 112／112、`openspec validate --specs` 48 項通過；第 8.5 項人工驗收使用者在場完成並逐項記入 README，沒做的項目也已列在「未驗證」） | 2026-11-03（實作 `174afb6`） | 移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`（淘汰：忽略並只警告一次）；玩家不收任何信；資料遷移 `0011` 清除玩家密碼、使曾有密碼者的登入狀態失效、把待驗證改為啟用，舊玩家以同信箱的 Google 登入即回到原帳號；客服提示詞改為 Google 登入；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie。**管理員的 Google 加密碼兩段式登入與重設密碼不變**。人工驗收中發現預演指令在未載入預演環境時會悄悄讀 `.env`、誤把開發用 SQL Server 升到 `0011`（無玩家資料，無損失），營運文件的預演步驟已加註 |
 | cloud-staging-run（C-5c） | 規劃完成，待實作（等前提） | 2026-11-02（規劃自原 C-5b 拆出） | **前提：使用者有可計費的 Google Cloud 專案**（已安裝並登入 `gcloud`、同意 Cloud SQL 的固定月費，N-9）。會產生雲端費用，每一步使用者在場確認（單步執行 `--only --yes`）：實際執行 C-5a 的腳本並把差異回寫、Cloud SQL（私有 IP、驗證伺服器憑證——失敗就停止，不退讓到 `TrustServerCertificate=yes`、備份與時間點還原、日誌保存 30 天）、平台告警六類各演練一次、隔離的壓測環境與 gunicorn 調整、Cloud SQL 複製的還原演練、`create-admin --password-env` |
-| production-launch（C-5d） | 規劃中 | — | production 資源與對外開放真實會員；需要使用者決定：自有網域與信件的 SPF／DKIM／DMARC、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter）、入口層 IP 限流是否補做、成年驗證方式（若要開放分級 3）；上線前要重新確認供應商條款與年齡規則。**「只留 Google 登入」尚未立案**（見專案記憶：管理員的密碼重新驗證有衝突） |
+| production-launch（C-5d） | 規劃中 | — | production 資源與對外開放真實會員；需要使用者決定：自有網域與信件的 SPF／DKIM／DMARC、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter）、入口層 IP 限流是否補做、成年驗證方式（成人模式；已決定為切換時勾選確認，待法務確認，見 report.md 的 U-28）；上線前要重新確認供應商條款與年齡規則。**「只留 Google 登入」尚未立案**（見專案記憶：管理員的密碼重新驗證有衝突） |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
+| RPG 規範修訂（劇本創作與分級） | **已完成**（2026-11-03；不是 OpenSpec change，尚未提交） | 2026-11-03 | AGENTS.md 第 5、7、10、11 節、技能鏡像、同步測試與 report.md 的決定紀錄（U-20 至 U-26）：玩家創作並公開分享劇本（先審後發）、自動檢查四類紅線、內容分級改為安全／一般／成人三種模式、暱稱與筆名、自訂結局與已完結存檔、劇本的個資與刪帳號保留偏好。**不含程式碼** |
+| content-tier-modes | 規劃中 | — | `AccessPolicy` 的內容上限與年齡閘門 API 的 `ceiling` 由 `sexual_content_level` 0 至 3 改為 `content_tier` 三種模式；`SEXUAL_CONTENT_LEVEL3_*` 設定與 age-confirmation、launch-gates 規格同步；也可併入 RC-1 |
+| rpg-script-authoring（RC-7） | 規劃中 | — | 玩家創作劇本的 API 與表單、固定規格驗證、額度與送審次數、硬性檢查、暱稱的初次設定頁；依賴 RC-1 |
+| rpg-script-publishing（RC-8） | 規劃中 | — | 先審後發的管理員審核佇列、上下架、公開目錄、檢舉、署名、刪帳號的保留偏好；依賴 RC-7 |
+| 錢包與訂閱（W1 至 W3） | 探索中（方向已定，**尚未寫入規範**） | — | W1 token-wallet（只有免費幣，RC-2 的扣款依賴它）、W2 payments-and-subscriptions（金流、法務、未成年付款）、W3 model-catalog-and-pricing；見 report.md U-27 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |
 
 ## 2. 待決定與待辦
@@ -81,8 +93,9 @@ flowchart LR
 | 逾時（20 / 30 / 35 秒）要不要調整 | 等正式模型確定後以量測資料決定 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
 | 規範已修訂（AGENTS.md 第 10、11 節、技能檔與同步測試；決定紀錄見 report.md 的 U-12 至 U-16），① 已實作並封存（google-first-login，2026-11-03），② 已實作並封存（remove-player-password-auth，2026-11-03）。**已決定**：玩家只用 Google 登入，畫面只有 Google 與條款勾選框（新使用者必勾、回訪不必勾）；生日與年齡區間在登入之後才填，沒填什麼都不能做，帳號最多保留 24 小時，逾時刪除；補填時未滿 13 歲立即抹除帳號與個資；登入有效期閒置 30 天、每次使用就續期、不設絕對上限；管理員每次先 Google 登入再驗證一次密碼；預設頁面現為 /cs，RPG 上線後改為選擇劇本的首頁；拆成兩個 change（① 新的 Google 登入體驗，② 移除玩家端密碼功能）。管理員忘記密碼：在密碼驗證那一步按「忘記密碼」寄重設信；登入與註冊合一為 /login，登入後另有年齡確認頁，沒有 /register。帳號鎖定與申訴：同一帳號 15 分鐘內 Google 登入被拒達 5 次或被訊息數上限擋下達 10 次即鎖定，只有管理員能解除，被鎖定者只進申訴頁，管理員只看得到申訴（取代「登入失敗激增」告警，改為「帳號鎖定激增」）；門檻為預設值。起因：C-5b 的 Google 登入人工驗收發現登入頁每次都要求重填條款與生日（README「驗收紀錄（C-5b）」第 5 點） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、AGENTS.md 第 10、11 節 |
 | 登入後的預設頁面（單一常數 `app/security/redirects.py` 的 `DEFAULT_AFTER_LOGIN`） | 已實作（2026-11-02，change ①）：目前是 `/cs`，RPG 上線後改為選擇劇本的首頁（只改這一個常數）；首頁、登入頁與 Google 回呼共用 `landing_for` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| RPG 玩家創作劇本與三種內容模式（2026-11-03 已決定，見 report.md 的 U-20 至 U-26） | 規範已修訂（AGENTS.md 第 5、7、10、11 節）。**待處理**：成人模式勾選確認是否足夠的法務確認、供應商書面許可須涵蓋新模型、公開分享的法務關卡、劇情輸出的審查層與串流（RC-2）、RPG 開場流程（另行探索）、各欄位上限以實際 token 預算校正（RC-4） | [RPG.md](RPG.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、AGENTS.md 第 7、10、11 節 |
 | 全站每日用量上限的預設值綁定 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、500 RPD） | 換模型或正式環境改用 OpenAI 時須重設 `USAGE_DAILY_TOKEN_LIMIT`、`USAGE_DAILY_CALL_LIMIT`；15 RPM 是全站共用，多人同時使用才需要另加全站每分鐘閘門 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[營運與部署-operations.md](營運與部署-operations.md) |
-| 強化成年驗證的方式（對外開放等級 3 之前，AGENTS.md 第 7 節要求先於第 10 節訂定） | 範圍已決定：只有開啟等級 3 時才驗證，註冊維持自行聲明。比較結果：台灣數位身分（自然人憑證等）依內政部的申請要點對一般民間企業多半不開放；信用卡在台灣有附卡（約 15 歲起）與金融卡（約 7 歲起）的漏洞，強度偏低且專案沒有金流；第三方證件加活體或自拍估齡是唯一現實的選項，但各家對台灣證件的支援須逐家確認（Yoti 列有台灣國民身分證）。**尚未選定**，應排在法務意見與供應商許可之後 | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| 成人模式的成年確認方式（AGENTS.md 第 7 節） | **已決定（2026-11-03）**：切換為成人模式時勾選「我確定已滿 18 歲」與同意安全規範，並記錄確認時間、規範版本與方式（自行聲明）；書面許可（須涵蓋新模型）、法務意見與部署層開關仍須具備，**法務若認為不足，只更換確認方式**。原評估的備選（若法務要求更強的方式）：台灣數位身分（自然人憑證等）依內政部的申請要點對一般民間企業多半不開放；信用卡在台灣有附卡（約 15 歲起）與金融卡（約 7 歲起）的漏洞，強度偏低且專案沒有金流；第三方證件加活體或自拍估齡是唯一現實的選項，但各家對台灣證件的支援須逐家確認（Yoti 列有台灣國民身分證） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | 等級 3 的許可涵蓋的供應商、模型與日期 | 使用者表示已取得許可，內容尚未提供；取得後寫入 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 並填入 `SEXUAL_CONTENT_LEVEL3_MODELS` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | 13 至 17 歲可使用 AI 功能與 Gemini 條款不符 | 僅限個人測試；對外開放前須以實際供應商條款重新確認（RPG.md R-15.4） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 

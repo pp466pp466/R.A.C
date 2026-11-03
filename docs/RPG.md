@@ -2,6 +2,8 @@
 
 > 注意（2026-11-02）：AGENTS.md 第 10、11 節的年齡確認已修訂——生日與年齡區間改在 Google 首次登入**之後**才填，沒填之前什麼都不能做，帳號最多保留 24 小時；補填時發現未滿 13 歲，立即抹除帳號與個資。下文 R-15.4 與 T-10 對年齡確認的描述（註冊時填寫、未滿 13 歲不得註冊）是修訂前的實作狀態；change ① `google-first-login` 已實作（登入後才填、24 小時期限、補填時未滿 13 歲立即抹除），以現行程式與 `docs/帳號與安全-auth-security.md` 為準。
 
+> 注意（2026-11-03）：AGENTS.md 第 5、7、10、11 節已修訂，與本文件的下列部分不同，**以 AGENTS.md 為準**，這些章節待 RC-1、RC-2 設計時改寫：①RU-1 已決定為 (c) 玩家創作並公開分享劇本（先審後發），新增 RC-7、RC-8（見 6.2）；②內容分級由 `sexual_content_level` 0 至 3 改為 `content_tier` 的 safe／standard／adult 三種模式（成人模式是玩家個人頁面開關；成年確認改為切換時勾選「我確定已滿 18 歲」與安全規範，其餘解鎖條件不變），R-15 與 G-13 的等級描述以此為準；③R-05 的「不存在死亡或結局終止狀態」只適用平台預設與首發劇本，玩家劇本可自訂結局，到結局存檔變「已完結」；④角色年齡是錨定事實，成年角色不得被改成未成年；⑤劇本屬個資，存檔開局時複製劇本內容。決定紀錄見 [report.md](report.md) 的 U-20 至 U-26；訂閱與 token 幣（U-27）尚未探索。
+
 - **文件版本**：v1.2（v1.0 為 Explore 階段產出，與 [report.md](report.md) 配套；v1.1 追加人物個性、內容分級與外部資料的決策，見下方「v1.1 追加」；v1.2 以記事簿取代 RPG 的對話摘要，見下方「v1.2 追加」）
 - **日期**：2026-10-27（v1.1：2026-10-28；v1.2：2026-10-30）
 - **依據**：`AGENTS.md`（唯一權威來源）、`docs/spec_report_v2.1.1.md`、report.md 的 D-00（範圍方案 A）
@@ -70,7 +72,7 @@ spec_report 主題三的 `scripts`、`sessions`、`memory_logs` 對照 AGENTS.md
 | G-10 | 沒有「玩家層」的個性覆蓋（v1.1） | R-14：個性是唯一跨存檔重複使用的內容，玩家修正後只存差異 | 新增 `user_persona_overrides`：`(user_id, trait_key)` 唯一、`overrides_json`、`version`。**只用於個性**，其餘內容一律留在存檔層 |
 | G-11 | 沒有全站性格原型庫（v1.1） | R-14：「AI 的存檔」，玩家唯讀 | 新增獨立資料表 `persona_prototypes`：`trait_key` 唯一（純文字標準化欄位）、特質定義、`status`、`version`。**不含任何使用者外鍵**。不用假使用者擁有 `sessions` 的作法 |
 | G-12 | 沒有原型草案佇列（v1.1） | R-14：AI 擬草案、管理員核可才上架 | 新增 `persona_drafts`：草案內容、來源 `user_id`、`status`（待審、核可、退回、逾期）。含玩家衍生文字，視為個資；退回或逾期清除，帳號刪除時一併刪除 |
-| G-13 | `sessions` 沒有內容分級（v1.1） | R-15：分級以旗標存在存檔上 | 新增 `sessions.content_tier` 與 `sessions.sexual_content_level`（0 至 3）。用純欄位而不放 JSON，因為會用於統計與稽核。年齡確認欄位屬共用層（見 RA-10），不在本模組的 migration |
+| G-13 | `sessions` 沒有內容分級（v1.1） | R-15：分級以旗標存在存檔上 | 新增 `sessions.content_tier`（`safe`／`standard`／`adult`；2026-11-03 起取代原本的 `sexual_content_level` 0 至 3，見 AGENTS.md 第 7 節）。用純欄位而不放 JSON，因為會用於統計與稽核。年齡確認欄位屬共用層（見 RA-10），不在本模組的 migration |
 | G-14 | 沒有地方存長期記憶（v1.2） | R-17：記事簿，每個存檔一本 | `sessions` 新增 `notebook_text`（`UnicodeText`，預設空字串）、`notebook_version`（整數，預設 1，玩家編輯與 AI 追加的衝突偵測）、`notebook_upto_turn`（整數，預設 0，已處理到的 boundary）。容量不存，由會員等級推得（程式常數，見 R-17.2）。純文字欄位，不放 JSON、不做內容篩選 |
 
 ### 2.2 建議的資料模型
@@ -111,8 +113,7 @@ erDiagram
         int notebook_version "新增（v1.2），編輯衝突偵測"
         int notebook_upto_turn "新增（v1.2），已處理到的 boundary"
         int version "新增"
-        string content_tier "新增（v1.1）"
-        int sexual_content_level "新增（v1.1），0 至 3"
+        string content_tier "新增（v1.1），safe／standard／adult（2026-11-03）"
         boolean is_archived
     }
     MEMORY_LOGS {
@@ -607,7 +608,7 @@ sequenceDiagram
 
 | 編號 | 事項 | 選項 | 我的建議 |
 |---|---|---|---|
-| RU-1 | 是否開放使用者創作劇本（影響 `scripts.is_public`、內容審核與 IDOR） | (a) v1 只提供內建預設劇本；(b) 開放私人劇本；(c) 開放公開分享 | (a) |
+| RU-1 | 是否開放使用者創作劇本（影響 `scripts.is_public`、內容審核與 IDOR） | (a) v1 只提供內建預設劇本；(b) 開放私人劇本；(c) 開放公開分享 | **已決定（2026-11-03，使用者）：(c)**，先審後發；規格、審核、署名與刪帳號見 AGENTS.md 第 7、10、11 節與 [report.md](report.md) 的 U-20 至 U-26（原建議 (a) 已被取代） |
 | RU-2 | 狀態變更呼叫是否等待完成才解鎖輸入 | (a) 收到 `state` 與 `done` 後才解鎖（資料一致，延遲略增）；(b) 文字完成即解鎖，狀態延後到達（體驗快，需處理版本競爭） | (a) |
 | RU-3 | `state_transition_rules` 格式 | R-05 的 (a)、(b)、(c) | (a) |
 | RU-4 | 每日回合上限與每回合 token 預算 | 依 U-7 的預算決定 | 待預算。**v1.2 提醒**：記事簿讓 vip 每回合多帶約 9000 至 12500 token（假設值，R-17.9），預算要把它算進去，並由 RC-4 的壓測校正 |
@@ -780,6 +781,8 @@ RPG 的 change 在 report.md 的 C-1 至 C-4 完成後才開始（需要共用�
 | RC-4 | `rpg-ops-loadtest` | 同時串流上限、Nginx SSE 設定驗證、串流壓測、監控項目補充。**含擴充 C-4d 的告警**：目前模型錯誤率與對話延遲只統計客服（`kind = chat`），RPG 的 `rpg_stream`、`rpg_notebook` 呼叫要納入各自的錯誤率與延遲告警（設定錯誤已是任何種類都算） |
 | RC-5 | `rpg-persona-library`（v1.1） | 原型庫與草案流程、管理員審核介面（歸屬見 RU-12）、比對鍵清單與同義詞（RU-9）、草案與覆蓋的保存與刪除（RU-10） |
 | RC-6 | `external-data-gateway`（v1.1） | `ExternalDataProvider` 介面、MCP 轉接器與假實作、設定與機密、快取、額度整合（R-16；時間點見 RU-7）。**屬共用能力，非 RPG 專屬** |
+| RC-7 | `rpg-script-authoring`（2026-11-03） | 玩家創作劇本：建立與編輯的 API 與表單（欄位範例帶入、里程碑預覽）、固定規格驗證、劇本數量與送審次數限制、硬性檢查（規則層加可替換的模型層審查介面）、暱稱的初次設定頁與帳號頁更改 |
+| RC-8 | `rpg-script-publishing`（2026-11-03） | 先審後發：管理員審核佇列、上下架、公開目錄與搜尋、檢舉、署名、刪帳號的保留偏好 |
 
 ```mermaid
 flowchart LR
@@ -792,6 +795,8 @@ flowchart LR
     CS --> RC6["RC-6 external-data-gateway（時間點見 RU-7）"]
     RC6 -.->|"選配接入"| RC2
     RC2 --> RC5["RC-5 rpg-persona-library"]
+    RC1 --> RC7["RC-7 rpg-script-authoring"]
+    RC7 --> RC8["RC-8 rpg-script-publishing"]
 ```
 
 ### 6.3 轉交共用層與 report.md 的事項（v1.1）

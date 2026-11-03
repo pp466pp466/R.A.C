@@ -2,6 +2,7 @@
 
 > 狀態：已實作 ｜ 最後更新：2026-11-03 ｜ 對應 change：remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0010_google_first_login` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
+> 注意（2026-11-03）：AGENTS.md 第 7、11 節的劇本創作、暱稱、自訂結局與已完結存檔、三種內容模式（`content_tier`）、刪帳號的劇本保留偏好**尚未實作**，對應的資料表與欄位屬 RC-1 的設計（見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)）；本文件描述目前的實作。
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
