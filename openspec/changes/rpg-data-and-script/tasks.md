@@ -1,0 +1,61 @@
+# Tasks
+
+## 1. 資料模型與遷移
+
+- [ ] 1.1 新增模型：`Script`、`ScriptVersion`、`ScriptVersionTag`（`app/models/script.py`）與 `RpgSession`（資料表 `sessions`，避免與 SQLAlchemy 的 `Session` 同名）、`MemoryLog`（`app/models/rpg_session.py`），欄位、型別與約束依 design D1 至 D4：文字用 `Unicode`／`UnicodeText`、角色與地點與里程碑與世界狀態用 `JSON`、`PublicIdMixin` 與 `TimestampMixin`；`scripts.seed_key`、`script_versions.live_script_id`、`script_versions.open_script_id` 用 `unique_when_not_null()`；`(script_id, version_no)`、`(session_id, client_msg_id)`、`(session_id, seq)` 唯一；外鍵動作：`scripts.creator_id`、`sessions.user_id`、`script_versions.script_id`、`script_version_tags.version_id`、`memory_logs.session_id` 為 `CASCADE`，`sessions.source_version_id` 為 `SET NULL`；狀態、模式與回合狀態的值域放在集中的常數（不加資料庫 CHECK，與專案慣例一致）；在 `app/models/__init__.py` 匯入。驗證：`Base.metadata` 含 5 張新表，名稱與欄位對應 design。
+- [ ] 1.2 `users` 新增四欄（`content_tier_preference`：`NOT NULL`、伺服器預設 `safe`；`adult_confirmed_at`、`adult_rules_version`、`adult_confirm_method`：可為空），`User` 模型與 `CurrentUser`（`from_model`）同步，新欄位有預設值使既有測試輔助不必修改，且不進 `public_dict` 與 `/api/auth/me`。驗證：`tests/test_user_models.py` 與 `tests/test_current_user*.py` 更新後通過；`/api/auth/me` 的回應鍵沒有新增。
+- [ ] 1.3 撰寫遷移 `0012_rpg_data_and_script`：`users` 四欄（`batch_alter_table`）、5 張新表與索引（含部分唯一索引的 `sqlite_where` 與 `mssql_where`，與模型一致）、一次回填（`is_adult_at_confirmation` 為真 → `standard`，其餘 `safe`，用 `sa.table`／`sa.update`，不匯入應用程式程式碼、沒有原生 SQL）；`downgrade` 移除新表與新欄位（`recreate="never"`，說明同 `0010`）；檔案以 UTF-8 與繁體中文註解撰寫。驗證：`tests/test_migrations.py` 新增測試：從 `0011` 升級並種入成年、未成年與 `is_adult_at_confirmation` 為空三種既有帳號，確認回填結果、5 張表與各索引存在、再升級一次結果相同、降級後新表與新欄位消失；同一組在真實 SQL Server `project_test` 通過；`alembic.ini` 與 `script.py.mako` 仍是純 ASCII。
+- [ ] 1.4 模型約束測試（SQLite 與 SQL Server 兩軌各跑一次）：版本編號在同一劇本內唯一；第二個 `published`、第二個進行中的版本被唯一索引擋下；多個沒有種子鍵的劇本可以並存、重複的種子鍵被擋；`(session_id, client_msg_id)` 與 `(session_id, seq)` 重複被擋；外鍵啟用下刪除使用者會串聯刪除劇本、版本、標籤、存檔與回合，且 `source_version_id` 在版本被刪時變為空值。驗證：新增 `tests/test_rpg_models.py` 全數通過。
+
+## 2. 固定規格驗證器
+
+- [ ] 2.1 新增 `app/services/script_spec.py`：集中的常數表（各欄位長度與數量上限、總量上限 8,000 字、`SPEC_VERSION = 1`、列舉值）、標準化（NFC、去控制字元、單行與多行欄位的差異）、`validate_script(raw, *, max_tier, forbidden_markers=())` 純函式，回傳標準化內容、`content_hash`（規範化 JSON 的 SHA-256）與 `total_chars`，或拋出 `ValidationError`，其 `fields` 以路徑為鍵（如 `characters[2].age`）；涵蓋目錄與設定欄位、角色、地點、里程碑與曆法、結局、圖片預留、總量上限與宣告分級上限；錯誤訊息只描述規則、不回顯輸入。驗證：模組沒有資料庫、網路與時間的匯入（`tests/architecture` 的分層測試通過）。
+- [ ] 2.2 規格驗證器的測試（`tests/test_script_spec.py`），逐一對應 `script-fixed-spec` 的每個情境：合法內容、相同輸入相同輸出、未定義欄位、多個錯誤一次回報、各欄位上限與必填、標籤去重、不合法的內容分級、NFC 與控制字元與單行收斂、不公開標記字串、角色（含年齡為整數、3 歲角色合法、姓名重複、角色過多）、地點可為空與去重、里程碑與曆法（年份觸發需要曆法、年份不得早於起始年、年齡觸發不需要曆法、觸發不接受自由文字、穩定的編號）、結局（預設無結局、自訂需要說明、無結局不得附說明、文字不決定模式）、圖片非空被拒絕、總量剛好 8000 字通過與 8001 字失敗、宣告分級高於作者上限、錯誤路徑格式與訊息不回顯輸入。驗證：全數通過。
+- [ ] 2.3 `content_hash` 的穩定性：鍵順序與空白差異不影響雜湊、任何欄位的實質變動會改變雜湊、同一份內容在 SQLite 與 SQL Server 讀回後重新驗證得到相同雜湊（JSON 欄位往返不改變內容）。驗證：新增的測試通過。
+
+## 3. 內容模式（取代等級 0 至 3）
+
+- [ ] 3.1 新增 `app/services/content_tier.py`：三種模式與順序常數、`most_conservative()`、`parse_tier()`（無法判定取 `safe`）、`ADULT_RULES_VERSION`、確認方式常數（`self_declared`）；純邏輯、無任何年齡數字。驗證：`tests/test_content_tier.py` 涵蓋順序、取較保守者與無法判定。
+- [ ] 3.2 改寫 `AccessPolicy`：移除 `content_ceiling`、`ContentCeiling`、`MAX_ADULT_SEXUAL_CONTENT_LEVEL` 與相關常數，新增 `content_access(user)`（回傳偏好、年齡上限、生效模式、成人模式是否可選與是否已確認、原因）與 `effective_tier(user, script_tier=…, save_tier=…)`；建構參數 `adult_ceiling` 改為 `adult_mode_enabled: bool = False`；`registry.py` 依設定傳入。年齡一律由生日於當下計算，管理員與各等級不豁免。驗證：`tests/test_access_policy.py` 的內容上限部分、`tests/test_content_ceiling_switch.py`（改名為 `tests/test_content_tier_modes.py`）改為新語意並通過，涵蓋 `content-tier-modes` 的年齡上限、取最保守者、成人模式退為一般、開關不影響未成年者與管理員不豁免等情境。
+- [ ] 3.3 設定：`ContentSettings` 改為 `adult_mode_enabled`、`adult_models`；`_resolve_content` 移除「staging 與 production 一律禁止」，保留 RPG 用途已設定、清單非空且涵蓋主要與備援模型、值格式與布林檢查，訊息只含變數名稱；`SEXUAL_CONTENT_LEVEL3_ENABLED` 與 `_MODELS` 列為已淘汰（忽略、啟動時只警告一次且不回顯值，不會讓啟動失敗），`scripts/launch_plan.py` 的 `OBSOLETE_VARS` 加入它們；`.env.example` 改列 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`、不再列舊名稱。驗證：`tests/test_config_rpg_llm.py`、`tests/test_env_example.py`、`tests/test_launch_plan.py` 更新後通過，涵蓋沒有設定、development 開啟、production 明確開啟、值不合法、備援模型不在清單、清單為空、未設定 RPG 用途、關閉時不驗證清單、舊變數為開啟或不合法時成人模式仍關閉且只有一則不含值的警告。
+- [ ] 3.4 `UserRepository` 與年齡確認：`complete_age_verification_if_unset` 與管理員補填路徑在同一個條件式更新中依確認當下的年齡寫入 `content_tier_preference`（成年 `standard`、未成年 `safe`），失敗（不一致、未滿 13 歲）不留下任何偏好；新增 `set_content_preference` 與 `record_adult_confirmation`（條件式更新，ORM 表達式）。驗證：`tests/test_age_gate_api.py` 與相關 Repository 測試涵蓋「成年者確認」「未成年者確認」「之後滿 18 歲仍是 `safe`」「確認失敗不留偏好」。
+- [ ] 3.5 `ContentModeService` 與端點：`get_state`、`set_mode`（偏好、成年確認與兩項勾選、規範版本、未成年與部署關閉的拒絕、失效重新確認），`account_api_bp` 新增 `GET`／`PUT /api/account/content-mode`（需登入、CSRF、受限登入狀態規則，先過年齡閘門）；錯誤代碼 `content_mode_restricted`、`adult_mode_unavailable` 與 400 逐欄位；事件以名稱表達新模式（`account.content_mode.safe`／`standard`／`adult`，加入 `security_events`）；回應只含偏好、生效模式、各模式是否可選、不可用原因與是否已確認，不含生日與年齡區間。驗證：`tests/test_content_mode_api.py` 涵蓋 `content-tier-modes` 的 API 與成人模式各情境（首次切換、缺少確認、部署關閉、未成年、已確認後再切換、規範版本改變、離開不清除紀錄、未登入 401、未確認年齡 403、不合法模式 400、缺 CSRF、事件不含任何輸入）；並含權限測試框架的 IDOR 檢查（只能讀寫自己的）。
+- [ ] 3.6 `/account` 對 13 至 17 歲使用者顯示安全模式的提示與原因，確認它依生日於當下計算而不是依儲存的偏好；若現有頁面尚未符合就補上。驗證：`tests/test_auth_pages.py`（或帳號頁相關測試）新增「13 至 17 歲看到安全模式提示、成年者不顯示」。
+- [ ] 3.7 更新測試輔助與其他引用：`tests/support/age_gate.py` 的測試用端點改回傳新的生效模式、`tests/test_age_gate_api.py` 同步；全專案搜尋 `sexual_content_level`、`content_ceiling`、`SEXUAL_CONTENT_LEVEL3` 在 `app/`、`tests/`、`scripts/` 不再有殘留（`docs/` 與規格由最後一組處理）。驗證：`grep` 結果只剩測試中「舊名稱已淘汰」的斷言。
+
+## 4. 劇本資料存取
+
+- [ ] 4.1 `ScriptRepository`（`app/repositories/script_repository.py`）：擁有者範圍的方法一律接收 `user_id`（建立劇本與第一個草稿、讀取與列出自己的、修改草稿與標籤、刪除草稿）；公開讀取只回傳 `published` 的版本（`get_published`、`list_published(max_tier, limit, offset)`）；狀態轉移集中在少數方法（送審、撤回、核可、退回），核可時在同一個交易取代舊版、第一次核可時鎖定筆名；`live_script_id` 與 `open_script_id` 只由這些方法寫入；內建劇本的建立走專用方法（直接 `published`）；更新筆名的方法在已鎖定時拋出衝突。驗證：`tests/test_script_repository.py` 涵蓋 `script-store` 的每個情境：版本編號連續、合法與非法的轉移、修改草稿與修改已發佈或待審的版本被拒絕、第二個進行中的版本被拒絕、並行建立最多一個成功（以兩個連線模擬）、取代與失敗不留下半套、筆名鎖定與新版本沿用、標籤去重與可查詢、擁有者讀自己的與非擁有者得到 404、公開讀取只回傳上架版本、依內容模式篩選、只有草稿可以刪除。
+- [ ] 4.2 狀態與輔助欄位的不變量測試：走遍每一種合法轉移，斷言「`live_script_id` 等於 `script_id` 若且唯若狀態為 `published`」與「`open_script_id` 等於 `script_id` 若且唯若狀態為 `draft` 或 `pending_review`」；並新增架構測試確認沒有 Repository 以外的程式碼直接寫版本狀態。驗證：測試通過。
+
+## 5. 存檔與回合
+
+- [ ] 5.1 `SessionRepository`（`app/repositories/session_repository.py`）：所有方法接收 `user_id`；建立存檔（含複本與初始值）、讀取、列出、世界狀態的條件式更新（版本號）、完結、開始回合（`seq` 以目前最大值加 1 並在唯一約束衝突時重試一次、`client_msg_id` 冪等、已完結拋出 `SessionEnded`、串流中的重送拋出衝突）、完成回合（才指派 `turn_number`）、中斷與被擋；`last_active_at` 在開始與完成回合時更新。驗證：`tests/test_session_repository.py` 涵蓋 `rpg-sessions` 的初始值、擁有者隔離（讀取、列表、管理員也得到 404）、重送已完成／中斷／串流中的回合、並行同一編號只有一筆、序號遞增、完成才有輪數、中斷不佔輪數、版本一致與落後、完結與完結後開始回合與仍可讀與不可恢復、同劇本開新存檔。
+- [ ] 5.2 `SessionService.start_session`（`app/services/session_service.py`）：先過 `AccessPolicy` 的年齡閘門，再檢查來源版本可用（`published`，或擁有者自己的任何版本，非擁有者的非上架版本得到 404）與「劇本宣告的模式不高於玩家的生效模式」（否則 403 `content_tier_restricted`），複製標準化內容與 `spec_version`，存檔的內容模式取生效模式與劇本宣告較保守者；新增 `SessionEnded`（`Conflict` 子類別，代碼 `session_ended`）與 `ContentTierRestricted`（`Forbidden` 子類別）。驗證：`tests/test_session_service.py` 涵蓋開存檔的各情境（已發佈版本、未確認年齡、擁有者用自己的草稿、非擁有者用他人草稿、分級高於玩家、內容模式取較保守者、新存檔不受其他存檔影響）、複本與來源一致、來源之後被修改或刪除複本不變、15 歲玩家可用 `safe` 的內建劇本。
+- [ ] 5.3 日誌：存檔與回合的任何操作都不得把使用者行動、劇情原文、記事簿、世界狀態與劇本文字寫入日誌（只記內部編號、列舉值與整數長度）。驗證：擴充 `tests/test_log_scan_full_flow.py`：建立存檔、完成與中斷回合、完結後，收集日誌，斷言找不到上述內容。
+
+## 6. 內建劇本種子
+
+- [ ] 6.1 撰寫首發的古風仙俠劇本資料檔 `app/data/scripts/xianxia-qingyun.json`（UTF-8，繁體中文）：`seed_key`、規格內容、宣告 `safe`、結局 `none`、曆法「乾歷朝」；至少三位角色（其中一位表層活潑、隱藏腹黑，展示弧線）、三個地點（例：古劍山莊、金寶閣、青雲宗山門）、至少兩個里程碑（20 歲宗門大測為年齡觸發、乾歷朝 1215 年青雲宗收徒大典為年份觸發）；不含真實人物、真實個資與不公開的標記字串。驗證：以 `validate_script` 驗證通過，總量不超過 8,000 字。
+- [ ] 6.2 `ScriptSeedService` 與 `flask seed-scripts [--dry-run]`（`app/cli.py`）：讀取封裝的資料檔（`utf-8-sig`），全部驗證通過才寫入（全有或全無）；以 `seed_key` 與 `content_hash` 判斷建立、更新（新增版本並取代舊版）與沒有變動；內建劇本沒有作者、筆名「官方」並鎖定；輸出只含筆數與種子鍵；加入 `MANUAL_COMMANDS`，不在應用程式啟動時執行。驗證：`tests/test_seed_scripts.py` 涵蓋 `builtin-script-seed` 的第一次執行、重複執行沒有任何變動、預覽、不在啟動時執行、內容改變時新增第 2 版並取代、只有排版差異視為沒有改變、既有存檔不受影響、欄位超過上限時整批失敗且資料庫沒有任何變動與輸出不含劇本文字、首發劇本通過驗證與未成年玩家可遊玩與內容結構。
+- [ ] 6.3 容器內確認資料檔被封裝：`scripts/verify_container.py` 新增檢查，在映像中執行 `flask seed-scripts --dry-run`，確認筆數大於 0 且結束代碼為 0（以純 ASCII 的流程腳本與參數清單呼叫，不經 PowerShell 傳中文）。驗證：`python scripts/verify_container.py` 通過並記錄新的檢查項數。
+
+## 7. 生命週期：抹除、匯出與保存期限
+
+- [ ] 7.1 擴充抹除守門測試：`tests/architecture/test_account_erasure_coverage.py` 的分類改為記錄任意父表的串聯與 `SET NULL`，新增 `CASCADED_FROM_USERS` 的 `scripts.creator_id` 與 `sessions.user_id`、`CASCADED_FROM_SESSIONS`（`memory_logs.session_id`）、`CASCADED_FROM_SCRIPTS`（`script_versions.script_id`）、`CASCADED_FROM_VERSIONS`（`script_version_tags.version_id`）與 `SET_NULL_TO_VERSIONS`（`sessions.source_version_id`），並保留「沒有外鍵卻存使用者編號」的偵測；`test_user_foreign_keys.py` 無需放寬。行為測試：抹除一位有草稿、已發佈劇本、存檔與回合的作者後，這些資料都不存在；另一位玩家用他的劇本開過的存檔仍在、內容不變、來源參照為空值且抹除沒有被阻止。驗證：兩個守門測試與新的行為測試在 SQLite 與 SQL Server 通過；故意新增一張沒有串聯的資料表時守門測試會失敗（反向驗證）。
+- [ ] 7.2 個人資料匯出：`ScriptRepository.export_scripts(user_id)` 與 `SessionRepository.export_sessions(user_id)` 以產生器逐筆提供資料；`PersonalExportService` 的 JSON 新增 `scripts` 與 `sessions` 兩個陣列、CSV zip 新增 `scripts.csv`、`sessions.csv`、`turns.csv`（沿用公式字元中和與 UTF-8-sig）；不含種子鍵、內容雜湊、內部整數編號與存檔內的劇本複本；世界狀態只在 JSON。驗證：`tests/test_personal_export*.py` 涵蓋 `personal-data-export` 的各情境（含劇本全部版本、含存檔與記事簿、不含他人劇本複本、不含種子鍵與雜湊、zip 內所有檔案以 BOM 開頭、公式字元被中和、沒有世界狀態欄位）與大量回合時仍以串流產生。
+- [ ] 7.3 保存期限：`RetentionRepository` 新增找出、計數與處理存檔與「過期的中斷或被擋回合的部分內容」的方法；`DataRetentionService` 的清單新增 `sessions`（365 天）與 `turn_content`（14 天，把 `llm_raw_response` 清為空字串、保留回合紀錄）兩個類別，`lifecycle_events` 新增對應的類別常數；沿用預覽、分批與只輸出筆數。驗證：`tests/test_data_retention*.py` 涵蓋 `data-retention` 的新增情境（超過與未滿 12 個月、只看最後活動、沒有回合的存檔、已完結的存檔、預覽；超過與未滿 14 天、被擋的回合、已完成的回合不受影響）。
+
+## 8. 規範字句、環境與文件
+
+- [ ] 8.1 規範字句：AGENTS.md 第 7 節與 `.claude/skills/python-flask-skill/references/business-encoding.md`、`database.md` 的「`scripts.milestones_json`」改為「劇本版本（`script_versions`）的 `milestones_json`」，兩邊逐字一致。驗證：`tests/test_agents_skill_sync.py` 通過。
+- [ ] 8.2 更新 `README.md`：環境變數表改列 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 並說明舊名稱已淘汰與 staging、production 的設定規則、端點表新增 `GET`／`PUT /api/account/content-mode`、指令表新增 `seed-scripts` 與部署順序（備份、遷移、部署、種子）、移除舊的等級 3 說明。驗證：`tests/test_readme.py`、`tests/test_env_example.py` 通過。
+- [ ] 8.3 規格收尾：delta 規格通過 `openspec validate rpg-data-and-script --strict`；兩份主規格（`age-confirmation`、`launch-gates`）頁首有「待後續的 change（content-tier-modes）更新」的提示，在封存同步之前仍描述舊行為，已逐項寫入下方「Workflow follow-up」。驗證：`openspec validate rpg-data-and-script --strict` 通過，且 follow-up 清單含移除這兩份提示。
+- [ ] 8.4 總驗證並記錄數字：完整 `pytest`（含 SQL Server `project_test`，SQLite 與 SQL Server 各跑一次、不略過）、`node --test "tests/js/*.test.js"`、`python scripts/verify_container.py`、`openspec validate --specs`；在 `README.md` 新增「驗收紀錄（rpg-data-and-script）」，分成「已驗證」與「未驗證」兩欄，沒有實際執行的項目標為未驗證。驗證：全部通過，數字寫入 README；任何失敗先修正再繼續。
+- [ ] 8.5 更新 docs/ 對應的設計文件（對照表見 docs/README.md），並讓 tests/test_design_docs.py 通過：`資料模型-data-model.md`（5 張新表、`users` 新欄位、遷移 `0012` 的 ER 圖與表、串聯與保存期限、移除對應的「尚未實作」提示）、`系統架構-architecture.md`（新的 Repository 與 Service、`AccessPolicy` 的內容模式）、`帳號與安全-auth-security.md`（三種內容模式、成人模式的成年確認、內容模式 API、事件，移除「尚未實作」提示與等級 3 的舊說明）、`營運與部署-operations.md`（`ADULT_MODE_*` 變數與舊名稱淘汰、`seed-scripts` 指令與部署順序、保存期限新增兩類、上線前關卡的成年驗證列）、`模型呼叫層-llm-layer.md`（標明劇本審查的模型層屬 RC-7）、`RPG.md`（資料模型章節依本 change 改寫：劇本版本、存檔複本、已完結、`content_tier`，移除被取代的 `sexual_content_level` 與 `is_public` 描述）、`路線圖-roadmap.md`（本 change 的狀態與日期、RC-7 與 RC-8 的前置）；各文件標頭的「最後更新」與「對應 change」。驗證：`tests/test_design_docs.py` 通過；之後重跑一次完整 `pytest`，把最終數字更新到 README 的驗收紀錄。
+
+## Workflow follow-up
+
+- 封存同一步的主規格收尾：①移除 `age-confirmation` 與 `launch-gates` 兩份主規格頁首「待後續的 change（content-tier-modes）更新」的提示（`grep -rn "content-tier-modes" openspec/specs` 應無結果）；②檢查 `age-confirmation` 的 Purpose 是否仍描述「等級」（若有則改寫為內容模式）；③`openspec validate --specs` 通過。
+- 封存：`/openspec-archive-change rpg-data-and-script`（封存前確認設計文件已隨本 change 更新；封存後更新 `docs/路線圖-roadmap.md` 的狀態與日期，並複查各設計文件標頭的「對應 change」）。
+- 後續的 change（依 `docs/路線圖-roadmap.md`）：RC-7 `rpg-script-authoring`（暱稱與初次設定頁、創作 API 與表單、硬性檢查、劇本數量與送審次數上限）、RC-8 `rpg-script-publishing`（審核佇列、目錄、檢舉、「匿名保留我已發佈的劇本」偏好與抹除分支）、RC-2 回合引擎（依賴本 change 的存檔與回合、以及尚未探索的 W1 代幣錢包）、RC-3 遊戲介面（內容模式的介面與安全規範頁面）。
