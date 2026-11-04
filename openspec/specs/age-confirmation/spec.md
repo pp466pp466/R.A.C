@@ -3,8 +3,6 @@
 ## Purpose
 定義使用者對「已年滿 18 歲」的確認：如何記錄（不蒐集年齡）、既有帳號如何補確認、未確認時不得使用 AI 功能，以及條款與隱私權政策中的揭露，使服務符合 Gemini API 條款對成年使用者的要求，並預留日後改用更嚴格確認方式的路徑。
 
-> 注意（2026-11-03）：AGENTS.md 第 7 節的內容分級已改為 safe／standard／adult 三種模式（`content_tier`），並新增暱稱於初次設定頁填寫；本規格中的 `sexual_content_level` 0 至 3 與「成年者最高為 2」描述的是目前的實作，待後續的 change（content-tier-modes）更新。
-
 ## Requirements
 
 ### Requirement: 年齡確認的紀錄
@@ -110,37 +108,6 @@
 - **WHEN** 待確認年齡的玩家補填時被算出未滿 13 歲
 - **THEN** 該帳號被抹除，回應 400 `age_not_eligible`，沒有任何生日被保存
 
-### Requirement: 未成年者的安全模式與內容上限
-內容上限 SHALL 由集中的權限政策依生日當下計算的年齡決定：未滿 18 歲者 SHALL 固定為安全模式（`sexual_content_level` 為 0，內容分級取最保守值），不論存檔旗標為何都不得提高；成年者的上限為 `sexual_content_level` 2，只有在「等級 3 開關」開啟時才為 3（見等級 3 的設定規則）。介面 SHALL 對未成年者顯示安全模式的提示。管理員與各會員等級 SHALL NOT 豁免。
-
-#### Scenario: 未成年者
-- **WHEN** 15 歲的使用者詢問內容上限
-- **THEN** `sexual_content_level` 上限為 0，且標示為安全模式
-
-#### Scenario: 成年者
-- **WHEN** 25 歲的使用者詢問內容上限，且等級 3 開關為關閉（預設）
-- **THEN** `sexual_content_level` 上限為 2，不會是 3
-
-#### Scenario: 成年者，開關開啟
-- **WHEN** 25 歲的使用者詢問內容上限，且等級 3 開關為開啟
-- **THEN** `sexual_content_level` 上限為 3，且不是安全模式
-
-#### Scenario: 開關開啟也不影響未成年者
-- **WHEN** 等級 3 開關為開啟，15 歲的使用者詢問內容上限
-- **THEN** 上限仍為 0，且標示為安全模式
-
-#### Scenario: 尚未完成年齡確認
-- **WHEN** 等級 3 開關為開啟，尚未填寫生日的使用者詢問內容上限
-- **THEN** 視為安全模式，上限為 0
-
-#### Scenario: 管理員不豁免
-- **WHEN** 15 歲的管理員詢問內容上限
-- **THEN** 同樣為安全模式
-
-#### Scenario: 帳號設定頁的提示
-- **WHEN** 13 至 17 歲的使用者開啟 `/account`
-- **THEN** 頁面顯示目前為安全模式及其原因
-
 ### Requirement: 年齡規則集中設定
 最低註冊年齡、最低使用年齡、成年門檻、年齡區間選項與年齡政策版本 SHALL 集中在單一設定，由權限政策與年齡驗證唯一讀取；頁面、端點與其他 Service SHALL NOT 內嵌年齡數字。更動設定 SHALL 只需要修改該處與提高政策版本，不需要變更資料結構。
 
@@ -166,44 +133,6 @@
 #### Scenario: 匯出自己的資料
 - **WHEN** 使用者匯出個人資料
 - **THEN** 匯出內容含其生日與年齡區間
-
-### Requirement: 等級 3 預設關閉且只能以環境設定開啟
-`sexual_content_level` 3 SHALL 由環境變數 `SEXUAL_CONTENT_LEVEL3_ENABLED` 控制，預設為關閉，SHALL NOT 在程式中寫死為開啟。`development` 與 `testing` 可開啟；`staging` 與 `production` 在強化的成年驗證完成之前設定為開啟 SHALL 使應用程式啟動失敗，訊息只指出變數名稱。值不是布林時 SHALL 啟動失敗。
-
-#### Scenario: 沒有設定
-- **WHEN** 沒有設定 `SEXUAL_CONTENT_LEVEL3_ENABLED`
-- **THEN** 等級 3 為關閉
-
-#### Scenario: 開發環境開啟
-- **WHEN** `APP_ENV` 為 `development` 且開關設為開啟，其他條件齊備
-- **THEN** 應用程式可啟動，等級 3 為開啟
-
-#### Scenario: 預備與正式環境
-- **WHEN** `APP_ENV` 為 `staging` 或 `production` 且開關設為開啟
-- **THEN** 啟動失敗，訊息指出 `SEXUAL_CONTENT_LEVEL3_ENABLED`，說明尚未完成成年驗證
-
-#### Scenario: 值不合法
-- **WHEN** 開關的值是 `maybe`
-- **THEN** 應用程式啟動失敗，訊息指出變數名稱而不含其值
-
-### Requirement: 開啟等級 3 時須記錄許可涵蓋的模型
-開啟等級 3 時，`SEXUAL_CONTENT_LEVEL3_MODELS`（逗號分隔的模型識別碼，代表取得書面許可所涵蓋的模型）SHALL 非空，且 RPG 用途的主要模型與備援模型 SHALL 全部在清單內，RPG 用途 SHALL 已設定；任一條件不成立 SHALL 使應用程式啟動失敗，訊息只指出變數名稱。清單 SHALL NOT 影響開關關閉時的行為。
-
-#### Scenario: 清單涵蓋模型
-- **WHEN** 開關開啟，RPG 用途的主要模型在 `SEXUAL_CONTENT_LEVEL3_MODELS` 內
-- **THEN** 應用程式可啟動
-
-#### Scenario: 模型不在清單內
-- **WHEN** 開關開啟，但 RPG 用途的備援模型不在清單內
-- **THEN** 應用程式啟動失敗，訊息指出 `SEXUAL_CONTENT_LEVEL3_MODELS`
-
-#### Scenario: 清單為空
-- **WHEN** 開關開啟且 `SEXUAL_CONTENT_LEVEL3_MODELS` 沒有設定
-- **THEN** 應用程式啟動失敗，訊息指出 `SEXUAL_CONTENT_LEVEL3_MODELS`
-
-#### Scenario: 沒有設定 RPG 用途
-- **WHEN** 開關開啟，但沒有設定 RPG 用途的供應商
-- **THEN** 應用程式啟動失敗，訊息指出 RPG 用途尚未設定
 
 ### Requirement: 補填時生日與年齡區間的對照
 補填 SHALL 要求使用者填寫生日（`YYYY-MM-DD`）並從列舉選項選擇年齡區間（未滿 13 歲、13–17、18–24、25–34、35–44、45–54、55 以上）。伺服器 SHALL 以 Asia/Taipei 的日曆日期由生日計算年齡，並與所選區間對照：缺少、格式不合法、日期在未來或早於 1900 年時 SHALL 回應 400 與繁體中文的欄位說明；兩者不一致時 SHALL 一律回應通用的「資料有誤」（代碼 `age_mismatch`，不指出是哪一個欄位），且不記錄任何年齡資料。不一致 SHALL 計入該帳號的鎖定次數（見 `account-lockout`）；帳號保留，使用者可立即重新填寫。
@@ -231,3 +160,22 @@
 #### Scenario: 補填時不一致計入鎖定次數
 - **WHEN** 待確認年齡的玩家補填時第一次生日與年齡區間不一致
 - **THEN** 回應 400 `age_mismatch`，帳號沒有年齡資料，並記一次鎖定計次
+
+### Requirement: 年齡確認時決定預設內容模式
+年齡確認成功時，系統 SHALL 依確認當下由生日算出的年齡設定使用者的內容模式偏好：已滿 18 歲為 `standard`，未滿 18 歲為 `safe`。之後偏好 SHALL NOT 因年齡增加而自動改變（滿 18 歲的使用者要自行切換才會調高，見 `content-tier-modes`）。年齡確認失敗（不一致、未滿 13 歲）SHALL NOT 留下任何偏好。
+
+#### Scenario: 成年者確認
+- **WHEN** 25 歲的新使用者以一致的生日與區間完成年齡確認
+- **THEN** 內容模式偏好為 `standard`
+
+#### Scenario: 未成年者確認
+- **WHEN** 15 歲的新使用者完成年齡確認
+- **THEN** 內容模式偏好為 `safe`
+
+#### Scenario: 之後滿 18 歲
+- **WHEN** 該 15 歲的使用者在三年後再次登入
+- **THEN** 偏好仍是 `safe`，沒有自動調高
+
+#### Scenario: 確認失敗不留偏好
+- **WHEN** 年齡確認因生日與區間不一致而失敗
+- **THEN** 沒有保存任何內容模式偏好

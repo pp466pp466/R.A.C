@@ -1,6 +1,6 @@
 # 路線圖與待決定事項
 
-> 狀態：持續更新 ｜ 最後更新：2026-11-03 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
+> 狀態：持續更新 ｜ 最後更新：2026-11-04 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
 
 本文件說明各個 change 的順序、相依與目前狀態，以及尚未決定的事項。細節與理由在 report.md 與 RPG.md；這裡只維護「現在在哪裡、下一步是什麼」。
 
@@ -25,7 +25,7 @@ flowchart LR
     C5C["C-5c cloud-staging-run<br/>雲端預備環境、平台告警與還原演練、雲端壓測"]:::plan
     C5D["C-5d production-launch<br/>production 資源與對外開放"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
-    RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料、固定規格、三種內容模式、內建劇本（已實作，待封存）"]:::active
+    RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料、固定規格、三種內容模式、內建劇本（已封存）"]:::done
     RC2["RC-2 rpg-turn-engine<br/>回合引擎、SSE、世界狀態"]:::plan
     RC3["RC-3 rpg-game-ui<br/>/game 頁面"]:::plan
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
@@ -33,7 +33,7 @@ flowchart LR
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
     RC7["RC-7 rpg-script-authoring<br/>玩家創作劇本、固定規格、硬性檢查"]:::plan
     RC8["RC-8 rpg-script-publishing<br/>先審後發、目錄、上下架、檢舉"]:::plan
-    CT["content-tier-modes<br/>三種內容模式（併入 RC-1，已實作，待封存）"]:::active
+    CT["content-tier-modes<br/>三種內容模式（併入 RC-1，已封存）"]:::done
     WL["W1 token-wallet<br/>代幣帳本與簽到（金流、訂閱另行探索）"]:::plan
 
     C1 --> C2 --> AG --> AB --> C3
@@ -74,8 +74,8 @@ flowchart LR
 | cloud-staging-run（C-5c） | 規劃完成，待實作（等前提） | 2026-11-02（規劃自原 C-5b 拆出） | **前提：使用者有可計費的 Google Cloud 專案**（已安裝並登入 `gcloud`、同意 Cloud SQL 的固定月費，N-9）。會產生雲端費用，每一步使用者在場確認（單步執行 `--only --yes`）：實際執行 C-5a 的腳本並把差異回寫、Cloud SQL（私有 IP、驗證伺服器憑證——失敗就停止，不退讓到 `TrustServerCertificate=yes`、備份與時間點還原、日誌保存 30 天）、平台告警六類各演練一次、隔離的壓測環境與 gunicorn 調整、Cloud SQL 複製的還原演練、`create-admin --password-env` |
 | production-launch（C-5d） | 規劃中 | — | production 資源與對外開放真實會員；需要使用者決定：自有網域與信件的 SPF／DKIM／DMARC、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter）、入口層 IP 限流是否補做、成年驗證方式（成人模式；已決定為切換時勾選確認，待法務確認，見 report.md 的 U-28）；上線前要重新確認供應商條款與年齡規則。**「只留 Google 登入」尚未立案**（見專案記憶：管理員的密碼重新驗證有衝突） |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
-| RPG 規範修訂（劇本創作與分級） | **已完成**（2026-11-03；不是 OpenSpec change，尚未提交） | 2026-11-03 | AGENTS.md 第 5、7、10、11 節、技能鏡像、同步測試與 report.md 的決定紀錄（U-20 至 U-26）：玩家創作並公開分享劇本（先審後發）、自動檢查四類紅線、內容分級改為安全／一般／成人三種模式、暱稱與筆名、自訂結局與已完結存檔、劇本的個資與刪帳號保留偏好。**不含程式碼** |
-| rpg-data-and-script（RC-1，含 content-tier-modes） | **已實作，待封存**（2026-11-03；第 1 組 commit `74f7a35`，其餘待提交） | 2026-11-03 | 劇本與存檔的資料基礎：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）與遷移 `0012`、固定規格 v1 驗證器、`ScriptRepository` 與 `SessionRepository`（狀態與唯一性由資料庫保證、擁有者隔離、回合冪等與不計中斷輪數）、`AccessPolicy` 的三種內容模式（取代 `sexual_content_level` 0 至 3）、`GET`／`PUT /api/account/content-mode`、`ADULT_MODE_ENABLED`／`ADULT_MODE_MODELS`（舊變數淘汰）、內建首發劇本與 `flask seed-scripts`、抹除（別人的存檔保留）、匯出與保存期限。**沒有任何玩家看得到的介面**。封存時須移除 age-confirmation 與 launch-gates 兩份主規格頁首提到「content-tier-modes」的提示 |
+| RPG 規範修訂（劇本創作與分級） | **已完成並提交**（2026-11-03，commit `bff4109`；不是 OpenSpec change） | 2026-11-03 | AGENTS.md 第 5、7、10、11 節、技能鏡像、同步測試與 report.md 的決定紀錄（U-20 至 U-26）：玩家創作並公開分享劇本（先審後發）、自動檢查四類紅線、內容分級改為安全／一般／成人三種模式、暱稱與筆名、自訂結局與已完結存檔、劇本的個資與刪帳號保留偏好。**不含程式碼** |
+| rpg-data-and-script（RC-1，含 content-tier-modes） | **已封存**（2026-11-04，實作 commit `74f7a35`（第 1 組）與 `eb88e9f`（第 2 至 8 組）：30／30 項；封存時新增 5 個主規格 `content-tier-modes`、`script-fixed-spec`、`script-store`、`rpg-sessions`、`builtin-script-seed`，修改 5 個既有規格 `age-confirmation`、`launch-gates`、`account-deletion`、`personal-data-export`、`data-retention`；pytest 6370、Node 197、容器驗收 117／117、`openspec validate --specs` 53 項通過） | 2026-11-04 | 劇本與存檔的資料基礎：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）與遷移 `0012`、固定規格 v1 驗證器、`ScriptRepository` 與 `SessionRepository`（狀態與唯一性由資料庫保證、擁有者隔離、回合冪等與不計中斷輪數）、`AccessPolicy` 的三種內容模式（取代 `sexual_content_level` 0 至 3）、`GET`／`PUT /api/account/content-mode`、`ADULT_MODE_ENABLED`／`ADULT_MODE_MODELS`（舊變數淘汰）、內建首發劇本與 `flask seed-scripts`、抹除（別人的存檔保留）、匯出與保存期限。**沒有任何玩家看得到的介面**。age-confirmation 與 launch-gates 兩份主規格頁首「待 content-tier-modes 更新」的提示已於封存時移除。尚待處理的措辭（服務條款、隱私權政策與客服提示詞的「滿 18 歲自動解除」、隱私權政策的保存期限表）留給法務覆核 |
 | rpg-script-authoring（RC-7） | 規劃中（RC-1 已實作，可開始規劃） | — | 玩家創作劇本的 API 與表單、固定規格驗證、額度與送審次數、硬性檢查、暱稱的初次設定頁；依賴 RC-1 |
 | rpg-script-publishing（RC-8） | 規劃中 | — | 先審後發的管理員審核佇列、上下架、公開目錄、檢舉、署名、刪帳號的保留偏好；依賴 RC-7 |
 | 錢包與訂閱（W1 至 W3） | 探索中（方向已定，**尚未寫入規範**） | — | W1 token-wallet（只有免費幣，RC-2 的扣款依賴它）、W2 payments-and-subscriptions（金流、法務、未成年付款）、W3 model-catalog-and-pricing；見 report.md U-27 |
@@ -96,7 +96,7 @@ flowchart LR
 | RPG 玩家創作劇本與三種內容模式（2026-11-03 已決定，見 report.md 的 U-20 至 U-26） | 規範已修訂（AGENTS.md 第 5、7、10、11 節）。**待處理**：成人模式勾選確認是否足夠的法務確認、供應商書面許可須涵蓋新模型、公開分享的法務關卡、劇情輸出的審查層與串流（RC-2）、RPG 開場流程（另行探索）、各欄位上限以實際 token 預算校正（RC-4） | [RPG.md](RPG.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、AGENTS.md 第 7、10、11 節 |
 | 全站每日用量上限的預設值綁定 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、500 RPD） | 換模型或正式環境改用 OpenAI 時須重設 `USAGE_DAILY_TOKEN_LIMIT`、`USAGE_DAILY_CALL_LIMIT`；15 RPM 是全站共用，多人同時使用才需要另加全站每分鐘閘門 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | 成人模式的成年確認方式（AGENTS.md 第 7 節） | **已決定（2026-11-03）**：切換為成人模式時勾選「我確定已滿 18 歲」與同意安全規範，並記錄確認時間、規範版本與方式（自行聲明）；書面許可（須涵蓋新模型）、法務意見與部署層開關仍須具備，**法務若認為不足，只更換確認方式**。原評估的備選（若法務要求更強的方式）：台灣數位身分（自然人憑證等）依內政部的申請要點對一般民間企業多半不開放；信用卡在台灣有附卡（約 15 歲起）與金融卡（約 7 歲起）的漏洞，強度偏低且專案沒有金流；第三方證件加活體或自拍估齡是唯一現實的選項，但各家對台灣證件的支援須逐家確認（Yoti 列有台灣國民身分證） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
-| 等級 3 的許可涵蓋的供應商、模型與日期 | 使用者表示已取得許可，內容尚未提供；取得後寫入 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 並填入 `SEXUAL_CONTENT_LEVEL3_MODELS` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| 成人模式的許可涵蓋的供應商、模型與日期 | 使用者表示已取得許可，內容尚未提供；取得後寫入 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 並填入 `ADULT_MODE_MODELS`（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_MODELS`） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | 13 至 17 歲可使用 AI 功能與 Gemini 條款不符 | 僅限個人測試；對外開放前須以實際供應商條款重新確認（RPG.md R-15.4） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 
 ## 3. 每次封存後要做的事
