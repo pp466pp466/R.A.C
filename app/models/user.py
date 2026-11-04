@@ -110,6 +110,14 @@ class User(Base, PublicIdMixin, TimestampMixin):
     adult_confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     adult_rules_version: Mapped[str | None] = mapped_column(Unicode(40), nullable=True)
     adult_confirm_method: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
+    # 玩家創作（rpg-script-authoring）：
+    # - `nickname`、`nickname_code`：公開暱稱與系統產生的穩定短代號。與 Google 帶來的 `display_name` 分開存放，
+    #   只有暱稱可能公開（顯示於已發佈劇本的署名）；既有帳號可為空，第一次創作前須先設定。短代號在第一次設定暱稱時
+    #   亂數產生並保存，之後更改暱稱不改變，不要求唯一。
+    # - `publish_suspended_at`：連續被自動拒絕而被暫停發佈的時間（獨立於 `locked_at`，只停止送審）；只由條件式更新寫入。
+    nickname: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
+    nickname_code: Mapped[str | None] = mapped_column(Unicode(8), nullable=True)
+    publish_suspended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
 
 
 class UserIdentity(Base):

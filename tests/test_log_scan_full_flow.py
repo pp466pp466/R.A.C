@@ -16,6 +16,7 @@ from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 from tests.support.google import FakeProvider, google_sign_in
+from tests.support.review import PassingReviews
 
 pytestmark = pytest.mark.usefixtures("generous_free_limits")      # 掃描日誌用的流程不是用量限制（見 conftest）
 
@@ -365,7 +366,7 @@ def test_a_complete_rpg_tour_leaves_no_script_action_story_notebook_or_world_sta
         user = session.get(User, add_user(session, 1, age=30).id)
         current = CurrentUser.from_model(user)
         scripts, saves = ScriptRepository(session), SessionRepository(session)
-        service = SessionService(scripts=scripts, sessions=saves, policy=AccessPolicy(clock=clock), clock=clock)
+        service = SessionService(scripts=scripts, sessions=saves, policy=AccessPolicy(clock=clock), reviews=PassingReviews(), clock=clock)
 
         content = validated(
             title=RPG_SECRETS["title"][:30], background=RPG_SECRETS["background"], opening=RPG_SECRETS["action"],

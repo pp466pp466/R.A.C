@@ -35,13 +35,14 @@ from sqlalchemy.orm import util as orm_util
 
 from app.models.rpg_session import RpgSession
 from app.models.script import (
-    ENDING_NONE, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED,
-    VERSION_REJECTED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
+    ENDING_NONE, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING,
+    VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
 )
 from app.models.user import CONTENT_TIER_SAFE, CONTENT_TIERS
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
-    AuthorNameLockedError, DuplicateSeedKeyError, InvalidVersionTransitionError, OpenVersionExistsError, VersionNotDraftError,
+    AuthorNameLockedError, DraftChangedError, DuplicateSeedKeyError, InvalidVersionTransitionError, OpenVersionExistsError,
+    VersionNotDraftError,
 )
 
 # 目標狀態 → 允許的來源狀態（固定的轉移集合，見 script-store 規格「版本的狀態與轉移」）
@@ -197,6 +198,31 @@ class ScriptRepository(BaseRepository[Script]):
         )
         return [(script, version) for script, version in self._session.execute(statement).all()]
 
+    def count_owned(self, user_id: int) -> int:
+        """作者擁有的劇本數（含只有草稿的劇本）；劇本數量上限用它。"""
+        return self._session.execute(select(func.count(Script.id)).where(Script.creator_id == user_id)).scalar_one()
+
+    def get_open_version(self, user_id: int, script_public_id: str) -> ScriptVersion | None:
+        """自己劇本目前進行中的版本（草稿或待審），沒有（或不是自己的劇本）回傳 `None`。"""
+        return self._session.scalar(
+            select(ScriptVersion)
+            .join(Script, Script.id == ScriptVersion.script_id)
+            .where(Script.public_id == script_public_id, Script.creator_id == user_id, ScriptVersion.open_script_id.is_not(None))
+        )
+
+    def latest_closed_version(self, user_id: int, script_public_id: str) -> ScriptVersion | None:
+        """自己劇本最新的非進行中版本（已發佈、被退回或被取代）：由它的內容建立下一個草稿。"""
+        return self._session.scalar(
+            select(ScriptVersion)
+            .join(Script, Script.id == ScriptVersion.script_id)
+            .where(
+                Script.public_id == script_public_id, Script.creator_id == user_id,
+                ScriptVersion.status.in_((VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED)),
+            )
+            .order_by(ScriptVersion.version_no.desc())
+            .limit(1)
+        )
+
     def get_script_of(self, version: ScriptVersion) -> Script:
         script = self._session.get(Script, version.script_id)
         assert script is not None, "版本的外鍵保證劇本存在"
@@ -205,21 +231,33 @@ class ScriptRepository(BaseRepository[Script]):
     # ---- 擁有者：修改與刪除草稿 ---------------------------------------------------------
 
     def update_draft(
-        self, user_id: int, version_public_id: str, *, content: Mapping[str, Any], content_hash: str, total_chars: int
+        self, user_id: int, version_public_id: str, *, content: Mapping[str, Any], content_hash: str, total_chars: int,
+        expected_hash: str | None = None,
     ) -> ScriptVersion | None:
-        """覆寫自己草稿的內容與標籤。不是自己的回傳 `None`；不是草稿拋出 `VersionNotDraftError`，內容保持原樣。"""
+        """覆寫自己草稿的內容與標籤。不是自己的回傳 `None`；不是草稿拋出 `VersionNotDraftError`，內容保持原樣。
+
+        `expected_hash`（編輯開始時的內容雜湊）有給時，條件式 UPDATE 同時比對它：草稿在這之間被別處更新（例如另一個分頁）就不覆寫，
+        拋出 `DraftChangedError`。沒命中時再讀一次區分「不是草稿」與「草稿已被更新」。"""
         version = self._owned_version(user_id, version_public_id)
         if version is None:
             return None
+        conditions = [ScriptVersion.id == version.id, ScriptVersion.status == VERSION_DRAFT]
+        if expected_hash is not None:
+            conditions.append(ScriptVersion.content_hash == expected_hash)
         with self._session.begin_nested():
             result = self._session.execute(
                 update(ScriptVersion)
-                .where(ScriptVersion.id == version.id, ScriptVersion.status == VERSION_DRAFT)
+                .where(*conditions)
                 .values(**_content_columns(content, content_hash, total_chars))
                 .execution_options(synchronize_session=False)
             )
             if result.rowcount != 1:
-                raise VersionNotDraftError
+                current = self._session.execute(
+                    select(ScriptVersion.status).where(ScriptVersion.id == version.id)
+                ).scalar_one_or_none()
+                if current != VERSION_DRAFT:
+                    raise VersionNotDraftError
+                raise DraftChangedError
             self._session.execute(delete(ScriptVersionTag).where(ScriptVersionTag.version_id == version.id).execution_options(synchronize_session=False))
             self._add_tags(version.id, content.get("tags") or [])
         self._expire(ScriptVersion, version.id)
@@ -414,6 +452,23 @@ class ScriptRepository(BaseRepository[Script]):
                 (ScriptVersion.status == VERSION_PUBLISHED) | (Script.creator_id == user_id),
             )
         )
+
+    # ---- 審查結果（script-review 規格；唯一寫入審查欄位的方法）---------------------------------
+
+    def record_review(self, version_id: int, content_hash: str, verdict: str, categories: Sequence[str], now: datetime) -> bool:
+        """記錄模型層對「這份內容」的審查結果。條件式 UPDATE（`content_hash` 必須仍等於審查時的雜湊）：審查期間內容被修改時
+        不寫入，回傳 `False`，舊結果不會蓋在新內容上。結果是中繼資料，不改變內容，所以任何狀態的版本都可以記錄。
+        結果與類別必須是固定列舉（程式錯誤時拋出 `ValueError`）。"""
+        if verdict not in REVIEW_VERDICTS or any(category not in REVIEW_CATEGORIES for category in categories):
+            raise ValueError("審查結果與類別必須是固定列舉。")
+        result = self._session.execute(
+            update(ScriptVersion)
+            .where(ScriptVersion.id == version_id, ScriptVersion.content_hash == content_hash)
+            .values(review_hash=content_hash, review_verdict=verdict, review_categories_json=list(categories), reviewed_at=now)
+            .execution_options(synchronize_session=False)
+        )
+        self._expire(ScriptVersion, version_id)
+        return result.rowcount == 1
 
     # ---- 匯出（個人資料匯出用）-------------------------------------------------------------
 

@@ -5,7 +5,8 @@
 {% block page_body %}
 {% raw %}
 <div id="app" v-cloak>
-  <p class="auth-lead">您的帳號目前被鎖定。請向管理員說明情況，管理員解除鎖定之後才能繼續使用。申訴內容只有管理員看得到，請勿填寫密碼或其他不必要的個人資料。</p>
+  <p v-if="isSuspended" class="auth-lead">您的送審權限目前被暫停（連續多次送審被自動拒絕），只有送審受到影響，其他功能照常使用。請向管理員說明情況，管理員解除暫停之後才能再送審。申訴內容只有管理員看得到，請勿填寫密碼或其他不必要的個人資料。</p>
+  <p v-else class="auth-lead">您的帳號目前被鎖定。請向管理員說明情況，管理員解除鎖定之後才能繼續使用。申訴內容只有管理員看得到，請勿填寫密碼或其他不必要的個人資料。</p>
 
   <section v-if="appeals.length" aria-labelledby="appeal-history-title">
     <h2 id="appeal-history-title" class="account-notice-title">您送出的申訴</h2>
@@ -21,7 +22,7 @@
   </section>
   <p v-if="loadError" class="auth-form-error" role="alert">{{ loadError }}</p>
 
-  <p v-if="hasPending" class="auth-notice" role="status">您已有一則申訴等待管理員處理。管理員解除鎖定之後，重新整理本頁即可繼續使用。</p>
+  <p v-if="hasPending" class="auth-notice" role="status">您已有一則申訴等待管理員處理。管理員{{ isSuspended ? '解除暫停' : '解除鎖定' }}之後，{{ isSuspended ? '即可再送審' : '重新整理本頁即可繼續使用' }}。</p>
 
   <form v-else @submit.prevent="submit" novalidate>
     <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
@@ -42,6 +43,7 @@
   </form>
 
   <div class="auth-links">
+    <a v-if="isSuspended" class="auth-linkbtn" href="/scripts">回到劇本</a>
     <button type="button" class="auth-linkbtn" @click="refresh">重新整理</button>
     <button type="button" class="auth-linkbtn" @click="logout">登出</button>
   </div>

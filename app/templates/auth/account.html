@@ -46,6 +46,8 @@
 <div id="app" v-cloak>
   <p v-if="actions.state.formError" class="auth-form-error" role="alert">{{ actions.state.formError }}</p>
 
+  <ui-restriction-notice :kind="restrictionKind"></ui-restriction-notice>
+
   <dl class="account-list">
     <dt>顯示名稱</dt>
     <dd>{{ user.display_name }}</dd>
@@ -57,6 +59,8 @@
     <dd>{{ user.email_verified ? '已驗證' : '尚未驗證' }}</dd>
     <dt>年齡確認</dt>
     <dd>{{ ageConfirmed ? '已完成' : '尚未完成' }}</dd>
+    <dt>暱稱</dt>
+    <dd>{{ nicknameText }}</dd>
     <dt>登入方式</dt>
     <dd>{{ methods }}</dd>
   </dl>
@@ -93,6 +97,28 @@
   <section v-if="ageGroup === 'minor'" class="auth-notice" aria-labelledby="safe-mode-title" role="status">
     <h2 id="safe-mode-title" class="account-notice-title">目前為安全模式</h2>
     <p>因為您未滿 {{ ageRules.adultAge }} 歲，內容會限制在適合所有年齡的範圍，且無法調整。滿 {{ ageRules.adultAge }} 歲之後這項年齡限制會自動解除，但您的內容模式不會自動改變，屆時可以自行切換為一般模式。</p>
+  </section>
+
+  <section v-if="ageConfirmed" class="account-section" aria-labelledby="nickname-title">
+    <h2 id="nickname-title">暱稱與劇本創作</h2>
+    <p v-if="!nickname" class="auth-hint" role="status">創作劇本前請先設定暱稱。</p>
+    <p class="auth-hint">暱稱會公開顯示於您創作的劇本，請勿使用真實姓名。顯示時會附上系統產生的短代號，更改暱稱不會改變短代號。</p>
+    <form @submit.prevent="saveNickname" novalidate>
+      <p v-if="nicknameForm.state.formError" class="auth-form-error" role="alert">{{ nicknameForm.state.formError }}</p>
+      <div class="auth-field">
+        <label class="auth-label" for="account_nickname">暱稱（2 至 20 字）</label>
+        <input id="account_nickname" name="nickname" type="text" class="auth-input" autocomplete="nickname" required
+               v-model="nicknameForm.values.nickname" :disabled="nicknameForm.state.submitting"
+               :aria-invalid="nicknameForm.fieldErrors.nickname ? 'true' : 'false'" :aria-describedby="nicknameForm.fieldErrors.nickname ? 'account_nickname-error' : null">
+        <p v-if="nicknameForm.fieldErrors.nickname" id="account_nickname-error" class="auth-error" role="alert">{{ nicknameForm.fieldErrors.nickname }}</p>
+      </div>
+      <div class="auth-actions">
+        <button type="submit" class="ui-btn ui-btn--primary" :disabled="nicknameForm.state.submitting" :aria-busy="nicknameForm.state.submitting ? 'true' : 'false'">
+          {{ nicknameForm.state.submitting ? '儲存中…' : (nickname ? '更改暱稱' : '設定暱稱') }}
+        </button>
+        <a class="ui-btn" href="/scripts">前往劇本創作</a>
+      </div>
+    </form>
   </section>
 
   <section class="account-section" aria-labelledby="security-title">

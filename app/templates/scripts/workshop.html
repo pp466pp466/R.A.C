@@ -1,0 +1,362 @@
+{% extends "base.html" %}
+{# 劇本創作頁：Vue 3 全域變數模式。Modal、Toast 與區塊的顯示與隱藏完全由 Vue 的響應式變數接管（v-if／v-show），
+   所有來自作者的文字以 {{ }} 插值顯示（純文字），不解析任何標記語言。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。 #}
+{% block title %}劇本創作{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/scripts.css') }}">
+{% endblock %}
+{% block content %}
+<div id="script-app" class="sw-shell" v-cloak>
+{% raw %}
+  <header class="sw-topbar">
+    <h1 class="sw-topbar__title">劇本創作</h1>
+    <span v-if="limits" class="sw-chip" title="你目前擁有的劇本數與上限">劇本 {{ limits.scripts.used }} / {{ limits.scripts.limit }}</span>
+    <span v-if="limits" class="sw-chip" title="今日（台灣時間）的送審次數與上限">今日送審 {{ limits.submissions_today.used }} / {{ limits.submissions_today.limit }}</span>
+    <a class="sw-topbar__link" href="/cs">客服</a>
+    <a class="sw-topbar__link" href="/account">帳號</a>
+  </header>
+
+  <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
+  <p v-if="gate" class="sw-banner" role="alert">請先到<a href="/account">帳號設定</a>完成年齡確認，才能創作劇本。</p>
+  <p v-else-if="limits && !limits.has_nickname" class="sw-banner" role="status">創作劇本前，請先到<a href="/account">帳號設定</a>設定暱稱。</p>
+
+  <!-- ===== 劇本列表 ===== -->
+  <main v-if="view === 'list'" class="sw-main">
+    <div class="sw-head">
+      <h2 class="sw-head__title">我的劇本</h2>
+      <button type="button" class="ui-btn ui-btn--primary" :disabled="busy || locked || !!gate" @click="startNew">新增劇本</button>
+    </div>
+    <p v-if="!ready" class="sw-hint">載入中…</p>
+    <p v-else-if="listError" class="sw-error" role="alert">{{ listError }}</p>
+    <p v-else-if="scripts.length === 0 && !gate" class="sw-hint">還沒有劇本。按「新增劇本」開始創作；編輯器可以帶入範例，照著改就行。</p>
+
+    <ul v-if="scripts.length" class="sw-scripts">
+      <li v-for="script in scripts" :key="script.id" class="sw-script">
+        <p class="sw-script__line">
+          <strong>{{ script.versions[0].title }}</strong>
+          <span class="sw-chip" :title="script.author_locked ? '筆名已在第一次發佈時鎖定' : '發佈前可以重新取用目前的暱稱'">筆名：{{ script.author_name }}#{{ script.author_code }}</span>
+          <span v-if="script.author_locked" class="sw-chip">筆名已鎖定</span>
+        </p>
+        <ul class="sw-versions">
+          <li v-for="version in script.versions" :key="version.id" class="sw-version">
+            <span class="sw-version__no">第 {{ version.version_no }} 版</span>
+            <span class="sw-chip" :class="'sw-chip--' + version.status">{{ statusLabels[version.status] || version.status }}</span>
+            <span class="sw-chip">{{ tierLabels[version.content_tier] || version.content_tier }}</span>
+            <span class="sw-version__muted">{{ version.total_chars }} 字</span>
+            <span class="sw-version__actions">
+              <button type="button" class="ui-btn sw-btn-sm" :disabled="busy" @click="openVersion(version.id)">{{ version.status === 'draft' ? '編輯' : '檢視' }}</button>
+              <button v-if="version.status === 'draft'" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askRemove(version)">刪除</button>
+              <button v-if="version.status === 'pending_review'" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="withdraw(version.id)">撤回</button>
+            </span>
+          </li>
+        </ul>
+        <p class="sw-script__actions">
+          <button v-if="!hasOpenVersion(script)" type="button"
+                  class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="newVersion(script.id)">由最新版本建立新草稿</button>
+          <button v-if="!script.author_locked" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="refreshAuthorName(script.id)">改用目前的暱稱作為筆名</button>
+        </p>
+      </li>
+    </ul>
+    <p class="sw-hint">送審之後內容會被凍結，由管理員審核；審核期間可以撤回再修改。審核與公開目錄的功能之後才會開放，送審的劇本會先停在「待審」。</p>
+  </main>
+
+  <!-- ===== 編輯器 ===== -->
+  <main v-else class="sw-main">
+    <div class="sw-head">
+      <button type="button" class="ui-btn sw-btn-sm" :disabled="busy" @click="backToList">← 回到列表</button>
+      <h2 class="sw-head__title">{{ editor.version ? '第 ' + editor.version.version_no + ' 版' : '新的劇本' }}</h2>
+      <span v-if="editor.version" class="sw-chip" :class="'sw-chip--' + editor.version.status">{{ statusLabels[editor.version.status] }}</span>
+      <span v-if="penName" class="sw-chip">筆名：{{ penName }}</span>
+      <span v-if="dirty && !readOnly" class="sw-chip sw-chip--dirty" role="status">尚未儲存</span>
+    </div>
+
+    <p v-if="readOnly" class="sw-banner" role="status">這個版本已經{{ editor.version.status === 'pending_review' ? '送審，內容凍結中；要修改請先撤回' : '離開草稿，內容不可修改；要修改請回到列表建立新草稿' }}。</p>
+    <p v-if="editor.general" class="sw-error sw-error--block" role="alert">{{ editor.general }}</p>
+    <ul v-if="errorList.length" class="sw-errors" role="alert">
+      <li v-for="item in errorList" :key="item.path"><strong>{{ item.label }}</strong>：{{ item.message }}</li>
+    </ul>
+
+    <p class="sw-hint sw-lead">不知道怎麼寫？每個欄位裡的灰色文字是範例，欄位下方有簡短說明；想看一份完整的示範，可以按「帶入範例」。</p>
+    <form @submit.prevent="save" novalidate>
+      <!-- 目錄資訊 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.catalog ? 'true' : 'false'" @click="toggle('catalog')">
+          <span>目錄資訊</span><span aria-hidden="true">{{ open.catalog ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.catalog" class="sw-section__body">
+          <p class="sw-hint sw-lead">這些資料會顯示在劇本目錄上，讓其他玩家決定要不要玩。</p>
+          <div class="sw-field">
+            <label for="sw-title">標題 <small class="sw-count">{{ count(editor.draft.title) }} / {{ spec.title }}</small></label>
+            <input id="sw-title" type="text" class="sw-input" v-model="editor.draft.title" :disabled="!canEdit" autocomplete="off" placeholder="例：青雲問道">
+            <p class="sw-hint">劇本的名稱，簡短好記即可。</p>
+            <p v-if="err('title')" class="sw-error" role="alert">{{ err('title') }}</p>
+          </div>
+          <div class="sw-field">
+            <label for="sw-summary">簡介 <small class="sw-count">{{ count(editor.draft.summary) }} / {{ spec.summary }}</small></label>
+            <textarea id="sw-summary" class="sw-input" rows="2" v-model="editor.draft.summary" :disabled="!canEdit" placeholder="例：少年拜入宗門，在爭奪與機緣之間，一步步走出自己的道。"></textarea>
+            <p class="sw-hint">用一兩句話說明這個劇本在玩什麼。</p>
+            <p v-if="err('summary')" class="sw-error" role="alert">{{ err('summary') }}</p>
+          </div>
+          <div class="row g-3">
+            <div class="col-12 col-md-7 sw-field">
+              <label for="sw-world">世界觀名稱 <small class="sw-count">{{ count(editor.draft.world_name) }} / {{ spec.world_name }}</small></label>
+              <input id="sw-world" type="text" class="sw-input" v-model="editor.draft.world_name" :disabled="!canEdit" autocomplete="off" placeholder="例：乾歷朝仙俠世界">
+              <p class="sw-hint">這個世界的名字或類型。</p>
+              <p v-if="err('world_name')" class="sw-error" role="alert">{{ err('world_name') }}</p>
+            </div>
+            <div class="col-12 col-md-5 sw-field">
+              <label for="sw-tier">內容模式</label>
+              <select id="sw-tier" class="sw-input" v-model="editor.draft.content_tier" :disabled="!canEdit">
+                <option v-for="tier in tiers" :key="tier" :value="tier">{{ tierLabels[tier] }}</option>
+              </select>
+              <p class="sw-hint">宣告這份劇本的內容程度；未成年的作者只能宣告安全模式。玩家只能遊玩不高於自己目前模式的劇本。</p>
+              <p v-if="err('content_tier')" class="sw-error" role="alert">{{ err('content_tier') }}</p>
+            </div>
+          </div>
+          <div class="sw-field">
+            <label for="sw-tags">標籤</label>
+            <input id="sw-tags" type="text" class="sw-input" v-model="editor.draft.tagsText" :disabled="!canEdit" autocomplete="off" placeholder="例如：仙俠、成長">
+            <p class="sw-hint">以逗號或頓號分隔，最多 {{ spec.tag_count }} 個，每個最多 {{ spec.tag }} 字。</p>
+            <p v-if="err('tags')" class="sw-error" role="alert">{{ err('tags') }}</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 背景與體系 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.background ? 'true' : 'false'" @click="toggle('background')">
+          <span>背景、規則與初始對話</span><span aria-hidden="true">{{ open.background ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.background" class="sw-section__body">
+          <p class="sw-hint sw-lead">AI 在每一回合都會參考這一區的內容；寫得越具體，劇情越貼合你的設定。</p>
+          <div class="sw-field">
+            <label for="sw-background">背景與體系 <small class="sw-count">{{ count(editor.draft.background) }} / {{ spec.background }}</small></label>
+            <textarea id="sw-background" class="sw-input" rows="6" v-model="editor.draft.background" :disabled="!canEdit" placeholder="例：靈氣復甦的年代，宗門林立，凡人也能修行。修行分為煉氣、築基、金丹三個境界，境界越高壽命越長。玩家是一名剛滿十六歲的孤兒，被山下的藥鋪收養，今天第一次走進青雲宗的山門。"></textarea>
+            <p class="sw-hint">寫這個世界是什麼樣子：時代與地方、有哪些勢力、世界特有的系統（例如修煉境界、魔法規則、科技程度），以及玩家一開始的處境。直接用文字寫就好，不需要選類型。</p>
+            <p v-if="err('background')" class="sw-error" role="alert">{{ err('background') }}</p>
+          </div>
+          <div class="sw-field">
+            <label for="sw-rules">世界規則（狀態轉移規則，選填） <small class="sw-count">{{ count(editor.draft.rules) }} / {{ spec.rules }}</small></label>
+            <textarea id="sw-rules" class="sw-input" rows="3" v-model="editor.draft.rules" :disabled="!canEdit" placeholder="例：一、突破境界必須有時間、機緣或努力作為依據，不能憑空獲得。二、時間依玩家的行動自然流逝，年齡隨時間增長。三、角色依各自的個性行動，不會無條件聽從玩家，信任要靠事件慢慢累積。四、保持古風的語氣，避免現代用語。"></textarea>
+            <p class="sw-hint">這是寫給 AI 的「行事準則」：規定這個世界裡的事情要怎麼發展、在什麼條件下才會改變（「狀態轉移」就是從一個狀態變成另一個狀態）。AI 會把它當成必須遵守的設定。可以寫：①能力或地位怎樣才算進步（例如突破境界需要什麼條件）、②時間怎麼流逝、③角色會不會無條件聽從玩家、④語氣與用詞。不寫也可以，AI 就依背景自行判斷。</p>
+            <p v-if="err('rules')" class="sw-error" role="alert">{{ err('rules') }}</p>
+          </div>
+          <div class="sw-field">
+            <label for="sw-opening">初始對話（選填） <small class="sw-count">{{ count(editor.draft.opening) }} / {{ spec.opening }}</small></label>
+            <textarea id="sw-opening" class="sw-input" rows="3" v-model="editor.draft.opening" :disabled="!canEdit" placeholder="例：山門前，晨霧未散。你背著簡單的行囊，抬頭望向那塊刻著「青雲」二字的石碑。"></textarea>
+            <p class="sw-hint">故事開始時的第一段文字，用來設定開場的氣氛與場景。</p>
+            <p v-if="err('opening')" class="sw-error" role="alert">{{ err('opening') }}</p>
+          </div>
+        </div>
+      </section>
+
+      <!-- 角色 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.characters ? 'true' : 'false'" @click="toggle('characters')">
+          <span>角色（{{ editor.draft.characters.length }} / {{ spec.character_count }}）</span><span aria-hidden="true">{{ open.characters ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.characters" class="sw-section__body">
+          <p class="sw-hint sw-lead">劇中的重要人物。AI 會依這裡的個性與說話風格來演出他們；「隱藏個性」不會一開始就揭露，要等劇情推進到合適的時機。</p>
+          <p v-if="err('characters')" class="sw-error" role="alert">{{ err('characters') }}</p>
+          <div v-for="(character, index) in editor.draft.characters" :key="character.key" class="sw-card">
+            <div class="sw-card__head">
+              <strong>角色 {{ index + 1 }}</strong>
+              <button type="button" class="ui-btn sw-btn-sm" :disabled="!canEdit" @click="removeCharacter(index)">移除</button>
+            </div>
+            <div class="row g-3">
+              <div class="col-12 col-md-8 sw-field">
+                <label :for="'sw-c-name-' + character.key">姓名</label>
+                <input :id="'sw-c-name-' + character.key" type="text" class="sw-input" v-model="character.name" :disabled="!canEdit" autocomplete="off" placeholder="例：林曉">
+                <p v-if="err('characters[' + index + '].name')" class="sw-error" role="alert">{{ err('characters[' + index + '].name') }}</p>
+              </div>
+              <div class="col-12 col-md-4 sw-field">
+                <label :for="'sw-c-age-' + character.key">年齡</label>
+                <input :id="'sw-c-age-' + character.key" type="text" inputmode="numeric" class="sw-input" v-model="character.age" :disabled="!canEdit" autocomplete="off" placeholder="例：16">
+                <p v-if="err('characters[' + index + '].age')" class="sw-error" role="alert">{{ err('characters[' + index + '].age') }}</p>
+              </div>
+            </div>
+            <div class="sw-field">
+              <label :for="'sw-c-personality-' + character.key">個性 <small class="sw-count">{{ count(character.personality) }} / {{ spec.character_personality }}</small></label>
+              <input :id="'sw-c-personality-' + character.key" type="text" class="sw-input" v-model="character.personality" :disabled="!canEdit" autocomplete="off" placeholder="例：活潑好動、嘴硬心軟">
+              <p v-if="err('characters[' + index + '].personality')" class="sw-error" role="alert">{{ err('characters[' + index + '].personality') }}</p>
+            </div>
+            <div class="sw-field">
+              <label :for="'sw-c-appearance-' + character.key">外貌 <small class="sw-count">{{ count(character.appearance) }} / {{ spec.character_appearance }}</small></label>
+              <textarea :id="'sw-c-appearance-' + character.key" class="sw-input" rows="2" v-model="character.appearance" :disabled="!canEdit" placeholder="例：身形瘦小，眼神明亮，總穿著洗得發白的灰袍"></textarea>
+              <p v-if="err('characters[' + index + '].appearance')" class="sw-error" role="alert">{{ err('characters[' + index + '].appearance') }}</p>
+            </div>
+            <div class="row g-3">
+              <div class="col-12 col-md-4 sw-field">
+                <label :for="'sw-c-occupation-' + character.key">職業（選填）</label>
+                <input :id="'sw-c-occupation-' + character.key" type="text" class="sw-input" v-model="character.occupation" :disabled="!canEdit" autocomplete="off" placeholder="例：外門弟子">
+                <p v-if="err('characters[' + index + '].occupation')" class="sw-error" role="alert">{{ err('characters[' + index + '].occupation') }}</p>
+              </div>
+              <div class="col-12 col-md-8 sw-field">
+                <label :for="'sw-c-speech-' + character.key">說話風格（選填）</label>
+                <input :id="'sw-c-speech-' + character.key" type="text" class="sw-input" v-model="character.speech_style" :disabled="!canEdit" autocomplete="off" placeholder="例：說話直率，愛用反問句，生氣時會結巴">
+                <p v-if="err('characters[' + index + '].speech_style')" class="sw-error" role="alert">{{ err('characters[' + index + '].speech_style') }}</p>
+              </div>
+            </div>
+            <div class="sw-field">
+              <label :for="'sw-c-hidden-' + character.key">隱藏個性（選填，故事中才會逐漸揭露）</label>
+              <input :id="'sw-c-hidden-' + character.key" type="text" class="sw-input" v-model="character.hidden_trait" :disabled="!canEdit" autocomplete="off" placeholder="例：其實是失傳古老血脈的後裔，自己並不知情">
+              <p v-if="err('characters[' + index + '].hidden_trait')" class="sw-error" role="alert">{{ err('characters[' + index + '].hidden_trait') }}</p>
+            </div>
+          </div>
+          <button type="button" class="ui-btn sw-btn-sm" :disabled="!canEdit || editor.draft.characters.length >= spec.character_count" @click="addCharacter">＋ 新增角色</button>
+        </div>
+      </section>
+
+      <!-- 地點 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.locations ? 'true' : 'false'" @click="toggle('locations')">
+          <span>地點（{{ editor.draft.locations.length }} / {{ spec.location_count }}）</span><span aria-hidden="true">{{ open.locations ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.locations" class="sw-section__body">
+          <p class="sw-hint sw-lead">故事中可以前往的地方。</p>
+          <p v-if="err('locations')" class="sw-error" role="alert">{{ err('locations') }}</p>
+          <div v-for="(place, index) in editor.draft.locations" :key="place.key" class="sw-inline">
+            <label class="sw-visually-hidden" :for="'sw-l-' + place.key">地點 {{ index + 1 }}</label>
+            <input :id="'sw-l-' + place.key" type="text" class="sw-input" v-model="place.text" :disabled="!canEdit" autocomplete="off" placeholder="例：古劍山莊">
+            <button type="button" class="ui-btn sw-btn-sm" :disabled="!canEdit" @click="removeLocation(index)" :aria-label="'移除地點 ' + (index + 1)">移除</button>
+            <p v-if="err('locations[' + index + ']')" class="sw-error" role="alert">{{ err('locations[' + index + ']') }}</p>
+          </div>
+          <button type="button" class="ui-btn sw-btn-sm" :disabled="!canEdit || editor.draft.locations.length >= spec.location_count" @click="addLocation">＋ 新增地點</button>
+        </div>
+      </section>
+
+      <!-- 里程碑 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.milestones ? 'true' : 'false'" @click="toggle('milestones')">
+          <span>里程碑（{{ editor.draft.milestones.length }} / {{ spec.milestone_count }}）</span><span aria-hidden="true">{{ open.milestones ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.milestones" class="sw-section__body">
+          <p class="sw-hint sw-lead">到了指定的玩家年齡或遊戲內年份，就會發生的重要事件（例如 20 歲的宗門大測）。時間到了沒有，是由系統判斷的，不是 AI 說了算。</p>
+          <div class="row g-3">
+            <div class="col-12 col-md-7 sw-field">
+              <label for="sw-cal-name">曆法名稱（用年份觸發時才需要）</label>
+              <input id="sw-cal-name" type="text" class="sw-input" v-model="editor.draft.calendar_name" :disabled="!canEdit" autocomplete="off" placeholder="例：乾歷">
+              <p v-if="err('calendar.name') || err('calendar')" class="sw-error" role="alert">{{ err('calendar.name') || err('calendar') }}</p>
+            </div>
+            <div class="col-12 col-md-5 sw-field">
+              <label for="sw-cal-year">起始年</label>
+              <input id="sw-cal-year" type="text" inputmode="numeric" class="sw-input" v-model="editor.draft.calendar_start_year" :disabled="!canEdit" autocomplete="off" placeholder="例：1200">
+              <p class="sw-hint">故事開始時是這個曆法的第幾年。</p>
+              <p v-if="err('calendar.start_year')" class="sw-error" role="alert">{{ err('calendar.start_year') }}</p>
+            </div>
+          </div>
+          <p v-if="err('milestones')" class="sw-error" role="alert">{{ err('milestones') }}</p>
+          <div v-for="(milestone, index) in editor.draft.milestones" :key="milestone.key" class="sw-card">
+            <div class="sw-card__head">
+              <strong>里程碑 {{ index + 1 }}</strong>
+              <button type="button" class="ui-btn sw-btn-sm" :disabled="!canEdit" @click="removeMilestone(index)">移除</button>
+            </div>
+            <div class="sw-field">
+              <label :for="'sw-m-title-' + milestone.key">事件名稱</label>
+              <input :id="'sw-m-title-' + milestone.key" type="text" class="sw-input" v-model="milestone.title" :disabled="!canEdit" autocomplete="off" placeholder="例：宗門大測">
+              <p v-if="err('milestones[' + index + '].title')" class="sw-error" role="alert">{{ err('milestones[' + index + '].title') }}</p>
+            </div>
+            <div class="row g-3">
+              <div class="col-12 col-md-5 sw-field">
+                <label :for="'sw-m-kind-' + milestone.key">觸發方式</label>
+                <select :id="'sw-m-kind-' + milestone.key" class="sw-input" v-model="milestone.kind" :disabled="!canEdit">
+                  <option value="age">玩家年齡到達</option>
+                  <option value="year">遊戲內年份到達</option>
+                </select>
+              </div>
+              <div class="col-12 col-md-7 sw-field">
+                <label :for="'sw-m-value-' + milestone.key">{{ milestone.kind === 'age' ? '年齡' : '年份' }}</label>
+                <input :id="'sw-m-value-' + milestone.key" type="text" inputmode="numeric" class="sw-input" v-model="milestone.value" :disabled="!canEdit" autocomplete="off" :placeholder="milestone.kind === 'age' ? '例：20' : '例：1205'">
+                <p v-if="err('milestones[' + index + '].trigger.value') || err('milestones[' + index + '].trigger')" class="sw-error" role="alert">{{ err('milestones[' + index + '].trigger.value') || err('milestones[' + index + '].trigger') }}</p>
+              </div>
+            </div>
+          </div>
+          <button type="button" class="ui-btn sw-btn-sm" :disabled="!canEdit || editor.draft.milestones.length >= spec.milestone_count" @click="addMilestone">＋ 新增里程碑</button>
+          <div class="sw-preview" aria-live="polite">
+            <h3 class="sw-preview__title">里程碑預覽</h3>
+            <p v-if="preview.length === 0" class="sw-hint">填入事件名稱與觸發數值後，這裡會依觸發的先後列出（只在這個頁面計算，不會送出）。</p>
+            <ol v-else class="sw-preview__list">
+              <li v-for="item in preview" :key="item.index"><strong>{{ item.label }}</strong>：{{ item.title }}</li>
+            </ol>
+          </div>
+        </div>
+      </section>
+
+      <!-- 結局 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.ending ? 'true' : 'false'" @click="toggle('ending')">
+          <span>結局</span><span aria-hidden="true">{{ open.ending ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.ending" class="sw-section__body">
+          <p class="sw-hint sw-lead">預設沒有結局，玩家可以一直玩下去（開放世界）。選「自訂結局」可以替故事設定一個終點。</p>
+          <fieldset class="sw-fieldset" :disabled="!canEdit">
+            <legend class="sw-legend">結局模式</legend>
+            <label class="sw-radio"><input type="radio" value="none" v-model="editor.draft.ending_mode"> 無結局（預設，開放世界）</label>
+            <label class="sw-radio"><input type="radio" value="custom" v-model="editor.draft.ending_mode"> 自訂結局</label>
+          </fieldset>
+          <p v-if="err('ending_mode')" class="sw-error" role="alert">{{ err('ending_mode') }}</p>
+          <template v-if="editor.draft.ending_mode === 'custom'">
+            <div class="sw-field">
+              <label for="sw-ending-text">結局說明 <small class="sw-count">{{ count(editor.draft.ending_text) }} / {{ spec.ending_text }}</small></label>
+              <textarea id="sw-ending-text" class="sw-input" rows="3" v-model="editor.draft.ending_text" :disabled="!canEdit" placeholder="例：主角在晚年飛升而去，留下一段流傳後世的傳說。"></textarea>
+              <p class="sw-hint">寫給 AI 看的結局描述：在什麼情況下故事算結束，結束時會是什麼樣子。</p>
+              <p v-if="err('ending_text')" class="sw-error" role="alert">{{ err('ending_text') }}</p>
+            </div>
+            <div class="sw-field">
+              <label for="sw-ending-age">壽終年齡（選填）</label>
+              <input id="sw-ending-age" type="text" inputmode="numeric" class="sw-input" v-model="editor.draft.ending_age" :disabled="!canEdit" autocomplete="off" placeholder="例：90">
+              <p class="sw-hint">選填：角色活到這個年齡就自然壽終，故事隨之結束。</p>
+              <p v-if="err('ending_age')" class="sw-error" role="alert">{{ err('ending_age') }}</p>
+            </div>
+          </template>
+        </div>
+      </section>
+
+      <p class="sw-hint" :class="{ 'sw-error': total > spec.total }">全部文字約 {{ total }} / {{ spec.total }} 字。</p>
+
+      <div class="sw-actions">
+        <button type="submit" class="ui-btn ui-btn--primary" :disabled="!canEdit || (!dirty && !!editor.version)" :aria-busy="editor.saving ? 'true' : 'false'">
+          {{ editor.saving ? '儲存中…' : '儲存草稿' }}
+        </button>
+        <button type="button" class="ui-btn" :disabled="!canEdit" @click="askExample">帶入範例</button>
+        <button type="button" class="ui-btn ui-btn--primary" :disabled="!canSubmit" :aria-busy="editor.submitting ? 'true' : 'false'" @click="askSubmit">
+          {{ editor.submitting ? '審查中，請稍候…' : '送審' }}
+        </button>
+        <button v-if="editor.version && editor.version.status === 'pending_review'" type="button" class="ui-btn" :disabled="busy || locked" @click="withdraw(editor.version.id)">撤回送審</button>
+      </div>
+    </form>
+  </main>
+
+  <ui-modal v-model="modal.submit" title="送審這份劇本？" status-code="SUBMIT_SCRIPT" confirm-text="確認送審" @confirm="confirmSubmit">
+    <p>送審前會先儲存目前的內容，並進行內容審查（最長約 30 秒）。送審之後內容會被凍結，由管理員審核；審核期間可以撤回再修改。</p>
+    <p class="sw-hint">明確違反內容規範的劇本會被直接拒絕，只會告知類別。連續多次被拒絕會暫停您的送審權限。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.remove" title="刪除這份草稿？" status-code="DELETE_DRAFT" confirm-text="刪除" @confirm="confirmRemove">
+    <p>這份草稿會被永久刪除，無法復原。{{ modal.removeTarget && modal.removeTarget.version_no === 1 ? '這是劇本唯一的版本，整個劇本也會一併刪除。' : '' }}</p>
+  </ui-modal>
+  <ui-modal v-model="modal.leave" title="離開之前" status-code="UNSAVED_CHANGES" confirm-text="放棄修改並離開" @confirm="confirmLeave">
+    <p>目前的修改還沒有儲存，離開之後會遺失。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.example" title="帶入範例？" status-code="LOAD_EXAMPLE" confirm-text="帶入範例" @confirm="loadExample">
+    <p>範例會取代編輯器裡目前尚未儲存的內容。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.conflict" title="這份草稿已在別處更新" status-code="DRAFT_CHANGED" :closable="false" :show-cancel="false">
+    <p>這份草稿在你開始編輯之後已被更新（例如在另一個分頁儲存），為了避免蓋掉較新的內容，這次沒有儲存。</p>
+    <template #actions>
+      <button type="button" class="ui-btn" @click="modal.conflict = false">先保留我的修改</button>
+      <button type="button" class="ui-btn ui-btn--primary" @click="reloadFromServer">重新載入（放棄我的修改）</button>
+    </template>
+  </ui-modal>
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
+</div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scripts/script-draft.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scripts/milestone-preview.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scripts/script-api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scripts/script-workshop.js') }}"></script>
+{% endblock %}

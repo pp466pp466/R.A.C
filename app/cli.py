@@ -1,6 +1,6 @@
 """`flask` 自訂指令（見 AGENTS.md 第 10、11 節：維運工作以指令實作，不用行程內計時器）。
 
-十個指令：
+十二個指令：
 - `llm-probe`：開發用，不屬於維運。呼叫 RPG 敘事用途的模型端點一次，印出回覆、模型、延遲、token 與結束原因，
   讓人在 RPG 實作之前先評估端點好不好用（含結構化輸出的穩定度）。只能在 development 與 testing 執行；**不寫帳本與任何資料表**，
   不顯示金鑰，也不印供應商的錯誤本文。
@@ -23,6 +23,10 @@
   讀取隨映像封裝的內建劇本資料檔（`app/data/scripts/*.json`），全部驗證通過才在單一交易內寫入（全有或全無），以種子鍵與內容雜湊
   冪等地建立、更新（新增版本並取代舊版）或略過；`--dry-run` 只列出結果。輸出只有種子鍵與筆數，不含劇本內容；
   資料不合規時以非零代碼結束並指出檔名與欄位路徑，沒有寫入任何資料。
+- `set-script-limit`、`show-script-limits`：**人工類，不得排程**。營運限制（每位作者可擁有的劇本數、每個台灣日的送審次數、連續被
+  自動拒絕幾次就暫停發佈）存在資料庫，程式每次使用時現讀，所以調整不必重新部署。`set-script-limit KEY VALUE` 驗證鍵與範圍後寫入、
+  輸出舊值與新值，並寫一筆 `limit.set` 稽核（管理員欄位為空）；`show-script-limits` 列出全部七個鍵、目前生效的值與是否為保底預設。
+  輸出只有鍵與數值。沒有任何 HTTP 端點可以修改限制。
 - `replay-deletions`：**備份還原後、對外開放流量之前**手動執行（不得排程），依 `deletion_tombstones`（以及由日誌取出的
   `使用者編號,刪除時間` 檔案，`--ids-file`）重新抹除復活的帳號；只抹除建立時間不晚於刪除時間且不是管理員的帳號，
   `--dry-run` 只列筆數。檔案先整體驗證，格式錯誤時在抹除任何帳號之前失敗，只指出行號；輸出只有筆數，不含檔案路徑與內容。
@@ -43,8 +47,10 @@ from app.services.alert_messages import ALERT_NAMES, SEVERITY_LABELS, format_thr
 from app.services.llm_output import parse_llm_json
 from app.services.registry import (
     build_account_deletion_executor, build_account_retention_service, build_age_stats_service, build_auth_service,
-    build_alert_service, build_data_retention_service, build_deletion_replay_service, build_script_seed_service,
+    build_alert_service, build_data_retention_service, build_deletion_replay_service, build_runtime_limits,
+    build_script_seed_service,
 )
+from app.services.runtime_limits import LimitError
 from app.services.cs_prompt import leak_marker
 from app.services.deletion_replay_service import ReplayFileError, parse_replay_file
 from app.services.script_seed_service import SEED_CREATED, SEED_UNCHANGED, SEED_UPDATED, SeedDataError
@@ -61,7 +67,9 @@ SCHEDULED_COMMANDS: dict[str, str] = {
     "purge-expired-data": "40 3 * * *",
 }
 # 人工操作的指令：開發用、一次性或還原時才執行，不得排程。
-MANUAL_COMMANDS: tuple[str, ...] = ("llm-probe", "create-admin", "age-stats", "replay-deletions", "seed-scripts")
+MANUAL_COMMANDS: tuple[str, ...] = (
+    "llm-probe", "create-admin", "age-stats", "replay-deletions", "seed-scripts", "set-script-limit", "show-script-limits",
+)
 
 # ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
 PROBE_SYSTEM = "你是一位說書人。請一律使用繁體中文（台灣用語）回答，內容保持輕鬆無害。"
@@ -85,6 +93,7 @@ RETENTION_LABELS = {
     "lock_strikes": "帳號鎖定計次",
     "turn_content": "中斷或被擋回合的部分內容",
     "sessions": "RPG 存檔與回合",
+    "script_submissions": "劇本送審紀錄",
 }
 
 
@@ -323,6 +332,31 @@ def register_cli(app: Flask) -> None:
         click.echo(f"  建立 {report.created}、更新 {report.updated}、沒有變動 {report.unchanged}（共 {len(report.results)} 份）")
         for result in report.results:
             click.echo(f"  {result.seed_key}：{label[result.action]}")
+
+    @app.cli.command("set-script-limit")
+    @click.argument("key")
+    @click.argument("value", type=int)
+    def set_script_limit(key: str, value: int) -> None:
+        """修改一個營運限制（見 `show-script-limits` 的鍵）。立即生效，不必重新部署；每次修改寫一筆稽核。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            try:
+                previous, current = build_runtime_limits(session, clock=get_clock()).set(key, value)
+            except LimitError as error:
+                session.rollback()
+                raise click.ClickException(str(error)) from None
+            session.commit()
+        click.echo(f"{key}：{previous} → {current}")
+
+    @app.cli.command("show-script-limits")
+    def show_script_limits() -> None:
+        """列出全部營運限制的目前值（只有鍵與數值）。「保底預設」表示資料庫缺值或值不合法。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            rows = build_runtime_limits(session, clock=get_clock()).rows()
+        for row in rows:
+            note = "" if row.from_database else "（保底預設：資料庫缺值或不合法）"
+            click.echo(f"  {row.key} = {row.value}（範圍 {row.minimum} 至 {row.maximum}）{note}")
 
     @app.cli.command("age-stats")
     def age_stats() -> None:

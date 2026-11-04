@@ -22,6 +22,7 @@ from app.services.account_lock_service import AccountLockService
 from app.services.current_user import CurrentUser
 from app.services.errors import Conflict, Forbidden, UnderageAccountErased, Unauthenticated, ValidationError
 from app.services.input_cleaning import clean_single_line
+from app.services.nickname import check_nickname, new_code
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, VerifiedAge, age_group, taipei_today, validate_age_input
 from app.services.normalization import canonical_email, is_valid_email, normalize_email
 from app.services.password_hasher import MAX_PASSWORD_LENGTH, PasswordHasherService, normalize_password, password_problem
@@ -157,10 +158,15 @@ class AuthService:
         group = age_group(current.birth_date, taipei_today(self._clock()), self._age_policy)
         return current.public_dict(age_group=group, google_linked=linked)
 
-    def verify_age(self, current: CurrentUser, *, birth_date: object, age_range: object) -> CurrentUser:
+    def verify_age(
+        self, current: CurrentUser, *, birth_date: object, age_range: object, nickname: object = None
+    ) -> CurrentUser:
         """已登入、尚未完成年齡確認的使用者補填生日與年齡區間（玩家首次以 Google 登入後的年齡確認頁、管理員的帳號設定頁）。
 
         - 已完成的帳號再次提交一律成功、完全不改動原本的紀錄，也不再記錄事件（即使內容不同）。
+        - **玩家同時提交暱稱**（rpg-script-authoring）：暱稱與生日、年齡區間是同一個步驟、同一次提交，全有或全無。暱稱**先**驗證，
+          不合格以暱稱欄位的錯誤回應，不保存任何資料，也**不**計入帳號鎖定的計次（不是年齡資料的不一致）。管理員在帳號設定頁
+          補填時可不提供暱稱（提供了就一併驗證與保存）。
         - 驗證規則與註冊相同；不通過時不寫入任何年齡資料，日誌只記事件名稱。
         - **未滿 13 歲的玩家**（生日算出的年齡，或所選區間為未滿 13 歲）：立即抹除帳號與全部個資，不保存填寫的生日，
           拋出 `UnderageAccountErased`（400，Controller 據此清除目前裝置的登入狀態）。管理員只拒絕、不抹除。
@@ -170,7 +176,18 @@ class AuthService:
         user = self._require_user(current)
         if user.birth_date is not None and user.age_range is not None:
             return CurrentUser.from_model(user)
+        clean_nickname: str | None = None
+        nickname_error: str | None = None
+        if user.role != ROLE_ADMIN or nickname not in (None, ""):
+            clean_nickname, nickname_error = check_nickname(nickname)
         verified, error = self._check_age_input(birth_date, age_range)
+        if nickname_error is not None:
+            # 暱稱不合格：什麼都不保存、不計入鎖定計次（不一致與未滿 13 歲的處理在這之後，所以不會被觸發）。
+            # 年齡欄位只是格式錯誤（沒有填、日期不合法）時，把欄位錯誤一併回報，使用者一次改完。
+            fields = {"nickname": nickname_error}
+            if error is not None and error.code == "validation_error":
+                fields = {**error.fields, **fields}
+            raise ValidationError(fields=fields)
         if error is not None:
             security_events.log_age_rejection(error.code)
             raise self._age_step_error(user, error)
@@ -182,6 +199,8 @@ class AuthService:
             is_adult=verified.is_adult,
             confirmed_at=self._clock(),
             policy_version=self._age_policy.version,
+            nickname=clean_nickname,
+            nickname_code=new_code() if clean_nickname else None,
         ):
             security_events.log_event(security_events.AGE_CONFIRMED_LATER, user_id=user.id)
         return CurrentUser.from_model(user)

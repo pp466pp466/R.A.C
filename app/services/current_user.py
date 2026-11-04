@@ -25,6 +25,10 @@ RESTRICTION_LOCKED = "locked"
 RESTRICTION_AGE_PENDING = "age_pending"
 RESTRICTION_DELETION_PENDING = "deletion_pending"
 
+# 可以使用申訴頁的兩種狀態（lockout-appeals 規格）：被鎖定（受限登入狀態），或被暫停發佈（其餘功能照常）。
+APPEAL_KIND_LOCKED = "locked"
+APPEAL_KIND_SUSPENDED = "suspended"
+
 
 @dataclass(frozen=True)
 class CurrentUser:
@@ -45,6 +49,10 @@ class CurrentUser:
     content_tier_preference: str = "safe"
     adult_confirmed_at: datetime | None = None
     adult_rules_version: str | None = None
+    # 玩家創作（只有本人看得到暱稱與短代號；暫停發佈只以布林進 `public_dict`）
+    nickname: str | None = None
+    nickname_code: str | None = None
+    publish_suspended_at: datetime | None = None
 
     @property
     def age_confirmed(self) -> bool:
@@ -72,6 +80,9 @@ class CurrentUser:
             content_tier_preference=user.content_tier_preference,
             adult_confirmed_at=user.adult_confirmed_at,
             adult_rules_version=user.adult_rules_version,
+            nickname=user.nickname,
+            nickname_code=user.nickname_code,
+            publish_suspended_at=user.publish_suspended_at,
         )
 
     @property
@@ -84,6 +95,17 @@ class CurrentUser:
                 return RESTRICTION_AGE_PENDING
         if self.awaiting_deletion:
             return RESTRICTION_DELETION_PENDING
+        return None
+
+    @property
+    def appeal_kind(self) -> str | None:
+        """可以申訴的原因：被鎖定（優先）或被暫停發佈；兩者都沒有（含管理員，他們不會被鎖定或暫停）時為 None。"""
+        if self.role == ROLE_ADMIN:
+            return None
+        if self.locked_at is not None:
+            return APPEAL_KIND_LOCKED
+        if self.publish_suspended_at is not None:
+            return APPEAL_KIND_SUSPENDED
         return None
 
     @property
@@ -126,6 +148,9 @@ class CurrentUser:
             "age_confirmed": self.age_confirmed,
             "age_group": age_group,
             "restriction": self.restriction,
+            "nickname": self.nickname,
+            "nickname_code": self.nickname_code,
+            "publish_suspended": self.publish_suspended_at is not None,
         }
         if google_linked is not None:
             data["google_linked"] = google_linked

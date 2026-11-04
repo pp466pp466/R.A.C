@@ -11,7 +11,7 @@ import pytest
 from app.config import PROJECT_ROOT
 from app.models.admin_audit_log import AUDIT_ACTIONS
 from app.models.chat import MSG_STATUS_FALLBACK, MSG_STATUS_OK
-from app.models.llm_call_log import KIND_CHAT, KIND_SUMMARY
+from app.models.llm_call_log import CALL_KINDS
 from app.models.lock_strike import STRIKE_KINDS
 from app.models.user import MEMBER_TIERS, USER_STATUSES
 
@@ -37,7 +37,7 @@ def labels() -> dict[str, dict[str, str]]:
         ("tier", MEMBER_TIERS),
         ("action", AUDIT_ACTIONS),
         ("lockReason", STRIKE_KINDS),
-        ("kind", (KIND_CHAT, KIND_SUMMARY)),
+        ("kind", CALL_KINDS),
         ("messageStatus", (MSG_STATUS_OK, MSG_STATUS_FALLBACK)),
         ("role", ("user", "admin")),
         ("messageRole", ("user", "assistant")),

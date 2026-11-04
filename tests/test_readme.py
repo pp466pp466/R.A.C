@@ -147,6 +147,33 @@ def test_readme_member_auth_endpoint_tables_list_exactly_the_registered_routes()
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 
+def test_readme_script_authoring_tables_list_exactly_the_registered_routes_and_both_limit_commands():
+    """劇本創作的端點與頁面表格必須與實際註冊的路由完全一致；兩個營運限制指令與七個鍵都要記載。"""
+    from app import create_app
+    from app.config import load_config
+    from app.services.runtime_limits import LIMIT_KEYS
+
+    section = readme_section("玩家創作劇本（rpg-script-authoring）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/[^`]*`", cells[0]):
+            methods = set(cells[1].split("、")) if re.fullmatch(r"[A-Z]+(、[A-Z]+)*", cells[1]) else {"GET"}
+            documented.update((cells[0].strip("`"), method) for method in methods)
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/scripts") or rule.endpoint.startswith("script_pages."):
+            actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
+    assert len(actual) == 12, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+    for command in ("set-script-limit", "show-script-limits"):
+        assert command in section, command
+    for key in LIMIT_KEYS:
+        assert key.split(".")[0] in section, key
+
+
 def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():
     """客服的端點與頁面表格必須與實際註冊的路由完全一致；同一路徑的不同方法各佔一列。"""
     from app import create_app
@@ -189,7 +216,7 @@ def test_readme_admin_endpoint_tables_list_exactly_the_registered_routes():
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/admin/") or rule.endpoint.startswith("admin_pages."):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 16, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 18, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 
@@ -225,7 +252,7 @@ def test_readme_privacy_lifecycle_endpoint_tables_list_exactly_the_registered_ro
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/account/"):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 5, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 6, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 
@@ -241,7 +268,9 @@ def test_readme_privacy_lifecycle_section_documents_the_commands_the_periods_and
         assert phrase in section, phrase
     assert (retention.CONVERSATION_RETENTION.days, retention.LEDGER_RETENTION.days, retention.ERROR_DETAIL_RETENTION.days,
             retention.AUTH_TOKEN_RETENTION.days, retention.ADMIN_AUDIT_RETENTION.days, retention.LOCK_STRIKE_RETENTION.days) == (365, 365, 14, 7, 730, 7)
-    assert set(RETENTION_LABELS) == {"conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes", "turn_content", "sessions"}
+    assert set(RETENTION_LABELS) == {
+        "conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes", "turn_content", "sessions", "script_submissions",
+    }
     for path in ("app/static/js/auth/account-lifecycle.js", "tests/js/account-lifecycle.test.js", "tests/test_restricted_session.py",
                  "tests/test_privacy_lifecycle_flow.py", "tests/architecture/test_account_erasure_coverage.py"):
         assert (PROJECT_ROOT / path).is_file(), path

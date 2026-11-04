@@ -1,6 +1,6 @@
 """認證相關回應禁止被快取（見 session-authentication 規格「認證回應不可被快取」）。
 
-- `/api/auth/`、`/api/cs/`、`/api/admin/` 與 `/api/account/` 底下的所有回應（含錯誤）：內容是使用者本人的資料（帳號、對話與訊息）、
+- `/api/auth/`、`/api/cs/`、`/api/admin/`、`/api/account/` 與 `/api/scripts/` 底下的所有回應（含錯誤）：內容是使用者本人的資料（帳號、對話與訊息）、
   管理員才看得到的他人資料，或一次性的結果；
 - 所有 HTML 頁面：每一頁都內嵌 CSRF 權杖，帳號頁與確認頁更含有使用者資料或一次性流程，
   被瀏覽器或中介快取後可能顯示過期的權杖，或在登出後仍看得到內容。
@@ -14,7 +14,8 @@ AUTH_API_PREFIX = "/api/auth/"
 CS_API_PREFIX = "/api/cs/"
 ADMIN_API_PREFIX = "/api/admin/"
 ACCOUNT_API_PREFIX = "/api/account/"
-NO_STORE_API_PREFIXES = (AUTH_API_PREFIX, CS_API_PREFIX, ADMIN_API_PREFIX, ACCOUNT_API_PREFIX)
+SCRIPT_API_PREFIX = "/api/scripts"          # 列表與建立沒有尾端斜線，同樣要涵蓋
+NO_STORE_API_PREFIXES = (AUTH_API_PREFIX, CS_API_PREFIX, ADMIN_API_PREFIX, ACCOUNT_API_PREFIX, SCRIPT_API_PREFIX)
 
 
 def init_no_store(app: Flask) -> None:

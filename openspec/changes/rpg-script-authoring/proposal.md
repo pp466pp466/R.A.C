@@ -48,7 +48,7 @@ RC-1（`rpg-data-and-script`）已經把劇本與存檔的資料、固定規格�
 
 ## Impact
 
-- **資料庫**：遷移 `0013_rpg_script_authoring`（只新增，expand 階段）：`users` 新增 `nickname`、`nickname_code`、`publish_suspended_at`（皆可為空）；`script_versions` 新增 `review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at`（皆可為空）；新表 `script_submissions`、`runtime_limits`（遷移以 ORM 寫入預設列）。SQLite 與 SQL Server 雙軌都要通過。
+- **資料庫**：遷移 `0013_rpg_script_authoring`（只新增，expand 階段）：`users` 新增 `nickname`、`nickname_code`、`publish_suspended_at`（皆可為空）；`script_versions` 新增 `review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at`（皆可為空）；新表 `script_submissions`、`runtime_limits`（遷移以 ORM 寫入預設列）；另把 `llm_call_logs.kind` 由 10 字加寬為 20 字（新的呼叫類別 `script_review` 有 13 個字，SQL Server 會截斷而拒絕寫入）。SQLite 與 SQL Server 雙軌都要通過。
 - **程式**：`app/models/`（`User`、`ScriptVersion`、新模型）、`app/repositories/`（劇本新增編輯方法、送審紀錄、限制、使用者的暱稱與暫停）、`app/services/`（暱稱、創作、規則層、模型層、送審、限制、`AccessPolicy` 新閘門、`SessionService` 接審查、`AuthService.verify_age` 接暱稱、`AppealService` 與 `AdminService` 擴充）、`app/controllers/`（`script_api_controller`、`script_page_controller`、帳號與年齡端點）、`app/cli.py`（兩個新指令）、`app/data/review/`（規則層詞表）、`app/templates/scripts/`、`app/static/js/scripts/`、`/age` 與 `/account` 的頁面。
 - **LLM**：`llm_call_logs` 新增呼叫類別 `script_review`（沿用 RPG 用途的 `LlmService`）；全站每日 token 與呼叫上限本來就不分類別彙總，審查呼叫自動計入。
 - **測試**：規則層（含誤擋案例）、模型層（假模型伺服器與假供應商，不打真實 API）、送審流程與並行、暫停與解除、限制讀取、暱稱驗證與年齡步驟、創作 API 的擁有者隔離、前端純邏輯的 Node 測試、遷移、匯出與抹除的守門測試擴充、容器驗收。

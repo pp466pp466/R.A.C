@@ -105,6 +105,23 @@ def unlock_account(public_id: str):
     return jsonify(user=service.unlock_account(admin, public_id, password=body.get("password")))
 
 
+# ---- 暫停發佈（rpg-script-authoring）-------------------------------------------------------------
+
+@admin_api_bp.get("/publish-suspended")
+def publish_suspended():
+    """連續被自動拒絕而被暫停發佈的帳號（只有對外識別碼、顯示名稱與暫停時間）。"""
+    admin, service = _admin()
+    limit, offset = _page()
+    return jsonify(accounts=service.publish_suspended_accounts(admin, limit=limit, offset=offset))
+
+
+@admin_api_bp.post("/users/<public_id>/lift-publish-suspension")
+def lift_publish_suspension(public_id: str):
+    admin, service = _admin()
+    body = read_json_object()
+    return jsonify(user=service.lift_publish_suspension(admin, public_id, password=body.get("password")))
+
+
 # ---- 對話與模型失敗的原文 ---------------------------------------------------------------------------
 
 @admin_api_bp.get("/feedback")

@@ -21,16 +21,17 @@ from app.services.errors import (
 from app.services.session_service import SessionService
 from tests.support.age import TODAY_UTC
 from tests.support.auth import FakeClock, add_user
+from tests.support.review import PassingReviews
 from tests.support.script_data import validated
 
 GHOST = "00000000-0000-4000-8000-000000000000"
 
 
-def service_for(session, adult_mode=False):
+def service_for(session, adult_mode=False, reviews=None):
     clock = FakeClock()
     return SessionService(
         scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        policy=AccessPolicy(clock=clock, adult_mode_enabled=adult_mode), clock=clock,
+        policy=AccessPolicy(clock=clock, adult_mode_enabled=adult_mode), reviews=reviews or PassingReviews(), clock=clock,
     ), clock
 
 

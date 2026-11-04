@@ -23,6 +23,7 @@ from app.models.chat import ChatConversation
 from app.models.llm_call_log import LlmCallLog
 from app.models.lock_strike import LockStrike
 from app.models.rpg_session import TURN_BLOCKED, TURN_INTERRUPTED, MemoryLog, RpgSession
+from app.models.script_submission import ScriptSubmission
 from app.models.user import AuthToken
 
 
@@ -102,6 +103,19 @@ class RetentionRepository:
         if not ids:
             return 0
         return self._run(update(MemoryLog).where(MemoryLog.id.in_(ids)).values(llm_raw_response=""))
+
+    # ---- 劇本送審紀錄：建立早於 cutoff。只刪紀錄本身；暫停發佈的旗標是帳號的欄位，不受影響（連續被拒的判斷只看最近幾筆）------------
+
+    def find_script_submissions(self, cutoff: datetime, limit: int) -> list[int]:
+        return self._ids(select(ScriptSubmission.id).where(ScriptSubmission.created_at < cutoff).order_by(ScriptSubmission.id), limit)
+
+    def count_script_submissions(self, cutoff: datetime) -> int:
+        return self._count(select(func.count(ScriptSubmission.id)).where(ScriptSubmission.created_at < cutoff))
+
+    def purge_script_submissions(self, ids: Sequence[int]) -> int:
+        if not ids:
+            return 0
+        return self._run(delete(ScriptSubmission).where(ScriptSubmission.id.in_(ids)))
 
     # ---- 用量帳本：建立早於 cutoff --------------------------------------------------------
 

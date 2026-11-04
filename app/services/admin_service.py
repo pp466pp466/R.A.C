@@ -18,6 +18,7 @@ from typing import Any, Callable
 from app.config import UsageSettings
 from app.models.admin_audit_log import (
     ACTION_ACCOUNT_UNLOCK, ACTION_APPEAL_READ, ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ,
+    ACTION_PUBLISH_LIFT,
     ACTION_REAUTH_FAILED, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
     MAX_REASON_CHARS,
 )
@@ -25,7 +26,7 @@ from app.models.user import (
     MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
     USER_STATUSES, User,
 )
-from app.observability import admin_events, security_events
+from app.observability import admin_events, script_events, security_events
 from app.repositories.admin_audit_repository import AdminAuditRepository
 from app.repositories.admin_repository import AdminRepository, ReviewableConversation
 from app.services.access_policy import AccessPolicy
@@ -33,7 +34,7 @@ from app.services.age_policy import TAIPEI
 from app.services.age_stats_service import AgeStatsService
 from app.services.cs_intents import INTENT_COMPLAINT_FEEDBACK, INTENT_HUMAN_HANDOFF
 from app.services.current_user import CurrentUser
-from app.services.errors import AdminTargetForbidden, Conflict, NotFound, ValidationError
+from app.services.errors import AdminTargetForbidden, Conflict, NotFound, NotSuspended, ValidationError
 from app.services.input_cleaning import clean_single_line
 from app.services.normalization import canonical_email, is_valid_email
 from app.services.quota_policy import suspension_until, taipei_day_bounds
@@ -229,16 +230,18 @@ class AdminService:
         ]
 
     def appeals(self, admin: CurrentUser, *, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0) -> list[dict[str, Any]]:
-        """**只有「目前被鎖定的帳號」送出的申訴**（解除之後不再出現；這不開放讀取任何對話）。內容是個資：只出現在這個回應，
+        """**只有「目前被鎖定」或「目前被暫停發佈」的帳號送出的申訴**（兩種都解除之後不再出現；這不開放讀取任何對話）。`restriction`
+        說明該帳號目前是哪一種（鎖定優先），後台據此提供解除鎖定或解除暫停。內容是個資：只出現在這個回應，
         稽核只記筆數。先寫稽核再回傳。"""
         self._policy.require_admin(admin)
         limit, offset = self._page(limit, offset)
-        rows = self._admins.appeals_of_locked_accounts(limit=limit, offset=offset)
+        rows = self._admins.appeals_of_restricted_accounts(limit=limit, offset=offset)
         self._record(admin, ACTION_APPEAL_READ, detail={"count": len(rows)})
         return [
             {
                 "id": row.appeal_public_id, "user_public_id": row.user_public_id, "display_name": row.display_name,
                 "content": row.content, "created_at": _iso(row.created_at), "status": "handled" if row.handled_at else "pending",
+                "restriction": row.restriction,
             }
             for row in rows
         ]
@@ -259,6 +262,31 @@ class AdminService:
         self._record(admin, ACTION_ACCOUNT_UNLOCK, target_user=user, detail={"handled_appeals": handled}, changed=True)
         security_events.log_event(security_events.PLAYER_UNLOCKED, user_id=user.id)
         return {"public_id": user.public_id, "display_name": user.display_name, "locked": False}
+
+    def publish_suspended_accounts(self, admin: CurrentUser, *, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0) -> list[dict[str, Any]]:
+        """目前被暫停發佈的玩家帳號：只有對外識別碼、顯示名稱與暫停時間（不含 email、暱稱與內部編號）。"""
+        self._policy.require_admin(admin)
+        limit, offset = self._page(limit, offset)
+        return [
+            {"public_id": row.user_public_id, "display_name": row.display_name, "suspended_at": _iso(row.suspended_at)}
+            for row in self._admins.publish_suspended_accounts(limit=limit, offset=offset)
+        ]
+
+    def lift_publish_suspension(self, admin: CurrentUser, public_id: str, *, password: object) -> dict[str, Any]:
+        """解除玩家的暫停發佈（高風險操作：重新輸入密碼）。成功時補一筆 `lifted` 送審紀錄、把待處理的申訴標為已處理，目標立刻可以再送審。"""
+        self._policy.require_admin(admin)
+        user = self._find_user(public_id)
+        if user.role != ROLE_USER:
+            raise AdminTargetForbidden()
+        if user.publish_suspended_at is None:
+            raise NotSuspended()
+        self._confirm(admin, password, ACTION_PUBLISH_LIFT, target_user=user)
+        handled = self._admins.lift_publish_suspension(user, now=self._clock())
+        if handled is None:
+            raise Conflict("這個帳號的狀態已經改變，請重新整理後再試。", code="state_changed")
+        self._record(admin, ACTION_PUBLISH_LIFT, target_user=user, detail={"handled_appeals": handled}, changed=True)
+        script_events.log_publish_lifted(user_id=user.id)
+        return {"public_id": user.public_id, "display_name": user.display_name, "publish_suspended": False}
 
     # =========================================================================
     # 對話與模型失敗的原文

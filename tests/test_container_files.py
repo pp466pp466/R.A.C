@@ -103,6 +103,17 @@ def test_verification_scripts_exist_and_the_wrapper_is_ascii_only():
     wrapper = (PROJECT_ROOT / "scripts" / "verify-container.ps1").read_bytes()
     assert wrapper.isascii(), "Windows PowerShell 5.1 以系統編碼讀無 BOM 的腳本，非 ASCII 字元會亂碼"
 
+def test_the_container_acceptance_covers_the_script_authoring_migration_limits_and_retention_preview():
+    """rpg-script-authoring：遷移升級到 0013、flask 的限制指令（七個鍵、修改後讀回）與期限清除預覽含送審紀錄。"""
+    script = (PROJECT_ROOT / "scripts" / "verify_container.py").read_text(encoding="utf-8-sig")
+    for needed in ("0013_rpg_script_authoring", "show-script-limits", "set-script-limit", "script_limit.free", "purge-expired-data", "劇本送審紀錄"):
+        assert needed in script, needed
+    namespace = runpy.run_path(str(PROJECT_ROOT / "scripts" / "verify_container.py"))
+    from app.services.runtime_limits import LIMIT_KEYS
+
+    assert tuple(namespace["SCRIPT_LIMIT_KEYS"]) == tuple(LIMIT_KEYS)                  # 驗收腳本的鍵與程式的規格一致
+
+
 def test_the_container_acceptance_covers_the_model_key_and_the_chat_flow():
     """container-runtime 規格：staging 與 production 沒有金鑰就無法啟動，所以驗收用假金鑰啟動、另驗缺少金鑰、並走完客服的 HTTP 流程。"""
     script = (PROJECT_ROOT / "scripts" / "verify_container.py").read_text(encoding="utf-8-sig")

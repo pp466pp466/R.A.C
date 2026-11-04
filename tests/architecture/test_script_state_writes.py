@@ -7,6 +7,10 @@
 - 建立 `ScriptVersion(...)` 物件或對它執行 `update(...)`／`delete(...)`；
 - 對 `ScriptVersion` 的 `status` 屬性賦值。
 並附反向驗證，證明檢查真的抓得到違規的寫法。
+
+審查結果欄位（`review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at`，rpg-script-authoring）是審查的中繼資料，
+只能由 `ScriptRepository.record_review` 寫入（它條件式比對內容雜湊，內容被改動時舊結果不會蓋在新內容上）。讀取不受限制（審查服務要讀）；
+這裡只抓「寫入」：對這些屬性賦值，或在任何呼叫中以同名的關鍵字傳入（`update(...).values(review_hash=...)`、`ScriptVersion(review_hash=...)`）。
 """
 import ast
 
@@ -15,6 +19,7 @@ from app.config import PROJECT_ROOT
 APP = PROJECT_ROOT / "app"
 ALLOWED = {"app/models/script.py", "app/repositories/script_repository.py"}
 HELPER_COLUMNS = {"live_script_id", "open_script_id"}
+REVIEW_COLUMNS = {"review_hash", "review_verdict", "review_categories_json", "reviewed_at"}
 
 
 def violations_in(source: str) -> list[str]:
@@ -25,6 +30,13 @@ def violations_in(source: str) -> list[str]:
             problems.append(f"第 {node.lineno} 行：提到輔助欄位 {node.attr}")
         elif isinstance(node, ast.keyword) and node.arg in HELPER_COLUMNS:
             problems.append(f"第 {node.lineno} 行：以關鍵字寫入輔助欄位 {node.arg}")
+        elif isinstance(node, ast.keyword) and node.arg in REVIEW_COLUMNS:
+            problems.append(f"第 {node.lineno} 行：以關鍵字寫入審查欄位 {node.arg}")
+        elif isinstance(node, (ast.Assign, ast.AugAssign)) and any(
+            isinstance(target, ast.Attribute) and target.attr in REVIEW_COLUMNS
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        ):
+            problems.append(f"第 {node.lineno} 行：對審查欄位賦值")
         elif isinstance(node, ast.Name) and node.id in HELPER_COLUMNS:
             problems.append(f"第 {node.lineno} 行：提到輔助欄位 {node.id}")
         elif isinstance(node, ast.Call):
@@ -71,6 +83,21 @@ def test_the_scan_really_flags_each_kind_of_violation():
     assert violations_in("def f(version):\n    version.status = 'published'\n")
     assert violations_in("from sqlalchemy import delete\ndelete(ScriptVersion).where(1)\n")
     assert violations_in("def f(v):\n    return ScriptVersion.live_script_id == v\n")
+
+
+def test_the_scan_flags_writes_to_the_review_columns_but_not_reads():
+    assert violations_in("def f(v):\n    v.review_hash = 'x'\n")
+    assert violations_in("from sqlalchemy import update\nupdate(Other).values(review_verdict='pass')\n")
+    assert violations_in("def f():\n    return Other(reviewed_at=1)\n")
+    assert violations_in("def f(v):\n    v.review_categories_json += [1]\n")
+    assert violations_in("def f(v):\n    return v.review_hash == v.content_hash and v.review_verdict\n") == []
+    assert violations_in("def f(v):\n    return list(v.review_categories_json or ()), v.reviewed_at\n") == []
+
+
+def test_the_review_columns_are_written_only_by_record_review():
+    repository = (APP / "repositories" / "script_repository.py").read_text(encoding="utf-8-sig")
+    assert any("審查欄位" in p for p in violations_in(repository))
+    assert repository.count("review_categories_json=") == 1 and "def record_review" in repository
 
 
 def test_the_scan_leaves_innocent_code_alone():

@@ -8,14 +8,14 @@ const Format = require('../../app/static/js/admin/admin-format.js');
 const STATUSES = ['active', 'suspended', 'deletion_pending'];
 const TIERS = ['free', 'plus', 'vip'];
 const ACTIONS = ['user.lookup', 'user.suspend', 'user.unsuspend', 'user.change_tier', 'conversation.read', 'conversation.delete', 'failures.read', 'reauth.failed',
-  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock'];
+  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock', 'limit.set', 'publish.suspend', 'publish.lift'];
 
 test('every status, tier, role, action, kind and message value has a Chinese label', () => {
   for (const value of STATUSES) { assert.notEqual(Format.statusLabel(value), value, value); }
   for (const value of TIERS) { assert.notEqual(Format.tierLabel(value), value, value); }
   for (const value of ['user', 'admin']) { assert.notEqual(Format.roleLabel(value), value, value); }
   for (const value of ACTIONS) { assert.notEqual(Format.actionLabel(value), value, value); }
-  for (const value of ['chat', 'summary']) { assert.notEqual(Format.kindLabel(value), value, value); }
+  for (const value of ['chat', 'summary', 'script_review']) { assert.notEqual(Format.kindLabel(value), value, value); }
   for (const value of ['user', 'assistant']) { assert.notEqual(Format.messageRoleLabel(value), value, value); }
   for (const value of ['ok', 'fallback']) { assert.notEqual(Format.messageStatusLabel(value), value, value); }
 });

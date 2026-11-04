@@ -110,7 +110,7 @@ def test_the_output_and_the_logs_carry_only_counts(app, runner, log_lines):
     purged = [(line["reason"], line["count"]) for line in log_lines() if line.get("event") == "retention.purged"]
     assert purged == [
         ("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1),
-        ("turn_content", 0), ("sessions", 0),                 # 這個測試沒有放 RPG 資料
+        ("turn_content", 0), ("sessions", 0), ("script_submissions", 0),      # 這個測試沒有放 RPG 資料與送審紀錄
     ]
 
 

@@ -5,23 +5,30 @@
 2. 驗證主角姓名與角色年齡（劇中角色的年齡，與使用者的年齡無關）；
 3. 找來源版本：上架中的任何版本，或呼叫者自己的任何版本；別人的非上架版本與不存在的一樣是 404；
 4. 劇本宣告的內容模式不得高於玩家目前**生效**的模式（玩家偏好與年齡上限中較保守者），否則 `ContentTierRestricted`（403）；
-5. 把版本標準化後的完整內容複製進存檔，存檔的內容模式取玩家生效模式與劇本宣告兩者中較保守者。之後存檔不再讀取劇本。
+5. **審查的把關**（script-review 規格）：非內建劇本的版本，對應「目前內容」的模型層結果必須是通過或有疑慮（沒有結果時先審查）；
+   結果為拒絕 -> `ScriptRejected`（422，只帶類別），模型層不可用 -> `ReviewUnavailable`（503，一律擋下、不放行）。
+   內建的種子劇本（有 `seed_key`，沒有作者）視為已審查，不呼叫審查。審查用的就是接下來要複製的那一份內容。
+6. 把版本標準化後的完整內容複製進存檔，存檔的內容模式取玩家生效模式與劇本宣告兩者中較保守者。之後存檔不再讀取劇本。
 
 存檔與回合的內容是個資：這裡不記錄任何日誌。
 """
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Callable
+from typing import Any, Callable, Protocol
 
 from app.models.rpg_session import RpgSession
+from app.models.script import REVIEW_REJECT, ScriptVersion
 from app.repositories.errors import SessionEndedError, TurnInProgressError
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository, TurnStart
 from app.services.access_policy import AccessPolicy
 from app.services.content_tier import most_conservative, tier_rank
 from app.services.current_user import CurrentUser
-from app.services.errors import Conflict, ContentTierRestricted, NotFound, SessionEnded, ValidationError
+from app.services.errors import (
+    Conflict, ContentTierRestricted, NotFound, ReviewUnavailable, ScriptRejected, SessionEnded, ValidationError,
+)
+from app.services.script_review_service import ModelReview
 from app.services.script_spec import normalize_single_line
 
 PLAYER_NAME_MAX = 20
@@ -31,13 +38,26 @@ CLIENT_MSG_ID_MAX = 64            # 與 memory_logs.client_msg_id 的欄位長�
 TURN_IN_PROGRESS_MESSAGE = "這個回合仍在處理中，請稍候。"
 
 
+class ReviewGate(Protocol):
+    """開存檔前的審查把關（實作見 `ScriptReviewService`；測試可注入替身）。"""
+
+    def ensure_reviewed(self, user_id: int, version: ScriptVersion, content: dict[str, Any]) -> ModelReview: ...
+
+
 class SessionService:
     def __init__(
-        self, *, scripts: ScriptRepository, sessions: SessionRepository, policy: AccessPolicy, clock: Callable[[], datetime]
+        self,
+        *,
+        scripts: ScriptRepository,
+        sessions: SessionRepository,
+        policy: AccessPolicy,
+        reviews: ReviewGate,
+        clock: Callable[[], datetime],
     ) -> None:
         self._scripts = scripts
         self._sessions = sessions
         self._policy = policy
+        self._reviews = reviews
         self._clock = clock
 
     def start_session(
@@ -52,8 +72,15 @@ class SessionService:
         effective = self._policy.effective_tier(current)
         if tier_rank(version.content_tier) > tier_rank(effective):
             raise ContentTierRestricted()
+        snapshot = self._scripts.content_of(version)
+        if self._scripts.get_script_of(version).seed_key is None:           # 內建的種子劇本視為已審查
+            review = self._reviews.ensure_reviewed(current.id, version, snapshot)
+            if review.verdict is None:
+                raise ReviewUnavailable()
+            if review.verdict == REVIEW_REJECT:
+                raise ScriptRejected(review.categories)
         return self._sessions.create(
-            current.id, source_version_id=version.id, snapshot=self._scripts.content_of(version),
+            current.id, source_version_id=version.id, snapshot=snapshot,
             snapshot_spec_version=version.spec_version, player_name=name, character_age=age,
             content_tier=most_conservative(effective, version.content_tier), now=self._clock(),
         )

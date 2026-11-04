@@ -21,7 +21,8 @@ from app.models.base import Base, UTCDateTime, utcnow
 
 KIND_CHAT = "chat"
 KIND_SUMMARY = "summary"
-CALL_KINDS = (KIND_CHAT, KIND_SUMMARY)
+KIND_SCRIPT_REVIEW = "script_review"       # 劇本審查的模型層（RPG 用途的模型；script-review 規格）
+CALL_KINDS = (KIND_CHAT, KIND_SUMMARY, KIND_SCRIPT_REVIEW)
 
 STATUS_OK = "ok"
 STATUS_VALIDATION_FAILED = "validation_failed"
@@ -50,7 +51,7 @@ class LlmCallLog(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     conversation_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    kind: Mapped[str] = mapped_column(Unicode(10))
+    kind: Mapped[str] = mapped_column(Unicode(20))      # 0013 由 10 加寬為 20：`script_review` 有 13 個字（SQL Server 會截斷而報錯，SQLite 不會）
     provider: Mapped[str] = mapped_column(Unicode(20))
     model: Mapped[str] = mapped_column(Unicode(64))
     attempt: Mapped[int] = mapped_column(Integer)

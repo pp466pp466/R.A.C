@@ -21,11 +21,17 @@ def birth_date_for_age(age: int, today: date = TODAY) -> date:
     return date(today.year - age, today.month, today.day)
 
 
+TEST_NICKNAME = "測試玩家"
+
+
 def age_fields(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: date = TODAY, **overrides: Any) -> dict[str, Any]:
-    """註冊與補填的請求欄位：ISO 日期字串與對應的年齡區間代碼。可用 overrides 覆蓋（例如造成不一致）。"""
+    """玩家年齡確認步驟的請求欄位：ISO 日期字串、對應的年齡區間代碼與暱稱（暱稱與生日是同一個步驟，玩家必填；
+    rpg-script-authoring）。可用 overrides 覆蓋（例如造成不一致，或傳 `nickname=None` 模擬沒有提供暱稱）。"""
     chosen = range_for_age(age, policy)
     assert chosen is not None, f"沒有涵蓋 {age} 歲的年齡區間"
-    values: dict[str, Any] = {"birth_date": birth_date_for_age(age, today).isoformat(), "age_range": chosen.code}
+    values: dict[str, Any] = {
+        "birth_date": birth_date_for_age(age, today).isoformat(), "age_range": chosen.code, "nickname": TEST_NICKNAME,
+    }
     values.update(overrides)
     return values
 

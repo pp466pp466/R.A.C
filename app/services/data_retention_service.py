@@ -10,6 +10,7 @@
 | 帳號鎖定計次 | 建立早於 7 天（計次視窗只有 15 分鐘） | 刪除 |
 | 中斷或被擋回合的部分內容 | 最後更新早於 14 天 | `llm_raw_response` 清為空字串，回合紀錄（序號、編號、狀態、時間）保留 |
 | RPG 存檔 | 最後活動早於 365 天（12 個月；沒有回合的存檔以建立時間算） | 刪除；回合與記事簿一併消失，不論進行中或已完結 |
+| 劇本送審紀錄 | 建立早於 365 天（12 個月） | 刪除；只刪紀錄，帳號的暫停發佈旗標不受影響 |
 
 帳號刪除紀錄（`deletion_tombstones`）**不納入**：它不含個資，而且備份還原後要靠它重新執行刪除。**申訴也不納入**：它的保存期限與所屬帳號
 相同（帳號刪除時一併刪除），不由這裡清除。月以天計（與閒置帳號清除相同）。
@@ -35,6 +36,7 @@ AUTH_TOKEN_RETENTION = timedelta(days=7)
 ADMIN_AUDIT_RETENTION = timedelta(days=730)
 LOCK_STRIKE_RETENTION = timedelta(days=7)
 SESSION_RETENTION = timedelta(days=365)
+SCRIPT_SUBMISSION_RETENTION = timedelta(days=365)
 TURN_CONTENT_RETENTION = timedelta(days=14)
 BATCH_SIZE = 500
 
@@ -83,6 +85,10 @@ class DataRetentionService:
             # 回合的部分內容排在存檔之前：同時符合兩者的舊回合先清內容、再隨存檔刪除，預覽（各類獨立計數）與實際執行的筆數一致
             (lifecycle_events.CATEGORY_TURN_CONTENT, TURN_CONTENT_RETENTION, r.find_turn_content, r.count_turn_content, r.purge_turn_content),
             (lifecycle_events.CATEGORY_SESSIONS, SESSION_RETENTION, r.find_sessions, r.count_sessions, r.purge_sessions),
+            (
+                lifecycle_events.CATEGORY_SCRIPT_SUBMISSIONS, SCRIPT_SUBMISSION_RETENTION, r.find_script_submissions,
+                r.count_script_submissions, r.purge_script_submissions,
+            ),
         )
 
     def run(self, *, dry_run: bool = False) -> RetentionReport:

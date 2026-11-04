@@ -7,7 +7,7 @@
  * - 危險操作（停權、解除停權、調整等級、刪除對話、解除帳號鎖定）共用一個確認視窗。密碼只存在輸入框的響應式欄位：送出的當下立即清空，
  *   取消、關閉視窗也清空，不寫入 localStorage、IndexedDB 或任何其他儲存體。
  * - 「看使用者」會依對外識別碼取得使用者（寫稽核）；信箱查詢是次要入口，標明「供客服反應時使用」。沒有使用者清單。
- * - 「被鎖定的帳號」與「申訴」：申訴只有目前被鎖定的帳號送出的才看得到（解除之後從兩個清單消失），內容以純文字顯示；
+ * - 「被鎖定的帳號」與「申訴」：申訴只有目前被鎖定或被暫停發佈的帳號送出的才看得到（兩種都解除之後消失；每列標明是哪一種，並提供對應的解除鎖定或解除暫停），內容以純文字顯示；
  *   讀取申訴會寫稽核（只記筆數），所以和「模型失敗」一樣，進入分頁時才載入、不因切換分頁而重複讀取。
  * - 清單依分頁載入：進入分頁時才載入一次（模型失敗每次讀取都會寫稽核，所以不因切換分頁而重複讀取），
  *   「重新整理」才會重新讀取；做了會改變資料的操作之後，相關的分頁標記為過期，下次進入時重新載入。
@@ -30,6 +30,7 @@
     { id: 'flagged', label: '被標記對話' },
     { id: 'feedback', label: '意見回饋' },
     { id: 'locked', label: '被鎖定的帳號' },
+    { id: 'suspended', label: '被暫停發佈' },
     { id: 'appeals', label: '申訴' },
     { id: 'users', label: '使用者' },
     { id: 'failures', label: '模型失敗' },
@@ -43,10 +44,11 @@
     audit: { path: '/audit', key: 'entries', paged: true },
     failures: { path: '/failures', key: 'failures', paged: false },
     locked: { path: '/locked', key: 'accounts', paged: true },
+    suspended: { path: '/publish-suspended', key: 'accounts', paged: true },
     appeals: { path: '/appeals', key: 'appeals', paged: true }
   };
 
-  /* 五個危險操作。needsReason：停權與刪除對話必須填原因；needsTier：調整等級要選新的等級。 */
+  /* 六個危險操作。needsReason：停權與刪除對話必須填原因；needsTier：調整等級要選新的等級。 */
   var CONFIRMS = {
     suspend: {
       code: 'ADMIN_SUSPEND_USER', title: '停權這位使用者？', confirmText: '確認停權', needsReason: true, needsTier: false,
@@ -67,6 +69,11 @@
       code: 'ADMIN_UNLOCK_ACCOUNT', title: '解除這個帳號的鎖定？', confirmText: '確認解除', needsReason: false, needsTier: false,
       intro: '解除後，這位玩家可以再次使用全部功能，目前的登入狀態立即恢復；該帳號的鎖定計次會清除，待處理的申訴會標為已處理。',
       path: function (id) { return '/users/' + encodeURIComponent(id) + '/unlock'; }, done: '已解除鎖定。'
+    },
+    lift: {
+      code: 'ADMIN_LIFT_PUBLISH_SUSPENSION', title: '解除這位玩家的暫停發佈？', confirmText: '確認解除', needsReason: false, needsTier: false,
+      intro: '解除後，這位玩家可以再次送審劇本；待處理的申訴會標為已處理。解除之後若再被自動拒絕，要重新累積連續的次數才會再次暫停。',
+      path: function (id) { return '/users/' + encodeURIComponent(id) + '/lift-publish-suspension'; }, done: '已解除暫停發佈。'
     },
     remove: {
       code: 'ADMIN_DELETE_CONVERSATION', title: '刪除這個對話？', confirmText: '確認刪除', needsReason: true, needsTier: false,
@@ -159,7 +166,7 @@
       function reloadOverview() { overviewState.loaded = false; return fetchOverview(); }
 
       // ---- 清單 -----------------------------------------------------------------------------
-      var lists = { flagged: newList(), feedback: newList(), audit: newList(), failures: newList(), locked: newList(), appeals: newList() };
+      var lists = { flagged: newList(), feedback: newList(), audit: newList(), failures: newList(), locked: newList(), suspended: newList(), appeals: newList() };
 
       function fetchList(id, more) {
         var list = lists[id];
@@ -355,6 +362,7 @@
       function askUnsuspend() { if (user.value) { openConfirm('unsuspend', userTarget()); } }
       function askTier() { if (user.value) { openConfirm('tier', userTarget()); } }
       function askUnlock(publicId, displayName) { openConfirm('unlock', { id: publicId, label: displayName }); }
+      function askLift(publicId, displayName) { openConfirm('lift', { id: publicId, label: displayName }); }
       function askDeleteConversation() {
         if (!conv.data) { return; }
         var id = conv.data.conversation.id;
@@ -377,6 +385,11 @@
 
       function removeUnlockedFromLists(publicId) {
         lists.locked.items = lists.locked.items.filter(function (row) { return row.public_id !== publicId; });
+        lists.appeals.items = lists.appeals.items.filter(function (row) { return row.user_public_id !== publicId; });
+      }
+
+      function removeLiftedFromLists(publicId) {
+        lists.suspended.items = lists.suspended.items.filter(function (row) { return row.public_id !== publicId; });
         lists.appeals.items = lists.appeals.items.filter(function (row) { return row.user_public_id !== publicId; });
       }
 
@@ -427,6 +440,9 @@
           } else if (kind === 'unlock') {
             removeUnlockedFromLists(targetId);                 // 解除之後，帳號與它的申訴都從管理員的檢視消失
             markStale('overview', 'audit');
+          } else if (kind === 'lift') {
+            removeLiftedFromLists(targetId);                   // 申訴是否還看得到取決於帳號是否仍被鎖定，下次開啟時重新讀取
+            markStale('overview', 'audit', 'appeals');
           } else {
             user.value = data.user;
             markStale('overview', 'audit');
@@ -452,7 +468,7 @@
         openUserById: openUserById, refreshUser: refreshUser, lookupUser: lookupUser,
         convOpen: convOpen, conv: conv, openConversation: openConversation, viewConversationUser: viewConversationUser,
         confirmOpen: confirmOpen, confirmState: confirmState, confirmSpec: confirmSpec, tierOptions: tierOptions,
-        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askUnlock: askUnlock,
+        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askUnlock: askUnlock, askLift: askLift,
         askDeleteConversation: askDeleteConversation,
         onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm
       };

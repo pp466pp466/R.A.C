@@ -47,6 +47,25 @@
 - **WHEN** 宣告為 `standard` 的劇本有 17 歲的角色，其個性欄位出現性相關詞，但沒有同句的明確命中
 - **THEN** 結果為 `flag`，類別為 `minor_suspected`
 
+### Requirement: 直接拒絕的主軸是露骨性用語與未成年用語同句
+規則層 SHALL 以「同一句內同時出現露骨的性用語與明確的未成年用語（不分先後）」作為直接拒絕的主軸（`minor_sexual`）。`non_consensual`、`sexual_violence` 與 `real_person_sexual` 也 SHALL 要求同一句裡有露骨的性用語才直接拒絕；強姦或性暴力用語單獨出現（例如犯罪劇情、新聞、性侵害防治課）SHALL 只標示為 `flag` 的 `other_concern`，交給模型層與人工。明確的國中生、初中生與中學生 SHALL 視為未成年用語，並 SHALL 排除「異國中生存」這類只是字面相符的詞。
+
+#### Scenario: 露骨用語在前或在後
+- **WHEN** 同一句出現露骨的性用語與「高中生」，不論誰先誰後
+- **THEN** 結果為 `reject`，類別為 `minor_sexual`
+
+#### Scenario: 強姦用語單獨出現
+- **WHEN** 劇本提到「他因強姦罪被判處五年徒刑」，同一句沒有露骨的性用語
+- **THEN** 結果為 `flag`，類別為 `other_concern`，不是 `reject`
+
+#### Scenario: 強姦用語與露骨性用語同句
+- **WHEN** 同一句同時有強姦用語與露骨的性用語
+- **THEN** 結果為 `reject`，類別為 `non_consensual`
+
+#### Scenario: 字面相符不是未成年
+- **WHEN** 同一句有露骨的性用語與「異國中生存」
+- **THEN** 結果不是 `reject`
+
 ### Requirement: 規則層在每次儲存時執行
 建立與更新草稿 SHALL 先執行規則層；結果為 `reject` 時 SHALL 拒絕儲存並以 422 與代碼 `script_auto_rejected` 回應類別，被拒絕的文字 SHALL NOT 被保存（既有的草稿維持原狀）。儲存時的拒絕 SHALL NOT 計入送審次數與連續被拒的計算。結果為 `flag` 時 SHALL 照常儲存，疑慮在送審時重新計算。
 

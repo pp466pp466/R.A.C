@@ -58,6 +58,7 @@ def test_nullable_columns_are_exactly_the_documented_ones():
         "age_confirmed_at", "age_policy_version", "birth_date", "age_range", "is_adult_at_confirmation", "last_login_at",
         "deletion_requested_at", "status_before_deletion", "age_deadline_at", "locked_at", "lock_reason",
         "adult_confirmed_at", "adult_rules_version", "adult_confirm_method",       # rpg-data-and-script：成年確認紀錄
+        "nickname", "nickname_code", "publish_suspended_at",                       # rpg-script-authoring：暱稱、短代號、暫停發佈
     }
     # 內容模式偏好不可為空，且預設是最保守的 safe（伺服器端與資料庫預設都是）
     preference = columns["content_tier_preference"]

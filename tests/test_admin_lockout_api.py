@@ -91,7 +91,8 @@ def test_the_admin_sees_the_appeal_of_a_locked_account_and_leaves_an_appeal_read
     assert response.status_code == 200
     (appeal,) = response.get_json()["appeals"]
     assert appeal["content"] == LOCKED_APPEAL and appeal["user_public_id"] == world.locked_public and appeal["status"] == "pending"
-    assert set(appeal) == {"id", "user_public_id", "display_name", "content", "created_at", "status"}
+    assert set(appeal) == {"id", "user_public_id", "display_name", "content", "created_at", "status", "restriction"}
+    assert appeal["restriction"] == "locked"                                  # 目前是鎖定（被暫停發佈的見 test_appeal_suspended.py）
     (row,) = audit_rows(world, "appeal.read")
     assert row.admin_user_id == world.admin_id and row.detail_json == {"count": 1}
     assert LOCKED_APPEAL not in repr((row.detail_json, row.reason, row.target_user_public_id))

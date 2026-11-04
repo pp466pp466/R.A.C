@@ -60,6 +60,38 @@ test('the age request carries exactly the birthday and the range', () => {
   assert.deepEqual(Flows.ageBody({ birthDate: '1996-10-27', ageRange: '25_34', extra: 'x' }), { birth_date: '1996-10-27', age_range: '25_34' });
 });
 
+test('the player age step also requires a nickname, the admin form on the account page does not', () => {
+  const filled = { birthDate: '1996-10-27', ageRange: '25_34' };
+  assert.deepEqual(Flows.validateAge({ ...filled, nickname: '' }, { nicknameRequired: true }), { nickname: '請輸入暱稱。' });
+  assert.deepEqual(Flows.validateAge({ ...filled, nickname: '   ' }, { nicknameRequired: true }), { nickname: '請輸入暱稱。' });
+  assert.deepEqual(Flows.validateAge(filled, { nicknameRequired: true }), { nickname: '請輸入暱稱。' });
+  assert.deepEqual(Flows.validateAge({ ...filled, nickname: '雲遊者' }, { nicknameRequired: true }), {});
+  assert.deepEqual(Flows.validateAge({ birthDate: '', ageRange: '', nickname: '' }, { nicknameRequired: true }), {
+    birth_date: '請輸入生日。', age_range: '請選擇年齡區間。', nickname: '請輸入暱稱。'
+  });
+  assert.deepEqual(Flows.validateAge(filled), {});                                         // 沒有選項：不要求暱稱（管理員補填）
+});
+
+test('the age request carries the trimmed nickname only when one was typed', () => {
+  const base = { birthDate: '1996-10-27', ageRange: '25_34' };
+  assert.deepEqual(Flows.ageBody({ ...base, nickname: '  雲遊者 ' }), { birth_date: '1996-10-27', age_range: '25_34', nickname: '雲遊者' });
+  assert.deepEqual(Flows.ageBody({ ...base, nickname: '   ' }), { birth_date: '1996-10-27', age_range: '25_34' });
+  assert.deepEqual(Flows.ageBody({ ...base, nickname: 42 }), { birth_date: '1996-10-27', age_range: '25_34' });
+});
+
+test('the account page nickname form refuses an empty value before any request and leaves the format to the server', () => {
+  assert.deepEqual(Flows.validateNickname(''), { nickname: '請輸入暱稱。' });
+  assert.deepEqual(Flows.validateNickname('  '), { nickname: '請輸入暱稱。' });
+  assert.deepEqual(Flows.validateNickname(undefined), { nickname: '請輸入暱稱。' });
+  assert.deepEqual(Flows.validateNickname('https://x.io'), {});                              // 網址樣式由伺服器判斷
+});
+
+test('a nickname error from the server is shown beside the field and nothing is cleared', () => {
+  const outcome = Flows.ageOutcome({ status: 400, code: 'validation_error', fields: { nickname: '暱稱不可包含網址、電子郵件或電話。' } });
+  assert.deepEqual(outcome, { action: 'fields', fields: { nickname: '暱稱不可包含網址、電子郵件或電話。' } });
+  assert.equal(outcome.clear, undefined);
+});
+
 test('age_not_eligible ends the flow with the server message and a link back to the login page', () => {
   const outcome = Flows.ageOutcome(server(400, 'age_not_eligible', '本服務僅供 13 歲以上使用，您的帳號與相關資料已刪除。'));
   assert.deepEqual(outcome, { action: 'final', message: '本服務僅供 13 歲以上使用，您的帳號與相關資料已刪除。', to: '/login' });

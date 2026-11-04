@@ -28,7 +28,7 @@ from app.services.content_tier import (
     ADULT_RULES_VERSION, CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, most_conservative, parse_tier,
 )
 from app.services.current_user import CurrentUser
-from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound
+from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound, PublishSuspended
 
 # 成人模式目前沒有啟用的原因（`ContentAccess.reason`，也是內容模式 API 回應的列舉值）
 REASON_NOT_ADULT = "not_adult"                  # 未滿成年門檻，或尚未完成年齡確認
@@ -112,6 +112,11 @@ class AccessPolicy:
             return None
         return age_on(user.birth_date, taipei_today(self._clock()))
 
+    @property
+    def adult_age(self) -> int:
+        """成年門檻（來自年齡規則）；規則層判斷「小於成年門檻的年齡」時使用，不在別處寫死數字。"""
+        return self._age_policy.adult_age
+
     # ---- 內容模式 -----------------------------------------------------------
 
     @property
@@ -144,6 +149,18 @@ class AccessPolicy:
             reason = None
         age_cap = CONTENT_TIER_ADULT if reason is None else CONTENT_TIER_STANDARD
         return ContentAccess(preference, age_cap, most_conservative(preference, age_cap), True, selectable, confirmed, reason)
+
+    def author_content_cap(self, user: CurrentUser) -> str:
+        """作者可以宣告的內容模式上限（rpg-script-authoring）：由生日於當下算出的年齡決定，未成年者（含尚未完成年齡確認）只能宣告
+        安全模式，成年者可宣告到成人模式。**不要求作者本人開啟成人模式**：宣告只是劇本的屬性，誰能遊玩由玩家的生效模式決定
+        （`effective_tier` 取劇本宣告與玩家上限中較保守者）。管理員與各會員等級不豁免。"""
+        age = self._age(user)
+        return CONTENT_TIER_ADULT if age is not None and age >= self._age_policy.adult_age else CONTENT_TIER_SAFE
+
+    def require_can_submit(self, user: CurrentUser) -> None:
+        """送審的權限：被暫停發佈（連續被自動拒絕）的玩家不能送審，其餘功能不受影響；管理員不會被暫停。"""
+        if user.role != ROLE_ADMIN and user.publish_suspended_at is not None:
+            raise PublishSuspended()
 
     def effective_tier(self, user: CurrentUser, *, script_tier: str | None = None, save_tier: str | None = None) -> str:
         """實際生效的內容模式：玩家偏好、年齡上限、劇本宣告（有劇本時）與存檔記錄（有存檔時）中最保守的一個。

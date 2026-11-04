@@ -1,8 +1,9 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
+> 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -135,6 +136,39 @@ flowchart TD
 - 開存檔時複製劇本內容，之後存檔不再讀取劇本；`sessions.source_version_id` 是無動作的外鍵，刪除版本與抹除帳號的流程先清為空值。
 - 組裝在 `registry.py`（`get_content_mode_service()`、`get_session_service()`、`build_script_seed_service()`）；`AccessPolicy` 的成人模式開關來自 `config.content.adult_mode_enabled`。
 
+### 劇本創作與審查（rpg-script-authoring）
+
+```mermaid
+flowchart TD
+    Ctl["script_api_controller<br/>/api/scripts/*"] --> Auth["ScriptAuthoringService<br/>建立 編輯 新版本 刪除 撤回 額度與範例"]
+    Ctl --> Sub["ScriptSubmissionService<br/>送審的唯一入口"]
+    Auth --> Spec["script_spec 固定規格"]
+    Auth --> Rules["script_rules 規則層<br/>純運算 詞表在 app/data/review/lexicon.json"]
+    Sub --> Rules
+    Sub --> Rev["ScriptReviewService 模型層<br/>kind script_review"]
+    Rev --> Llm["LlmService.run_structured<br/>RPG 用途的供應商 不使用 Gemini"]
+    Sub --> Pol["AccessPolicy<br/>年齡閘門 require_can_submit author_content_cap"]
+    Auth --> Lim["RuntimeLimits<br/>每次使用時現讀資料庫"]
+    Sub --> Lim
+    Sess["SessionService 開存檔"] -->|"ReviewGate 內建劇本免審"| Rev
+    Auth --> SRepo["ScriptRepository"]
+    Sub --> SRepo
+    Sub --> SubRepo["ScriptSubmissionRepository"]
+    Lim --> LRepo["RuntimeLimitRepository"]
+```
+
+| 元件 | 責任 |
+|---|---|
+| `script_rules.py`（純運算） | 規則層：同一句內的詞共現判斷，詞表是隨映像封裝的 JSON（`not_after`／`not_before` 排除誤判，如「異國中生存」）；直接拒絕的主軸是露骨性用語與未成年用語同句，強姦或性暴力用語單獨出現只標示；只回報固定類別，不回報內容或位置；每次儲存都執行 |
+| `script_review_prompt.py`／`ScriptReviewService` | 模型層：審查指示只放 `system_instruction`，劇本文字是資料區塊；輸出固定為 `{verdict, categories}`，沒有自由文字；結果掛在版本上（對應 `content_hash`），內容不變就不再呼叫；**RPG 供應商沒有設定、預算用盡、降級或被擋一律不放行** |
+| `ScriptAuthoringService` | 作者自己的劇本：建立、儲存草稿（`base_hash` 樂觀並行）、新版本、刪除、撤回、重新取用筆名、額度與範例；每次儲存只跑規則層，被拒絕時不寫入也不計次 |
+| `ScriptSubmissionService` | 送審的順序：年齡閘門 → 擁有者（404）→ 必須是草稿 → 沒有被暫停 → 每日上限（台灣日）→ 固定規格與規則層 → 模型層 → 合併疑慮 → 記錄審查結果 → 條件式轉移為待審；自動拒絕寫一筆紀錄、評估連續被拒，達門檻即條件式暫停發佈 |
+| `RuntimeLimits` | 七個營運限制（劇本數、每日送審數、連續被拒門檻）：每次現讀、不快取；缺值或不合法用保守的保底預設並記警告；修改只經 `flask set-script-limit` 並寫稽核 |
+| `nickname.py`／`NicknameService` | 暱稱的驗證（NFC、去控制字元、長度、不得含網址 電子郵件 電話樣式、不得冒用官方署名）與短代號；年齡確認時與生日一起驗證，帳號頁可更改 |
+
+- **依賴方向**：Service 只透過 Repository 與 `LlmService`；`SessionService` 只依賴 `ReviewGate`（Protocol），不認識模型層的實作，測試以替身注入。審查結果欄位只由 `ScriptRepository.record_review` 寫入，`tests/architecture/test_script_state_writes.py` 擋住別處的賦值。
+- 組裝在 `registry.py`（`get_runtime_limits()`、`get_script_review_service()`、`get_script_authoring_service()`、`get_script_submission_service()`、`get_nickname_service()`）；自動拒絕與暫停的稽核走 `_system_audit`（管理員欄位為空）。
+
 ## 3. 一個請求的生命週期
 
 ```mermaid
@@ -200,6 +234,7 @@ flowchart LR
 | security-headers                                                                                                                                     | `app/security/security_headers.py`（HSTS 只在 staging 與 production；不送 CSP） | [營運與部署-operations.md](營運與部署-operations.md) |
 | operational-alerts（及 app-configuration、service-observability 的告警條款）                                                                         | `app/services/alert_rules.py`（純函式）、`alert_service.py`、`alert_messages.py`、`app/repositories/alert_state_repository.py`、`app/observability/alert_events.py`、`app/cli.py` 的 `check-alerts` | [營運與部署-operations.md](營運與部署-operations.md)、[資料模型-data-model.md](資料模型-data-model.md) |
 | content-tier-modes、script-fixed-spec、script-store、rpg-sessions、builtin-script-seed | `app/services/content_tier.py`、`script_spec.py`、`content_mode_service.py`、`session_service.py`、`script_seed_service.py`、`app/repositories/script_repository.py`、`session_repository.py`、`app/data/scripts/` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) |
+| script-authoring、script-review、script-submission、runtime-limits、player-nickname、appeal-shortcut | `app/services/script_authoring_service.py`、`script_submission_service.py`、`script_review_service.py`、`script_review_prompt.py`、`script_rules.py`、`runtime_limits.py`、`nickname.py`、`nickname_service.py`、`app/repositories/script_submission_repository.py`、`runtime_limit_repository.py`、`app/controllers/script_api_controller.py`、`script_page_controller.py`、`app/data/review/lexicon.json` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[前端結構-frontend.md](前端結構-frontend.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |
@@ -221,7 +256,7 @@ flowchart LR
 
 ## 7. 規劃中的 RPG 模組
 
-RPG 與客服共用上述分層與模型呼叫層；差異在串流（SSE）、世界狀態與劇本。**資料基礎已實作**（上面的「RPG 資料基礎」）：劇本與版本、存檔與回合、固定規格驗證器、三種內容模式、內建劇本種子。**尚未實作**：創作介面（RC-7）、審核與公開目錄（RC-8）、回合引擎與串流（RC-2）、遊戲介面（RC-3）。細節見 [RPG.md](RPG.md)，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。
+RPG 與客服共用上述分層與模型呼叫層；差異在串流（SSE）、世界狀態與劇本。**資料基礎已實作**（上面的「RPG 資料基礎」）：劇本與版本、存檔與回合、固定規格驗證器、三種內容模式、內建劇本種子。**創作介面已實作**（RC-7，上面的「劇本創作與審查」）。**尚未實作**：審核與公開目錄（RC-8）、回合引擎與串流（RC-2）、遊戲介面（RC-3）。細節見 [RPG.md](RPG.md)，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。
 
 ---
 

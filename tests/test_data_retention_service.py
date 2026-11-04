@@ -1,4 +1,4 @@
-"""data-retention 規格：八類資料的期限清除（邊界、帳號刪除紀錄不納入、近期紀錄與額度不受影響、一類失敗不阻止其餘、分批、重跑、事件）。
+"""data-retention 規格：九類資料的期限清除（邊界、帳號刪除紀錄不納入、近期紀錄與額度不受影響、一類失敗不阻止其餘、分批、重跑、事件）。
 
 以 `member_session` 同時在 SQLite 與真實 SQL Server 上執行。
 """
@@ -9,20 +9,23 @@ from sqlalchemy import func, select
 
 from app.models import (
     AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, LockAppeal, LockStrike, MemoryLog,
-    RpgSession, User,
+    RpgSession, ScriptSubmission, User,
 )
 from app.models.user import TOKEN_RESET_PASSWORD
 from app.repositories.retention_repository import RetentionRepository
 from app.services.data_retention_service import (
     ADMIN_AUDIT_RETENTION, AUTH_TOKEN_RETENTION, CONVERSATION_RETENTION, ERROR_DETAIL_RETENTION, LEDGER_RETENTION,
-    LOCK_STRIKE_RETENTION, SESSION_RETENTION, TURN_CONTENT_RETENTION, DataRetentionService,
+    LOCK_STRIKE_RETENTION, SCRIPT_SUBMISSION_RETENTION, SESSION_RETENTION, TURN_CONTENT_RETENTION, DataRetentionService,
 )
 from tests.support.auth import START, FakeClock, add_user
 
 SECOND = timedelta(seconds=1)
-CATEGORIES = ["conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes", "turn_content", "sessions"]
+CATEGORIES = [
+    "conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes", "turn_content", "sessions", "script_submissions",
+]
 EVERY_ONE = {
     "conversations": 1, "ledger": 1, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1, "lock_strikes": 1, "turn_content": 1, "sessions": 1,
+    "script_submissions": 1,
 }
 
 
@@ -106,6 +109,14 @@ def seed_every_category(session) -> dict[str, tuple]:
     session.flush()
     out["sessions"] = (expired_save.id, kept_save.id)
     out["turn_content"] = (stale_turn.id, fresh_turn.id)
+    # 劇本送審紀錄：一筆剛好過期、一筆差一秒
+    submissions = [
+        ScriptSubmission(user_id=user, outcome="auto_rejected", categories_json=["minor_sexual"], created_at=START - SCRIPT_SUBMISSION_RETENTION - SECOND),
+        ScriptSubmission(user_id=user, outcome="sent", categories_json=None, created_at=START - SCRIPT_SUBMISSION_RETENTION + SECOND),
+    ]
+    session.add_all(submissions)
+    session.flush()
+    out["script_submissions"] = tuple(row.id for row in submissions)
     session.commit()
     return out
 
@@ -117,6 +128,7 @@ def test_the_periods_are_the_documented_ones():
     assert ERROR_DETAIL_RETENTION == timedelta(days=14) and AUTH_TOKEN_RETENTION == timedelta(days=7)
     assert ADMIN_AUDIT_RETENTION == timedelta(days=730) and LOCK_STRIKE_RETENTION == timedelta(days=7)
     assert SESSION_RETENTION == timedelta(days=365) and TURN_CONTENT_RETENTION == timedelta(days=14)
+    assert SCRIPT_SUBMISSION_RETENTION == timedelta(days=365)
 
 
 def test_each_category_removes_only_what_is_past_its_own_period(member_session):
@@ -137,6 +149,7 @@ def test_each_category_removes_only_what_is_past_its_own_period(member_session):
     assert set(s.scalars(select(AdminAuditLog.id))) == {ids["admin_audit"][1]}
     assert set(s.scalars(select(LockStrike.id))) == {ids["lock_strikes"][1]}        # 8 天前的計次清除，6 天前的保留
     assert set(s.scalars(select(RpgSession.id))) == {ids["sessions"][1]}
+    assert set(s.scalars(select(ScriptSubmission.id))) == {ids["script_submissions"][1]}
     turns = {t.id: t for t in s.scalars(select(MemoryLog))}                          # 過期存檔的回合隨存檔消失；其餘回合紀錄都保留
     assert set(turns) == set(ids["turn_content"]) and turns[ids["turn_content"][0]].llm_raw_response == ""
     assert turns[ids["turn_content"][1]].llm_raw_response == "未過期片段" and turns[ids["turn_content"][0]].turn_status == "interrupted"
@@ -263,7 +276,7 @@ def test_events_carry_only_the_category_and_the_count(member_session, log_lines)
     purged = [(line["reason"], line["count"]) for line in log_lines() if line.get("event") == "retention.purged"]
     assert purged == [
         ("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1),
-        ("turn_content", 1), ("sessions", 1),
+        ("turn_content", 1), ("sessions", 1), ("script_submissions", 1),
     ]
     for secret in ("機密訊息", "過期原文", "user1@example.com", "使用者1", "過期片段", "隨存檔刪除的劇情"):
         assert secret not in log_lines.raw()

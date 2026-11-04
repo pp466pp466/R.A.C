@@ -47,7 +47,7 @@ def test_the_admin_sees_appeals_only_while_the_account_is_locked(member_session)
     appeals.create(locked.id, "請解除鎖定", NOW)
     appeals.create(free.id, "我沒被鎖定", NOW)
     admin = AdminRepository(s)
-    rows = admin.appeals_of_locked_accounts(limit=10, offset=0)
+    rows = admin.appeals_of_restricted_accounts(limit=10, offset=0)
     assert [r.content for r in rows] == ["請解除鎖定"] and rows[0].user_public_id == locked.public_id
     assert [r.user_public_id for r in admin.locked_accounts(limit=10, offset=0)] == [locked.public_id]
     # 解除鎖定之後，申訴不再出現在管理員的檢視中，但資料仍在
@@ -55,7 +55,7 @@ def test_the_admin_sees_appeals_only_while_the_account_is_locked(member_session)
 
     assert UserRepository(s).unlock_player(locked.id) is True
     s.commit()
-    assert admin.appeals_of_locked_accounts(limit=10, offset=0) == []
+    assert admin.appeals_of_restricted_accounts(limit=10, offset=0) == []
     assert s.scalar(select(func.count(LockAppeal.id))) == 2
 
 

@@ -1,8 +1,9 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0012_rpg_data_and_script` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0013_rpg_script_authoring` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
-> 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：暱稱與筆名的使用者欄位（RC-7）、刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
+> 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
+> 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
@@ -15,6 +16,7 @@ erDiagram
     users ||--o{ chat_conversations : "擁有 CASCADE"
     users ||--o{ lock_strikes : "鎖定計次 CASCADE"
     users ||--o{ lock_appeals : "申訴 CASCADE"
+    users ||--o{ script_submissions : "送審紀錄 CASCADE"
     chat_conversations ||--o{ chat_messages : "包含 CASCADE"
     users |o--o{ llm_call_logs : "產生 SET NULL 匿名化"
     chat_conversations ||..o{ llm_call_logs : "只存編號 無外鍵"
@@ -59,6 +61,9 @@ erDiagram
         datetime adult_confirmed_at "成人模式的成年確認時間 可為空 只保存目前這一次"
         string adult_rules_version "確認時的安全規範版本 版本改變即失效 可為空"
         string adult_confirm_method "確認方式 目前只有 self_declared 可為空"
+        string nickname "公開暱稱 2 至 20 字 個資 與 display_name 分開 可為空 創作劇本前必填"
+        string nickname_code "系統產生的穩定短代號 與暱稱一起顯示 可為空"
+        datetime publish_suspended_at "連續被自動拒絕而暫停發佈的時間 獨立於 locked_at 只停止送審 可為空 有索引"
     }
     scripts {
         int id PK
@@ -93,6 +98,10 @@ erDiagram
         int live_script_id "狀態為 published 時等於 script_id 部分唯一"
         int open_script_id "狀態為 draft 或 pending_review 時等於 script_id 部分唯一"
         datetime published_at
+        string review_hash "審查當時的 content_hash 與目前相同才算數 內容變動即失效 可為空"
+        string review_verdict "pass flag reject 系統判斷 可為空"
+        json review_categories_json "固定列舉 不含任何內容 可為空"
+        datetime reviewed_at "可為空"
     }
     script_version_tags {
         int id PK
@@ -141,6 +150,19 @@ erDiagram
         text content "玩家撰寫 上限 1000 字 視為個資"
         datetime created_at
         datetime handled_at "解除鎖定時標記 可為空"
+    }
+    script_submissions {
+        int id PK
+        int user_id FK "CASCADE 沒有版本識別碼 不連到版本"
+        string outcome "sent auto_rejected lifted"
+        json categories_json "固定列舉 沒有任何劇本文字 可為空"
+        datetime created_at "與 user_id 的複合索引 保存 12 個月"
+    }
+    runtime_limits {
+        int id PK
+        string key UK "七個固定的鍵 劇本數 每日送審數 連續被拒門檻 沒有外鍵 不含個資"
+        int int_value "範圍與缺值時的保底預設在程式 不在資料庫約束"
+        datetime updated_at
     }
     user_identities {
         int id PK
@@ -191,7 +213,7 @@ erDiagram
         int id PK
         int user_id FK "可為空"
         int conversation_id "不設外鍵"
-        string kind "chat 或 summary"
+        string kind "chat summary 或 script_review 長度 20"
         string provider
         string model
         int attempt
@@ -217,7 +239,7 @@ erDiagram
     admin_audit_logs {
         int id PK
         int admin_user_id FK "可為空 SET NULL"
-        string action "12 個固定動作"
+        string action "15 個固定動作"
         string target_user_public_id "對外識別碼 無外鍵"
         string target_conversation_public_id "對外識別碼 無外鍵"
         string reason "管理員填寫 至多 200 字"
@@ -256,6 +278,11 @@ erDiagram
 | 來源參照是無動作的外鍵 | `sessions.source_version_id → script_versions.id` 沒有 `ON DELETE`；刪除版本與抹除帳號的流程先把參照清為空值 | 刪除使用者有兩條路徑到達 `sessions`（`users → sessions`，與 `users → scripts → script_versions → sessions`），SQL Server 不允許多重串聯路徑（錯誤 1785）；有外鍵才不會出現指向已刪除編號的懸空參照，忘了清空時刪除會直接失敗 |
 | 回合的唯一性與輪數 | `(session_id, client_msg_id)`、`(session_id, seq)` 唯一；`turn_number` 可為空，只在回合完成時指派，不設資料庫唯一約束 | 冪等與順序由資料庫保證；可為空的複合唯一在 SQL Server 有問題，輪數的唯一靠「同一存檔同時只處理一則」與開始回合時對存檔列的條件式 UPDATE 取鎖 |
 | 內容模式欄位 | `users.content_tier_preference` 為 `NOT NULL`、伺服器預設 `safe`（舊版程式的 INSERT 仍有效且保守）；成年確認三欄皆可為空，只保存目前這一次 | 預設最保守；規範版本改變後覆寫即可，歷史不需要保存；`0012` 依 `is_adult_at_confirmation` 一次回填（成年為 `standard`），所以滿 18 歲不會自動調高 |
+| 暱稱與暫停發佈是帳號的屬性（`0013`） | `users.nickname`、`nickname_code`、`publish_suspended_at` 皆可為空，舊版程式的 INSERT 仍有效；暫停時間有索引（後台清單只掃有值的列），只由條件式 UPDATE 寫入（`publish_suspended_at IS NULL` 才寫，並行的拒絕只暫停一次；管理員不會被暫停） | 暫停發佈獨立於 `locked_at`：它只停止送審，其餘功能照常，所以不能共用鎖定欄位；暱稱是公開顯示的個資，與 Google 帶來的 `display_name` 分開存放 |
+| 審查結果掛在版本上（`0013`） | `script_versions.review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at` 皆可為空；只由 `ScriptRepository.record_review` 寫入，條件是 `content_hash` 仍等於審查當時的雜湊（架構測試擋住別處的寫入）；`review_hash` 與目前的 `content_hash` 不同即視為尚未審查 | 審查期間內容被改時舊結果不會蓋在新內容上；結果是系統的判斷，不匯出給使用者，類別只有固定列舉 |
+| 送審紀錄不連到版本（`0013`） | `script_submissions` 只存（使用者、結果、類別、時間），外鍵只有 `users.id`（`CASCADE`），`(user_id, created_at)` 複合索引；`lifted` 是管理員解除暫停時補的一筆，使連續被拒中斷 | 被拒絕的送審只保留類別與時間（AGENTS.md 第 11 節）；不指向版本也就沒有 `users → script_versions → script_submissions` 的第二條串聯路徑（SQL Server 錯誤 1785）；每日次數與連續被拒都從這張表計算，不另設計數器 |
+| 營運限制存在資料庫（`0013`） | `runtime_limits.key` 唯一，七個鍵由遷移植入；程式**每次使用時現讀**，不在行程內快取；範圍與缺值時的保底預設在 `app/services/runtime_limits.py`，資料庫不設值域約束；只能由 `flask set-script-limit` 修改並寫 `limit.set` 稽核 | 多 worker 不得依賴行程記憶體（AGENTS.md 第 9 節），所以調整不必重新部署也立即生效；資料被誤改時讀取端仍有保守的後備值並記錄警告（只記鍵名） |
+| 帳本的類別欄位加寬（`0013`） | `llm_call_logs.kind` 由 10 加寬為 20，`script_review` 共 13 個字 | SQL Server 會以錯誤拒絕過長的字串，SQLite 不會，只在 SQLite 測試看不出來，所以在真實 SQL Server 的測試中守住；降級前先刪除非客服類別的列，才能安全縮回 |
 | 標籤獨立成表 | `script_version_tags` 以顯示形式儲存（保留大小寫，版本內容可由欄位完整還原、雜湊不變），查詢以小寫比對 | 不得依 JSON 內容篩選；同一版本內由驗證器以 NFC 與不分大小寫去除重複，所以兩種資料庫的唯一約束不會誤判 |
 
 ## 3. Migration 歷程
@@ -273,12 +300,14 @@ flowchart LR
     M9 --> M10["0010 google_first_login<br/>users 的補填期限與鎖定欄位、lock_strikes、lock_appeals"]
     M10 --> M11["0011 remove_player_passwords<br/>只動資料：清除玩家的密碼雜湊、pending_verification 改為 active"]
     M11 --> M12["0012 rpg_data_and_script<br/>users 的內容模式四欄與回填、scripts、script_versions、script_version_tags、sessions、memory_logs"]
+    M12 --> M13["0013 rpg_script_authoring<br/>users 的暱稱與暫停發佈三欄、script_versions 的審查四欄、script_submissions、runtime_limits 與七個初始值、llm_call_logs.kind 加寬"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
 - `0011_remove_player_passwords` 是**只動資料**的遷移（清除非管理員帳號的密碼雜湊、失敗計數與密碼鎖定，並把 `pending_verification` 改為 `active`）：沒有結構變更、可重複執行、舊版程式在遷移後仍可運作；被清除的雜湊無法還原，回復靠遷移前的備份。
 - `0012_rpg_data_and_script` 只新增（四個 `users` 欄位與五張新表，部分唯一索引同時有 `sqlite_where` 與 `mssql_where`），並用 ORM 表達式一次回填 `content_tier_preference`；舊版程式在新結構上可運作，所以部署順序仍是「備份 → 遷移 → 部署 → `flask seed-scripts`」；降級會移除新表與新欄位，只在還沒有任何真實資料時使用。
-- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
+- `0013_rpg_script_authoring` 只新增與加寬（七個可為空的新欄位、兩張新表、`kind` 由 10 加寬為 20）；七個限制的初始值以 `op.bulk_insert` 與 ORM 資料表物件寫入，沒有原生 SQL；舊版程式在新結構上可運作。降級先刪除非客服類別的帳本列才縮回 `kind`，所以只在還沒有真實資料時使用。
+- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。
 
@@ -302,6 +331,8 @@ flowchart TD
     Strike["lock_strikes"] -->|"7 天（purge-expired-data）"| Del7["刪除（鎖定計次，視窗只有 15 分鐘）"]
     Save["sessions（RPG 存檔，連同回合與記事簿）"] -->|"最後活動後 365 天（purge-expired-data）"| Del8["刪除，不論進行中或已完結"]
     Turn["memory_logs 中斷或被擋回合的劇情內容"] -->|"14 天（purge-expired-data）"| Del9["llm_raw_response 清為空字串，回合紀錄保留"]
+    Sub["script_submissions（送審紀錄）"] -->|"建立後 365 天（purge-expired-data）"| Del10["刪除，只刪紀錄 暫停旗標不受影響"]
+    Sub -->|"隨帳號抹除 CASCADE"| Era
     Scr["scripts、script_versions、script_version_tags"] -->|"隨作者的帳號抹除"| Era
     Appeal["lock_appeals（申訴）"] -->|"與帳號同進退，不由期限清除"| Era
 ```
@@ -310,7 +341,7 @@ flowchart TD
 
 劇本、版本、標籤與作者自己的存檔、回合都靠 `CASCADE` 一起消失；別的玩家用該作者的劇本開過的存檔**保留**（有自己的劇本複本），只是來源參照變成空值。「匿名保留已發佈劇本」的偏好與抹除分支屬 RC-8，目前沒有它，漏掉處理時偏向刪除。
 
-期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730；存檔 365、回合的部分內容 14），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。重新抹除（`flask replay-deletions`）只抹除「建立時間不晚於刪除時間」且非管理員的帳號：SQL Server 的 IDENTITY 在還原後從備份時的種子繼續，備份之後註冊再被刪除的編號會被還原後的新使用者沿用，只憑編號刪除會刪到別人；同一個編號有多筆紀錄時只看最晚的刪除時間。紀錄本身沒有外鍵、也不唯一，重新抹除時若該編號已有不早於這次的紀錄就不再寫入。
+期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730；存檔 365、送審紀錄 365、回合的部分內容 14），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。重新抹除（`flask replay-deletions`）只抹除「建立時間不晚於刪除時間」且非管理員的帳號：SQL Server 的 IDENTITY 在還原後從備份時的種子繼續，備份之後註冊再被刪除的編號會被還原後的新使用者沿用，只憑編號刪除會刪到別人；同一個編號有多筆紀錄時只看最晚的刪除時間。紀錄本身沒有外鍵、也不唯一，重新抹除時若該編號已有不早於這次的紀錄就不再寫入。
 
 ---
 

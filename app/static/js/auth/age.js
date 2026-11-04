@@ -1,5 +1,6 @@
 /* 年齡確認頁（Vue 3 全域變數模式）。玩家首次以 Google 登入之後唯一能做的事。
- * 送出生日與年齡區間 -> 成功就回到登入前要去的位置；錯誤代碼的處理集中在 auth-flows.js（可在 Node 測試）：
+ * 送出生日、年齡區間與暱稱（同一個步驟，全有或全無；暱稱不合格時欄位旁顯示說明，生日與區間保持原樣）
+ *   -> 成功就回到登入前要去的位置；錯誤代碼的處理集中在 auth-flows.js（可在 Node 測試）：
  *   age_not_eligible（未滿最低年齡，帳號已抹除）-> 只顯示說明與回登入頁的連結；age_mismatch -> 通用說明並清空兩個欄位；
  *   登入逾時 -> 登入頁。處理中禁用、無論成功或失敗都在 finally 恢復（Auth.useForm）。 */
 (function () {
@@ -9,7 +10,7 @@
 
   var app = Vue.createApp({
     setup: function () {
-      var form = Auth.useForm({ birthDate: '', ageRange: '' });
+      var form = Auth.useForm({ birthDate: '', ageRange: '', nickname: '' });
       var finished = Vue.ref(null);
 
       function applyOutcome(outcome) {
@@ -20,7 +21,7 @@
 
       function submit() {
         form.clearErrors();
-        var problems = Auth.validateAge(form.values);
+        var problems = Auth.validateAge(form.values, { nicknameRequired: true });
         if (Object.keys(problems).length) {
           Object.assign(form.fieldErrors, problems);
           return Promise.resolve(false);

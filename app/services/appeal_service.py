@@ -1,10 +1,10 @@
-"""被鎖定玩家的申訴（見 lockout-appeals 規格與 google-first-login 的 design D8）。
+"""被鎖定或被暫停發佈玩家的申訴（見 lockout-appeals 規格與 google-first-login 的 design D8、rpg-script-authoring 的 D13）。
 
-- 只有「目前被鎖定的玩家」能申訴；其他人（含管理員）得到與不存在相同的 404。
+- 只有「目前被鎖定」或「目前被暫停發佈」的玩家能申訴；其他人（含管理員）得到與不存在相同的 404。兩種狀態共用同一套上限與處理流程。
 - 內容視為個資：NFC 正規化、去除控制字元，上限 1000 字（以清理之後的 Unicode 字元計），空白內容在這裡擋下。
 - 頻率：同一帳號每小時最多 3 則、同一時間最多 1 則待處理（先判斷待處理，因為那時再送也不會成功）；拒絕時不寫入。
 - 申訴內容絕不進日誌或稽核：稽核（`appeal.submit`，管理員欄位為空）只有對外識別碼與字數，日誌只有事件名稱與內部編號。
-- 管理員檢視被鎖定帳號的申訴與解除鎖定在 `AdminService`（後台專用 Repository），不在這裡。
+- 管理員檢視申訴、解除鎖定與解除暫停發佈在 `AdminService`（後台專用 Repository），不在這裡。
 """
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ class AppealService:
         self._clock = clock
 
     def submit(self, current: CurrentUser, content: object) -> AppealView:
-        user_id, public_id = self._require_locked(current)
+        user_id, public_id = self._require_appealable(current)
         text = self._clean(content)
         now = self._clock()
         if self._appeals.has_pending(user_id):
@@ -82,18 +82,18 @@ class AppealService:
 
     def mine(self, current: CurrentUser) -> list[AppealView]:
         """自己的申訴，由新到舊（最多 20 則）。"""
-        user_id, _ = self._require_locked(current)
+        user_id, _ = self._require_appealable(current)
         appeals = self._appeals.list_for_user(user_id)
         return [_view(appeal) for appeal in reversed(appeals[-MAX_APPEALS_LISTED:])]
 
     # ---- 內部 ----------------------------------------------------------------------
 
-    def _require_locked(self, current: CurrentUser) -> tuple[int, str]:
+    def _require_appealable(self, current: CurrentUser) -> tuple[int, str]:
         user = self._users.get_by_id(current.id)
         if user is None:
             raise Unauthenticated()
-        if user.locked_at is None:
-            raise NotFound()                            # 沒有被鎖定：與不存在完全相同的回應
+        if user.locked_at is None and user.publish_suspended_at is None:
+            raise NotFound()                            # 沒有被鎖定、也沒有被暫停發佈：與不存在完全相同的回應
         return user.id, user.public_id
 
     @staticmethod

@@ -25,7 +25,9 @@ from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.lock_strike_repository import LockStrikeRepository
 from app.repositories.alert_state_repository import AlertStateRepository
 from app.repositories.retention_repository import RetentionRepository
+from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.repositories.script_repository import ScriptRepository
+from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
@@ -54,9 +56,15 @@ from app.services.cs_prompt import leak_marker
 from app.services.email_flow_service import EmailFlowService
 from app.services.google_sign_in_service import GoogleSignInService
 from app.services.health_service import HealthService
+from app.services.nickname_service import NicknameService
 from app.services.llm_service import LlmService
 from app.services.mail_sender import MailSender
 from app.services.password_hasher import PasswordHasherService, parameters_for_env
+from app.services.runtime_limits import RuntimeLimits
+from app.services.script_authoring_service import ScriptAuthoringService
+from app.services.script_submission_service import ScriptSubmissionService
+from app.services.script_review_prompt import review_marker
+from app.services.script_review_service import ScriptReviewService
 from app.services.script_seed_service import SEED_DIRECTORY, ScriptSeedService
 from app.services.session_service import SessionService
 from app.services.summary_service import SummaryService
@@ -106,7 +114,7 @@ def _system_audit(session: Session, clock: Callable[[], datetime]):
     """系統或玩家觸發的稽核寫入（管理員欄位為空）：鎖定與申訴提交。傳給 Service 的是函式，不是後台專用的 Repository。"""
     audits = AdminAuditRepository(session)
 
-    def write_audit(action: str, target_user_public_id: str, detail: Mapping[str, Any]) -> None:
+    def write_audit(action: str, target_user_public_id: str | None, detail: Mapping[str, Any]) -> None:
         audits.add(admin_user_id=None, action=action, now=clock(), target_user_public_id=target_user_public_id, detail=detail)
 
     return write_audit
@@ -320,11 +328,46 @@ def get_content_mode_service() -> ContentModeService:
     return ContentModeService(users=UserRepository(get_session()), policy=get_access_policy(), clock=get_clock())
 
 
+def get_script_authoring_service() -> ScriptAuthoringService:
+    """目前請求的創作服務：只讀寫呼叫者本人的劇本與版本（Repository 的方法都以 `user_id` 為第一個參數）。"""
+    session, clock = get_session(), get_clock()
+    return ScriptAuthoringService(
+        scripts=ScriptRepository(session), users=UserRepository(session), submissions=ScriptSubmissionRepository(session),
+        policy=get_access_policy(), limits=get_runtime_limits(), clock=clock,
+    )
+
+
+def get_script_submission_service() -> ScriptSubmissionService:
+    """目前請求的送審服務：自動拒絕與暫停發佈的寫入要在 4xx 之後保留（`persist`），稽核由系統寫入（管理員欄位為空）。"""
+    session, clock = get_session(), get_clock()
+    return ScriptSubmissionService(
+        scripts=ScriptRepository(session), users=UserRepository(session), submissions=ScriptSubmissionRepository(session),
+        policy=get_access_policy(), limits=get_runtime_limits(), reviews=get_script_review_service(),
+        authoring=get_script_authoring_service(), audit=_system_audit(session, clock), clock=clock, persist=keep_changes_on_error,
+    )
+
+
+def get_nickname_service() -> NicknameService:
+    """目前請求的暱稱服務：只讀寫呼叫者本人的暱稱與短代號。"""
+    return NicknameService(users=UserRepository(get_session()), policy=get_access_policy())
+
+
+def get_script_review_service() -> ScriptReviewService:
+    """目前請求的劇本審查（模型層）：RPG 用途的 `LlmService`（沒有設定供應商時為 None，審查一律回報不可用）與全站用量上限的檢查。"""
+    session, config, clock = get_session(), get_config(), get_clock()
+    usage = build_usage_service(session, settings=config.usage, clock=clock)
+    return ScriptReviewService(
+        scripts=ScriptRepository(session), llm=get_rpg_llm_service(), marker=review_marker(config.secret_key.reveal()),
+        budget_exhausted=usage.global_budget_exhausted, clock=clock,
+    )
+
+
 def get_session_service() -> SessionService:
     """目前請求的存檔服務：開存檔與開始回合（兩者都只處理呼叫者本人的資料）。"""
     session = get_session()
     return SessionService(
-        scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy(), clock=get_clock(),
+        scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy(),
+        reviews=get_script_review_service(), clock=get_clock(),
     )
 
 
@@ -333,7 +376,8 @@ def get_personal_export_service() -> PersonalExportService:
     session = get_session()
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
-        appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session), clock=get_clock(),
+        appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
+        submissions=ScriptSubmissionRepository(session), clock=get_clock(),
     )
 
 
@@ -388,6 +432,15 @@ def build_script_seed_service(
         scripts=ScriptRepository(session), clock=clock, commit=session.commit, rollback=session.rollback,
         directory=directory if directory is not None else SEED_DIRECTORY, forbidden_markers=forbidden_markers,
     )
+
+
+def build_runtime_limits(session: Session, *, clock: Callable[[], datetime]) -> RuntimeLimits:
+    """營運限制（每次使用時現讀，不快取）；稽核（管理員欄位為空）以注入的函式寫入，只有命令列的修改用得到。"""
+    return RuntimeLimits(limits=RuntimeLimitRepository(session), clock=clock, audit=_system_audit(session, clock))
+
+
+def get_runtime_limits() -> RuntimeLimits:
+    return build_runtime_limits(get_session(), clock=get_clock())
 
 
 def build_age_stats_service(session: Session, *, age_policy: AgePolicy = DEFAULT_AGE_POLICY) -> AgeStatsService:

@@ -18,6 +18,7 @@ FORBIDDEN_KEYS = {"id", "token_version", "password_hash", "password", "tv"}
 PROFILE_KEYS = {
     "public_id", "email", "display_name", "member_tier", "role", "status",
     "email_verified", "has_password", "age_confirmed", "age_group", "google_linked", "restriction",
+    "nickname", "nickname_code", "publish_suspended",                 # rpg-script-authoring：只回給本人
 }
 AGE_SECRETS = ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult")
 
@@ -146,8 +147,8 @@ def test_verify_age_records_everything_and_returns_the_fresh_profile_without_the
 @pytest.mark.parametrize(
     ("body", "code", "fields"),
     [
-        ({}, "validation_error", {"birth_date", "age_range"}),
-        ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error", {"birth_date"}),
+        ({}, "validation_error", {"birth_date", "age_range", "nickname"}),
+        ({"birth_date": "2026-02-30", "age_range": "25_34", "nickname": "測試玩家"}, "validation_error", {"birth_date"}),
         (age_fields(30, age_range=None), "validation_error", {"age_range"}),
         (age_fields(30, age_range="13_17"), "age_mismatch", None),
     ],

@@ -457,6 +457,8 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 | `/api/admin/failures` | GET | 最近 14 天模型輸出驗證失敗的原文（最多 100 筆，`error_detail`）。寫稽核（`failures.read`） | 是（管理員） |
 | `/api/admin/locked` | GET | 目前被鎖定的玩家帳號：對外識別碼、顯示名稱、鎖定時間、原因類別（固定列舉）；沒有 email 與內部編號 | 是（管理員） |
 | `/api/admin/appeals` | GET | **只有目前被鎖定的帳號**送出的申訴（解除之後不再出現；不開放讀取任何對話）。寫稽核（`appeal.read`，只記筆數） | 是（管理員） |
+| `/api/admin/publish-suspended` | GET | 目前被暫停發佈的玩家帳號（作者連續多次送審被自動拒絕時由系統暫停，只停止送審）：只有對外識別碼、顯示名稱與暫停時間，不含 email、暱稱與內部編號 | 是（管理員） |
+| `/api/admin/users/<public_id>/lift-publish-suspension` | POST | 解除玩家的暫停發佈（**高風險：重新輸入密碼**，失敗寫 `reauth.failed`）。條件式更新，兩位管理員同時解除只有一位成功（另一位 409 `not_suspended`）；成功時補一筆 `lifted` 送審紀錄（使連續被拒中斷）、把待處理的申訴標為已處理，目標立刻可以再送審。寫稽核（`publish.lift`） | 是（管理員） |
 | `/api/admin/users/<public_id>/unlock` | POST | 解除玩家帳號的鎖定（**高風險：重新輸入密碼**，失敗寫 `reauth.failed`）。條件式更新，兩位管理員同時解除只有一位成功（另一位 409 `not_locked`）；成功時清除該帳號的計次、把待處理的申訴標為已處理，目標的登入狀態立刻恢復。寫稽核（`account.unlock`） | 是（管理員） |
 
 | 頁面 | 說明 |
@@ -468,7 +470,7 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 - **找使用者的方式**：平常只透過警告（總覽的「今日警告」→ 被標記對話 → 看對話、看使用者）；以信箱查詢只在客服反應時使用，介面標明用途，稽核的細節註明是以信箱或識別碼。
 - **危險操作要重新輸入密碼**：停權、解除停權、調整等級、刪除對話。密碼錯誤沿用登入的失敗計數與鎖定（**連續 5 次鎖定 15 分鐘，計數與登入共用**），鎖定中即使密碼正確也拒絕，且訊息與密碼錯誤相同（不洩漏是否被鎖定）；成功**不**重設計數（只有登入成功才重設）。失敗寫 `reauth.failed` 並保存（請求是 400，交易預設會回復，所以明確以 `keep_changes_on_error` 保存）。只靠 Google 登入、沒有設定密碼的管理員不能執行這些操作（`no_password`）。讀取類操作不需要密碼，但每次都有稽核。
 - **只能操作一般使用者**：目標若是管理員（含自己）回 403 `admin_target_forbidden`；`deletion_pending` 回 409 `target_pending_deletion`；狀態與等級以單一條件式 `UPDATE` 改寫，兩位管理員同時操作不會互相覆蓋（409 `already_suspended`、`not_suspended`、`tier_unchanged`、`state_changed`）。
-- **稽核**（`admin_audit_logs`，migration `0007`）：12 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及 Google 登入改版新增的帳號鎖定與申訴 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`；鎖定與申訴提交由系統或玩家觸發，管理員欄位為空）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
+- **稽核**（`admin_audit_logs`，migration `0007`）：15 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及 Google 登入改版新增的帳號鎖定與申訴 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，與劇本創作新增的 `limit.set`（部署者修改營運限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停）；鎖定、申訴提交、修改限制與暫停發佈由系統、玩家或部署者觸發，管理員欄位為空）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
 - **分層由測試守住**（`tests/architecture/test_admin_boundaries.py`，AST）：`AdminService` 的每個公開方法第一個陳述式是 `require_admin`；後台專用的 Repository（`admin_repository.py`、`admin_audit_repository.py`）只被 `admin_service.py` 與 `registry.py` 匯入；測試本身有自我驗證（餵它故意違規的原始碼必須失敗並指出方法或檔案）。一般使用者的 `ChatRepository`「第一個參數必須是 `user_id`」規則完全不變。
 - **日誌**：只有 `admin.access_denied`、`admin.reauth_failed`、`admin.action` 三種事件，欄位是內部編號與固定列舉（動作名稱或 `not_admin`），列舉以外的值立刻出錯；沒有 email、訊息與原因文字（整段流程以日誌掃描驗證）。
 - **前端**：`app/static/js/admin/admin-format.js`（日期以台灣時間、列舉的中文標籤、用量百分比與警示等級；純函式，`tests/js/admin-format.test.js`，`tests/test_admin_format_labels.py` 比對標籤與後端列舉）、`admin.js`（Vue 應用）、`app/static/css/admin.css`。六個分頁：總覽（最上面是可點擊的「今日警告」）、被標記對話、意見回饋、使用者、模型失敗、稽核。Modal 與 Toast 完全由 Vue 狀態接管；所有文字以插值顯示為純文字。確認視窗的密碼欄位在**送出的當下與關閉時立即清空**，不存進任何儲存體。進入分頁時才載入一次（模型失敗每次讀取都寫稽核，所以不因切換分頁而重複讀取），「重新整理」才重新讀取。
@@ -499,6 +501,7 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 | 端點 | 方法 | 用途 | 需要登入 |
 |---|---|---|---|
 | `/api/account/delete` | POST | 申請刪除自己的帳號。有密碼的帳號帶 `password`（與登入共用失敗計數與鎖定，連續 5 次鎖定 15 分鐘）；只靠 Google 的帳號帶 `confirm_text`（固定文字「刪除我的帳號」，由伺服器放進頁面狀態，前端不另存一份）。成功後帳號為 `deletion_pending`、`token_version` 加 1（所有裝置登出，這台的 cookie 一併清除）；**不寄通知信**（玩家端不寄任何信）。錯誤：400 欄位錯誤、403 `admin_delete_forbidden`（管理員不可自助刪除）、409 `deletion_not_allowed`（已在待刪除，或停權等不允許的狀態） | 是 |
+| `/api/account/nickname` | PUT | 設定或更改自己的公開暱稱，本文 `nickname`（2 至 20 字，NFC 正規化並去除控制字元，不得含網址、電子郵件或電話的樣式，也不得冒用「官方」；不合格 400 並指出 `nickname`）。需登入、先過年齡閘門（尚未確認年齡 403 `age_confirmation_required`，鎖定 403 `account_locked`，未登入 401）。第一次設定時產生 4 碼的短代號並保存，之後更改暱稱不改變短代號；不要求唯一，公開顯示為「暱稱#短代號」。回應 `user` 與 `GET /api/auth/me` 相同（本人才看得到暱稱與短代號）。成功時記錄 `account.nickname_set` 事件（只含事件名稱與使用者編號，**不含暱稱與短代號**）。玩家首次登入後的 `POST /api/auth/verify-age` 也要帶 `nickname`（與生日、年齡區間同一個步驟，全有或全無） | 是 |
 | `/api/account/cancel-deletion` | POST | 撤銷刪除（只在申請後 7 天內）：一律還原為 `active`（`pending_verification` 已退役）。**少數允許受限登入狀態的端點之一**；`token_version` 不變，撤銷後目前的登入狀態直接變成完整的。錯誤：409 `grace_expired`、`not_pending` | 是（含待刪除） |
 | `/api/account/content-mode` | GET | 查詢自己的內容模式（安全、一般、成人，見 AGENTS.md 第 7 節）。需登入、先過年齡閘門（尚未確認年齡 403 `age_confirmation_required`，未登入 401）。回應 `content_mode` 只含 `preference`（偏好）、`effective`（生效模式，偏好與年齡上限中較保守者）、`selectable`（`safe`／`standard`／`adult` 各是否可選）、`adult_reason`（成人模式沒有啟用的原因：`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`（是否已在目前的安全規範版本下確認），**不含**生日、年齡區間、年齡確認時間或內部編號；`Cache-Control: no-store`。滿 18 歲不會自動調高偏好，`selectable.standard` 變成真值時介面提示可自行切換 | 是 |
 | `/api/account/content-mode` | PUT | 切換自己的內容模式，本文 `mode`（`safe`、`standard`、`adult`，其餘 400 並指出 `mode`）。成年玩家可選任一種（含安全模式）；未滿成年門檻者只能選 `safe`，否則 403 `content_mode_restricted`。切換為 `adult` 另須：部署開關開啟（否則 403 `adult_mode_unavailable`）、尚未在目前規範版本確認時本文須同時帶 `confirm_adult: true` 與 `confirm_rules: true`（缺哪一項就 400 並指出哪一項）；確認成功記錄時間、規範版本與方式（自行聲明）。已確認後再切換不需再勾選，離開成人模式不清除紀錄。成功時記錄 `account.content_mode.<模式>` 事件（只含事件名稱與使用者編號）。回應同 GET | 是 |
@@ -520,6 +523,7 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 | 用量帳本 | 建立早於 365 天 | 刪除 |
 | 驗證權杖 | 到期早於 7 天（不論是否已使用） | 刪除 |
 | 管理稽核紀錄 | 建立早於 730 天 | 刪除（稽核 Repository 仍然沒有更新與刪除；清除只在 `RetentionRepository`） |
+| 劇本送審紀錄（`script_submissions`） | 建立早於 365 天 | 刪除（rpg-script-authoring 新增；只有結果、類別與時間，不含劇本文字；暫停發佈的旗標在帳號上，不受影響） |
 | 帳號鎖定計次（`lock_strikes`） | 建立早於 7 天（計次視窗只有 15 分鐘） | 刪除（Google 登入改版新增；**申訴不在這裡清除**：保存期限與所屬帳號相同，帳號刪除時一併刪除，並納入個人資料匯出的 `appeals`／`appeals.csv`） |
 
 `deletion_tombstones`（只含內部編號、時間與原因）**不納入**清除。失敗原文排在帳本之前：同時符合兩者的舊紀錄先清原文、再刪整筆，預覽與實際的筆數才一致。以上期限與 `/privacy` 的保存期限表由 `tests/test_legal_pages.py` 比對。
@@ -798,6 +802,97 @@ change `rpg-data-and-script`（RC-1）。RPG 的資料基礎，**還沒有任何
 | **雲端部署與一次性 Job** | 沒有做：部署計畫腳本尚未為 `seed-scripts` 產生 Cloud Run Job（屬 C-5c），也沒有可計費的雲端專案 |
 | **成人模式的真實條件** | 沒有：供應商的書面許可、法務意見（含勾選確認是否足夠）與劇情輸出的審查層都不存在；`ADULT_MODE_ENABLED` 只是部署層的條件之一，目前沒有任何送出露骨內容的入口 |
 | **服務條款、隱私權政策與客服提示詞的措辭** | 沒有修訂：「滿 18 歲之後會自動解除」與保存期限表尚未反映新規則（見 change 的 tasks.md「Workflow follow-up」），留給法務覆核 |
+| **欄位上限與總量上限的校正** | 沒有：數字是暫定值，之後以實際 token 預算校正（RC-4） |
+
+## 玩家創作劇本（rpg-script-authoring）
+
+change `rpg-script-authoring`（RC-7）。玩家依固定規格創作劇本，送審前經過規則層與模型層審查；連續被自動拒絕的作者會被暫停發佈（只停止送審）。**這是玩家看得到的第一個 RPG 頁面 `/scripts`**；審核佇列、上下架、公開目錄與檢舉屬 RC-8，所以送審之後劇本停在「待審」，目前沒有管理員核可的入口。
+
+### 端點與頁面
+
+全部需要登入（管理員與各會員等級都一樣）；非 GET 須通過 CSRF；回應 `Cache-Control: no-store`。非擁有者存取他人的劇本一律 404。
+
+| 端點 | 方法 | 說明 |
+|---|---|---|
+| `/scripts` | GET | 劇本創作頁（頁面外殼與初始狀態：本人的暱稱與是否被暫停發佈、年齡閘門、送審的請求逾時）。被鎖定導向 `/appeal`、待確認年齡導向 `/age` |
+| `/api/scripts` | GET | 我的劇本與各版本（沒有劇本文字，只有目錄欄位與狀態） |
+| `/api/scripts` | POST | 建立劇本與第一個草稿。規則層在儲存時執行：被拒絕時回 422 且**不寫入、不計次**；沒有設定暱稱回 409 `nickname_required`；劇本數量已達上限回 409 `script_limit_reached`（超過即擋下，不加鎖） |
+| `/api/scripts/example` | GET | 欄位範例：內建首發劇本的標準化內容（沒有種子資料時 404） |
+| `/api/scripts/limits` | GET | 我的劇本數與上限、今日送審次數與上限、是否被暫停發佈、可宣告的內容模式上限、固定規格的欄位上限 |
+| `/api/scripts/versions/<version_id>` | GET、PUT、DELETE | 讀取、儲存（只有草稿；帶 `base_hash`，別處已更新回 409 `draft_changed`）、刪除草稿（已發佈與待審的版本不能刪） |
+| `/api/scripts/versions/<version_id>/withdraw` | POST | 撤回待審的版本，回到草稿 |
+| `/api/scripts/versions/<version_id>/submit` | POST | 送審：見下方順序；被自動拒絕回 422 `script_auto_rejected`（頂層 `categories` 只有固定類別，不指出內容） |
+| `/api/scripts/<script_id>/versions` | POST | 由最新的版本建立新草稿（同一劇本一次只能有一個進行中的版本） |
+| `/api/scripts/<script_id>/author-name/refresh` | POST | 重新取用目前的暱稱作為筆名（第一次發佈鎖定之前才可以） |
+
+暱稱的更改（`PUT /api/account/nickname`）與管理員的解除暫停（`/api/admin/publish-suspended`、`/api/admin/users/<public_id>/lift-publish-suspension`）見各自的端點表。
+
+### 設計重點
+
+- **送審的順序**：年齡閘門 → 擁有者（404）→ 必須是草稿（409 `not_draft`）→ 沒有被暫停（403 `publish_suspended`）→ 每日上限（台灣日，429 `submission_limit`）→ 固定規格與規則層 → 模型層 → 合併疑慮類別 → 記錄審查結果 → 條件式轉為待審並記一筆 `sent`。自動拒絕寫一筆 `auto_rejected`，評估連續被拒。
+- **規則層**（`app/services/script_rules.py`，純運算，詞表是隨映像封裝的 `app/data/review/lexicon.json`）：同一句內的詞共現判斷，並以 `not_after`／`not_before` 排除誤判（例如「異國中生存」）；**直接拒絕的主軸是露骨的性用語與未成年用語出現在同一句（不分先後）**，其餘的組合（非自願、性暴力、真人）也都要求同句有露骨的性用語；強姦或性暴力用語單獨出現（犯罪劇情、新聞、防治課）只標示、不直接拒絕；一般的親子、育兒、校園日常不會被擋；只回報固定類別，不回報內容或位置。**詞表（版本 `2026-11-04-4`）已由使用者檢視並依指示放寬，仍未用真實內容校正，上線前須經法務檢視**。
+- **模型層**（`ScriptReviewService`，呼叫類別 `script_review`）：RPG 用途的模型（`OPENROUTER_*`，不使用 Gemini）；輸出固定為 `{verdict, categories}`，沒有自由文字欄位。**模型不可用（沒有設定、預算用盡、降級、被擋）一律不放行**，送審回 503。結果掛在版本上並對應內容雜湊，內容不變就不再呼叫。內建劇本不經模型層。
+- **類別**：紅線（拒絕）四類：涉及未成年的性內容（`minor_sexual`）、性暴力（`sexual_violence`）、非自願的性情節（`non_consensual`）、以真人名義的性內容（`real_person_sexual`）；有疑慮（只標示、仍可送審，之後進人工）：`minor_suspected`、`real_person_suspected`、`tier_mismatch`、`other_concern`。被拒絕只告知類別。
+- **暫停發佈**：最近 `script_reject_streak`（預設 3）筆送審紀錄全部是自動拒絕時，以條件式更新設定 `users.publish_suspended_at`（管理員不會被暫停），寫 `publish.suspend` 稽核（管理員欄位為空）。**獨立於帳號鎖定**：只有送審被擋，其餘功能照常；被暫停的玩家可使用申訴頁，管理員重新輸入密碼後解除，並補一筆 `lifted` 使連續被拒中斷。
+- **申訴捷徑**：被鎖定或被暫停時，`/cs`、`/scripts` 與 `/account` 直接顯示「前往申訴」按鈕（指向 `/appeal` 的一般連結）；是否顯示只依伺服器回應，解除後重新整理即消失。
+- **營運限制存在資料庫**（`runtime_limits`，七個鍵：`script_limit.free|plus|vip` 預設 3／10／30、`script_submit_daily.free|plus|vip` 預設 3／5／10、`script_reject_streak` 預設 3），程式每次使用時現讀、不快取：
+
+  | 指令 | 說明 |
+  |---|---|
+  | `flask --app wsgi show-script-limits` | **人工類，不得排程**：列出七個鍵、目前生效的值與範圍；缺值或不合法的鍵標示「保底預設」。輸出只有鍵與數值 |
+  | `flask --app wsgi set-script-limit KEY VALUE` | **人工類，不得排程**：驗證鍵與範圍後寫入，輸出舊值與新值，寫一筆 `limit.set` 稽核（管理員欄位為空）。立即生效，不必重新部署；沒有任何 HTTP 端點可以修改限制 |
+
+- **暱稱**：2 至 20 字（NFC、去控制字元），不得含網址、電子郵件或電話的樣式，也不得冒用平台的官方署名；年齡確認頁一起填（玩家必填），帳號頁可更改；短代號由系統產生且不變。劇本建立時記錄筆名（暱稱加短代號）快照，**第一次發佈時鎖定屬 RC-8**。
+- **作者可宣告的內容模式上限**由生日於當下計算（`AccessPolicy.author_content_cap`）：未滿 18 歲只能宣告安全模式，成年可到成人模式；不要求作者本人開啟成人模式。
+- **個資**：劇本文字與暱稱視為個資，隨帳號刪除、納入匯出；日誌只記內部編號與整數長度，絕不記暱稱、短代號、筆名、劇本文字與模型原文；被拒絕的送審只保留類別與時間（`script_submissions`，保存 12 個月）。
+
+### 部署順序與保存期限
+
+**部署順序不變**：備份 → `alembic upgrade head`（`0013` 只新增與加寬，七個限制的初始值由遷移寫入）→ 部署新版程式 → `flask seed-scripts`。
+
+| 類別（`purge-expired-data` 新增） | 條件 | 處理 |
+|---|---|---|
+| 劇本送審紀錄（`script_submissions`） | 建立早於 365 天 | 刪除；只刪紀錄，暫停旗標不受影響 |
+
+匯出新增 JSON 的 `script_submissions` 與 CSV 的 `script_submissions.csv`（結果、類別、時間）；劇本區塊不含審查欄位。
+
+### 已知限制
+
+- ①**沒有審核**：送審後停在待審，管理員的核可、退回與公開目錄屬 RC-8。②**詞表已由使用者檢視**（2026-11-04）並放寬強姦用語的單獨拒絕，但仍須以實際內容校正並經法務檢視；詞表刻意不涵蓋的缺口：「小學○年級」這類說法，以及沒有年齡的「少女」「女孩」（太常見，加入會誤擋一般劇情）——**使用者決定（2026-11-04）這些缺口交給模型層查核，不再加進詞表**，所以模型層的實際判斷品質（目前只用假模型驗證過）是這部分唯一的防線。③**服務條款與隱私權政策尚未補上**筆名公開顯示、劇本內容經 AI 檢查、送審可能由管理員審閱，以及送審紀錄與暱稱的保存說明（留給法務覆核）。④**審查的模型層依賴 RPG 供應商**：沒有設定或降級時所有送審與用創作劇本開存檔都會被擋。⑤欄位與總量上限是暫定值。
+
+### 驗收紀錄（rpg-script-authoring，2026-11-04，實作完成、人工驗收已做、尚未提交）
+
+日期 2026-11-04；規劃 commit `071f559`，AGENTS.md 修訂 commit `ed836fb`；實作尚未提交。依規範分成兩欄，**沒有實際執行的項目一律標為未驗證，不以預期結果代替**。
+
+| 已驗證 | 結果 |
+|---|---|
+| 自動化測試 | pytest **6941 項通過、0 項略過、0 項失敗**（含真實 SQL Server `project_test`，SQLite 與 SQL Server 在同一個行程；上次 6370，新增 571 項；另有 1 則既有的警告，子行程輸出解碼，與本 change 無關）；`node --test` **243 項通過** |
+| 遷移 `0013_rpg_script_authoring` | `tests/test_migrations.py` 在 SQLite 與真實 SQL Server 通過：七個新欄位、兩張新表與索引存在、七個限制的初始值、`llm_call_logs.kind` 加寬後可寫入 `script_review`、再升級一次結果相同、降級後新表與新欄位消失且非客服類別的帳本列先被刪除 |
+| 固定規格與兩層審查 | 規則層（同句共現、`not_after`／`not_before` 排除，一般的親子、育兒與校園日常不被誤擋，紅線四類直接拒絕、疑慮類別只標示）；模型層（結構化輸出無自由文字、洩漏標記視為驗證失敗、**模型不可用——沒有設定、預算用盡、降級、被擋——一律不放行**、結果對應內容雜湊並在內容變動時失效、審查期間內容被改時結果被丟棄、內建劇本免審）；儲存時只跑規則層，被拒絕不寫入也不計次 |
+| 送審與暫停發佈 | 送審的各個關卡依規定順序（年齡、擁有者 404、必須是草稿、被暫停 403、每日上限 429、規則層、模型層）；自動拒絕寫紀錄並評估連續被拒，達門檻以條件式更新暫停（管理員不會被暫停），解除補一筆 `lifted` 使連續中斷、解除後再被拒一次不會立刻又被暫停；已被暫停的帳號再次被暫停不會改寫（條件式更新） |
+| 營運限制 | 七個鍵每次現讀、不快取；缺值或不合法用保底預設並只記鍵名；`set-script-limit` 驗證範圍、輸出舊值與新值、寫 `limit.set` 稽核，修改後立即在 API 看到新的上限 |
+| 暱稱 | 驗證規則（長度、NFC、控制字元、網址／電子郵件／電話樣式、官方署名）；年齡確認頁一併驗證且不合格不計入鎖定計次；帳號頁更改；未設定暱稱不能創作 |
+| 申訴範圍與捷徑 | 被暫停發佈者可提交與查看申訴（上限與鎖定相同），兩者皆非與管理員得到與不存在相同的 404；管理員只看得到鎖定或暫停帳號的申訴並標明是哪一種，兩者都解除後不再出現，仍不能讀對話；解除暫停把待處理申訴標為已處理；`/cs`（使用中才被鎖定）、`/scripts`、`/account` 的「前往申訴」按鈕是指向 `/appeal` 的一般連結，無 `data-bs-*`、無查詢字串，只依伺服器回應判定 |
+| 前端規範 | 架構掃描與頁面測試：離線資源、無 CDN／`v-html`／Bootstrap JS、自製 Modal 與 Toast、`v-cloak`、不寫入任何瀏覽器儲存體、送審逾時取自伺服器的初始狀態、`finally` 恢復按鈕；Vue 範本以專案自己的離線 Vue 編譯通過；掃描擋下過一處寫死的年齡數字，已改為不含數字的說法 |
+| 匯出、抹除與保存期限 | 匯出含 `script_submissions`（JSON）與 `script_submissions.csv`（UTF-8-sig、公式字元中和），劇本區塊不含審查欄位；抹除帳號時送審紀錄一併消失、條件不成立時整個回復；`purge-expired-data` 新增類別 `script_submissions`（364／365 天邊界、預覽不刪、分批、不影響暫停旗標） |
+| 日誌掃描 | 更改暱稱、建立與編輯與刪除草稿、規則層拒絕、送審（模型先回傳無法解析的原文再通過）、撤回、重新取用筆名、調整限制、連續被模型層拒絕而暫停、被暫停者申訴、管理員檢視與解除，全程收集日誌，找不到暱稱、短代號、筆名、劇本文字、標題、標籤、申訴內容與模型原文；事件函式的簽名沒有文字參數、列舉以外的值立刻出錯 |
+| 容器驗收（WSL Docker，`scripts/verify_container.py`） | **126 / 126 項通過**（上次 117，新增 9 項：遷移一路升級到 `0013`、審查詞表隨映像封裝且可載入、`show-script-limits` 列出七個鍵、`set-script-limit` 修改並讀回、不合法的值被拒絕、還原預設值、`purge-expired-data` 預覽含劇本送審紀錄；輸出只有鍵、數值與筆數；這一輪在人工驗收與欄位說明修改之前執行，範本與靜態檔的後續修改不在容器檢查的範圍） |
+| 人工驗收（使用者操作，tasks.md 11.3） | 2026-11-04，使用者在獨立的驗收環境（獨立的 SQLite、本機假的審查模型、以簽出的 session cookie 模擬各種身分）依 13 項清單操作，**回報 13 項全部完成**。清單涵蓋：全新玩家在 `/age` 填暱稱完成年齡確認；在 `/account` 設定與更改暱稱；在 `/scripts` 建立劇本、帶入範例、儲存草稿、故意觸發 `draft_changed`、刪除草稿；送審進入待審；模型層通過、疑慮、拒絕與故障（故障時不放行）；規則層在儲存時拒絕；連續被拒而被暫停發佈；`/scripts` 與 `/account` 的「前往申訴」按鈕與申訴；管理員在 `/admin` 檢視申訴、重新輸入密碼解除暫停，玩家重新整理後按鈕消失；以 `set-script-limit` 調降劇本上限，**不重啟伺服器**重新整理就看到新的上限、再建立被擋下，還原後恢復。結果由使用者口頭回報，沒有逐項截圖 |
+| 人工驗收的發現（已修正） | ①編輯器的「狀態轉移規則」玩家看不懂，大部分欄位也沒有範例：已改名為「世界規則（狀態轉移規則，選填）」並加上白話說明，每個文字欄位加上範例，每個區塊最上方加用途說明；`tests/test_script_page.py` 新增守門測試，任何文字欄位沒有範例就會失敗。②後台解除暫停時一度一直顯示「密碼不正確」：**不是應用程式的缺陷**——驗收環境產生的 16 位隨機密碼大小寫混雜、容易看錯，連續輸錯 5 次後依設計鎖定 15 分鐘，鎖定中連正確密碼也顯示同一句訊息（刻意不洩漏是否被鎖）；驗收環境已改用好打的密碼並加上解除鎖定的按鈕，實測錯誤密碼被拒、正確密碼成功。 |
+| OpenSpec | `openspec validate rpg-script-authoring --strict` 通過；`openspec validate --specs` 53 項通過（封存前的主規格） |
+| 設計文件 | `tests/test_design_docs.py` 39 項、`tests/test_readme.py`、`tests/test_launch_docs.py` 與 `tests/test_agents_skill_sync.py` 通過（資料模型、系統架構、帳號與安全、模型呼叫層、前端結構、營運與部署、路線圖與 RPG 已同步） |
+
+| 未驗證 | 說明 |
+|---|---|
+| **真實的 Google 登入** | 沒有：人工驗收以簽出的 session cookie 模擬各種身分，管理員略過 Google 與密碼兩步驟；沒有走過真實的 Google 授權、條款勾選與管理員的二階段登入（這不是 RC-7 新增的功能，但「全新 Google 帳號」那一項實際上是用模擬的全新玩家做的） |
+| **欄位說明與範例的新措辭** | 修改後只由守門測試與伺服器端的 HTML 檢查驗證；使用者尚未在瀏覽器重新確認措辭是否清楚、範例是否合適 |
+| **人工驗收的逐項細節** | 結果由使用者口頭回報，沒有截圖或逐項紀錄；例如達到劇本上限後「新增」是按鈕停用還是送出後才顯示錯誤，並未記錄 |
+| **真實的 RPG 審查模型** | 沒有：模型層只以假供應商驗證；從未對真實的 OpenRouter 模型送出審查，所以審查指示的實際判斷品質、被擋與逾時的真實行為都是未知 |
+| **規則層詞表的品質** | 詞表（版本 `2026-11-04-4`）已由使用者檢視並依指示放寬（強姦用語單獨出現只標示、補上國中生／初中生／中學生），仍只以單元測試的案例驗證過誤判與漏判（含反向驗證：拿掉排除字，誤擋的句子會被拒絕），**沒有用真實內容校正，也尚未經法務檢視** |
+| **開發用 SQL Server 資料庫 `project` 的遷移** | 沒有執行：`0012` 與 `0013` 只在 SQLite、`project_test` 與容器內的 SQLite 驗證過；開發資料庫目前仍在 `0011`，須由使用者在備份後自行執行 `alembic upgrade head` 與 `flask seed-scripts` |
+| **對真實 SQL Server 執行 flask 限制指令** | 沒有做：`set-script-limit`／`show-script-limits` 的指令本身只在 SQLite 上實際執行（本機與容器）；限制的服務層與資料存取在 `project_test` 上通過（雙軌測試） |
+| **服務條款與隱私權政策的措辭** | 沒有修訂：筆名公開顯示、劇本內容經 AI 檢查、送審可能由管理員審閱，以及暱稱與送審紀錄的保存說明，還沒有寫進 `/privacy` 與 `/terms`（RPG 存檔與劇本的保存期限也還沒有），留給法務覆核 |
+| **雲端部署** | 沒有做：沒有可計費的雲端專案，部署計畫腳本也尚未為新指令產生任何排程或 Job（這兩個指令都是人工類） |
 | **欄位上限與總量上限的校正** | 沒有：數字是暫定值，之後以實際 token 預算校正（RC-4） |
 
 ## 撰寫新端點：權限與 IDOR 測試

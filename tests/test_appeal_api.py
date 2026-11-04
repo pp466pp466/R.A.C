@@ -218,7 +218,7 @@ def test_a_locked_player_opens_the_appeal_page_with_the_limits_and_nothing_perso
     response = client_for(app, "locked").get("/appeal")
     assert response.status_code == 200
     state = json.loads(STATE_PATTERN.search(response.get_data(as_text=True)).group(1))
-    assert state["appeal"] == {"maxChars": 1000, "hourlyLimit": 3} and "user" not in state
+    assert state["appeal"] == {"kind": "locked", "maxChars": 1000, "hourlyLimit": 3} and "user" not in state
     assert "user1@example.com" not in response.get_data(as_text=True)
 
 

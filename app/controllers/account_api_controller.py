@@ -10,6 +10,8 @@ Controller 只讀取請求、呼叫 Service、處理登入狀態；確認本人�
 - `GET /api/account/content-mode`、`PUT /api/account/content-mode`：查詢與切換自己的內容模式（安全、一般、成人）。
   先過年齡閘門；回應只含偏好、生效模式、各模式是否可選與成人模式沒有啟用的原因，不含生日與年齡區間。
   切換為成人模式時本文須帶 `confirm_adult` 與 `confirm_rules` 兩項確認（見 `ContentModeService`）。
+- `PUT /api/account/nickname`：設定或更改自己的公開暱稱（第一次設定時產生短代號，之後不變）。先過年齡閘門，受限登入狀態不可用；
+  格式不合格時以暱稱欄位的錯誤回應。回應是最新的帳號資料（本人才看得到暱稱與短代號）。
 - `POST /api/account/cancel-deletion`：寬限期內撤銷。**這是少數允許「受限登入狀態」的端點之一**（見 `require_login`）：
   帳號正在等待刪除的人登入後只能做這件事，目前的登入狀態在撤銷後直接變成完整的。
 """
@@ -19,7 +21,8 @@ from app.controllers.request_helpers import read_json_object
 from app.security.session import logout_user, require_login
 from app.services.current_user import iso_utc
 from app.services.registry import (
-    get_account_deletion_service, get_auth_service, get_content_mode_service, get_personal_export_service,
+    get_account_deletion_service, get_auth_service, get_content_mode_service, get_nickname_service,
+    get_personal_export_service,
 )
 
 account_api_bp = Blueprint("account_api", __name__, url_prefix="/api/account")
@@ -66,6 +69,14 @@ def set_content_mode():
         user, body.get("mode"), confirm_adult=body.get("confirm_adult"), confirm_rules=body.get("confirm_rules")
     )
     return jsonify(ok=True, content_mode=state)
+
+
+@account_api_bp.put("/nickname")
+def set_nickname():
+    user = require_login()
+    body = read_json_object()
+    updated = get_nickname_service().set_nickname(user, body.get("nickname"))
+    return jsonify(ok=True, user=get_auth_service().profile(updated))
 
 
 @account_api_bp.post("/cancel-deletion")

@@ -150,6 +150,10 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "AdminTargetForbidden": 403, "AccountDeletionPending": 403, "AccountLocked": 403, "UnderageAccountErased": 400,
         "AppealPending": 409, "AppealRateLimited": 429,
         "ContentModeRestricted": 403, "AdultModeUnavailable": 403, "ContentTierRestricted": 403, "SessionEnded": 409,
+        # rpg-script-authoring
+        "Unprocessable": 422, "ScriptAutoRejected": 422, "ScriptRejected": 422, "NicknameRequired": 409, "ScriptLimitReached": 409,
+        "DraftChanged": 409, "NotDraft": 409, "NotPending": 409, "OpenVersionExists": 409, "AuthorNameLocked": 409, "NotSuspended": 409,
+        "PublishSuspended": 403, "SubmissionLimit": 429, "ReviewUnavailable": 503,
     }
     made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
     assert made == expected

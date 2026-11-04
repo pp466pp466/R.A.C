@@ -226,6 +226,113 @@ class ServiceUnavailable(ServiceError):
     default_message = "服務暫時無法使用，請稍後再試。"
 
 
+class Unprocessable(ServiceError):
+    """內容本身無法被接受（422）：格式沒有問題，但審查認為不能使用。回應只帶審查的類別列舉（`categories`），
+    不指出內容的位置或文字（AGENTS.md 第 7 節：拒絕只告知類別）。"""
+
+    code = "unprocessable"
+    default_message = "這份內容無法被接受。"
+
+    def __init__(self, categories=(), message: str | None = None, *, code: str | None = None) -> None:
+        super().__init__(message, code=code)
+        self.categories = tuple(categories)
+
+
+class ScriptAutoRejected(Unprocessable):
+    """劇本在儲存或送審時被審查層（規則層或模型層）明確拒絕（422）。"""
+
+    code = "script_auto_rejected"
+    default_message = "這份劇本的內容違反平台的內容規範，無法儲存或送審。"
+
+
+class ScriptRejected(Unprocessable):
+    """劇本的審查結果為拒絕，不得用來開存檔（422）。內容改變之前不會重新審查。"""
+
+    code = "script_rejected"
+    default_message = "這份劇本的內容違反平台的內容規範，無法用來開始遊戲。請修改後再試。"
+
+
+class NicknameRequired(Conflict):
+    """創作劇本之前必須先設定暱稱（409）。"""
+
+    code = "nickname_required"
+    default_message = "創作劇本前，請先到帳號設定設定您的暱稱。"
+
+
+class ScriptLimitReached(Conflict):
+    """作者的劇本數已達會員等級的上限（409）。"""
+
+    code = "script_limit_reached"
+    default_message = "您的劇本數量已達上限，請先刪除不需要的草稿。"
+
+
+class DraftChanged(Conflict):
+    """草稿在這次編輯開始之後已被更新（409）：不覆寫，請重新載入。"""
+
+    code = "draft_changed"
+    default_message = "這份草稿已在別處更新，請重新載入後再編輯。"
+
+
+class NotDraft(Conflict):
+    """版本不是草稿（409）：已送審、已發佈或已被退回的版本內容凍結。"""
+
+    code = "not_draft"
+    default_message = "只有草稿可以這樣操作。"
+
+
+class OpenVersionExists(Conflict):
+    """劇本已有進行中的版本（草稿或待審），不能再建立新草稿（409）。"""
+
+    code = "open_version_exists"
+    default_message = "這個劇本已經有進行中的版本，請先完成或刪除它。"
+
+
+class AuthorNameLocked(Conflict):
+    """筆名已在第一次發佈時鎖定，不可更改（409）。"""
+
+    code = "author_name_locked"
+    default_message = "這個劇本已經發佈過，筆名已鎖定，無法更改。"
+
+
+class NotPending(Conflict):
+    """版本不是待審（409）：只有待審的版本可以撤回。"""
+
+    code = "not_pending"
+    default_message = "只有待審的版本可以撤回。"
+
+
+class NotSuspended(Conflict):
+    """帳號目前沒有被暫停發佈（409）。"""
+
+    code = "not_suspended"
+    default_message = "這個帳號目前沒有被暫停發佈。"
+
+
+class PublishSuspended(Forbidden):
+    """帳號因連續被自動拒絕而被暫停發佈（403）：只停止送審，其餘功能照常。可以向管理員申訴。"""
+
+    code = "publish_suspended"
+    default_message = "您的送審權限已被暫停，可以前往申訴頁向管理員說明。其他功能不受影響。"
+
+
+class SubmissionLimit(TooManyRequests):
+    """今日的送審次數已達會員等級的上限（429）。`retry_after` 是距離明日 00:00（台灣時間）的秒數。"""
+
+    code = "submission_limit"
+    default_message = "您今日的送審次數已用完，將於明日 00:00（台灣時間）重置。"
+
+    def __init__(self, retry_after: int = 1, message: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))
+
+
+class ReviewUnavailable(ServiceUnavailable):
+    """劇本審查的模型層目前無法給出結果（503）。送審與開存檔一律擋下（不放行），也不計入送審次數。"""
+
+    code = "review_unavailable"
+    default_message = "劇本審查目前無法使用，請稍後再試。"
+
+
 class SystemBusy(ServiceUnavailable):
     """全站今日的用量上限已到（503）。文案不透露上限或用量的數字；`retry_after` 是建議的重試間隔（秒）。"""
 

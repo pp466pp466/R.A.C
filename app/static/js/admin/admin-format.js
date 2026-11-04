@@ -33,11 +33,12 @@
       'user.lookup': '查詢使用者', 'user.suspend': '停權', 'user.unsuspend': '解除停權', 'user.change_tier': '調整會員等級',
       'conversation.read': '讀取對話', 'conversation.delete': '刪除對話', 'failures.read': '查看模型失敗原文',
       'reauth.failed': '重新輸入密碼失敗',
+      'limit.set': '修改營運限制', 'publish.suspend': '暫停發佈', 'publish.lift': '解除暫停發佈',
       'account.lock': '帳號自動鎖定', 'appeal.submit': '玩家送出申訴', 'appeal.read': '檢視申訴', 'account.unlock': '解除帳號鎖定'
     },
     /* 鎖定原因（app/models/lock_strike.py 的計次類別，也是 users.lock_reason 的值） */
     lockReason: { identity_rejected: '登入或年齡確認多次被拒', rate_limited: '短時間內訊息過多' },
-    kind: { chat: '客服對話', summary: '對話摘要' },
+    kind: { chat: '客服對話', summary: '對話摘要', script_review: '劇本審查' },
     messageRole: { user: '使用者', assistant: '客服' },
     messageStatus: { ok: '正常', fallback: '降級回覆' },
     via: { email: '以信箱', id: '以識別碼' }

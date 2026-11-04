@@ -122,8 +122,10 @@ class UserRepository(BaseRepository[User]):
         is_adult: bool,
         confirmed_at: datetime,
         policy_version: str,
+        nickname: str | None = None,
+        nickname_code: str | None = None,
     ) -> bool:
-        """尚未完成年齡確認時，一次寫入全部年齡欄位；已完成的帳號完全不改動。回傳是否真的寫入。
+        """尚未完成年齡確認時，一次寫入全部年齡欄位（玩家另含暱稱與短代號）；已完成的帳號完全不改動。回傳是否真的寫入。
 
         條件式 UPDATE（`birth_date IS NULL`；「完成」只看生日是否存在，勾選版時代只有 `age_confirmed_at` 的帳號
         視為尚未完成）：並行的兩次補填只有一次會寫入，第一次寫入的內容不會被覆蓋，所以「已完成的帳號再次提交」
@@ -132,23 +134,67 @@ class UserRepository(BaseRepository[User]):
         **內容模式偏好依確認當下的年齡設定**：已成年為 `standard`（一般模式，成年玩家的預設），未成年為 `safe`；
         之後滿 18 歲不會自動調高，玩家須自行切換（content-tier-modes 規格）。失敗（不一致、未滿 13 歲）的流程
         在呼叫這裡之前就結束，不會留下任何偏好。
+
+        **暱稱與短代號在同一個 UPDATE 寫入**（rpg-script-authoring）：暱稱與生日、年齡區間是同一個步驟，全有或全無。
+        管理員在帳號設定頁補填時可不提供暱稱（兩者都為 `None`，不改動這兩欄）。
         """
+        values: dict[str, object] = dict(
+            birth_date=birth_date,
+            age_range=age_range,
+            is_adult_at_confirmation=is_adult,
+            age_confirmed_at=confirmed_at,
+            age_policy_version=policy_version,
+            age_deadline_at=None,                    # 完成了，不再有逾時清除的期限
+            content_tier_preference=CONTENT_TIER_STANDARD if is_adult else CONTENT_TIER_SAFE,
+        )
+        if nickname is not None and nickname_code is not None:
+            values.update(nickname=nickname, nickname_code=nickname_code)
         changed = self._run_update(
             user,
-            update(User)
-            .where(User.id == user.id)
-            .where(User.birth_date.is_(None))
-            .values(
-                birth_date=birth_date,
-                age_range=age_range,
-                is_adult_at_confirmation=is_adult,
-                age_confirmed_at=confirmed_at,
-                age_policy_version=policy_version,
-                age_deadline_at=None,                    # 完成了，不再有逾時清除的期限
-                content_tier_preference=CONTENT_TIER_STANDARD if is_adult else CONTENT_TIER_SAFE,
-            ),
+            update(User).where(User.id == user.id).where(User.birth_date.is_(None)).values(**values),
         )
         return changed == 1
+
+    # ---- 暫停發佈（script-submission 規格）------------------------------------------------
+
+    def suspend_publish_if_clear(self, user: User, now: datetime) -> bool:
+        """設定暫停發佈。條件式 UPDATE（尚未被暫停，而且不是管理員）：並行時只有一個請求成功，管理員永遠不會被暫停。
+        回傳是否真的設定；呼叫端據此決定要不要寫稽核與事件（只有成功的那一個寫）。"""
+        changed = self._run_update(
+            user,
+            update(User).where(User.id == user.id).where(User.publish_suspended_at.is_(None)).where(User.role != ROLE_ADMIN)
+            .values(publish_suspended_at=now),
+        )
+        return changed == 1
+
+    def lift_publish_suspension(self, user: User) -> bool:
+        """解除暫停發佈。條件式 UPDATE（目前確實被暫停）：兩位管理員同時解除只有一位成功。"""
+        changed = self._run_update(
+            user,
+            update(User).where(User.id == user.id).where(User.publish_suspended_at.is_not(None)).values(publish_suspended_at=None),
+        )
+        return changed == 1
+
+    # ---- 暱稱（player-nickname 規格）----------------------------------------------------
+
+    def set_nickname(self, user: User, nickname: str, code: str) -> bool:
+        """設定或更改暱稱。第一次設定時一併寫入短代號（`code`），之後只更新暱稱、短代號不變。
+
+        兩個條件式 UPDATE：先試「短代號還是空的」（第一次）；沒有命中再更新暱稱。並行的兩次第一次設定只有一個會寫入短代號，
+        另一個走第二個語句，所以短代號一旦產生就不會被覆蓋。只有已完成年齡確認（有生日）的帳號才寫入，回傳是否真的寫入。
+        """
+        first = self._run_update(
+            user,
+            update(User).where(User.id == user.id).where(User.birth_date.is_not(None)).where(User.nickname_code.is_(None))
+            .values(nickname=nickname, nickname_code=code),
+        )
+        if first == 1:
+            return True
+        again = self._run_update(
+            user,
+            update(User).where(User.id == user.id).where(User.birth_date.is_not(None)).values(nickname=nickname),
+        )
+        return again == 1
 
     # ---- 內容模式（content-tier-modes 規格）-----------------------------------------------
 

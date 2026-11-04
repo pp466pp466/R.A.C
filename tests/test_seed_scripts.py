@@ -23,6 +23,7 @@ from app.services.script_seed_service import (
 from app.services.script_spec import TOTAL_CHARS_MAX, validate_script
 from app.services.session_service import SessionService
 from tests.support.auth import FakeClock, add_user
+from tests.support.review import PassingReviews
 from tests.support.script_data import valid
 
 SECRET_TEXT = "只該出現在資料檔裡的劇本文字SEED-SECRET"
@@ -128,7 +129,10 @@ def test_a_save_opened_from_the_first_version_keeps_its_content_after_the_seed_i
     service, clock = make_service(member_session, seeds)
     service.run()
     player = CurrentUser.from_model(add_user(member_session, 1))
-    sessions = SessionService(scripts=ScriptRepository(member_session), sessions=SessionRepository(member_session), policy=AccessPolicy(clock=clock), clock=clock)
+    sessions = SessionService(
+        scripts=ScriptRepository(member_session), sessions=SessionRepository(member_session), policy=AccessPolicy(clock=clock),
+        reviews=PassingReviews(), clock=clock,
+    )
     first = member_session.scalar(select(ScriptVersion))
     save = sessions.start_session(player, first.public_id, player_name="旅人", character_age=18)
     write_seed(seeds, "alpha", title="第二版標題")
@@ -266,7 +270,10 @@ def test_a_fifteen_year_old_can_start_a_save_from_the_shipped_script(member_sess
     service, clock = make_service(member_session, SEED_DIRECTORY)
     service.run()
     teen = CurrentUser.from_model(add_user(member_session, 1, age=15))
-    sessions = SessionService(scripts=ScriptRepository(member_session), sessions=SessionRepository(member_session), policy=AccessPolicy(clock=clock), clock=clock)
+    sessions = SessionService(
+        scripts=ScriptRepository(member_session), sessions=SessionRepository(member_session), policy=AccessPolicy(clock=clock),
+        reviews=PassingReviews(), clock=clock,
+    )
     version = member_session.scalar(select(ScriptVersion).where(ScriptVersion.status == VERSION_PUBLISHED))
     save = sessions.start_session(teen, version.public_id, player_name="旅人", character_age=16)
     assert save.content_tier == "safe" and save.script_snapshot_json["title"] == "青雲問道"

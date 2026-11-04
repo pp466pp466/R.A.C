@@ -138,4 +138,4 @@ def test_appeal_text_is_rendered_as_plain_text_never_as_markup():
 def test_the_appeals_view_says_what_it_does_and_does_not_show():
     template = _frontend("template")
     section = template.split("<!-- ===== 申訴 ===== -->", 1)[1].split("<!-- ===== 使用者 ===== -->", 1)[0]
-    assert "只有目前被鎖定的帳號" in section and "不提供該帳號的任何對話" in section
+    assert "只有目前被鎖定或被暫停發佈的帳號" in section and "不提供該帳號的任何對話" in section

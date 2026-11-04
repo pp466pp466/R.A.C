@@ -8,6 +8,7 @@ from alembic.config import Config
 from alembic.runtime.migration import MigrationContext
 from alembic.script import ScriptDirectory
 from sqlalchemy import MetaData, Table, func, inspect, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 import app.config as config_module
@@ -27,6 +28,14 @@ ALERT_TABLES = ("alert_states",)
 LOCK_TABLES = ("lock_strikes", "lock_appeals")
 RPG_TABLES = ("scripts", "script_versions", "script_version_tags", "sessions", "memory_logs")
 CONTENT_MODE_COLUMNS = ("content_tier_preference", "adult_confirmed_at", "adult_rules_version", "adult_confirm_method")
+AUTHORING_TABLES = ("script_submissions", "runtime_limits")
+AUTHORING_USER_COLUMNS = ("nickname", "nickname_code", "publish_suspended_at")
+REVIEW_COLUMNS = ("review_hash", "review_verdict", "review_categories_json", "reviewed_at")
+INITIAL_LIMITS = (
+    ("script_limit.free", 3), ("script_limit.plus", 10), ("script_limit.vip", 30),
+    ("script_submit_daily.free", 3), ("script_submit_daily.plus", 5), ("script_submit_daily.vip", 10),
+    ("script_reject_streak", 3),
+)
 
 
 def alembic_config(url: str) -> Config:
@@ -48,7 +57,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -487,6 +496,103 @@ def test_0012_adds_the_content_mode_columns_and_five_rpg_tables_backfills_the_pr
     engine.dispose()
 
 
+def test_0013_adds_nullable_columns_two_tables_and_the_seven_initial_limits_and_keeps_every_row(tmp_path):
+    """rpg-script-authoring：users 新增三個可為空的欄位與一個索引、script_versions 新增四個可為空的審查欄位、新增兩張表並寫入
+    七個初始限制；既有的帳號與劇本一列不少；回復只移除新增的東西；再升級一次初始列不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'authoring.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0013_rpg_script_authoring")
+    assert revision.down_revision == "0012_rpg_data_and_script" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0012_rpg_data_and_script")
+    now = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        _insert_user(conn, users, 1)
+        _insert_user(conn, users, 2, role="admin")
+        scripts = Table("scripts", MetaData(), autoload_with=conn)
+        conn.execute(scripts.insert().values(
+            creator_id=1, public_id="00000000-0000-4000-8000-0000000000a1", created_at=now, updated_at=now,
+        ))
+    before_tables = set(inspect(engine).get_table_names())
+    before_users = {c["name"] for c in inspect(engine).get_columns("users")}
+    before_versions = {c["name"] for c in inspect(engine).get_columns("script_versions")}
+
+    command.upgrade(cfg, "0013_rpg_script_authoring")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(AUTHORING_TABLES)
+    user_columns = {c["name"]: c for c in inspector.get_columns("users")}
+    assert set(user_columns) - before_users == set(AUTHORING_USER_COLUMNS)
+    assert all(user_columns[name]["nullable"] for name in AUTHORING_USER_COLUMNS)
+    version_columns = {c["name"]: c for c in inspector.get_columns("script_versions")}
+    assert set(version_columns) - before_versions == set(REVIEW_COLUMNS)
+    assert all(version_columns[name]["nullable"] for name in REVIEW_COLUMNS)
+    assert "ix_users_publish_suspended_at" in {i["name"] for i in inspector.get_indexes("users")}
+    submission_fk = [fk for fk in inspector.get_foreign_keys("script_submissions") if fk["constrained_columns"] == ["user_id"]]
+    assert len(submission_fk) == 1 and submission_fk[0]["referred_table"] == "users"
+    assert submission_fk[0]["options"].get("ondelete") == "CASCADE"
+    assert [fk["constrained_columns"] for fk in inspector.get_foreign_keys("script_submissions")] == [["user_id"]]   # 刻意不連到版本
+    assert "ix_script_submissions_user_id_created_at" in {i["name"] for i in inspector.get_indexes("script_submissions")}
+    assert sorted(sorted(u["column_names"]) for u in inspector.get_unique_constraints("runtime_limits")) == [["key"]]
+    kind = next(c for c in inspector.get_columns("llm_call_logs") if c["name"] == "kind")
+    assert kind["type"].length == 20 and not kind["nullable"]                      # script_review 有 13 個字，SQL Server 放不進 10
+
+    def limits() -> dict[str, int]:
+        with engine.connect() as conn:
+            table = Table("runtime_limits", MetaData(), autoload_with=conn)
+            return {row["key"]: row["int_value"] for row in conn.execute(select(table)).mappings()}
+
+    assert limits() == dict(INITIAL_LIMITS)
+    with engine.connect() as conn:                                      # 既有資料一列不少，新欄位為空
+        users = Table("users", MetaData(), autoload_with=conn)
+        assert conn.execute(select(func.count()).select_from(users)).scalar_one() == 2
+        assert conn.execute(select(users.c.nickname, users.c.nickname_code, users.c.publish_suspended_at)).all() == [(None, None, None)] * 2
+        assert conn.execute(select(func.count()).select_from(Table("scripts", MetaData(), autoload_with=conn))).scalar_one() == 1
+
+    with engine.begin() as conn:                                        # 降級前有一筆新的呼叫類別：窄回 10 個字之前會先被刪掉
+        ledger = Table("llm_call_logs", MetaData(), autoload_with=conn)
+        base = dict(provider="fake", model="m", attempt=1, status="ok", counted=False, latency_ms=1, created_at=now)
+        conn.execute(ledger.insert().values(kind="script_review", **base))
+        conn.execute(ledger.insert().values(kind="chat", **base))
+
+    command.downgrade(cfg, "0012_rpg_data_and_script")
+    inspector = inspect(engine)
+    assert next(c for c in inspector.get_columns("llm_call_logs") if c["name"] == "kind")["type"].length == 10
+    with engine.connect() as conn:
+        assert [row[0] for row in conn.execute(select(Table("llm_call_logs", MetaData(), autoload_with=conn).c.kind))] == ["chat"]
+    assert set(inspector.get_table_names()) == before_tables
+    assert {c["name"] for c in inspector.get_columns("users")} == before_users
+    assert {c["name"] for c in inspector.get_columns("script_versions")} == before_versions
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 2
+
+    command.upgrade(cfg, "0013_rpg_script_authoring")                   # 再升級一次，初始列不重複
+    assert limits() == dict(INITIAL_LIMITS)
+    engine.dispose()
+
+
+def test_migrated_authoring_tables_hold_the_initial_limits_and_cascade_with_the_user(migrated_database):
+    """SQLite 與 SQL Server 兩軌：升級後有七個初始限制（鍵唯一）；刪除使用者時送審紀錄一併消失。"""
+    engine = migrated_database
+    metadata = MetaData()
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", metadata, autoload_with=conn)
+        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(INITIAL_LIMITS)
+    with pytest.raises(IntegrityError):                                     # 鍵唯一
+        with engine.begin() as conn:
+            conn.execute(limits.insert().values(key="script_limit.free", int_value=1, updated_at=utcnow().replace(tzinfo=None)))
+    with engine.begin() as conn:
+        users = Table("users", metadata, autoload_with=conn)
+        submissions = Table("script_submissions", metadata, autoload_with=conn)
+        _insert_user(conn, users, 51)
+        user_id = conn.execute(select(users.c.id).where(users.c.email == "u51@example.com")).scalar_one()
+        conn.execute(submissions.insert().values(user_id=user_id, outcome="auto_rejected", categories_json=["non_consensual"], created_at=utcnow().replace(tzinfo=None)))
+        assert conn.execute(select(func.count()).select_from(submissions)).scalar_one() == 1
+        conn.execute(users.delete().where(users.c.id == user_id))
+        assert conn.execute(select(func.count()).select_from(submissions)).scalar_one() == 0
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -525,7 +631,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):

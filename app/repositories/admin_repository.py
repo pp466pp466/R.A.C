@@ -14,17 +14,19 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Sequence
 
-from sqlalchemy import and_, case, delete, func, select, true, update
+from sqlalchemy import and_, case, delete, func, or_, select, true, update
 from sqlalchemy.orm import Session
 
 from app.models.chat import ROLE_ASSISTANT, ChatConversation, ChatMessage
 from app.models.llm_call_log import KIND_CHAT, STATUS_BLOCKED, STATUS_VALIDATION_FAILED, LlmCallLog
 from app.models.lock_appeal import LockAppeal
+from app.models.script_submission import SUBMISSION_LIFTED
 from app.models.user import (
     MEMBER_TIERS, STATUS_ACTIVE, STATUS_SUSPENDED, User,
 )
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.lock_strike_repository import LockStrikeRepository
+from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.user_repository import UserRepository
 
 
@@ -81,6 +83,15 @@ class MessageRow:
 
 
 @dataclass(frozen=True)
+class SuspendedRow:
+    """被暫停發佈帳號的一列：只有對外識別碼、顯示名稱與暫停時間，沒有 email、暱稱或內部編號。"""
+
+    user_public_id: str
+    display_name: str
+    suspended_at: datetime
+
+
+@dataclass(frozen=True)
 class LockedRow:
     """被鎖定帳號的一列：只有對外識別碼、顯示名稱、鎖定時間與原因類別（固定列舉），沒有 email 或內部編號。"""
 
@@ -92,7 +103,9 @@ class LockedRow:
 
 @dataclass(frozen=True)
 class AppealRow:
-    """被鎖定帳號送出的申訴。內容由使用者撰寫，只在管理員檢視時出現，不進日誌與稽核。"""
+    """被鎖定或被暫停發佈的帳號送出的申訴。內容由使用者撰寫，只在管理員檢視時出現，不進日誌與稽核。
+
+    `restriction`：`locked`（帳號目前被鎖定，優先）或 `suspended`（目前被暫停發佈），讓管理員知道該用哪一種解除。"""
 
     appeal_public_id: str
     user_public_id: str
@@ -100,6 +113,7 @@ class AppealRow:
     content: str
     created_at: datetime
     handled_at: datetime | None
+    restriction: str
 
 
 @dataclass(frozen=True)
@@ -301,18 +315,37 @@ class AdminRepository:
         )
         return [LockedRow(public_id, name, locked_at, reason) for public_id, name, locked_at, reason in rows]
 
-    def appeals_of_locked_accounts(self, *, limit: int, offset: int) -> list[AppealRow]:
-        """只回傳「目前被鎖定的帳號」所送出的申訴；帳號解除鎖定之後它的申訴不再出現（資料仍隨帳號保存）。"""
+    def publish_suspended_accounts(self, *, limit: int, offset: int) -> list[SuspendedRow]:
+        """目前被暫停發佈的玩家帳號（由最近暫停的開始）。"""
+        rows = self._session.execute(
+            select(User.public_id, User.display_name, User.publish_suspended_at)
+            .where(User.publish_suspended_at.is_not(None))
+            .order_by(User.publish_suspended_at.desc(), User.id.desc())
+            .limit(limit).offset(offset)
+        )
+        return [SuspendedRow(public_id, name, suspended_at) for public_id, name, suspended_at in rows]
+
+    def lift_publish_suspension(self, user: User, *, now: datetime) -> int | None:
+        """解除暫停發佈：條件式 UPDATE（兩位管理員同時解除只有一位成功），成功時補一筆 `lifted` 送審紀錄（使連續被拒中斷，所以
+        解除後再被拒絕一次不會立刻又被暫停）、把待處理的申訴標為已處理。回傳被標為已處理的申訴數；帳號已不是暫停狀態時回傳 None。"""
+        if not UserRepository(self._session).lift_publish_suspension(user):
+            return None
+        ScriptSubmissionRepository(self._session).record(user.id, SUBMISSION_LIFTED, (), now)
+        return LockAppealRepository(self._session).mark_pending_handled(user.id, now)
+
+    def appeals_of_restricted_accounts(self, *, limit: int, offset: int) -> list[AppealRow]:
+        """只回傳「目前被鎖定」或「目前被暫停發佈」的帳號所送出的申訴；兩種狀態都解除之後它的申訴不再出現（資料仍隨帳號保存）。"""
         rows = self._session.execute(
             select(
                 LockAppeal.public_id, User.public_id, User.display_name, LockAppeal.content, LockAppeal.created_at, LockAppeal.handled_at,
+                User.locked_at,
             )
             .join(User, User.id == LockAppeal.user_id)
-            .where(User.locked_at.is_not(None))
+            .where(or_(User.locked_at.is_not(None), User.publish_suspended_at.is_not(None)))
             .order_by(LockAppeal.created_at.desc(), LockAppeal.id.desc())
             .limit(limit).offset(offset)
         )
-        return [AppealRow(*row) for row in rows]
+        return [AppealRow(*row[:6], restriction="locked" if row[6] is not None else "suspended") for row in rows]
 
     def _update_user(self, user: User, statement) -> bool:
         """先 flush 以保留尚未寫入的修改，執行條件式 UPDATE，讓物件在下次存取時重新讀取；回傳是否真的寫入。"""

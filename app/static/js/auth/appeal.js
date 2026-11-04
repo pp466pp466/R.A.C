@@ -1,4 +1,5 @@
-/* 帳號申訴頁（Vue 3 全域變數模式）。被鎖定的玩家唯一能用的頁面：向管理員說明情況、查看自己申訴的處理狀態。
+/* 帳號申訴頁（Vue 3 全域變數模式）。被鎖定的玩家唯一能用的頁面，被暫停發佈的玩家也能用：向管理員說明情況、查看自己申訴的處理狀態。
+ * 申訴原因（locked 或 suspended）只來自伺服器的初始狀態，頁面據此切換說明文字；兩種原因共用同一套上限與流程。
  * 申訴內容是個資：只以純文字（{{ }}）顯示，不寫入任何瀏覽器儲存體。字數、錯誤代碼的處理集中在 auth-flows.js（可在 Node 測試）。
  * 沒有被鎖定（例如管理員剛解除）時 API 回 404，頁面導向預設頁面。處理中禁用、無論成功或失敗都在 finally 恢復（Auth.useForm）。 */
 (function () {
@@ -6,6 +7,7 @@
   var Vue = window.Vue;
   var state = Auth.readInitialState(document);
   var limits = state.appeal || { maxChars: 1000, hourlyLimit: 3 };
+  var isSuspended = limits.kind === 'suspended';
 
   var app = Vue.createApp({
     setup: function () {
@@ -64,7 +66,7 @@
       Vue.onMounted(load);
 
       return {
-        form: form, appeals: appeals, loadError: loadError, counter: counter, hasPending: hasPending, limits: limits,
+        form: form, appeals: appeals, loadError: loadError, counter: counter, hasPending: hasPending, limits: limits, isSuspended: isSuspended,
         statusLabel: Auth.appealStatusLabel, timeText: timeText, submit: submit, refresh: refresh, logout: logout
       };
     }

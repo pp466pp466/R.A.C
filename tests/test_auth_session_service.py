@@ -86,6 +86,7 @@ def test_the_profile_has_the_members_own_data_and_nothing_internal(member_sessio
         "public_id": user.public_id, "email": "user1@example.com", "display_name": "使用者1", "member_tier": "plus",
         "role": "user", "status": "active", "email_verified": False, "has_password": True, "age_confirmed": False,
         "age_group": None, "google_linked": False, "restriction": "age_pending",
+        "nickname": None, "nickname_code": None, "publish_suspended": False,
     }
     assert not (FORBIDDEN_KEYS & set(profile))
     assert user.password_hash not in str(profile)

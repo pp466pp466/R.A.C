@@ -122,6 +122,19 @@ def test_the_page_has_a_labelled_birthday_and_a_range_select_fed_by_the_age_rule
     assert "confirm_adult" not in html and "我已年滿" not in html
 
 
+def test_the_page_asks_for_a_nickname_in_the_same_step_with_the_public_display_hint(app):
+    """玩家的暱稱與生日、年齡區間是同一個步驟：欄位必填、有公開顯示的提示、錯誤顯示在欄位旁、純文字渲染。"""
+    html = client_with(app, age=None).get("/age").get_data(as_text=True)
+    assert 'for="nickname"' in html and 'id="nickname"' in html and 'name="nickname"' in html and "required" in html
+    assert 'v-model="form.values.nickname"' in html and "form.fieldErrors.nickname" in html
+    assert "暱稱會公開顯示於您創作的劇本，請勿使用真實姓名" in html
+    assert "v-html" not in html
+    script = _asset("static", "auth/age.js")
+    assert "nickname: ''" in script and "nicknameRequired: true" in script
+    flows = _asset("static", "auth/auth-flows.js")
+    assert "nickname" in flows.split("function ageBody", 1)[1].split("function ageOutcome", 1)[0]
+
+
 def test_the_submit_button_is_disabled_and_busy_while_sending_and_there_is_a_way_out(app):
     html = client_with(app, age=None).get("/age").get_data(as_text=True)
     assert ':disabled="form.state.submitting"' in html and ":aria-busy=" in html
@@ -138,7 +151,7 @@ def test_when_the_account_was_erased_only_the_message_and_a_link_to_the_login_pa
 
 def test_the_script_validates_sends_and_follows_the_flow_module_and_keeps_nothing_in_the_browser():
     script = _asset("script", "auth/age.js")
-    assert "Auth.validateAge(form.values)" in script and "Auth.ageBody(form.values)" in script
+    assert "Auth.validateAge(form.values, { nicknameRequired: true })" in script and "Auth.ageBody(form.values)" in script
     assert "axios.post('/api/auth/verify-age'" in script and "Auth.safeDestination(state.next" in script
     assert "Auth.ageOutcome(info)" in script and "form.run(" in script                    # 處理中、錯誤與 finally 的恢復都由 useForm 負責
     for storage in ("localStorage", "sessionStorage", "indexedDB", "document.cookie"):

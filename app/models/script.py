@@ -40,6 +40,31 @@ ENDING_MODES = (ENDING_NONE, ENDING_CUSTOM)
 
 OFFICIAL_AUTHOR_NAME = "官方"               # 內建劇本的筆名（沒有作者）
 
+# 審查結果（script-review 規格）：`pass` 通過、`flag` 有疑慮（進人工並標示類別）、`reject` 明確違反（直接拒絕）
+REVIEW_PASS = "pass"
+REVIEW_FLAG = "flag"
+REVIEW_REJECT = "reject"
+REVIEW_VERDICTS = (REVIEW_PASS, REVIEW_FLAG, REVIEW_REJECT)
+
+# 審查的類別（固定列舉；對作者的回應與日誌都只有這些值，不含任何內容）。
+# 可導致 `reject` 的四類紅線（AGENTS.md 第 7 節）：涉及未成年的性內容、性暴力、非自願的性情節、以真人名義的性內容。
+CATEGORY_MINOR_SEXUAL = "minor_sexual"
+CATEGORY_SEXUAL_VIOLENCE = "sexual_violence"
+CATEGORY_NON_CONSENSUAL = "non_consensual"
+CATEGORY_REAL_PERSON_SEXUAL = "real_person_sexual"
+REJECT_CATEGORIES = (
+    CATEGORY_MINOR_SEXUAL, CATEGORY_SEXUAL_VIOLENCE, CATEGORY_NON_CONSENSUAL, CATEGORY_REAL_PERSON_SEXUAL,
+)
+# 只能導致 `flag`（有疑慮，進人工並標示類別）的類別
+CATEGORY_MINOR_SUSPECTED = "minor_suspected"
+CATEGORY_REAL_PERSON_SUSPECTED = "real_person_suspected"
+CATEGORY_TIER_MISMATCH = "tier_mismatch"                  # 宣告的內容模式與內容不符
+CATEGORY_OTHER_CONCERN = "other_concern"
+FLAG_CATEGORIES = (
+    CATEGORY_MINOR_SUSPECTED, CATEGORY_REAL_PERSON_SUSPECTED, CATEGORY_TIER_MISMATCH, CATEGORY_OTHER_CONCERN,
+)
+REVIEW_CATEGORIES = REJECT_CATEGORIES + FLAG_CATEGORIES
+
 
 class Script(Base, PublicIdMixin, TimestampMixin):
     __tablename__ = "scripts"
@@ -101,6 +126,14 @@ class ScriptVersion(Base, PublicIdMixin, TimestampMixin):
     live_script_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     open_script_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
     published_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    # 審查結果（rpg-script-authoring，script-review 規格）：審查的中繼資料，**不是內容**，所以不受「非草稿的內容不可變」限制。
+    # `review_hash` 是審查當時的 `content_hash`，與目前的 `content_hash` 相同才算數，內容有變動就自動失效。
+    # 只由 `ScriptRepository.record_review` 寫入（條件式比對雜湊）。類別是固定列舉（`review_categories_json`），不含任何內容。
+    review_hash: Mapped[str | None] = mapped_column(Unicode(64), nullable=True)
+    review_verdict: Mapped[str | None] = mapped_column(Unicode(8), nullable=True)
+    review_categories_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class ScriptVersionTag(Base):

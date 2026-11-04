@@ -9,6 +9,8 @@
   **自己創作的劇本**（全部版本，含草稿、待審、被退回與已被取代的；CSV 為 `scripts.csv`，每個版本一列）與**自己的存檔**（含記事簿全文與每個回合的
   玩家行動與劇情原文；CSV 為 `sessions.csv` 與 `turns.csv`；NPC 狀態、目標與里程碑進度等世界狀態只在 JSON）。存檔內的劇本複本不匯出，
   它是來源劇本作者的內容，存檔只帶該劇本的標題。劇本與存檔也以產生器逐筆、逐頁讀取，記憶體用量與總量無關。
+  **自己的送審紀錄**（結果、被拒絕的類別、時間；CSV 為 `script_submissions.csv`）：紀錄本來就只有固定列舉與時間，沒有任何劇本文字；
+  劇本區塊也**不含**審查結果的欄位（判定、類別、審查時間與內容雜湊）——那是系統的判斷而不是使用者提供的資料。
   **不含**密碼雜湊、`token_version`、驗證權杖、Google 的識別值、內部整數編號、種子鍵、內容雜湊、帳號鎖定的計次，以及意圖、實體、信心值、
   建議動作、對話狀態與回合的結構化輸出等模型內部欄位（不是使用者提供的資料，而是系統推論的副產品）。
 """
@@ -21,13 +23,14 @@ import tempfile
 import zipfile
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, BinaryIO, Callable
+from typing import Any, BinaryIO, Callable, Iterator
 
 from app.models.user import PROVIDER_GOOGLE, User
 from app.observability import lifecycle_events
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.script_repository import ScriptRepository
+from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
@@ -43,11 +46,12 @@ PAGE_SIZE = 500
 SPOOL_LIMIT_BYTES = 8 * 1024 * 1024
 
 ACCOUNT_COLUMNS = (
-    "email", "display_name", "member_tier", "email_verified_at", "created_at", "last_login_at", "terms_version",
+    "email", "display_name", "nickname", "nickname_code", "member_tier", "email_verified_at", "created_at", "last_login_at", "terms_version",
     "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "google_linked",
 )
 MESSAGE_COLUMNS = ("conversation_id", "conversation_title", "seq", "role", "content", "created_at")
 APPEAL_COLUMNS = ("appeal_id", "content", "created_at", "status")
+SUBMISSION_COLUMNS = ("outcome", "categories", "created_at")
 SCRIPT_COLUMNS = (
     "script_id", "version_no", "status", "spec_version", "title", "summary", "world_name", "content_tier", "background", "opening",
     "rules", "tags", "calendar_name", "calendar_start_year", "ending_mode", "ending_text", "ending_age", "characters", "locations",
@@ -88,9 +92,11 @@ class PersonalExportService:
         appeals: LockAppealRepository,
         scripts: ScriptRepository,
         sessions: SessionRepository,
+        submissions: ScriptSubmissionRepository,
         clock: Callable[[], datetime],
     ) -> None:
         self._scripts = scripts
+        self._submissions = submissions
         self._sessions = sessions
         self._appeals = appeals
         self._users = users
@@ -131,6 +137,8 @@ class PersonalExportService:
         return {
             "email": user.email,
             "display_name": user.display_name,
+            "nickname": user.nickname,
+            "nickname_code": user.nickname_code,
             "member_tier": user.member_tier,
             "email_verified_at": when(user.email_verified_at),
             "created_at": when(user.created_at),
@@ -185,6 +193,11 @@ class PersonalExportService:
             ],
         }
 
+    def _submission_rows(self, user_id: int) -> Iterator[dict[str, Any]]:
+        """送審紀錄：結果、類別（固定列舉）與時間。"""
+        for row in self._submissions.export_for_user(user_id):
+            yield {"outcome": row["outcome"], "categories": row["categories"], "created_at": self._when(row["created_at"])}
+
     def _session_head(self, save: dict[str, Any], *, world_state: bool) -> dict[str, Any]:
         head = {key: value for key, value in save.items() if key != "world_state"}
         for key in ("created_at", "last_active_at", "ended_at"):
@@ -233,6 +246,10 @@ class PersonalExportService:
             put("]}")
         put(']')
         put(',"appeals":' + dump(self._appeal_rows(user.id)))
+        put(',"script_submissions":[')
+        for index, row in enumerate(self._submission_rows(user.id)):
+            put(("," if index else "") + dump(row))
+        put(']')
         put('}')
 
     # ---- CSV（zip）------------------------------------------------------------------
@@ -250,6 +267,12 @@ class PersonalExportService:
                     writer.writerow(APPEAL_COLUMNS)
                     for row in self._appeal_rows(user.id):
                         writer.writerow([row["id"], csv_safe(row["content"]), row["created_at"], row["status"]])
+            with archive.open("script_submissions.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(SUBMISSION_COLUMNS)
+                    for row in self._submission_rows(user.id):
+                        writer.writerow([row["outcome"], csv_safe("、".join(row["categories"])), row["created_at"]])
             with archive.open("scripts.csv", "w") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
                     writer = csv.writer(text)

@@ -16,7 +16,7 @@
   var state = Auth.readInitialState(document);
   var user = state.user || {};
   var TIER_LABELS = { free: '一般', plus: '進階', vip: '尊榮' };
-  var GATE_CODES = { age_confirmation_required: true, age_restricted: true, forbidden: true };
+  var GATE_CODES = { age_confirmation_required: true, age_restricted: true, forbidden: true, account_locked: true };
   var RETRY_DELAY_MS = 10000;   // 保留的訊息自動重送的間隔（不是請求逾時；請求逾時只來自初始狀態）
 
   function newId() {
@@ -115,6 +115,10 @@
           return { text: '請先到帳號設定填寫生日並選擇年齡區間，才能使用客服。', link: '/account', linkText: '前往帳號設定' };
         }
         if (gate.value === 'age_restricted') { return { text: '您的年齡目前不符合使用這項功能的規定。' }; }
+        if (gate.value === 'account_locked') {                       // 使用中才被鎖定：直接給前往申訴的按鈕（appeal-shortcut）
+          var locked = UI.restrictionNoticeOf('locked');
+          return { text: locked.text, link: locked.href, linkText: locked.linkText, button: true };
+        }
         if (gate.value === 'forbidden') {
           return { text: '您的帳號目前無法使用客服，請確認信箱已完成驗證。', link: '/account', linkText: '前往帳號設定' };
         }

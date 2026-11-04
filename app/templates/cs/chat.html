@@ -48,7 +48,7 @@
     <p v-if="storageMode === 'memory'" class="cs-banner cs-banner--quiet" role="status">這個瀏覽器無法保存離線資料；重新整理後，尚未送出的訊息不會保留。</p>
     <p v-if="gateNotice" class="cs-banner cs-banner--gate" role="alert">
       {{ gateNotice.text }}
-      <a v-if="gateNotice.link" :href="gateNotice.link">{{ gateNotice.linkText }}</a>
+      <a v-if="gateNotice.link" :href="gateNotice.link" :class="gateNotice.button ? 'ui-btn ui-btn--primary cs-banner__button' : null">{{ gateNotice.linkText }}</a>
     </p>
 
     <div class="cs-messages" ref="scroller" role="log" aria-live="polite" aria-label="對話內容">

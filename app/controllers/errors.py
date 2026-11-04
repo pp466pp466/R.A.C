@@ -14,7 +14,7 @@ from app.observability.errors import describe_exception
 from app.security.errors import HttpSecurityError
 from app.services.errors import (
     ChatSuspended, Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated,
-    ValidationError, VersionConflict,
+    Unprocessable, ValidationError, VersionConflict,
 )
 
 logger = logging.getLogger(__name__)
@@ -42,6 +42,7 @@ _SERVICE_ERROR_STATUS: tuple[tuple[type[ServiceError], int], ...] = (
     (Forbidden, 403),
     (NotFound, 404),
     (Conflict, 409),
+    (Unprocessable, 422),
     (TooManyRequests, 429),
     (ServiceUnavailable, 503),
 )
@@ -95,6 +96,8 @@ def register_error_handlers(app: Flask) -> None:
         extra: dict[str, object] | None = None
         if isinstance(exc, VersionConflict):
             extra = {"conversation": exc.conversation}
+        elif isinstance(exc, Unprocessable):
+            extra = {"categories": list(exc.categories)}             # 只有固定列舉的類別，不含內容的位置或文字
         elif isinstance(exc, ChatSuspended) and exc.until is not None:
             extra = {"suspended_until": exc.until.isoformat(timespec="seconds")}      # 前端據此停用輸入並顯示恢復時間
         response = respond_with_error(_status_for(exc), exc.code, exc.message, fields, extra)

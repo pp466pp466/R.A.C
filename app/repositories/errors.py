@@ -34,6 +34,10 @@ class InvalidVersionTransitionError(Exception):
     或 `rejected`、`published`→`superseded`）。版本保持原狀態。"""
 
 
+class DraftChangedError(Exception):
+    """草稿在這次編輯開始之後已被更新（條件式更新沒有命中，而版本仍是草稿）：不覆寫，Service 轉成 `DraftChanged`（409）。"""
+
+
 class VersionNotDraftError(Exception):
     """只有 `draft` 版本的內容可以修改或刪除；離開草稿之後內容不可變，要修改須建立新的版本。內容保持原樣。"""
 

@@ -304,6 +304,33 @@ def test_the_account_state_does_not_expose_the_content_preference_or_the_adult_c
     assert not {"content_tier_preference", "adult_confirmed_at", "adult_rules_version", "adult_confirm_method"} & set(user)
 
 
+def test_a_confirmed_player_sees_the_nickname_row_the_form_and_the_link_to_the_script_workshop(full_app):
+    html = logged_in(full_app).get("/account").get_data(as_text=True)
+    assert "<dt>暱稱</dt>" in html and "{{ nicknameText }}" in html
+    section = html.split('aria-labelledby="nickname-title"', 1)[1].split("</section>", 1)[0]
+    assert 'v-if="!nickname"' in section and "創作劇本前請先設定暱稱" in section
+    assert "暱稱會公開顯示於您創作的劇本，請勿使用真實姓名" in section
+    assert 'id="account_nickname"' in section and 'name="nickname"' in section and "nicknameForm.fieldErrors.nickname" in section
+    assert 'href="/scripts"' in section and "v-html" not in html
+
+
+def test_the_admin_age_form_on_the_account_page_has_no_nickname_field(full_app):
+    html = logged_in_admin_without_age(full_app).get("/account").get_data(as_text=True)
+    age_block = html.split('aria-labelledby="age-title"', 1)[1].split("</section>", 1)[0]
+    assert "nickname" not in age_block
+    assert 'v-if="ageConfirmed" class="account-section" aria-labelledby="nickname-title"' in html      # 完成年齡確認之前不顯示暱稱表單
+
+
+def test_the_account_script_skips_the_request_for_an_empty_nickname_and_shows_the_saved_one():
+    from app.config import PROJECT_ROOT
+
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "account.js").read_text(encoding="utf-8")
+    body = script.split("function saveNickname()", 1)[1].split("// ---- 匯出我的資料", 1)[0]
+    assert body.index("Auth.validateNickname(") < body.index("axios.put('/api/account/nickname'")
+    assert "return Promise.resolve(false)" in body and "UI.toast(" in body
+    assert "nickname.value = response.data.user.nickname" in body and "nicknameCode.value" in body
+
+
 def test_verifying_the_age_on_the_account_page_flow_updates_the_state(full_app):
     client = logged_in_admin_without_age(full_app)
     body = {"birth_date": birth_date_for_age(15).isoformat(), "age_range": "13_17"}
@@ -432,7 +459,7 @@ def test_the_account_page_state_holds_the_members_own_profile_only(app):
     assert (user["email"], user["display_name"], user["member_tier"]) == ("user1@example.com", "使用者1", "plus")
     assert set(user) == {
         "public_id", "email", "display_name", "member_tier", "role", "status", "email_verified", "has_password",
-        "age_confirmed", "age_group", "google_linked", "restriction",
+        "age_confirmed", "age_group", "google_linked", "restriction", "nickname", "nickname_code", "publish_suspended",
     }
     assert user["restriction"] is None                                                # 管理員不會是待確認年齡的受限狀態
     assert user["age_confirmed"] is False and user["age_group"] is None

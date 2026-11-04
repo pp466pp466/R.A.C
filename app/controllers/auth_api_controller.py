@@ -89,7 +89,9 @@ def verify_age():
     body = read_json_object()
     service = get_auth_service()
     try:
-        updated = service.verify_age(user, birth_date=body.get("birth_date"), age_range=body.get("age_range"))
+        updated = service.verify_age(
+            user, birth_date=body.get("birth_date"), age_range=body.get("age_range"), nickname=body.get("nickname")
+        )
     except UnderageAccountErased:
         logout_user()          # 帳號已抹除：目前裝置的登入狀態一併清除（錯誤回應照常由錯誤處理器產生）
         raise

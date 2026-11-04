@@ -16,7 +16,7 @@ from app.security.redirects import landing_for, safe_next
 from app.security.session import current_user, login_required_page, login_user
 from app.services.age_policy import EARLIEST_BIRTH_DATE, taipei_today
 from app.services.appeal_service import APPEAL_HOURLY_LIMIT, MAX_APPEAL_CHARS
-from app.services.current_user import RESTRICTION_AGE_PENDING, RESTRICTION_LOCKED
+from app.services.current_user import RESTRICTION_AGE_PENDING
 from app.services.google_sign_in_service import (
     ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
 )
@@ -131,18 +131,20 @@ def age_page():
     return render_template("auth/age.html", initial_state=_state(next=safe_next(request.args.get("next"))))
 
 
-# ---- 申訴（被鎖定的玩家）---------------------------------------------------------------
+# ---- 申訴（被鎖定或被暫停發佈的玩家）-------------------------------------------------------
 
 @auth_pages_bp.get("/appeal")
-@login_required_page(allow_locked=True)           # 被鎖定的玩家唯一能開的頁面；其他受限狀態由裝飾器導向各自的頁面
+@login_required_page(allow_locked=True)           # 被鎖定的玩家唯一能開的頁面（被暫停發佈者是一般登入）；其他受限狀態由裝飾器導向各自的頁面
 def appeal_page():
-    """申訴頁的外殼。沒有被鎖定的人開啟時導向預設頁面。初始狀態只有字數與頻率上限，沒有申訴內容或個人資料。"""
+    """申訴頁的外殼。既沒有被鎖定、也沒有被暫停發佈的人開啟時導向預設頁面。初始狀態只有申訴原因（`kind`：locked 或 suspended，
+    頁面據此顯示對應的說明）、字數與頻率上限，沒有申訴內容或個人資料。"""
     user = current_user()
-    if user.restriction != RESTRICTION_LOCKED:
+    kind = user.appeal_kind
+    if kind is None:
         return redirect(landing_for(user))
     return render_template(
         "auth/appeal.html",
-        initial_state=_state(appeal={"maxChars": MAX_APPEAL_CHARS, "hourlyLimit": APPEAL_HOURLY_LIMIT}),
+        initial_state=_state(appeal={"kind": kind, "maxChars": MAX_APPEAL_CHARS, "hourlyLimit": APPEAL_HOURLY_LIMIT}),
     )
 
 

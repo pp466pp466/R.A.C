@@ -1,7 +1,7 @@
 # 模型呼叫層
 
-> 狀態：已實作（串流呼叫由 RPG 實作） ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script（沒有新增模型呼叫，只標明下列審查層的歸屬）、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
-> 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**尚未實作**（屬 RC-7），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
+> 狀態：已實作（串流呼叫由 RPG 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**已由 change `rpg-script-authoring`（RC-7）實作**（呼叫類別 `script_review`，見第 6a 節），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
 
 本文件說明業務邏輯如何呼叫模型：供應商中立的介面、重試與備援的決策、斷路、預算、用量帳本、提示詞結構、依用途指定供應商（第 10 節），以及日後更換供應商的步驟。客服如何使用它見 [客服對話-chat-service.md](客服對話-chat-service.md)。
 
@@ -148,9 +148,22 @@ RPG 用途沿用 `LLM_*` 的逾時、預算與輸出上限（一個地方調整�
 
 預算以單調時鐘計（不受系統時間調整影響）；剩餘預算少於 2 秒不再發出呼叫。
 
+## 6a. 劇本審查的呼叫（`script_review`，rpg-script-authoring）
+
+| 項目 | 規則 |
+|---|---|
+| 供應商與模型 | RPG 用途的 OpenAI 相容端點（`OPENROUTER_MODEL`，備援 `OPENROUTER_FALLBACK_MODEL`），**不使用 Gemini**；沿用 `LlmService.run_structured` 的重試、備援、斷路、總時間預算與帳本 |
+| 呼叫類別 | 帳本 `kind = script_review`（13 個字，所以 `kind` 欄位在 `0013` 加寬為 20）；`counted` 為否，不計入任何人的每日對話輪數，但計入全站用量 |
+| 系統指令 | 固定的繁體中文審查指示與不公開的標記字串（`HMAC-SHA256(SECRET_KEY, "script-review-marker-v1")` 前 24 碼；輸出含有它即驗證失敗）。**劇本文字與作者宣告的內容模式一律是使用者內容區的資料區塊**，其中要求改變審查標準的文字不生效 |
+| 輸出 schema | `{verdict, categories}`：`verdict` 為 `pass`、`flag`、`reject`；**沒有任何自由文字欄位**，模型沒有地方回顯內容，也不會指出「哪一句」。語意規則：`pass` 不得帶類別、`flag` 至少一個類別、`reject` 的類別限四類紅線（涉及未成年的性內容、性暴力、非自願的性情節、以真人名義的性內容）、類別不得重複 |
+| 失敗一律不放行 | 供應商沒有設定、全站用量已達上限、降級（兩次驗證失敗、備援也失敗）、被安全過濾阻擋，都回報「不可用」，由呼叫端拒絕送審或開存檔，也不寫入任何通過標記；不會因模型壞了而放行 |
+| 結果與快取 | 結果記在版本上並對應 `content_hash`，內容相同就直接用先前的結果（含 `reject`，不重複花 token）；審查期間內容被改時結果被丟棄，不蓋在新內容上 |
+| 內建劇本 | 有種子鍵的內建劇本（我們自己的內容）不經模型層審查 |
+| 日誌與保存 | 日誌只有類別、結果與數字；驗證失敗的模型原文依既有規則截斷存在 `error_detail`（14 天，僅管理員可讀） |
+
 ## 8. 用量帳本（`llm_call_logs`）
 
-每次呼叫一筆：用途（`chat`、`summary`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0）、延遲與結束原因。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
+每次呼叫一筆：用途（`chat`、`summary`、`script_review`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0）、延遲與結束原因。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
 
 帳本也是**用量限制的唯一來源**（`UsageService`，見 [客服對話-chat-service.md](客服對話-chat-service.md) 第 3 節），沒有另外的計數器：
 

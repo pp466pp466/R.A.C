@@ -11,7 +11,7 @@
   </div>
 
   <form v-else @submit.prevent="submit" novalidate>
-    <p class="auth-lead">請填寫生日並選擇年齡區間，完成之後才能使用其他功能。這兩項由您自行聲明，我們不會要求證件；本服務僅供 {{ ageRules.minRegisterAge }} 歲以上使用。</p>
+    <p class="auth-lead">請填寫生日、選擇年齡區間並取一個暱稱，完成之後才能使用其他功能。生日與年齡區間由您自行聲明，我們不會要求證件；本服務僅供 {{ ageRules.minRegisterAge }} 歲以上使用。</p>
     <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
 
     <div class="auth-field">
@@ -32,6 +32,15 @@
         <option v-for="range in ageRules.ranges" :key="range.code" :value="range.code">{{ range.label }}</option>
       </select>
       <p v-if="form.fieldErrors.age_range" id="age_range-error" class="auth-error" role="alert">{{ form.fieldErrors.age_range }}</p>
+    </div>
+
+    <div class="auth-field">
+      <label class="auth-label" for="nickname">暱稱（2 至 20 字）</label>
+      <input id="nickname" name="nickname" type="text" class="auth-input" autocomplete="nickname" required
+             v-model="form.values.nickname" :disabled="form.state.submitting"
+             :aria-invalid="form.fieldErrors.nickname ? 'true' : 'false'" :aria-describedby="form.fieldErrors.nickname ? 'nickname-error' : 'nickname-hint'">
+      <p id="nickname-hint" class="auth-hint">暱稱會公開顯示於您創作的劇本，請勿使用真實姓名。</p>
+      <p v-if="form.fieldErrors.nickname" id="nickname-error" class="auth-error" role="alert">{{ form.fieldErrors.nickname }}</p>
     </div>
 
     <div class="auth-actions">

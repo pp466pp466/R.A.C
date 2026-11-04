@@ -27,6 +27,7 @@
   var TEXT = {
     needBirthDate: '請輸入生日。',
     needAgeRange: '請選擇年齡區間。',
+    needNickname: '請輸入暱稱。',
     needPassword: '請輸入密碼。',
     needAppeal: '請輸入申訴內容。',
     ageMismatch: '資料有誤，請重新填寫。',
@@ -68,15 +69,29 @@
 
   // ---- 年齡確認頁 ------------------------------------------------------------------------------
 
-  /* 送出前的檢查只是為了少打一次請求；真正的驗證在伺服器。 */
-  function validateAge(values) {
+  /* 送出前的檢查只是為了少打一次請求；真正的驗證在伺服器。玩家的年齡確認頁同時要求暱稱（`nicknameRequired`）；
+     管理員在帳號設定頁補填年齡時沒有暱稱欄位。 */
+  function validateAge(values, options) {
     var errors = {};
     if (!values || !values.birthDate) { errors.birth_date = TEXT.needBirthDate; }
     if (!values || !values.ageRange) { errors.age_range = TEXT.needAgeRange; }
+    if (options && options.nicknameRequired && (!values || !isString(values.nickname) || !values.nickname.trim())) {
+      errors.nickname = TEXT.needNickname;
+    }
     return errors;
   }
 
-  function ageBody(values) { return { birth_date: values.birthDate, age_range: values.ageRange }; }
+  /* 帳號設定頁的暱稱表單。格式（長度、網址、電話……）只由伺服器判斷。 */
+  function validateNickname(value) {
+    return isString(value) && value.trim() ? {} : { nickname: TEXT.needNickname };
+  }
+
+  /* 暱稱有填才放進請求（管理員補填年齡時沒有這個欄位）；前後空白由伺服器的標準化處理，這裡只去頭尾。 */
+  function ageBody(values) {
+    var body = { birth_date: values.birthDate, age_range: values.ageRange };
+    if (isString(values.nickname) && values.nickname.trim()) { body.nickname = values.nickname.trim(); }
+    return body;
+  }
 
   /* 年齡確認送出失敗的處理。
      - age_not_eligible：帳號已抹除（登入狀態也已清除），流程結束，只留下回到登入頁的連結；
@@ -154,6 +169,7 @@
     isSafeProviderUrl: isSafeProviderUrl,
     googleStartOutcome: googleStartOutcome,
     validateAge: validateAge,
+    validateNickname: validateNickname,
     ageBody: ageBody,
     ageOutcome: ageOutcome,
     appealStatusLabel: appealStatusLabel,

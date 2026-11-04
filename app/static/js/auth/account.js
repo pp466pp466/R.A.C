@@ -16,6 +16,12 @@
       var actions = Auth.useForm({});
       var passwordForm = Auth.useForm({ current_password: '', new_password: '' });
       var ageForm = Auth.useForm({ birth_date: '', age_range: '' });
+      var nicknameForm = Auth.useForm({ nickname: user.nickname || '' });
+      var nickname = Vue.ref(user.nickname || '');
+      var nicknameCode = Vue.ref(user.nickname_code || '');
+      var nicknameText = Vue.computed(function () {
+        return nickname.value ? nickname.value + '#' + nicknameCode.value : '尚未設定';
+      });
       var ageConfirmed = Vue.ref(!!user.age_confirmed);
       var ageGroup = Vue.ref(user.age_group || null);
       var logoutAllOpen = Vue.ref(false);
@@ -31,8 +37,13 @@
       if (user.has_password) { methods.push('信箱與密碼'); }
       if (user.google_linked) { methods.push('Google'); }
 
+      // 申訴捷徑（appeal-shortcut）：被暫停發佈，或使用中才被鎖定，頁面直接給「前往申訴」的按鈕；只依伺服器的回應判定
+      var restrictionKind = Vue.ref(UI.restrictionOf(user));
+
       // 登入已失效（例如在別的裝置按了「登出所有裝置」）：回到登入頁並保留位置
       function onError(info) {
+        var kind = UI.restrictionOf(info);
+        if (kind) { restrictionKind.value = kind; }
         if (info.status === 401) { window.location.assign(Auth.loginUrlFor('/account')); }
       }
 
@@ -81,6 +92,24 @@
             onError(info);
           }
         });
+      }
+
+      // 設定或更改暱稱：沒填就不送出請求；格式由伺服器判斷（欄位旁顯示說明），成功後以 Toast 回報並更新顯示
+      function saveNickname() {
+        nicknameForm.clearErrors();
+        var problems = Auth.validateNickname(nicknameForm.values.nickname);
+        if (Object.keys(problems).length) {
+          Object.assign(nicknameForm.fieldErrors, problems);
+          return Promise.resolve(false);
+        }
+        return nicknameForm.run(function () {
+          return axios.put('/api/account/nickname', { nickname: nicknameForm.values.nickname.trim() }).then(function (response) {
+            nickname.value = response.data.user.nickname || '';
+            nicknameCode.value = response.data.user.nickname_code || '';
+            nicknameForm.values.nickname = nickname.value;
+            UI.toast('暱稱已儲存。');
+          });
+        }, { onError: onError });
       }
 
       // ---- 匯出我的資料：POST 後以 blob 下載（不使用外部程式庫）；逾時 60 秒，離開頁面時中止 ----
@@ -193,6 +222,10 @@
         actions: actions,
         passwordForm: passwordForm,
         ageForm: ageForm,
+        restrictionKind: restrictionKind,
+        nicknameForm: nicknameForm,
+        nickname: nickname,
+        nicknameText: nicknameText,
         ageConfirmed: ageConfirmed,
         isAdmin: user.role === 'admin',          // 年齡補填區塊只留給管理員：玩家沒完成年齡確認之前連這一頁都進不來（被導向 /age）
         ageGroup: ageGroup,
@@ -210,6 +243,7 @@
         logout: logout,
         logoutAll: logoutAll,
         verifyAge: verifyAge,
+        saveNickname: saveNickname,
         changePassword: changePassword,
         resetPasswordForm: resetPasswordForm,
         downloadExport: downloadExport,

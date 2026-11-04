@@ -210,7 +210,7 @@ def test_there_are_no_endpoints_for_listing_users_changing_the_audit_or_deleting
     assert world.client("admin").open(path, method=method, json={} if method != "GET" else None).status_code in (404, 405)
 
 
-def test_the_registered_admin_routes_are_exactly_the_fifteen_documented_ones(world):
+def test_the_registered_admin_routes_are_exactly_the_seventeen_documented_ones(world):
     routes = {(rule.rule, method) for rule in world.app.url_map.iter_rules() if rule.rule.startswith("/api/admin") for method in rule.methods - {"HEAD", "OPTIONS"}}
     assert routes == {
         ("/api/admin/overview", "GET"), ("/api/admin/audit", "GET"), ("/api/admin/users/lookup", "POST"),
@@ -219,6 +219,7 @@ def test_the_registered_admin_routes_are_exactly_the_fifteen_documented_ones(wor
         ("/api/admin/feedback", "GET"), ("/api/admin/flagged", "GET"), ("/api/admin/conversations/<public_id>", "GET"),
         ("/api/admin/conversations/<public_id>/delete", "POST"), ("/api/admin/failures", "GET"),
         ("/api/admin/locked", "GET"), ("/api/admin/appeals", "GET"), ("/api/admin/users/<public_id>/unlock", "POST"),
+        ("/api/admin/publish-suspended", "GET"), ("/api/admin/users/<public_id>/lift-publish-suspension", "POST"),      # rpg-script-authoring
     }
 
 

@@ -1,8 +1,8 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
-> 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱與筆名的欄位與介面（RC-7）、送審與審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
+> 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 
 本文件說明玩家如何以 Google 登入、登入後完成年齡確認，管理員如何先 Google 再輸入密碼，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -170,11 +170,11 @@ flowchart TD
 | `/api/auth/logout` | POST | 否 | 登出目前裝置 |
 | `/api/auth/logout-all` | POST | 是 | 登出所有裝置 |
 | `/api/auth/me` | GET | 是 | 本人資料（不含生日與內部編號） |
-| `/api/auth/verify-age` | POST | 是（含待確認年齡） | 補填生日與年齡區間；未滿 13 歲的玩家立即抹除、不一致計入鎖定計次 |
+| `/api/auth/verify-age` | POST | 是（含待確認年齡） | 補填生日、年齡區間與暱稱（玩家必填，管理員可省略）；暱稱先驗證，不合格只回欄位錯誤、不計入鎖定計次；未滿 13 歲的玩家立即抹除、不一致計入鎖定計次 |
 | `/api/auth/change-password` | POST | 是 | 變更密碼（只有已設定密碼者，實際上是管理員；玩家得到 400 `no_password`） |
 | `/api/auth/reset-password` | POST | 否 | 管理員以重設權杖設定新密碼（沒有寄信設定時 404；非管理員的權杖視為無效） |
 | `/api/auth/google/start` | POST | 否 | 發起 Google 登入（未設定時 404）；只收 `accept_terms` 與 `next` |
-| `/api/appeals` | POST | 是（含被鎖定） | 被鎖定的玩家向管理員申訴（其他人 404） |
+| `/api/appeals` | POST | 是（含被鎖定） | 被鎖定或被暫停發佈的玩家向管理員申訴（其他人 404） |
 | `/api/appeals/mine` | GET | 是（含被鎖定） | 自己的申訴與處理狀態 |
 
 `/api/account/*` 端點（C-4c；全部需 CSRF，回應 `no-store`）：
@@ -184,8 +184,9 @@ flowchart TD
 | `/api/account/delete` | POST | 是 | 申請刪除自己的帳號（有密碼者帶密碼，只靠 Google 者帶確認文字）；成功後所有裝置登出 |
 | `/api/account/cancel-deletion` | POST | 是（含受限狀態） | 寬限期內撤銷刪除，還原為申請前的狀態 |
 | `/api/account/export` | POST | 是 | 匯出自己的帳號資料與全部對話（JSON 或 CSV zip）；受限狀態不可用 |
+| `/api/account/nickname` | PUT | 是 | 更改公開暱稱（2 至 20 字；短代號不變）；不合格只回欄位錯誤 |
 
-頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
+頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/scripts`（劇本創作，第 7d 節）、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
 
 ## 7. 管理員後台的存取（C-4b）
 
@@ -211,7 +212,7 @@ flowchart TD
 | 找使用者 | 主要入口是警告（總覽的今日警告 → 被標記對話 → 看使用者）；信箱精確查詢是次要入口、供客服反應時使用；沒有使用者清單與模糊搜尋 |
 | 重新輸入密碼 | `AuthService.confirm_password`：與登入共用失敗計數與鎖定（連續 5 次鎖定 15 分鐘），鎖定中即使正確也拒絕且訊息相同；成功不重設計數；沒有設定密碼的管理員不能執行（`no_password`） |
 | 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
-| 稽核 | `admin_audit_logs`：12 個固定動作，只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
+| 稽核 | `admin_audit_logs`：15 個固定動作，只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
 | 回應 | `/admin` 與 `/api/admin/` 一律 `Cache-Control: no-store`；非 GET 須通過 CSRF |
 
 `/api/admin/*` 端點（全部需要登入且是管理員；`POST` 另需 CSRF）：
@@ -231,8 +232,10 @@ flowchart TD
 | `/api/admin/conversations/<public_id>/delete` | POST | 刪除整個對話（原因與密碼） |
 | `/api/admin/failures` | GET | 最近 14 天模型輸出驗證失敗的原文 |
 | `/api/admin/locked` | GET | 目前被鎖定的玩家帳號（識別碼、顯示名稱、鎖定時間、原因類別） |
-| `/api/admin/appeals` | GET | 只有目前被鎖定帳號送出的申訴（寫 `appeal.read`，只記筆數；解除後不再出現） |
+| `/api/admin/appeals` | GET | 只有目前被鎖定或被暫停發佈的帳號送出的申訴，每筆標明 `restriction`（`locked` 優先或 `suspended`）（寫 `appeal.read`，只記筆數；兩種狀態都解除後不再出現） |
 | `/api/admin/users/<public_id>/unlock` | POST | 解除鎖定（重新輸入密碼）；清計次、申訴標為已處理、寫 `account.unlock` |
+| `/api/admin/publish-suspended` | GET | 目前被暫停發佈的玩家帳號（識別碼、顯示名稱、暫停時間；不含 email 與暱稱） |
+| `/api/admin/users/<public_id>/lift-publish-suspension` | POST | 解除暫停發佈（重新輸入密碼）；補一筆 `lifted` 送審紀錄使連續被拒中斷、申訴標為已處理、寫 `publish.lift` |
 
 頁面：`/admin`（只有管理員的顯示名稱，所有資料經由 API 取得；前端見 [前端結構-frontend.md](前端結構-frontend.md)）。
 
@@ -300,7 +303,7 @@ flowchart TD
 
 - **年齡確認**：玩家首次以 Google 登入只建立帳號（沒有生日，`age_deadline_at` = 建立後 24 小時），登入後被導向 `/age`；`POST /api/auth/verify-age` 驗證生日與區間：未滿 13 歲立即抹除（`AccountErasureService.erase_underage`，不保存生日）、不一致回通用訊息並計入鎖定計次、成功則寫入並清空期限。逾時由 `purge-unconfirmed-accounts` 每小時清除。
 - **帳號鎖定**：`AccountLockService.register_strike` 把兩類計次寫入 `lock_strikes`——`identity_rejected`（已辨識出帳號卻被拒絕的 Google 登入、補填年齡不一致；15 分鐘內 5 次）與 `rate_limited`（被每分鐘訊息數上限擋下；15 分鐘內 10 次）；達門檻時以條件式 UPDATE 鎖定並寫 `account.lock` 稽核（管理員欄位為空）。計次發生在會以 4xx 結束的請求裡，所以寫入後呼叫 `keep_changes_on_error`。無法辨識出帳號的失敗不計次。
-- **申訴**：`/api/appeals` 只對被鎖定的玩家有效（其他人 404），1000 字、每小時 3 則、同時 1 則待處理；內容是個資，日誌與稽核只有字數（`appeal.submit`）。
+- **申訴**：`/api/appeals` 對被鎖定或被暫停發佈的玩家有效（兩者皆非則 404，管理員也一樣），1000 字、每小時 3 則、同時 1 則待處理，兩種狀態共用同一套上限；內容是個資，日誌與稽核只有字數（`appeal.submit`）。`/appeal` 頁面由 `CurrentUser.appeal_kind`（`locked` 優先、`suspended`）決定說明文字，兩者皆非時導向預設頁面。
 
 ## 7c. 管理員二階段登入（google-first-login）
 
@@ -327,6 +330,27 @@ sequenceDiagram
 **忘記密碼**：密碼驗證頁在有寄信設定（寄信器與對外網址）時多一個按鈕，`POST /api/auth/admin-password/forgot` 只接受持有有效中間狀態的請求（對象由中間狀態決定，匿名與沒有寄信設定一律 404），沿用重設密碼的權杖規則寄信到該管理員的信箱；`/reset-password` 因此不再只受 `EMAIL_VERIFICATION_REQUIRED` 控制。
 
 中間狀態 cookie（`app/security/admin_step.py`）不被 `current_user()` 辨識，所以只持有它的請求對所有需要登入的端點都是 401；`token_version` 變動（改密碼、登出所有裝置、停權）會使它失效。第一次以同信箱的 Google 登入時沿用既有的合併規則綁定 Google 身分，之後同樣要再輸入密碼。
+
+## 7d. 暱稱與暫停發佈（rpg-script-authoring）
+
+```mermaid
+flowchart TD
+    Age["/age 初次設定頁<br/>生日、年齡區間、暱稱同一步驟"] --> Nick["NicknameService / check_nickname<br/>NFC、去控制字元、2 至 20 字、不得含網址 電子郵件 電話樣式、不得冒用官方署名"]
+    Acct["/account 更改暱稱"] --> Nick
+    Nick --> Code["短代號由系統產生 穩定不變<br/>公開顯示為 暱稱 加 短代號"]
+    Submit["POST /api/scripts/versions/id/submit"] --> Gate{"AccessPolicy.require_can_submit"}
+    Gate -->|"publish_suspended_at 有值（管理員不會）"| Block["403 publish_suspended<br/>只停止送審 其餘功能照常"]
+    Gate -->|"否"| Flow["檢查每日上限 規則層 模型層 送審"]
+    Flow -->|"連續 N 次自動拒絕"| Susp["條件式 UPDATE 暫停發佈 寫 publish.suspend 稽核<br/>管理員欄位為空"]
+    Block --> Appeal["前往申訴 捷徑按鈕指向 /appeal"]
+    Appeal --> AdminLift["管理員檢視申訴 重新輸入密碼 解除暫停<br/>寫 publish.lift 稽核"]
+```
+
+- **暱稱**：公開顯示於玩家創作的劇本，與 Google 帶來的 `display_name` 分開存放，`display_name` 不公開；不要求唯一，公開顯示時附系統產生的穩定短代號。玩家在年齡確認頁一起填（必填，與年齡確認同一步驟、同受 24 小時期限，被抹除或不一致時不保存）；既有帳號可為空，第一次創作劇本前須先設定。暱稱是個資：日誌只記內部編號，絕不記暱稱或短代號；匯出時包含，隨帳號刪除。
+- **內容上限**：作者可宣告的內容模式上限由 `AccessPolicy.author_content_cap` 依生日於當下算出（未滿 18 歲只能宣告安全模式，成年可到成人模式；不要求作者本人開啟成人模式）。
+- **暫停發佈**：獨立於帳號鎖定的旗標（`users.publish_suspended_at`），只停止送審；觸發條件是最近 `script_reject_streak` 筆送審紀錄全部是自動拒絕（門檻存在資料庫，預設 3，每次使用時現讀）；管理員不會被暫停；寫入走條件式 UPDATE，並行的拒絕只暫停一次。被暫停的玩家看到說明與「前往申訴」按鈕（`/appeal` 的一般連結，無 `data-bs-*`、無查詢字串；是否顯示只依伺服器回應，解除後重新整理即消失）。
+- **申訴捷徑**：`/cs`（使用中才被鎖定時 API 回 `account_locked`）、`/scripts` 與 `/account` 都在受限時顯示同一個元件 `UiRestrictionNotice`；判定集中在純函式 `UI.restrictionOf`（`static/js/ui/restriction.js`）。
+- **管理員的可讀範圍**：申訴只看得到被鎖定或被暫停發佈帳號送出的；解除暫停與解除鎖定同樣要重新輸入密碼並寫稽核；仍不得任意讀取其他對話全文。
 
 ## 8. 個資與保存
 

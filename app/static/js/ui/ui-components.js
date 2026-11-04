@@ -167,10 +167,28 @@
       '</teleport>'
   };
 
+  // ---- 申訴捷徑（appeal-shortcut 規格）------------------------------------
+  // 被鎖定或被暫停發佈時，在所在的頁面顯示說明與「前往申訴」按鈕。`kind` 由 UI.restrictionOf 判定（只依伺服器的回應）；
+  // 按鈕是指向 /appeal 的一般連結（沒有 data-bs-*、沒有查詢字串）。文字純文字，不使用 v-html。
+  var RestrictionNotice = {
+    name: 'UiRestrictionNotice',
+    props: { kind: { type: String, default: null } },
+    setup: function (props) {
+      return { notice: Vue.computed(function () { return props.kind ? root.UI.restrictionNoticeOf(props.kind) : null; }) };
+    },
+    template:
+      '<div v-if="notice" class="ui-restriction" :class="\'ui-restriction--\' + kind" role="alert">' +
+      '  <p class="ui-restriction__text">{{ notice.text }}</p>' +
+      '  <a class="ui-btn ui-btn--primary ui-restriction__link" :href="notice.href">{{ notice.linkText }}</a>' +
+      '</div>'
+  };
+
   root.UI.Modal = Modal;
   root.UI.ToastRegion = ToastRegion;
+  root.UI.RestrictionNotice = RestrictionNotice;
   root.UI.install = function (app) {
     app.component('ui-modal', Modal);
     app.component('ui-toast-region', ToastRegion);
+    app.component('ui-restriction-notice', RestrictionNotice);
   };
 })(typeof self !== 'undefined' ? self : this);
