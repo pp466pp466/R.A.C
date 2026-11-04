@@ -37,7 +37,7 @@ description: 在 OpenSpec 的 propose、apply、archive 之後，或修改架構
 | 改了什麼 | 更新 |
 |---|---|
 | 分層、禁止匯入、`create_app` 注入參數、請求生命週期 | `系統架構-architecture.md` |
-| 資料表、欄位、約束、migration、保存與刪除 | `資料模型-data-model.md`（保存期限的實作狀態同步 `營運與部署-operations.md`） |
+| 資料表、欄位、約束、migration、保存與刪除 | `資料模型-data-model.md`（保存期限的實作狀態同步 `營運與部署-operations.md`）**以及 `project資料結構文件.md`**（SQL Server `project` 的逐欄資料字典與 ERD：對該資料庫的任何新增、修改、刪除都要同步，**並在該文件最下方的第 14 節「異動紀錄」追加一列（日期、類型、對象、內容、依據）**；用 `python -X utf8 -m tests.support.db_schema <資料表>` 印出該表應有的列，執行 `tests/test_project_db_schema_doc.py` 驗證） |
 | 註冊、登入、session、CSRF、Google、年齡規則、權限、`/api/auth/*`、`/api/admin/*`、後台的可讀範圍與重新輸入密碼 | `帳號與安全-auth-security.md` |
 | `/api/cs/*`、送出流程、冪等、上下文、摘要、降級文案、管理員可讀的對話範圍 | `客服對話-chat-service.md` |
 | `LlmService`、轉接器、斷路、預算、帳本、提示詞結構、`GEMINI_*`、`LLM_*` | `模型呼叫層-llm-layer.md` |

@@ -10,6 +10,7 @@
 |---|---|---|
 | [系統架構-architecture.md](系統架構-architecture.md) | 系統全景、後端分層與依賴方向、請求生命週期、依賴注入、關鍵技術決策 | `app/__init__.py`、`app/config.py`、`app/runtime.py`、`app/services/registry.py`、`tests/architecture/` |
 | [資料模型-data-model.md](資料模型-data-model.md) | 實體關聯圖、約束與設計理由、migration 歷程、保存與刪除 | `app/models/`、`migrations/versions/`、`app/repositories/` |
+| [project資料結構文件.md](project資料結構文件.md) | SQL Server `project` 資料庫的結構參考：資料庫環境、各領域與全庫 ERD、外鍵與刪除動作、**逐表逐欄的資料字典**、索引與約束、固定值與 JSON 欄位結構、型別與命名慣例、資料生命週期、Repository 對應、migration 歷程 | `app/models/`、`migrations/versions/`、`tests/support/db_schema.py` |
 | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) | 帳號狀態、註冊與登入、session 與 CSRF、Google 登入、年齡閘門、權限規則、`/api/auth/*`、管理員後台的存取規則與 `/api/admin/*` | `app/services/auth_service.py`、`access_policy.py`、`age_policy.py`、`admin_service.py`、`app/security/` |
 | [客服對話-chat-service.md](客服對話-chat-service.md) | 客服端點、送出訊息流程、冪等與處理標記、上下文與狀態、摘要、降級文案、管理員可讀的對話範圍 | `app/services/chat_service.py`、`cs_*.py`、`summary_service.py`、`app/controllers/cs_*.py` |
 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) | 模型呼叫的分層、重試與備援決策、斷路、預算、解析驗證、提示詞結構、帳本、更換供應商 | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`、`app/observability/llm_events.py` |
@@ -31,7 +32,7 @@
 | 如果這次的 change 改了… | 更新 |
 |---|---|
 | 分層、禁止匯入規則、後台專用 Repository 的規則、`create_app` 的注入參數、請求生命週期、主要外部依賴 | 系統架構-architecture.md |
-| 資料表、欄位、約束、索引、外鍵動作、migration、保存期限與刪除流程 | 資料模型-data-model.md（保存期限的實作狀態同步 營運與部署-operations.md） |
+| 資料表、欄位、約束、索引、外鍵動作、migration、保存期限與刪除流程 | 資料模型-data-model.md（設計理由與雙軌取捨）**以及** project資料結構文件.md（逐欄字典、ERD、固定值；**對 SQL Server `project` 資料庫的任何新增、修改、刪除都要同步，並在該文件第 14 節最下方追加一列異動紀錄**）；保存期限的實作狀態同步 營運與部署-operations.md |
 | Google 登入、管理員二階段登入與重設密碼、session、CSRF、年齡規則、權限政策、`/api/auth/*`、`/api/admin/*`、後台的可讀範圍與重新輸入密碼 | 帳號與安全-auth-security.md |
 | `/api/cs/*`、送出流程、冪等、處理標記、上下文與狀態、摘要、降級文案、客服回覆原則、管理員可讀的對話範圍 | 客服對話-chat-service.md |
 | `LlmService`、轉接器、錯誤分類、斷路、預算、帳本、提示詞結構、`GEMINI_*` 與 `LLM_*` 設定 | 模型呼叫層-llm-layer.md（用到的端點與流程同步 客服對話-chat-service.md） |
@@ -74,6 +75,7 @@ ules.tasks 要求會影響設計的 change 在 	asks.md 最後加一項「更新
 |---|---|
 | 每份文件有「最後更新」日期、至少一個 Mermaid 圖，圖的類型合法，內部連結都存在，並列在本索引 | 結構一致 |
 | 每張資料表（`Base.metadata`）與最新的 migration 版本都出現在 資料模型-data-model.md | 新增資料表不更新文件就失敗 |
+| `tests/test_project_db_schema_doc.py`：project資料結構文件.md 的每張資料表、每個欄位（型別、可空、鍵）、索引與唯一約束、外鍵與刪除動作、固定值、migration 版本與標頭的表欄位數都與 ORM（以 SQL Server 方言編譯）一致，且每個 migration 在第 14 節異動紀錄都有對應的列（日期與 migration 檔名一致、由舊到新、標頭的最後更新等於最後一列） | 資料庫改了而字典沒改就失敗，訊息指出哪張表、哪個欄位 |
 | 每個 `/api/auth/` 與 `/api/admin/` 路由出現在 帳號與安全-auth-security.md，每個 `/api/cs/` 路由出現在 客服對話-chat-service.md；每個頁面（含 `/admin`）出現在設計文件 | 新增端點不更新文件就失敗 |
 | 每個分層名稱與 `create_app` 的注入參數出現在 系統架構-architecture.md | 分層與注入的變動要反映 |
 | 每個帳本狀態與每個 `GEMINI_*`、`LLM_*` 環境變數出現在 模型呼叫層-llm-layer.md | 模型呼叫層的設定要反映 |

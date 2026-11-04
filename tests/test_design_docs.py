@@ -18,7 +18,7 @@ APP = PROJECT_ROOT / "app"
 # 新增設計文件時：加進這裡，並列入 docs/README.md 的索引
 DESIGN_DOCS = (
     "系統架構-architecture.md", "資料模型-data-model.md", "帳號與安全-auth-security.md", "客服對話-chat-service.md", "模型呼叫層-llm-layer.md", "前端結構-frontend.md",
-    "營運與部署-operations.md", "路線圖-roadmap.md",
+    "營運與部署-operations.md", "路線圖-roadmap.md", "project資料結構文件.md",
 )
 # 不是設計文件的既有檔案（探索與決策紀錄、舊版報告）
 OTHER_DOCS = {
