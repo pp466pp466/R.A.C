@@ -97,8 +97,8 @@ SYNCED_RULES = [
     (10, "同一帳號 15 分鐘內 Google 登入被拒（已辨識出身分但被拒絕，例如帳號停用、年齡資料不符）達 5 次", "references/auth-security.md"),
     (10, "同一帳號 15 分鐘內被每分鐘訊息數上限擋下達 10 次（客服洗版）", "references/auth-security.md"),
     (10, "只能進申訴頁向管理員留言（單則上限 1000 字、同一帳號每小時最多 3 則、同一時間最多 1 則待處理），其他頁面與 API 一律回 403 與代碼 account_locked", "references/auth-security.md"),
-    (10, "管理員只能看到被鎖定帳號送出的申訴，仍不得任意讀取其他對話全文", "references/auth-security.md"),
-    (10, "使用者主動提交的意見回饋對話、被鎖定帳號送出的申訴、被內容安全過濾標記的對話", "references/auth-security.md"),
+    (10, "管理員只能看到被鎖定或被暫停發佈帳號送出的申訴，仍不得任意讀取其他對話全文", "references/auth-security.md"),
+    (10, "使用者主動提交的意見回饋對話、被鎖定或被暫停發佈帳號送出的申訴、被內容安全過濾標記的對話", "references/auth-security.md"),
     (11, "申訴（帳號鎖定）：內容由使用者撰寫，視為個資", "references/privacy-observability.md"),
     (11, "帳號鎖定激增（Google 登入被拒與洗版造成的鎖定）", "references/privacy-observability.md"),
     # 2026-11-03：玩家創作並公開分享劇本（先審後發）、暱稱與筆名、自訂結局與已完結的存檔、劇本的個資與刪帳號保留偏好
@@ -125,6 +125,15 @@ SYNCED_RULES = [
     (11, "玩家創作的劇本與暱稱：劇本設定", "references/privacy-observability.md"),
     (11, "匿名保留我已發佈的劇本", "references/privacy-observability.md"),
     (11, "劇本設定全文、暱稱與筆名", "references/privacy-observability.md"),
+    # 2026-11-04：暫停發佈（獨立於帳號鎖定）、申訴範圍擴及被暫停發佈者、劇本限制存於資料庫的設定表、送審紀錄的保存、暱稱不得冒用官方署名
+    (7, "同一作者連續被自動拒絕達門檻次數時，暫停其發佈權限（獨立於帳號鎖定的狀態，只停止送審，其餘功能照常；", "references/business-encoding.md"),
+    (7, "這些上限與連續被拒的門檻存放於資料庫的設定表，程式每次使用時現讀而不快取於行程內，以 flask 指令修改並寫入稽核紀錄，初始值由遷移寫入", "references/business-encoding.md"),
+    (10, "被暫停發佈的帳號（見第 7 節）可進申訴頁（上限與鎖定相同）", "references/auth-security.md"),
+    (10, "鎖定、暫停發佈、申訴與解除都寫入稽核紀錄", "references/auth-security.md"),
+    (10, "也不得冒用平台的官方署名", "references/auth-security.md"),
+    (11, "只有管理員能在被鎖定或被暫停發佈的帳號下檢視", "references/privacy-observability.md"),
+    (11, "被拒絕的送審只保留類別列舉值與時間（送審紀錄保存 12 個月，隨帳號刪除並納入匯出）", "references/privacy-observability.md"),
+    (11, "auth_tokens 為到期後 7 天；送審紀錄 12 個月；", "references/privacy-observability.md"),
 ]
 
 
