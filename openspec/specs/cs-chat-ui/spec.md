@@ -5,6 +5,8 @@
 
 ## Requirements
 
+
+
 ### Requirement: 客服頁面需要登入
 `/cs` SHALL 只回傳 HTML 外殼與初始狀態。未登入者 SHALL 被導向登入頁並在登入後回到 `/cs`。頁面 SHALL 顯示使用者的會員等級標籤；等級只影響額度，不影響畫面上可用的功能。
 
@@ -17,7 +19,7 @@
 - **THEN** 看到對話區、Sidebar 與會員等級標籤
 
 ### Requirement: 被閘門擋下時引導使用者
-客服 API 回應尚未完成年齡確認、信箱未驗證或服務暫時無法使用時，頁面 SHALL 以繁體中文說明原因；尚未完成年齡確認 SHALL 附上前往帳號設定補填的連結，且輸入區 SHALL 停用。
+客服 API 回應尚未完成年齡確認、信箱未驗證、帳號被鎖定或服務暫時無法使用時，頁面 SHALL 以繁體中文說明原因；尚未完成年齡確認 SHALL 附上前往帳號設定補填的連結，帳號被鎖定（`account_locked`）SHALL 附上「前往申訴」按鈕連到申訴頁，且輸入區 SHALL 停用。
 
 #### Scenario: 尚未填生日
 - **WHEN** 沒有生日的帳號開啟 `/cs`
@@ -26,6 +28,10 @@
 #### Scenario: 服務不可用
 - **WHEN** API 回應 503
 - **THEN** 顯示服務暫時無法使用的提示，已輸入的文字保留
+
+#### Scenario: 使用中被鎖定
+- **WHEN** 玩家在已開啟的 `/cs` 送出訊息，API 回應 403 與代碼 `account_locked`
+- **THEN** 顯示帳號已被鎖定的說明與「前往申訴」按鈕，輸入區停用，已輸入的文字保留
 
 ### Requirement: Sidebar 的版面與狀態
 左側 Sidebar 寬度 SHALL 為 280px，由 Vue 響應式變數以 `v-if` 或 `v-show` 完全接管，SHALL NOT 使用 Bootstrap 的 offcanvas 或任何 `data-bs-*` 互動。寬度 992px 以上 SHALL 預設開啟並推擠主區域；未滿 992px SHALL 預設關閉並以覆蓋方式顯示，附遮罩。

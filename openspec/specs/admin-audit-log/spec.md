@@ -6,6 +6,8 @@
 ## Requirements
 
 
+
+
 ### Requirement: 稽核紀錄的內容
 每筆稽核紀錄 SHALL 含：執行的管理員（管理員帳號被刪除時為空值，紀錄保留）、固定列舉的動作、目標使用者的對外識別碼（可為空）、目標對話的對外識別碼（可為空）、管理員填寫的原因（可為空，至多 200 字）、列舉型的細節（例如調整前後的等級、原狀態、筆數、查詢的途徑為信箱或識別碼），以及建立時間（UTC）。目標只存對外識別碼，SHALL NOT 以外鍵參照使用者，使用者被刪除後紀錄仍然成立。
 
@@ -18,7 +20,7 @@
 - **THEN** 稽核紀錄仍在，目標識別碼保留
 
 ### Requirement: 動作是固定的列舉
-稽核的動作 SHALL 只有：`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及帳號鎖定相關的 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`。`account.lock` 與 `appeal.submit` 由系統或玩家觸發，其管理員欄位 SHALL 為空；其餘由管理員觸發。寫入列舉以外的動作 SHALL 被拒絕。申訴內容 SHALL NOT 進入稽核紀錄。
+稽核的動作 SHALL 只有：`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，帳號鎖定相關的 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，以及劇本創作相關的 `limit.set`（部署者修改限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停）。`account.lock`、`appeal.submit`、`limit.set` 與 `publish.suspend` 由系統、玩家或部署者觸發，其管理員欄位 SHALL 為空；其餘由管理員觸發。寫入列舉以外的動作 SHALL 被拒絕。申訴內容 SHALL NOT 進入稽核紀錄；`limit.set` 的細節 SHALL 只含限制的鍵與新舊數值。
 
 #### Scenario: 未知的動作
 - **WHEN** 程式嘗試寫入動作 `user.delete_everything`
@@ -31,6 +33,14 @@
 #### Scenario: 申訴不進稽核內容
 - **WHEN** 玩家提交申訴
 - **THEN** `appeal.submit` 紀錄只含目標識別碼與字數，不含申訴文字
+
+#### Scenario: 系統觸發的暫停發佈
+- **WHEN** 作者因連續被自動拒絕而被暫停發佈
+- **THEN** 有一筆 `publish.suspend` 紀錄，管理員欄位為空，目標是該帳號的對外識別碼
+
+#### Scenario: 修改限制
+- **WHEN** 部署者修改一個限制
+- **THEN** 有一筆 `limit.set` 紀錄，管理員欄位為空，細節只有鍵與新舊數值
 
 ### Requirement: 稽核不記錄敏感內容
 稽核紀錄 SHALL NOT 含 email、顯示名稱、訊息或回覆文字、模型原文、密碼與其雜湊、權杖。管理員填寫的原因是唯一的自由文字，且只在停權與刪除對話時存在。以信箱查詢使用者時，紀錄 SHALL 只含查到的使用者的對外識別碼，不含被查詢的信箱。
@@ -79,4 +89,3 @@
 #### Scenario: 一般使用者
 - **WHEN** 一般使用者呼叫稽核端點
 - **THEN** 回應 404
-

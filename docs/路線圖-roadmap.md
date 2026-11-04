@@ -31,7 +31,7 @@ flowchart LR
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
     RC5["RC-5 rpg-persona-library<br/>性格原型庫"]:::plan
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
-    RC7["RC-7 rpg-script-authoring<br/>玩家創作劇本、固定規格、規則層與模型層審查、送審與暫停發佈（實作完成，待提交與封存）"]:::active
+    RC7["RC-7 rpg-script-authoring<br/>玩家創作劇本、固定規格、規則層與模型層審查、送審與暫停發佈（已封存）"]:::done
     RC8["RC-8 rpg-script-publishing<br/>先審後發、目錄、上下架、檢舉"]:::plan
     CT["content-tier-modes<br/>三種內容模式（併入 RC-1，已封存）"]:::done
     WL["W1 token-wallet<br/>代幣帳本與簽到（金流、訂閱另行探索）"]:::plan
@@ -76,7 +76,7 @@ flowchart LR
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
 | RPG 規範修訂（劇本創作與分級） | **已完成並提交**（2026-11-03，commit `bff4109`；不是 OpenSpec change） | 2026-11-03 | AGENTS.md 第 5、7、10、11 節、技能鏡像、同步測試與 report.md 的決定紀錄（U-20 至 U-26）：玩家創作並公開分享劇本（先審後發）、自動檢查四類紅線、內容分級改為安全／一般／成人三種模式、暱稱與筆名、自訂結局與已完結存檔、劇本的個資與刪帳號保留偏好。**不含程式碼** |
 | rpg-data-and-script（RC-1，含 content-tier-modes） | **已封存**（2026-11-04，實作 commit `74f7a35`（第 1 組）與 `eb88e9f`（第 2 至 8 組）：30／30 項；封存時新增 5 個主規格 `content-tier-modes`、`script-fixed-spec`、`script-store`、`rpg-sessions`、`builtin-script-seed`，修改 5 個既有規格 `age-confirmation`、`launch-gates`、`account-deletion`、`personal-data-export`、`data-retention`；pytest 6370、Node 197、容器驗收 117／117、`openspec validate --specs` 53 項通過） | 2026-11-04 | 劇本與存檔的資料基礎：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）與遷移 `0012`、固定規格 v1 驗證器、`ScriptRepository` 與 `SessionRepository`（狀態與唯一性由資料庫保證、擁有者隔離、回合冪等與不計中斷輪數）、`AccessPolicy` 的三種內容模式（取代 `sexual_content_level` 0 至 3）、`GET`／`PUT /api/account/content-mode`、`ADULT_MODE_ENABLED`／`ADULT_MODE_MODELS`（舊變數淘汰）、內建首發劇本與 `flask seed-scripts`、抹除（別人的存檔保留）、匯出與保存期限。**沒有任何玩家看得到的介面**。age-confirmation 與 launch-gates 兩份主規格頁首「待 content-tier-modes 更新」的提示已於封存時移除。尚待處理的措辭（服務條款、隱私權政策與客服提示詞的「滿 18 歲自動解除」、隱私權政策的保存期限表）留給法務覆核 |
-| rpg-script-authoring（RC-7） | **實作完成**（2026-11-04：程式、自動化測試與人工驗收都已完成，待提交與封存；規劃 commit `071f559`） | 2026-11-04 | 玩家創作劇本的 API 與 `/scripts` 頁面、固定規格驗證、規則層與模型層審查（模型不可用一律不放行）、送審、連續被拒的暫停發佈（獨立旗標）與申訴捷徑、暱稱的初次設定頁與帳號頁更改、營運限制存資料庫（`flask set-script-limit`）、送審紀錄的匯出與 12 個月保存；依賴 RC-1。AGENTS.md 第 7、10、11 節的修訂已先提交（`ed836fb`） |
+| rpg-script-authoring（RC-7） | **已封存**（2026-11-04，規劃 commit `071f559`、規範修訂 `ed836fb`、實作 `cdc1b9f`；封存時新增 6 個主規格 `appeal-shortcut`、`player-nickname`、`runtime-limits`、`script-authoring`、`script-review`、`script-submission`，修改 10 個既有規格，`openspec validate --specs` 59 項） | 2026-11-04 | 玩家創作劇本的 API 與 `/scripts` 頁面、固定規格驗證、規則層與模型層審查（模型不可用一律不放行）、送審、連續被拒的暫停發佈（獨立旗標）與申訴捷徑、暱稱的初次設定頁與帳號頁更改、營運限制存資料庫（`flask set-script-limit`）、送審紀錄的匯出與 12 個月保存；依賴 RC-1。AGENTS.md 第 7、10、11 節的修訂已先提交（`ed836fb`） |
 | rpg-script-publishing（RC-8） | 規劃中 | — | 先審後發的管理員審核佇列、上下架、公開目錄、檢舉、署名、刪帳號的保留偏好；依賴 RC-7 |
 | 錢包與訂閱（W1 至 W3） | 探索中（方向已定，**尚未寫入規範**） | — | W1 token-wallet（只有免費幣，RC-2 的扣款依賴它）、W2 payments-and-subscriptions（金流、法務、未成年付款）、W3 model-catalog-and-pricing；見 report.md U-27 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |
