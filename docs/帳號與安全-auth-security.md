@@ -1,8 +1,8 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-03 ｜ 對應 change：remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
-> 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；**尚未實作**（屬 RC-1、RC-7、RC-8），本文件描述目前的實作。
+> 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱與筆名的欄位與介面（RC-7）、送審與審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 
 本文件說明玩家如何以 Google 登入、登入後完成年齡確認，管理員如何先 Google 再輸入密碼，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -99,7 +99,7 @@ sequenceDiagram
 - 開發與正式環境使用不同的 OAuth 用戶端；失敗一律導回 `/login?error=<固定代碼>`，Google 回傳的任何文字都不會進入網址或頁面。
 - 登入後的預設頁面是單一常數 `DEFAULT_AFTER_LOGIN`（`app/security/redirects.py`，目前 `/cs`，RPG 上線後改為選擇劇本的首頁）；`landing_for` 由首頁、登入頁與回呼共用。
 
-## 5. 年齡閘門與內容上限
+## 5. 年齡閘門與內容模式
 
 年齡規則的所有數字（最低註冊年齡 13、最低使用年齡 13、成年門檻 18、區間選項、政策版本）只在 `app/services/age_policy.py` 的 `AgePolicy`；年齡一律由生日於「當下」計算，不用儲存的結果判斷。
 
@@ -112,26 +112,42 @@ flowchart TD
     HasAge -->|"是"| Old{"年齡 ≥ 最低使用年齡？"}
     Old -->|"否"| Restricted["age_restricted（403）<br/>補填也沒有用，不引導"]
     Old -->|"是"| Pass["通過"]
-    Pass --> Ceiling{"年齡 ≥ 18？"}
-    Ceiling -->|"否"| Safe["content_ceiling：安全模式<br/>sexual_content_level = 0"]
-    Ceiling -->|"是"| Switch{"等級 3 開關開啟？<br/>SEXUAL_CONTENT_LEVEL3_ENABLED"}
-    Switch -->|"否（預設）"| Adult2["content_ceiling：最高 2"]
-    Switch -->|"是（只限 development 與 testing）"| Adult3["content_ceiling：最高 3"]
 ```
 
 - `chat_gate` 是純查詢（不拋例外、不記錄事件）；`require_chat_access` 以它判斷並對年齡拒絕記錄一筆事件，兩者不會分歧（測試逐一比對）。
 - 管理員與各會員等級都不豁免年齡閘門。管理員帳號由指令建立，沒有生日，第一次登入後須到 `/account` 補填；**玩家**則是登入後除了年齡確認與登出什麼都不能做（受限登入狀態 `age_pending`，第 7b 節），所以玩家不會走到 `chat_gate`。
 - 13 至 17 歲可以使用（含 AI 功能）但固定安全模式；此設定以供應商同意為前提，換供應商時只需換 `AgePolicy` 並提高版本（見 [路線圖-roadmap.md](路線圖-roadmap.md) 的待決定事項）。
 
-**等級 3 的環境開關**（AGENTS.md 第 7 節，change `openai-compatible-provider`）：成年者的上限預設是 2，`sexual_content_level 3` 只能以環境設定開啟，**不能在程式裡寫死**。`AccessPolicy` 的建構子接收 `adult_ceiling`（2 或 3，預設 2），由組裝處依 `SEXUAL_CONTENT_LEVEL3_ENABLED` 傳入；未成年者、尚未完成年齡確認者、管理員與各會員等級都不受開關影響（未成年永遠是安全模式）。
+### 內容模式（change `rpg-data-and-script`，取代 `sexual_content_level` 0 至 3）
+
+三種模式由保守到寬鬆：`safe`（安全模式）、`standard`（一般模式）、`adult`（成人模式）；順序與「取較保守者」在 `app/services/content_tier.py`（純邏輯，無法判定視為 `safe`）。**生效模式 = 玩家偏好、年齡上限、劇本宣告、存檔記錄中最保守者**（`AccessPolicy.effective_tier`）。
+
+```mermaid
+flowchart TD
+    Age{"年齡（生日於當下計算）<br/>≥ 成年門檻？"} -->|"否或尚未確認年齡"| Cap1["年齡上限 safe<br/>不論偏好、劇本、設定或角色（含管理員）"]
+    Age -->|"是"| Open{"成人模式啟用中？<br/>部署開關開啟 且 已在目前規範版本確認"}
+    Open -->|"否（預設）"| Cap2["年齡上限 standard"]
+    Open -->|"是"| Cap3["年齡上限 adult"]
+    Cap1 --> Eff["生效模式 = most_conservative(玩家偏好, 年齡上限, 劇本宣告, 存檔記錄)"]
+    Cap2 --> Eff
+    Cap3 --> Eff
+```
+
+- **偏好與預設**：`users.content_tier_preference` 預設 `safe`；年齡確認成功的當下依年齡設定（已滿 18 歲 `standard`，未滿 `safe`）。**滿 18 歲不自動調高**：年齡上限解除，但偏好與既有存檔的模式不變，`GET /api/account/content-mode` 的 `selectable.standard` 變成真值，介面提示玩家自行切換。成年玩家也可以自行選擇 `safe`。偏好為 `adult` 但條件不齊時退為 `standard`，不是錯誤。
+- **成人模式須同時滿足**：部署開關 `ADULT_MODE_ENABLED` 開啟；已滿 18 歲；在目前的安全規範版本（`ADULT_RULES_VERSION`）下完成成年確認；偏好為 `adult`。成年確認在切換為成人模式時完成：同時確認「我確定已滿 18 歲」與同意安全規範兩項（缺一回 400 並指出缺哪一項），記錄確認時間、規範版本與方式（目前 `self_declared`，不蒐集證件、不接第三方驗證）；規範版本改變後先前的確認失效，須重新確認；離開成人模式不清除紀錄。
+- **API**（需登入、CSRF、先過年齡閘門；受限登入狀態依既有規則被拒絕）：`GET /api/account/content-mode` 與 `PUT /api/account/content-mode`。回應只有 `preference`、`effective`、`selectable`（三種模式各是否可選）、`adult_reason`（`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`，**不含**生日、年齡區間、年齡確認時間或內部編號。錯誤：400（`mode` 不是三種之一，或缺少確認的那一項）、403 `content_mode_restricted`（未滿成年門檻者要求 `standard` 或 `adult`）、403 `adult_mode_unavailable`（部署開關關閉）、403 `age_confirmation_required`、401。成功時記錄 `account.content_mode.safe`／`standard`／`adult` 事件（只有事件名稱與使用者編號）。
+- `/account` 對 13 至 17 歲的使用者顯示安全模式的提示與原因，依生日於當下計算的年齡群組決定，不看儲存的偏好；目前**沒有切換內容模式的介面**（RC-3）。
+- 年齡規則的數字不在 `AccessPolicy` 內嵌（測試以 AST 掃描不得出現 13、17、18）；`AccessPolicy.content_access(user)` 回傳 `ContentAccess`（偏好、年齡上限、生效模式、是否已成年、成人模式是否可選、是否已確認、原因）。
+
+**成人模式的環境開關**（AGENTS.md 第 7 節）：`ADULT_MODE_ENABLED` 預設關閉，**不能在程式裡寫死為開啟**，由組裝處依設定傳入 `AccessPolicy(adult_mode_enabled=…)`；未成年者、尚未完成年齡確認者、管理員與各會員等級都不受開關影響（未成年永遠是安全模式）。
 
 | 環境 | 開關 | 條件 |
 |---|---|---|
-| development、testing | 可開啟 | 必須已設定 RPG 用途，且 `SEXUAL_CONTENT_LEVEL3_MODELS`（取得書面許可所涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型，否則啟動失敗 |
-| staging、production | **開啟即啟動失敗** | 強化的成年驗證尚未完成（AGENTS.md：第 10 節訂定驗證做法之前不得對一般會員開啟）；之後做成年驗證的 change 才放寬這個檢查 |
+| development、testing、staging、production | 可開啟；staging 與 production 須明確設定才生效 | 必須已設定 RPG 用途，且 `ADULT_MODE_MODELS`（取得書面許可所涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型，否則啟動失敗；值不是布林也啟動失敗，訊息只指出變數名稱 |
 
+- 舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS` 已淘汰：忽略、啟動時各警告一次（只含變數名稱），**忽略 = 成人模式維持關閉**；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕。
 - 清單只在開關開啟時才驗證，關閉時完全不影響行為；它是「防止換了模型卻忘了許可範圍」的護欄，不是許可本身的證明。**許可涵蓋的供應商與日期須由人另外記錄**（使用者尚未提供，見 [路線圖-roadmap.md](路線圖-roadmap.md)）。
-- **這只是開關**：RPG 尚未實作，目前沒有任何送出露骨內容的入口。任何入口出現之前，仍須先完成**自家審查層**（擋未成年、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕）與**強化成年驗證**（方式尚未選定）。
+- **這只是資料與政策基礎**：RPG 尚未實作，目前沒有任何送出露骨內容的入口。任何入口出現之前，仍須先完成**自家審查層**（安全模式與一般模式的界線、擋未成年、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕，屬 RC-2）、書面許可與法務意見。
 
 ## 6. 權限規則與端點清單
 

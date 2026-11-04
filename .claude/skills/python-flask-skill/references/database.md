@@ -25,4 +25,4 @@
 - 連線帳號與密碼僅存於 DATABASE_URL（`.env` 或平台機密），不得寫入程式碼、模板、文件或版本庫（見 [deployment.md](deployment.md)）。
 - 本機開發的 SQL Server 連線可設定 TrustServerCertificate=yes；正式環境嚴禁使用，且不得使用 sa 帳號。
 
-相關：RPG 原始劇本 `scripts.milestones_json` 為唯讀（見 [business-encoding.md](business-encoding.md)）。
+相關：RPG 原始劇本（劇本版本 `script_versions` 的 `milestones_json`）為唯讀（見 [business-encoding.md](business-encoding.md)）。

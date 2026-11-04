@@ -8,6 +8,8 @@
 | 驗證權杖 | 到期早於 7 天（不論是否已使用） | 刪除 |
 | 管理稽核紀錄 | 建立早於 730 天（24 個月） | 刪除 |
 | 帳號鎖定計次 | 建立早於 7 天（計次視窗只有 15 分鐘） | 刪除 |
+| 中斷或被擋回合的部分內容 | 最後更新早於 14 天 | `llm_raw_response` 清為空字串，回合紀錄（序號、編號、狀態、時間）保留 |
+| RPG 存檔 | 最後活動早於 365 天（12 個月；沒有回合的存檔以建立時間算） | 刪除；回合與記事簿一併消失，不論進行中或已完結 |
 
 帳號刪除紀錄（`deletion_tombstones`）**不納入**：它不含個資，而且備份還原後要靠它重新執行刪除。**申訴也不納入**：它的保存期限與所屬帳號
 相同（帳號刪除時一併刪除），不由這裡清除。月以天計（與閒置帳號清除相同）。
@@ -32,6 +34,8 @@ ERROR_DETAIL_RETENTION = timedelta(days=14)
 AUTH_TOKEN_RETENTION = timedelta(days=7)
 ADMIN_AUDIT_RETENTION = timedelta(days=730)
 LOCK_STRIKE_RETENTION = timedelta(days=7)
+SESSION_RETENTION = timedelta(days=365)
+TURN_CONTENT_RETENTION = timedelta(days=14)
 BATCH_SIZE = 500
 
 
@@ -76,6 +80,9 @@ class DataRetentionService:
             (lifecycle_events.CATEGORY_AUTH_TOKENS, AUTH_TOKEN_RETENTION, r.find_auth_tokens, r.count_auth_tokens, r.purge_auth_tokens),
             (lifecycle_events.CATEGORY_ADMIN_AUDIT, ADMIN_AUDIT_RETENTION, r.find_admin_audit, r.count_admin_audit, r.purge_admin_audit),
             (lifecycle_events.CATEGORY_LOCK_STRIKES, LOCK_STRIKE_RETENTION, r.find_lock_strikes, r.count_lock_strikes, r.purge_lock_strikes),
+            # 回合的部分內容排在存檔之前：同時符合兩者的舊回合先清內容、再隨存檔刪除，預覽（各類獨立計數）與實際執行的筆數一致
+            (lifecycle_events.CATEGORY_TURN_CONTENT, TURN_CONTENT_RETENTION, r.find_turn_content, r.count_turn_content, r.purge_turn_content),
+            (lifecycle_events.CATEGORY_SESSIONS, SESSION_RETENTION, r.find_sessions, r.count_sessions, r.purge_sessions),
         )
 
     def run(self, *, dry_run: bool = False) -> RetentionReport:

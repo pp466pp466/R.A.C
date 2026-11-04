@@ -1,8 +1,8 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-03 ｜ 對應 change：remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0010_google_first_login` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0012_rpg_data_and_script` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
-> 注意（2026-11-03）：AGENTS.md 第 7、11 節的劇本創作、暱稱、自訂結局與已完結存檔、三種內容模式（`content_tier`）、刪帳號的劇本保留偏好**尚未實作**，對應的資料表與欄位屬 RC-1 的設計（見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)）；本文件描述目前的實作。
+> 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：暱稱與筆名的使用者欄位（RC-7）、刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。
 
@@ -19,6 +19,12 @@ erDiagram
     users |o--o{ llm_call_logs : "產生 SET NULL 匿名化"
     chat_conversations ||..o{ llm_call_logs : "只存編號 無外鍵"
     users ||..o{ deletion_tombstones : "只存內部編號 無外鍵"
+    users |o--o{ scripts : "創作 CASCADE 內建劇本沒有作者"
+    scripts ||--o{ script_versions : "版本 CASCADE"
+    script_versions ||--o{ script_version_tags : "標籤 CASCADE"
+    users ||--o{ sessions : "存檔 CASCADE"
+    sessions ||--o{ memory_logs : "回合 CASCADE"
+    script_versions |o..o{ sessions : "來源參照 無動作 抹除前清為空值"
     users |o--o{ admin_audit_logs : "管理員操作 SET NULL 紀錄保留"
     users ||..o{ admin_audit_logs : "目標只存對外識別碼 無外鍵"
 
@@ -49,6 +55,78 @@ erDiagram
         datetime age_deadline_at "玩家補填年齡的期限 建立後 24 小時 補填後清空 可為空"
         datetime locked_at "玩家帳號被鎖定的時間 只有管理員能解除 可為空"
         string lock_reason "鎖定原因的固定列舉 可為空"
+        string content_tier_preference "safe standard adult 預設 safe 確認年齡時依年齡設定 滿 18 歲不自動調高"
+        datetime adult_confirmed_at "成人模式的成年確認時間 可為空 只保存目前這一次"
+        string adult_rules_version "確認時的安全規範版本 版本改變即失效 可為空"
+        string adult_confirm_method "確認方式 目前只有 self_declared 可為空"
+    }
+    scripts {
+        int id PK
+        string public_id UK "對外識別碼 UUID"
+        int creator_id FK "CASCADE 可為空 內建劇本沒有作者"
+        string seed_key "內建劇本的穩定鍵 非空時唯一 部分唯一索引"
+        string author_name "筆名快照 第一次發佈時鎖定"
+        string author_code "短代號"
+        datetime author_locked_at "鎖定時間 可為空"
+    }
+    script_versions {
+        int id PK
+        string public_id UK
+        int script_id FK "CASCADE 與版本編號唯一"
+        int version_no "同一劇本內從 1 連續遞增"
+        string status "draft pending_review published rejected superseded"
+        string title "目錄欄位 可瀏覽與篩選"
+        string summary
+        string world_name
+        string content_tier "作者宣告的內容模式"
+        text background
+        text opening
+        text rules
+        string ending_mode "none 或 custom"
+        int ending_age
+        string calendar_name
+        int calendar_start_year
+        json characters_json "不依內容篩選"
+        json locations_json
+        json milestones_json "原始劇本 唯讀"
+        string content_hash "標準化內容的 SHA-256 不對外"
+        int live_script_id "狀態為 published 時等於 script_id 部分唯一"
+        int open_script_id "狀態為 draft 或 pending_review 時等於 script_id 部分唯一"
+        datetime published_at
+    }
+    script_version_tags {
+        int id PK
+        int version_id FK "CASCADE 與標籤唯一"
+        string tag "顯示形式 查詢以小寫比對"
+    }
+    sessions {
+        int id PK
+        string public_id UK
+        int user_id FK "CASCADE"
+        int source_version_id FK "無動作 可為空 抹除前清為空值"
+        json script_snapshot_json "開存檔當時的標準化劇本內容 之後不再讀取劇本"
+        string player_name
+        int character_age "劇中角色的年齡 與使用者年齡無關"
+        string current_location
+        text status_summary
+        json entities_json "NPC 狀態"
+        json goals_json
+        json milestone_progress_json
+        int version "世界狀態的版本號 條件式更新"
+        text notebook_text "記事簿 個資 行為屬 RC-2"
+        string content_tier "開存檔當下的生效模式 只能往保守調整"
+        string status "active 或 ended 已完結不可恢復"
+        datetime last_active_at "期限清除的依據"
+    }
+    memory_logs {
+        int id PK
+        int session_id FK "CASCADE"
+        string client_msg_id "與存檔唯一 冪等"
+        int seq "與存檔唯一 單調遞增"
+        int turn_number "只有 complete 的回合才有 中斷與被擋不計輪 可為空"
+        string turn_status "streaming complete interrupted blocked"
+        text user_action "個資"
+        text llm_raw_response "劇情原文 中斷或被擋超過 14 天清為空字串"
     }
     lock_strikes {
         int id PK
@@ -171,6 +249,14 @@ erDiagram
 | 時間 | 資料庫存 UTC（`UTCDateTime`）；日界與年齡以 Asia/Taipei 計 | 兩種資料庫的時區行為一致 |
 | 不設軟刪除 | 使用者刪除對話即永久刪除；帳號刪除靠 `CASCADE` | 不留下內容殘影；`deletion_tombstones` 只存內部編號與日期，備份還原後可重新執行刪除 |
 | 生日是個資 | `birth_date`、`age_range` 不進 API 回應、日誌與模型 | AGENTS.md 第 10、11 節；是否成年一律由生日於當下計算 |
+| 劇本與版本分開（`0012`） | `scripts` 是身分（作者、種子鍵、筆名快照），內容與狀態在 `script_versions`；已發佈的版本不可變，修改一律新增版本 | 「核可前舊版持續有效」需要同一劇本同時存在多列內容；只在單一列上覆寫做不到不可變 |
+| 狀態由資料庫保證唯一 | `script_versions.live_script_id`、`open_script_id` 只在狀態為 `published`、`draft` 或 `pending_review` 時等於 `script_id`，各自一個「只涵蓋非 NULL 列」的部分唯一索引；兩者與狀態只由 `ScriptRepository` 寫入（架構測試擋住別處） | 每個劇本至多一個上架版本與一個進行中的版本；SQL Server 的 UNIQUE 只容許一個 NULL，不能直接對 `(script_id, status)` 設唯一，且並行請求只靠程式檢查會同時通過 |
+| 種子鍵可為空且唯一 | `scripts.seed_key` 用 `unique_when_not_null()`（`sqlite_where` 與 `mssql_where`） | 玩家劇本沒有種子鍵，多個 NULL 並存；兩種資料庫行為一致 |
+| 存檔複製劇本 | `sessions.script_snapshot_json` 存開存檔當時的完整標準化內容，`source_version_id` 只是可為空的參照 | 作者改版、下架或刪帳號都不影響存檔；也讓「作者被抹除時別人的存檔保留」成立 |
+| 來源參照是無動作的外鍵 | `sessions.source_version_id → script_versions.id` 沒有 `ON DELETE`；刪除版本與抹除帳號的流程先把參照清為空值 | 刪除使用者有兩條路徑到達 `sessions`（`users → sessions`，與 `users → scripts → script_versions → sessions`），SQL Server 不允許多重串聯路徑（錯誤 1785）；有外鍵才不會出現指向已刪除編號的懸空參照，忘了清空時刪除會直接失敗 |
+| 回合的唯一性與輪數 | `(session_id, client_msg_id)`、`(session_id, seq)` 唯一；`turn_number` 可為空，只在回合完成時指派，不設資料庫唯一約束 | 冪等與順序由資料庫保證；可為空的複合唯一在 SQL Server 有問題，輪數的唯一靠「同一存檔同時只處理一則」與開始回合時對存檔列的條件式 UPDATE 取鎖 |
+| 內容模式欄位 | `users.content_tier_preference` 為 `NOT NULL`、伺服器預設 `safe`（舊版程式的 INSERT 仍有效且保守）；成年確認三欄皆可為空，只保存目前這一次 | 預設最保守；規範版本改變後覆寫即可，歷史不需要保存；`0012` 依 `is_adult_at_confirmation` 一次回填（成年為 `standard`），所以滿 18 歲不會自動調高 |
+| 標籤獨立成表 | `script_version_tags` 以顯示形式儲存（保留大小寫，版本內容可由欄位完整還原、雜湊不變），查詢以小寫比對 | 不得依 JSON 內容篩選；同一版本內由驗證器以 NFC 與不分大小寫去除重複，所以兩種資料庫的唯一約束不會誤判 |
 
 ## 3. Migration 歷程
 
@@ -186,11 +272,13 @@ flowchart LR
     M8 --> M9["0009 alert_states<br/>營運告警的狀態資料表"]
     M9 --> M10["0010 google_first_login<br/>users 的補填期限與鎖定欄位、lock_strikes、lock_appeals"]
     M10 --> M11["0011 remove_player_passwords<br/>只動資料：清除玩家的密碼雜湊、pending_verification 改為 active"]
+    M11 --> M12["0012 rpg_data_and_script<br/>users 的內容模式四欄與回填、scripts、script_versions、script_version_tags、sessions、memory_logs"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
 - `0011_remove_player_passwords` 是**只動資料**的遷移（清除非管理員帳號的密碼雜湊、失敗計數與密碼鎖定，並把 `pending_verification` 改為 `active`）：沒有結構變更、可重複執行、舊版程式在遷移後仍可運作；被清除的雜湊無法還原，回復靠遷移前的備份。
-- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
+- `0012_rpg_data_and_script` 只新增（四個 `users` 欄位與五張新表，部分唯一索引同時有 `sqlite_where` 與 `mssql_where`），並用 ORM 表達式一次回填 `content_tier_preference`；舊版程式在新結構上可運作，所以部署順序仍是「備份 → 遷移 → 部署 → `flask seed-scripts`」；降級會移除新表與新欄位，只在還沒有任何真實資料時使用。
+- SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。
 
@@ -212,12 +300,17 @@ flowchart TD
     Tok["auth_tokens"] -->|"到期後 7 天（purge-expired-data）"| Del5["刪除，不論是否已使用"]
     Aud["admin_audit_logs"] -->|"730 天（purge-expired-data）"| Del6["刪除（唯一的清除途徑在 RetentionRepository）"]
     Strike["lock_strikes"] -->|"7 天（purge-expired-data）"| Del7["刪除（鎖定計次，視窗只有 15 分鐘）"]
+    Save["sessions（RPG 存檔，連同回合與記事簿）"] -->|"最後活動後 365 天（purge-expired-data）"| Del8["刪除，不論進行中或已完結"]
+    Turn["memory_logs 中斷或被擋回合的劇情內容"] -->|"14 天（purge-expired-data）"| Del9["llm_raw_response 清為空字串，回合紀錄保留"]
+    Scr["scripts、script_versions、script_version_tags"] -->|"隨作者的帳號抹除"| Era
     Appeal["lock_appeals（申訴）"] -->|"與帳號同進退，不由期限清除"| Era
 ```
 
-三個排程指令都已實作（`flask purge-inactive-accounts`、`execute-account-deletions`、`purge-expired-data`），設定排程屬 C-5。**抹除一個人只有一個出口**：每個帳號在一個交易內依序「把帳本的對話編號清為空值 → 條件式刪除（當下再確認一次條件）→ 寫刪除紀錄 → 提交」，條件不成立時整個回復。順序不能反過來：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列；帳本的 `conversation_id` 沒有外鍵，不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。管理員在後台刪除違規對話、使用者自己刪除對話與期限清除對話，都是同一個原則：先清帳本的對話編號再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
+三個排程指令都已實作（`flask purge-inactive-accounts`、`execute-account-deletions`、`purge-expired-data`），設定排程屬 C-5。**抹除一個人只有一個出口**：每個帳號在一個交易內依序「把別人的存檔對這位作者的劇本版本的來源參照清為空值 → 把帳本的對話編號清為空值 → 條件式刪除（當下再確認一次條件）→ 寫刪除紀錄 → 提交」，條件不成立時整個回復。順序不能反過來：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列；帳本的 `conversation_id` 沒有外鍵，不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。管理員在後台刪除違規對話、使用者自己刪除對話與期限清除對話，都是同一個原則：先清帳本的對話編號再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
 
-期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。重新抹除（`flask replay-deletions`）只抹除「建立時間不晚於刪除時間」且非管理員的帳號：SQL Server 的 IDENTITY 在還原後從備份時的種子繼續，備份之後註冊再被刪除的編號會被還原後的新使用者沿用，只憑編號刪除會刪到別人；同一個編號有多筆紀錄時只看最晚的刪除時間。紀錄本身沒有外鍵、也不唯一，重新抹除時若該編號已有不早於這次的紀錄就不再寫入。
+劇本、版本、標籤與作者自己的存檔、回合都靠 `CASCADE` 一起消失；別的玩家用該作者的劇本開過的存檔**保留**（有自己的劇本複本），只是來源參照變成空值。「匿名保留已發佈劇本」的偏好與抹除分支屬 RC-8，目前沒有它，漏掉處理時偏向刪除。
+
+期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730；存檔 365、回合的部分內容 14），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。重新抹除（`flask replay-deletions`）只抹除「建立時間不晚於刪除時間」且非管理員的帳號：SQL Server 的 IDENTITY 在還原後從備份時的種子繼續，備份之後註冊再被刪除的編號會被還原後的新使用者沿用，只憑編號刪除會刪到別人；同一個編號有多筆紀錄時只看最晚的刪除時間。紀錄本身沒有外鍵、也不唯一，重新抹除時若該編號已有不早於這次的紀錄就不再寫入。
 
 ---
 

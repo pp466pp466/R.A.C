@@ -97,6 +97,49 @@ def test_a_player_who_already_confirmed_is_never_erased_by_a_later_submission(me
     assert s.get(User, user.id).birth_date == birth_date_for_age(30)
 
 
+# ---- 內容模式偏好依確認當下的年齡設定（content-tier-modes 規格）-----------------------------------------------
+
+@pytest.mark.parametrize(("age", "expected"), [(13, "safe"), (17, "safe"), (18, "standard"), (30, "standard")])
+def test_confirming_the_age_sets_the_content_preference_by_the_age_at_that_moment(member_session, age, expected):
+    s = member_session
+    user = add_user(s, 1, age=None, password=None)
+    assert s.get(User, user.id).content_tier_preference == "safe"          # 確認之前是最保守的預設
+    assert submit(s, user, **age_fields(age)).age_confirmed is True
+    stored = s.get(User, user.id)
+    assert stored.content_tier_preference == expected
+    assert (stored.adult_confirmed_at, stored.adult_rules_version, stored.adult_confirm_method) == (None, None, None)
+
+
+def test_a_player_who_confirmed_at_17_is_still_safe_after_turning_18(member_session):
+    s = member_session
+    clock = FakeClock()
+    user = add_user(s, 1, age=None, password=None)
+    submit(s, user, clock, **age_fields(17, birth_date=(birth_date_for_age(18) + timedelta(days=1)).isoformat()))
+    clock.advance(days=2)                                                   # 生日已過：年齡上限解除，但偏好不自動調高
+    assert s.get(User, user.id).content_tier_preference == "safe"
+
+
+def test_a_failed_confirmation_leaves_no_preference_behind(member_session):
+    s = member_session
+    user = add_user(s, 1, age=None)
+    refusal(s, user, **age_fields(30, age_range="13_17"))                   # 不一致
+    refusal(s, user, **{"birth_date": "2026-02-30", "age_range": "25_34"})   # 格式不合法
+    s.expire_all()
+    stored = s.get(User, user.id)
+    assert stored.birth_date is None and stored.content_tier_preference == "safe"
+    admin = add_user(s, 2, age=None, role="admin")
+    refusal(s, admin, **age_fields(12))                                     # 管理員未滿 13 歲被拒絕
+    assert s.get(User, admin.id).content_tier_preference == "safe"
+
+
+def test_a_repeated_submission_never_changes_the_preference(member_session):
+    s = member_session
+    user = add_user(s, 1, age=30)
+    assert s.get(User, user.id).content_tier_preference == "standard"
+    submit(s, user, **age_fields(15))
+    assert s.get(User, user.id).content_tier_preference == "standard"
+
+
 # ---- 不一致：通用說明並計次 -----------------------------------------------------------------------------
 
 def test_a_mismatch_gets_the_generic_message_keeps_the_account_and_counts_once(member_session):

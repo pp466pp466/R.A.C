@@ -106,6 +106,7 @@ SYNCED_RULES = [
     (7, "到結局時存檔進入「已完結」", "references/business-encoding.md"),
     (7, "Milestone 的觸發由 Service 依玩家年齡或遊戲內年份", "references/business-encoding.md"),
     (7, "存檔開局時複製劇本內容，之後劇本的修改、下架或刪除不影響進行中的存檔", "references/business-encoding.md"),
+    (7, "原始劇本（劇本版本 `script_versions` 的 `milestones_json`）為唯讀", "references/business-encoding.md"),
     (7, "角色年齡為錨定事實，模型與玩家都不能直接寫入；成年角色不得被改成未成年", "references/business-encoding.md"),
     (7, "玩家創作劇本：v1 開放玩家依固定規格創作劇本並可公開分享", "references/business-encoding.md"),
     (7, "公開分享採先審後發", "references/business-encoding.md"),

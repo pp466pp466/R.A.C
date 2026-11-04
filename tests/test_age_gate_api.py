@@ -2,7 +2,7 @@
 
 目前還沒有任何會呼叫 Gemini 的正式端點（客服是 C-3），所以用一個「只在測試應用程式中註冊」的端點代表它，
 寫法與 C-3 的 AI 端點應有的寫法相同：先 `require_login()`，再 `require_chat_access(user)`，之後才做事。
-這個端點也回報 `content_ceiling`，證明內容上限在 HTTP 層同樣由當下的年齡決定。
+這個端點也回報 `content_access`（偏好、年齡上限、生效模式），證明內容模式的上限在 HTTP 層同樣由當下的年齡決定。
 """
 import pytest
 from sqlalchemy import select
@@ -108,7 +108,7 @@ def test_verifying_one_member_does_not_open_the_gate_for_another(app):
 
 
 # =============================================================================
-# 13 至 17 歲可用但固定安全模式；成年者上限為 2
+# 13 至 17 歲可用但固定安全模式；成年者上限為一般模式（成人模式預設關閉）
 # =============================================================================
 
 @pytest.mark.parametrize("age", [13, 15, 17])
@@ -116,18 +116,20 @@ def test_a_teen_can_use_the_endpoint_but_only_in_safe_mode(app, age):
     seed(app, 1, age=age)
     response = signed_in(app, 1).post(ENDPOINT, json={})
     assert response.status_code == 200
-    assert response.get_json()["ceiling"] == {"sexual_content_level": 0, "safe_mode": True}
+    assert response.get_json()["content"] == {"preference": "safe", "age_cap": "safe", "effective": "safe", "reason": "not_adult"}
 
 
 @pytest.mark.parametrize("age", [18, 30, 70])
-def test_an_adult_reaches_level_2_and_never_3(app, age):
+def test_an_adult_reaches_the_standard_mode_and_never_the_adult_mode_by_default(app, age):
     seed(app, 1, age=age)
-    assert signed_in(app, 1).post(ENDPOINT, json={}).get_json()["ceiling"] == {"sexual_content_level": 2, "safe_mode": False}
+    assert signed_in(app, 1).post(ENDPOINT, json={}).get_json()["content"] == {
+        "preference": "standard", "age_cap": "standard", "effective": "standard", "reason": "disabled",
+    }
 
 
 def test_an_admin_who_is_a_teen_is_still_in_safe_mode(app):
     seed(app, 1, age=15, role=ROLE_ADMIN)
-    assert signed_in(app, 1).post(ENDPOINT, json={}).get_json()["ceiling"]["safe_mode"] is True
+    assert signed_in(app, 1).post(ENDPOINT, json={}).get_json()["content"]["effective"] == "safe"
 
 
 def test_a_teen_who_turns_18_is_released_without_logging_in_again():
@@ -140,9 +142,11 @@ def test_a_teen_who_turns_18_is_released_without_logging_in_again():
         tomorrow_18 = birth_date_for_age(18).replace(day=birth_date_for_age(18).day + 1)
         add_user(session, 1, age=17, birth_date=tomorrow_18)
     client = signed_in(application, 1)
-    assert client.post(ENDPOINT, json={}).get_json()["ceiling"]["safe_mode"] is True
+    assert client.post(ENDPOINT, json={}).get_json()["content"]["age_cap"] == "safe"
     clock.advance(days=1)
-    assert client.post(ENDPOINT, json={}).get_json()["ceiling"] == {"sexual_content_level": 2, "safe_mode": False}
+    released = client.post(ENDPOINT, json={}).get_json()["content"]
+    # 年齡上限自動解除，但偏好不會自動調高：確認當時未成年，所以仍是安全模式
+    assert released == {"preference": "safe", "age_cap": "standard", "effective": "safe", "reason": "disabled"}
 
 
 # =============================================================================

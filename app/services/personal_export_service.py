@@ -5,8 +5,12 @@
   讓 Excel 開啟繁體中文不亂碼。儲存格以 `=`、`+`、`-`、`@`、Tab 或歸位字元開頭時，前面加單引號，避免被試算表當成公式執行
   （訊息內容是使用者與模型寫的，不可信任）。
 - 訊息以序號為游標每頁 500 則讀取，寫入 `SpooledTemporaryFile`（超過 8 MB 才落地），所以記憶體用量與訊息總數無關。
-- 範圍：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間，以及**自己送出的申訴**（內容、時間、處理狀態；CSV 為 `appeals.csv`）。**不含**密碼雜湊、`token_version`、驗證權杖、Google 的識別值、
-  內部整數編號、帳號鎖定的計次，以及意圖、實體、信心值、建議動作與對話狀態等模型內部欄位（不是使用者提供的資料，而是系統推論的副產品）。
+- 範圍：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間，**自己送出的申訴**（內容、時間、處理狀態；CSV 為 `appeals.csv`），
+  **自己創作的劇本**（全部版本，含草稿、待審、被退回與已被取代的；CSV 為 `scripts.csv`，每個版本一列）與**自己的存檔**（含記事簿全文與每個回合的
+  玩家行動與劇情原文；CSV 為 `sessions.csv` 與 `turns.csv`；NPC 狀態、目標與里程碑進度等世界狀態只在 JSON）。存檔內的劇本複本不匯出，
+  它是來源劇本作者的內容，存檔只帶該劇本的標題。劇本與存檔也以產生器逐筆、逐頁讀取，記憶體用量與總量無關。
+  **不含**密碼雜湊、`token_version`、驗證權杖、Google 的識別值、內部整數編號、種子鍵、內容雜湊、帳號鎖定的計次，以及意圖、實體、信心值、
+  建議動作、對話狀態與回合的結構化輸出等模型內部欄位（不是使用者提供的資料，而是系統推論的副產品）。
 """
 from __future__ import annotations
 
@@ -23,6 +27,8 @@ from app.models.user import PROVIDER_GOOGLE, User
 from app.observability import lifecycle_events
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
+from app.repositories.script_repository import ScriptRepository
+from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.services.age_policy import taipei_today
@@ -42,6 +48,16 @@ ACCOUNT_COLUMNS = (
 )
 MESSAGE_COLUMNS = ("conversation_id", "conversation_title", "seq", "role", "content", "created_at")
 APPEAL_COLUMNS = ("appeal_id", "content", "created_at", "status")
+SCRIPT_COLUMNS = (
+    "script_id", "version_no", "status", "spec_version", "title", "summary", "world_name", "content_tier", "background", "opening",
+    "rules", "tags", "calendar_name", "calendar_start_year", "ending_mode", "ending_text", "ending_age", "characters", "locations",
+    "milestones", "author_name", "author_code", "created_at", "published_at",
+)
+SESSION_COLUMNS = (
+    "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "current_location", "status_summary",
+    "elapsed_months", "created_at", "last_active_at", "ended_at", "notebook_text",
+)
+TURN_COLUMNS = ("session_id", "script_title", "seq", "turn_number", "status", "user_action", "story", "created_at")
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -70,8 +86,12 @@ class PersonalExportService:
         identities: UserIdentityRepository,
         chats: ChatRepository,
         appeals: LockAppealRepository,
+        scripts: ScriptRepository,
+        sessions: SessionRepository,
         clock: Callable[[], datetime],
     ) -> None:
+        self._scripts = scripts
+        self._sessions = sessions
         self._appeals = appeals
         self._users = users
         self._identities = identities
@@ -150,6 +170,33 @@ class PersonalExportService:
                 return
             after = page[-1].seq
 
+    @staticmethod
+    def _when(moment: datetime | None) -> str | None:
+        return None if moment is None else iso_utc(moment)
+
+    def _script_entry(self, script: dict[str, Any]) -> dict[str, Any]:
+        """一個劇本（含全部版本）的匯出內容：時間轉成 ISO 8601。"""
+        return {
+            "id": script["id"], "author_name": script["author_name"], "author_code": script["author_code"],
+            "author_locked_at": self._when(script["author_locked_at"]), "created_at": self._when(script["created_at"]),
+            "versions": [
+                {**version, "created_at": self._when(version["created_at"]), "published_at": self._when(version["published_at"])}
+                for version in script["versions"]
+            ],
+        }
+
+    def _session_head(self, save: dict[str, Any], *, world_state: bool) -> dict[str, Any]:
+        head = {key: value for key, value in save.items() if key != "world_state"}
+        for key in ("created_at", "last_active_at", "ended_at"):
+            head[key] = self._when(head[key])
+        if world_state:
+            head["world_state"] = save["world_state"]
+        return head
+
+    def _turns(self, user_id: int, session_public_id: str):
+        for turn in self._sessions.export_turns(user_id, session_public_id):
+            yield {**turn, "created_at": self._when(turn["created_at"]), "updated_at": self._when(turn["updated_at"])}
+
     # ---- JSON --------------------------------------------------------------------
 
     def _write_json(self, handle: BinaryIO, user: User, account: dict[str, Any], now: datetime) -> None:
@@ -174,6 +221,17 @@ class PersonalExportService:
                 put(("," if position else "") + dump(message))
             put("]}")
         put(']')
+        put(',"scripts":[')
+        for index, script in enumerate(self._scripts.export_scripts(user.id)):
+            put(("," if index else "") + dump(self._script_entry(script)))
+        put(']')
+        put(',"sessions":[')
+        for index, save in enumerate(self._sessions.export_sessions(user.id)):
+            put(("," if index else "") + dump(self._session_head(save, world_state=True))[:-1] + ',"turns":[')
+            for position, turn in enumerate(self._turns(user.id, save["id"])):
+                put(("," if position else "") + dump(turn))
+            put("]}")
+        put(']')
         put(',"appeals":' + dump(self._appeal_rows(user.id)))
         put('}')
 
@@ -192,6 +250,44 @@ class PersonalExportService:
                     writer.writerow(APPEAL_COLUMNS)
                     for row in self._appeal_rows(user.id):
                         writer.writerow([row["id"], csv_safe(row["content"]), row["created_at"], row["status"]])
+            with archive.open("scripts.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(SCRIPT_COLUMNS)
+                    for script in self._scripts.export_scripts(user.id):
+                        entry = self._script_entry(script)
+                        for version in entry["versions"]:
+                            calendar = version["calendar"] or {}
+                            cells = {
+                                "script_id": entry["id"], "version_no": version["version_no"], "status": version["status"],
+                                "spec_version": version["spec_version"], "title": version["title"], "summary": version["summary"],
+                                "world_name": version["world_name"], "content_tier": version["content_tier"],
+                                "background": version["background"], "opening": version["opening"], "rules": version["rules"],
+                                "tags": "、".join(version["tags"]), "calendar_name": calendar.get("name"),
+                                "calendar_start_year": calendar.get("start_year"), "ending_mode": version["ending_mode"],
+                                "ending_text": version["ending_text"], "ending_age": version["ending_age"],
+                                "characters": json.dumps(version["characters"], ensure_ascii=False),
+                                "locations": json.dumps(version["locations"], ensure_ascii=False),
+                                "milestones": json.dumps(version["milestones"], ensure_ascii=False),
+                                "author_name": entry["author_name"], "author_code": entry["author_code"],
+                                "created_at": version["created_at"], "published_at": version["published_at"],
+                            }
+                            writer.writerow([csv_safe(cells[name]) for name in SCRIPT_COLUMNS])
+            with archive.open("sessions.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(SESSION_COLUMNS)
+                    for save in self._sessions.export_sessions(user.id):
+                        head = self._session_head(save, world_state=False)
+                        writer.writerow([csv_safe({**head, "session_id": head["id"]}[name]) for name in SESSION_COLUMNS])
+            with archive.open("turns.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(TURN_COLUMNS)
+                    for save in self._sessions.export_sessions(user.id):
+                        for turn in self._turns(user.id, save["id"]):
+                            cells = {**turn, "session_id": save["id"], "script_title": save["script_title"]}
+                            writer.writerow([csv_safe(cells[name]) for name in TURN_COLUMNS])
             with archive.open("messages.csv", "w") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
                     writer = csv.writer(text)

@@ -2,7 +2,7 @@
 
 > 注意（2026-11-02）：AGENTS.md 第 10、11 節的年齡確認已修訂——生日與年齡區間改在 Google 首次登入**之後**才填，沒填之前什麼都不能做，帳號最多保留 24 小時；補填時發現未滿 13 歲，立即抹除帳號與個資。下文 R-15.4 與 T-10 對年齡確認的描述（註冊時填寫、未滿 13 歲不得註冊）是修訂前的實作狀態；change ① `google-first-login` 已實作（登入後才填、24 小時期限、補填時未滿 13 歲立即抹除），以現行程式與 `docs/帳號與安全-auth-security.md` 為準。
 
-> 注意（2026-11-03）：AGENTS.md 第 5、7、10、11 節已修訂，與本文件的下列部分不同，**以 AGENTS.md 為準**，這些章節待 RC-1、RC-2 設計時改寫：①RU-1 已決定為 (c) 玩家創作並公開分享劇本（先審後發），新增 RC-7、RC-8（見 6.2）；②內容分級由 `sexual_content_level` 0 至 3 改為 `content_tier` 的 safe／standard／adult 三種模式（成人模式是玩家個人頁面開關；成年確認改為切換時勾選「我確定已滿 18 歲」與安全規範，其餘解鎖條件不變），R-15 與 G-13 的等級描述以此為準；③R-05 的「不存在死亡或結局終止狀態」只適用平台預設與首發劇本，玩家劇本可自訂結局，到結局存檔變「已完結」；④角色年齡是錨定事實，成年角色不得被改成未成年；⑤劇本屬個資，存檔開局時複製劇本內容。決定紀錄見 [report.md](report.md) 的 U-20 至 U-26；訂閱與 token 幣（U-27）尚未探索。
+> 注意（2026-11-03）：AGENTS.md 第 5、7、10、11 節已修訂，與本文件的下列部分不同，**以 AGENTS.md 為準**，這些章節待 RC-1、RC-2 設計時改寫（**第 2 章資料模型已於 2026-11-03 依 RC-1 的實作改寫**）：①RU-1 已決定為 (c) 玩家創作並公開分享劇本（先審後發），新增 RC-7、RC-8（見 6.2）；②內容分級由 `sexual_content_level` 0 至 3 改為 `content_tier` 的 safe／standard／adult 三種模式（成人模式是玩家個人頁面開關；成年確認改為切換時勾選「我確定已滿 18 歲」與安全規範，其餘解鎖條件不變），R-15 與 G-13 的等級描述以此為準；③R-05 的「不存在死亡或結局終止狀態」只適用平台預設與首發劇本，玩家劇本可自訂結局，到結局存檔變「已完結」；④角色年齡是錨定事實，成年角色不得被改成未成年；⑤劇本屬個資，存檔開局時複製劇本內容。決定紀錄見 [report.md](report.md) 的 U-20 至 U-26；訂閱與 token 幣（U-27）尚未探索。
 
 - **文件版本**：v1.2（v1.0 為 Explore 階段產出，與 [report.md](report.md) 配套；v1.1 追加人物個性、內容分級與外部資料的決策，見下方「v1.1 追加」；v1.2 以記事簿取代 RPG 的對話摘要，見下方「v1.2 追加」）
 - **日期**：2026-10-27（v1.1：2026-10-28；v1.2：2026-10-30）
@@ -62,12 +62,12 @@ spec_report 主題三的 `scripts`、`sessions`、`memory_logs` 對照 AGENTS.md
 |---|---|---|---|
 | G-1 | `sessions` 沒有 `version` | 第 6 節：可變的世界狀態須帶版本號 | 新增 `sessions.version`，預設 1 |
 | G-2 | `memory_logs` 沒有前端產生的唯一 ID | 第 6 節：每則訊息有唯一 ID，後端以此去重 | 新增 `memory_logs.client_msg_id`，`(session_id, client_msg_id)` 唯一 |
-| G-3 | 回合序號沒有唯一約束 | 一輪的定義 | `(session_id, turn_number)` 唯一 |
+| G-3 | 回合序號沒有唯一約束 | 一輪的定義 | **已實作為** `(session_id, seq)` 唯一（後端指派的單調遞增序號）；`turn_number` 可為空，只在回合完成時指派，中斷與被擋的回合不計輪（不設資料庫唯一，靠同一存檔同時只處理一則） |
 | G-4 | `memory_summary` 放在每筆 `memory_logs` | 摘要是整個 session 的累積值，每列各存一份是冗餘；**v1.2：RPG 不再使用摘要（R-17）** | **v1.2 改為**：`memory_logs` 的摘要欄位直接移除，**不**新增 `sessions.memory_summary` 與 `summary_upto_turn`；長期記憶改用 G-14 的記事簿欄位 |
 | G-5 | 沒有地方存「LLM 動態延伸的目標」 | 第 7 節：不得寫回原始劇本，應另存於 session 層 | 新增 `sessions.goals_json`（見 R-06） |
 | G-6 | 沒有記錄各 Milestone 的觸發進度 | 原始劇本唯讀，進度只能記在 session | 新增 `sessions.milestone_progress_json` |
 | G-7 | 串流中斷時 `llm_raw_response` 無法為 NOT NULL | spec_report 主題六第 6 點 | 見 R-03，新增 `memory_logs.turn_status` |
-| G-8 | `scripts` 沒有可見性 | 若允許使用者創作劇本，需區分私人與公開 | 新增 `scripts.is_public`（預設 false）；是否開放使用者創作為待決定（R-13） |
+| G-8 | `scripts` 沒有可見性 | 若允許使用者創作劇本，需區分私人與公開 | **已被取代**：RU-1 決定為 (c) 玩家創作並公開分享（先審後發），可見性改由 `script_versions.status`（只有 `published` 的版本公開）與送審流程表達，不再有 `is_public`（RC-1 已建立資料，審核流程屬 RC-8） |
 | G-9 | 沒有地方存 NPC 的特質與弧線階段（v1.1） | R-14：特質與階段必須每回合進世界狀態，不能只靠記事簿（可能已滿、也可被玩家編輯） | **不新增欄位**，放入既有的 `sessions.entities_json` 內的 NPC 卡結構（見 R-14.3），變更時帶 `sessions.version` |
 | G-10 | 沒有「玩家層」的個性覆蓋（v1.1） | R-14：個性是唯一跨存檔重複使用的內容，玩家修正後只存差異 | 新增 `user_persona_overrides`：`(user_id, trait_key)` 唯一、`overrides_json`、`version`。**只用於個性**，其餘內容一律留在存檔層 |
 | G-11 | 沒有全站性格原型庫（v1.1） | R-14：「AI 的存檔」，玩家唯讀 | 新增獨立資料表 `persona_prototypes`：`trait_key` 唯一（純文字標準化欄位）、特質定義、`status`、`version`。**不含任何使用者外鍵**。不用假使用者擁有 `sessions` 的作法 |
@@ -81,49 +81,78 @@ spec_report 主題三的 `scripts`、`sessions`、`memory_logs` 對照 AGENTS.md
 erDiagram
     USERS ||--o{ SCRIPTS : "創作"
     USERS ||--o{ SESSIONS : "遊玩"
-    SCRIPTS ||--o{ SESSIONS : "被使用"
+    SCRIPTS ||--o{ SCRIPT_VERSIONS : "版本（CASCADE）"
+    SCRIPT_VERSIONS ||--o{ SCRIPT_VERSION_TAGS : "標籤（CASCADE）"
+    SCRIPT_VERSIONS |o..o{ SESSIONS : "來源參照（無動作）"
     SESSIONS ||--o{ MEMORY_LOGS : "包含"
     USERS ||--o{ USER_PERSONA_OVERRIDES : "個性修正（v1.1）"
     USERS ||--o{ PERSONA_DRAFTS : "草案來源，核可前（v1.1）"
 
     SCRIPTS {
         int id PK
-        int creator_id FK
+        string public_id UK
+        int creator_id FK "CASCADE 可為空 內建劇本沒有作者"
+        string seed_key "內建劇本的穩定鍵 非空時唯一"
+        string author_name "筆名快照 第一次發佈時鎖定"
+        string author_code
+        datetime author_locked_at
+    }
+    SCRIPT_VERSIONS {
+        int id PK
+        int script_id FK "CASCADE"
+        int version_no "同一劇本內從 1 連續遞增"
+        string status "draft pending_review published rejected superseded"
         string title
-        string world_view
-        string background_and_system
+        string summary
+        string world_name
+        string content_tier "作者宣告 safe standard adult"
+        string background
+        string opening
+        string rules "狀態轉移規則"
+        string ending_mode "none 或 custom"
+        string calendar_name
+        int calendar_start_year
         json characters_json
         json locations_json
-        json milestones_json "唯讀"
-        string state_transition_rules
-        boolean is_public "新增"
+        json milestones_json "原始劇本 唯讀"
+        int live_script_id "published 時等於 script_id 部分唯一"
+        int open_script_id "draft 或 pending_review 時等於 script_id 部分唯一"
+    }
+    SCRIPT_VERSION_TAGS {
+        int id PK
+        int version_id FK "CASCADE"
+        string tag "與版本唯一"
     }
     SESSIONS {
         int id PK
-        int user_id FK
-        int script_id FK
+        int user_id FK "CASCADE"
+        int source_version_id FK "無動作 可為空 刪除前由流程清為空值"
+        json script_snapshot_json "開存檔當時的完整劇本內容 之後不再讀取劇本"
         string player_name
-        int player_age
+        int character_age "劇中角色的年齡"
         string current_location
         string status_summary
         json entities_json
-        json goals_json "新增"
-        json milestone_progress_json "新增"
-        string notebook_text "新增（v1.2），記事簿，UnicodeText"
-        int notebook_version "新增（v1.2），編輯衝突偵測"
-        int notebook_upto_turn "新增（v1.2），已處理到的 boundary"
-        int version "新增"
-        string content_tier "新增（v1.1），safe／standard／adult（2026-11-03）"
-        boolean is_archived
+        json goals_json
+        json milestone_progress_json
+        string notebook_text "記事簿 UnicodeText"
+        int notebook_version "編輯衝突偵測"
+        int notebook_upto_turn "已處理到的 boundary"
+        int version "世界狀態的版本號"
+        string content_tier "開存檔當下的生效模式 safe standard adult"
+        string status "active 或 ended 已完結不可恢復"
+        boolean is_archived "玩家自行封存 與完結無關"
+        datetime last_active_at "期限清除的依據"
     }
     MEMORY_LOGS {
         int id PK
-        int session_id FK
-        string client_msg_id "新增"
-        int turn_number
+        int session_id FK "CASCADE"
+        string client_msg_id "與存檔唯一"
+        int seq "與存檔唯一 單調遞增"
+        int turn_number "只有 complete 的回合才有 可為空"
         string user_action
         string llm_raw_response
-        string turn_status "新增"
+        string turn_status "streaming complete interrupted blocked"
         json structured_result
     }
     PERSONA_PROTOTYPES {
@@ -149,7 +178,9 @@ erDiagram
     }
 ```
 
-`sessions.script_id` 在 RPG 模組內維持原定義，**不受客服影響**（客服不使用 `sessions`，見 report.md D-05）。
+**實作狀態（2026-11-03，RC-1 `rpg-data-and-script`）**：上圖的 `SCRIPTS`、`SCRIPT_VERSIONS`、`SCRIPT_VERSION_TAGS`、`SESSIONS`、`MEMORY_LOGS` 已實作（遷移 `0012`），圖與表以 `app/models/` 與 [資料模型-data-model.md](資料模型-data-model.md) 為準。與 2.1 節原先建議的差異（以實作為準）：①**劇本拆成 `scripts` 與 `script_versions`**，內容與狀態在版本上，已發佈的版本不可變、修改一律新增版本（取代原本 `scripts.is_public` 的可見性旗標，改由版本狀態與先審後發表達）；②存檔以 `source_version_id`（無動作的外鍵）取代 `script_id`，並複製完整內容到 `script_snapshot_json`；③回合的唯一約束是 `(session_id, seq)` 與 `(session_id, client_msg_id)`，`turn_number` 可為空、只在回合完成時指派（不設資料庫唯一）；④`sessions.content_tier` 是三種模式之一，預設 `safe`；⑤`sessions.character_age` 是劇中角色的年齡，與使用者年齡無關；⑥記事簿欄位只建立並給預設值，行為屬 RC-2。`PERSONA_*` 三張表仍屬 RC-5，未實作。
+
+客服不使用 `sessions`（見 report.md D-05），**不受影響**。
 
 `PERSONA_PROTOTYPES` 刻意**不與 `USERS` 連線**：核可上架的原型由管理員改寫去識別，不留可回溯到個人的外鍵，帳號刪除時才不會殘留個人內容（見 R-14.5）。NPC 的特質與弧線階段存在 `sessions.entities_json` 內，不另建資料表（G-9）。
 
@@ -307,7 +338,7 @@ NPC 好感度與狀態效果屬結構化資料，但劇情是自由文字串流�
 
 ### 4.3 R-06　Milestones 與動態目標　**[建議]**
 
-AGENTS.md 第 7 節：`scripts.milestones_json` 為**唯讀**；LLM 延伸的目標不得寫回原始劇本，應另存於 session 層，完成後歸檔。
+AGENTS.md 第 7 節：劇本版本（`script_versions`）的 `milestones_json` 為**唯讀**；LLM 延伸的目標不得寫回原始劇本，應另存於 session 層，完成後歸檔。
 
 - 動態目標存於 `sessions.goals_json`（JSON，結構為 `active` 與 `archived` 兩個清單），**與 AGENTS.md 第 4 節「高動態資料用 JSON 欄位」一致**；變更時帶 `sessions.version`。不另建資料表。
 - 各 Milestone 是否已觸發，記錄於 `sessions.milestone_progress_json`，不修改劇本。

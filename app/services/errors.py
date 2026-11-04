@@ -81,6 +81,27 @@ class AgeRestricted(Forbidden):
     default_message = "您的年齡目前不符合使用這項功能的規定。"
 
 
+class ContentModeRestricted(Forbidden):
+    """依年齡規定，這位使用者不能使用要求的內容模式（403）：未滿成年門檻者只能使用安全模式。訊息不帶年齡數字。"""
+
+    code = "content_mode_restricted"
+    default_message = "依年齡規定，您目前只能使用安全模式。"
+
+
+class ContentTierRestricted(Forbidden):
+    """劇本宣告的內容模式高於玩家目前生效的模式（403）：不開出存檔。"""
+
+    code = "content_tier_restricted"
+    default_message = "這個劇本的內容模式高於您目前的設定，無法開始。"
+
+
+class AdultModeUnavailable(Forbidden):
+    """成人模式在這個部署沒有開放（403）：部署層的開關為關閉。"""
+
+    code = "adult_mode_unavailable"
+    default_message = "目前未開放成人模式。"
+
+
 class NotFound(ServiceError):
     """資源不存在，或呼叫者無權得知它存在（404）。非擁有者與不存在必須得到完全相同的回應。"""
 
@@ -93,6 +114,13 @@ class Conflict(ServiceError):
 
     code = "conflict"
     default_message = "目前無法處理，請稍後再試。"
+
+
+class SessionEnded(Conflict):
+    """存檔已完結（409）：歷史仍可閱讀，但不得再送出新的回合；可以用同一個劇本開新的存檔。"""
+
+    code = "session_ended"
+    default_message = "這個存檔已經完結，無法再送出新的回合。您可以用同一個劇本開新的存檔。"
 
 
 class ConversationBusy(Conflict):

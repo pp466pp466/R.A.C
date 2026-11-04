@@ -1,4 +1,7 @@
-"""access-control 規格：權限判斷集中在政策物件；非擁有者一律 404；角色與會員等級的語意；年齡閘門與內容上限。"""
+"""access-control 規格：權限判斷集中在政策物件；非擁有者一律 404；角色與會員等級的語意；年齡閘門與內容模式的年齡上限。
+
+成人模式的部署開關、成年確認與生效模式的完整組合見 `test_content_tier_modes.py`。
+"""
 import ast
 from datetime import date
 
@@ -9,7 +12,7 @@ from app.models.user import (
     MEMBER_TIERS, ROLE_ADMIN, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
     USER_STATUSES,
 )
-from app.services.access_policy import AccessPolicy, ContentCeiling
+from app.services.access_policy import AccessPolicy
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.current_user import CurrentUser
 from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound
@@ -148,9 +151,11 @@ def test_raising_the_minimum_age_to_18_in_the_policy_blocks_teens_and_nobody_els
 def test_turning_18_lifts_the_limit_without_any_stored_flag_changing():
     """年齡由生日於當下計算：同一個人，時鐘前進過生日後內容上限自動改變。"""
     teen = member(age=None, birth_date=date(2008, 10, 28))           # 明天才滿 18 歲
-    assert POLICY.content_ceiling(teen) == ContentCeiling(0, safe_mode=True)
+    assert POLICY.content_access(teen).age_cap == "safe"
     tomorrow = AccessPolicy(clock=lambda: TODAY_UTC.replace(day=28))
-    assert tomorrow.content_ceiling(teen) == ContentCeiling(2, safe_mode=False)
+    assert tomorrow.content_access(teen).age_cap == "standard"
+    # 上限自動解除，但儲存的偏好不會跟著改變：玩家須自行切換
+    assert tomorrow.content_access(teen).preference == "safe" and tomorrow.content_access(teen).effective == "safe"
 
 
 @pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
@@ -183,33 +188,43 @@ def test_a_member_who_passes_leaves_no_log_line(log_lines):
     assert [line for line in log_lines() if line.get("event") == "auth.age_gate_denied"] == []
 
 
-# ---- 內容上限 -----------------------------------------------------------------
+# ---- 內容模式的年齡上限 --------------------------------------------------------
 
 @pytest.mark.parametrize("age", [13, 14, 15, 16, 17])
-def test_a_minor_is_always_in_safe_mode_level_0(age):
-    assert POLICY.content_ceiling(member(age=age)) == ContentCeiling(sexual_content_level=0, safe_mode=True)
+@pytest.mark.parametrize("preference", ["safe", "standard", "adult"])
+def test_a_minor_is_always_in_safe_mode_whatever_the_stored_preference(age, preference):
+    access = POLICY.content_access(member(age=age, content_tier_preference=preference))
+    assert (access.age_cap, access.effective, access.is_adult, access.reason) == ("safe", "safe", False, "not_adult")
+    assert access.selectable == ("safe",) and access.adult_selectable is False
 
 
 @pytest.mark.parametrize("age", [18, 19, 30, 65, 100])
-def test_an_adult_may_reach_level_2_but_never_3(age):
-    ceiling = POLICY.content_ceiling(member(age=age))
-    assert ceiling == ContentCeiling(sexual_content_level=2, safe_mode=False) and ceiling.sexual_content_level != 3
+def test_an_adult_is_capped_at_the_standard_mode_when_the_adult_mode_is_not_available(age):
+    access = POLICY.content_access(member(age=age, content_tier_preference="adult"))
+    assert (access.age_cap, access.effective, access.is_adult, access.reason) == ("standard", "standard", True, "disabled")
+    assert access.selectable == ("safe", "standard")
 
 
 def test_a_member_without_an_age_check_is_treated_conservatively():
-    assert POLICY.content_ceiling(member(age=None)) == ContentCeiling(0, safe_mode=True)
+    access = POLICY.content_access(member(age=None, content_tier_preference="standard"))
+    assert (access.age_cap, access.effective, access.reason) == ("safe", "safe", "not_adult")
 
 
 @pytest.mark.parametrize("role", [ROLE_USER, ROLE_ADMIN])
 @pytest.mark.parametrize("tier", MEMBER_TIERS)
-def test_neither_role_nor_tier_changes_the_content_ceiling(role, tier):
-    assert POLICY.content_ceiling(member(age=15, role=role, member_tier=tier)).safe_mode is True
-    assert POLICY.content_ceiling(member(age=40, role=role, member_tier=tier)).sexual_content_level == 2
+def test_neither_role_nor_tier_changes_the_content_access(role, tier):
+    assert POLICY.content_access(member(age=15, role=role, member_tier=tier, content_tier_preference="adult")).effective == "safe"
+    assert POLICY.content_access(member(age=40, role=role, member_tier=tier, content_tier_preference="standard")).effective == "standard"
 
 
-def test_the_ceiling_follows_the_adult_age_in_the_policy_not_a_number_in_the_code():
+def test_the_cap_follows_the_adult_age_in_the_policy_not_a_number_in_the_code():
     older = policy_for(age_policy=AgePolicy(adult_age=21))
-    assert older.content_ceiling(member(age=20)).safe_mode is True and older.content_ceiling(member(age=21)).safe_mode is False
+    assert older.content_access(member(age=20)).age_cap == "safe" and older.content_access(member(age=21)).age_cap == "standard"
+
+
+def test_an_unrecognised_stored_preference_is_treated_as_safe():
+    assert POLICY.content_access(member(age=30, content_tier_preference="mature")).effective == "safe"
+    assert POLICY.content_access(member(age=30, content_tier_preference="")).preference == "safe"
 
 
 def test_the_policy_source_has_no_age_numbers_of_its_own():

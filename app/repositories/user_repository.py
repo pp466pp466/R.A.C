@@ -14,8 +14,11 @@ from sqlalchemy import and_, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.models.llm_call_log import LlmCallLog
+from app.models.rpg_session import RpgSession
+from app.models.script import Script, ScriptVersion
 from app.models.user import (
-    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, User,
+    CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIERS, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
+    STATUS_DELETION_PENDING, User,
 )
 from app.repositories.base import BaseRepository
 from app.repositories.errors import DuplicateUserError
@@ -124,7 +127,11 @@ class UserRepository(BaseRepository[User]):
 
         條件式 UPDATE（`birth_date IS NULL`；「完成」只看生日是否存在，勾選版時代只有 `age_confirmed_at` 的帳號
         視為尚未完成）：並行的兩次補填只有一次會寫入，第一次寫入的內容不會被覆蓋，所以「已完成的帳號再次提交」
-        不會改變原本的紀錄。五個欄位在同一個 UPDATE 寫入，不會出現只寫一半的狀態。
+        不會改變原本的紀錄。年齡欄位與內容模式偏好在同一個 UPDATE 寫入，不會出現只寫一半的狀態。
+
+        **內容模式偏好依確認當下的年齡設定**：已成年為 `standard`（一般模式，成年玩家的預設），未成年為 `safe`；
+        之後滿 18 歲不會自動調高，玩家須自行切換（content-tier-modes 規格）。失敗（不一致、未滿 13 歲）的流程
+        在呼叫這裡之前就結束，不會留下任何偏好。
         """
         changed = self._run_update(
             user,
@@ -138,7 +145,38 @@ class UserRepository(BaseRepository[User]):
                 age_confirmed_at=confirmed_at,
                 age_policy_version=policy_version,
                 age_deadline_at=None,                    # 完成了，不再有逾時清除的期限
+                content_tier_preference=CONTENT_TIER_STANDARD if is_adult else CONTENT_TIER_SAFE,
             ),
+        )
+        return changed == 1
+
+    # ---- 內容模式（content-tier-modes 規格）-----------------------------------------------
+
+    def set_content_preference(self, user: User, tier: str) -> bool:
+        """設定內容模式偏好。條件式 UPDATE：只有已完成年齡確認（有生日）的帳號才寫入，回傳是否真的寫入。
+
+        `tier` 必須是三種模式之一，否則拋出 `ValueError`（程式錯誤，不是使用者輸入錯誤；使用者輸入由
+        `ContentModeService` 先驗證）。這裡不判斷「這個人可不可以用這個模式」，那是 `AccessPolicy` 與 Service 的責任。
+        """
+        if tier not in CONTENT_TIERS:
+            raise ValueError("內容模式必須是 safe、standard、adult 之一。")
+        changed = self._run_update(
+            user,
+            update(User).where(User.id == user.id).where(User.birth_date.is_not(None)).values(content_tier_preference=tier),
+        )
+        return changed == 1
+
+    def record_adult_confirmation(self, user: User, *, confirmed_at: datetime, rules_version: str, method: str) -> bool:
+        """記錄成人模式的成年確認（時間、安全規範的版本、方式）。條件同 `set_content_preference`。
+
+        只保存「目前這一次」確認：規範版本改變後重新確認時覆寫，歷史不另存。離開成人模式不呼叫這裡，所以不會清除紀錄。
+        """
+        changed = self._run_update(
+            user,
+            update(User)
+            .where(User.id == user.id)
+            .where(User.birth_date.is_not(None))
+            .values(adult_confirmed_at=confirmed_at, adult_rules_version=rules_version, adult_confirm_method=method),
         )
         return changed == 1
 
@@ -301,6 +339,21 @@ class UserRepository(BaseRepository[User]):
             update(LlmCallLog)
             .where(LlmCallLog.user_id == user_id, LlmCallLog.conversation_id.is_not(None))
             .values(conversation_id=None)
+            .execution_options(synchronize_session=False)
+        )
+        return result.rowcount
+
+    def clear_script_version_refs(self, user_id: int) -> int:
+        """把「參照這位使用者創作的劇本版本」的存檔（任何玩家的）的來源參照清為空值（單一 UPDATE），回傳受影響的筆數。
+
+        `sessions.source_version_id` 是無動作的外鍵（SQL Server 不允許多重串聯路徑，錯誤 1785），不先清掉的話，
+        別的玩家用這位作者的劇本開過的存檔會擋住刪除。存檔本身保留，它有自己的劇本複本。必須在刪除使用者**之前**做：
+        使用者一刪，作者的劇本與版本也串聯消失，就找不到要清的列。
+        """
+        self._session.flush()
+        authored = select(ScriptVersion.id).join(Script, Script.id == ScriptVersion.script_id).where(Script.creator_id == user_id)
+        result = self._session.execute(
+            update(RpgSession).where(RpgSession.source_version_id.in_(authored)).values(source_version_id=None)
             .execution_options(synchronize_session=False)
         )
         return result.rowcount

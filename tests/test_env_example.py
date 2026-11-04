@@ -41,6 +41,14 @@ def test_does_not_list_the_retired_email_verification_variable():
     assert "EMAIL_VERIFICATION_REQUIRED" not in parse_assignments()
 
 
+def test_lists_the_adult_mode_variables_and_no_longer_the_old_level_3_ones():
+    """內容分級改為三種模式：`ADULT_MODE_*` 取代 `SEXUAL_CONTENT_LEVEL3_*`（content-tier-modes 規格「已淘汰的環境變數」）。"""
+    names = parse_assignments()
+    assert {"ADULT_MODE_ENABLED", "ADULT_MODE_MODELS"} <= set(names)
+    assert not {"SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS"} & set(names)
+    assert names["ADULT_MODE_ENABLED"] == "" and names["ADULT_MODE_MODELS"] == ""          # 預設不開啟，範例不帶任何值
+
+
 def test_every_variable_the_config_reads_is_listed():
     """app/config.py 讀取的每個環境變數名稱，都必須出現在 .env.example（避免新增設定卻忘了列出）。"""
     source = (PROJECT_ROOT / "app" / "config.py").read_text(encoding="utf-8-sig")

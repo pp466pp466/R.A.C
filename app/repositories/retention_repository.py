@@ -22,6 +22,7 @@ from app.models.admin_audit_log import AdminAuditLog
 from app.models.chat import ChatConversation
 from app.models.llm_call_log import LlmCallLog
 from app.models.lock_strike import LockStrike
+from app.models.rpg_session import TURN_BLOCKED, TURN_INTERRUPTED, MemoryLog, RpgSession
 from app.models.user import AuthToken
 
 
@@ -70,6 +71,37 @@ class RetentionRepository:
         self._session.flush()
         self._run(update(LlmCallLog).where(LlmCallLog.conversation_id.in_(ids)).values(conversation_id=None))
         return self._run(delete(ChatConversation).where(ChatConversation.id.in_(ids)))
+
+    # ---- RPG 存檔：最後活動早於 cutoff（沒有任何回合的存檔，最後活動就是建立時間）-------------------------
+
+    def find_sessions(self, cutoff: datetime, limit: int) -> list[int]:
+        return self._ids(select(RpgSession.id).where(RpgSession.last_active_at < cutoff).order_by(RpgSession.id), limit)
+
+    def count_sessions(self, cutoff: datetime) -> int:
+        return self._count(select(func.count(RpgSession.id)).where(RpgSession.last_active_at < cutoff))
+
+    def purge_sessions(self, ids: Sequence[int]) -> int:
+        """刪除存檔；回合靠資料庫的 `ON DELETE CASCADE` 一併移除，記事簿與世界狀態是存檔自己的欄位，一起消失。"""
+        if not ids:
+            return 0
+        return self._run(delete(RpgSession).where(RpgSession.id.in_(ids)))
+
+    # ---- 中斷或被擋回合的部分內容：最後更新早於 cutoff，清為空字串，回合紀錄保留（冪等與統計不受影響）-------------------
+
+    @staticmethod
+    def _stale_turn_content(cutoff: datetime):
+        return (MemoryLog.turn_status.in_((TURN_INTERRUPTED, TURN_BLOCKED)), MemoryLog.llm_raw_response != "", MemoryLog.updated_at < cutoff)
+
+    def find_turn_content(self, cutoff: datetime, limit: int) -> list[int]:
+        return self._ids(select(MemoryLog.id).where(*self._stale_turn_content(cutoff)).order_by(MemoryLog.id), limit)
+
+    def count_turn_content(self, cutoff: datetime) -> int:
+        return self._count(select(func.count(MemoryLog.id)).where(*self._stale_turn_content(cutoff)))
+
+    def purge_turn_content(self, ids: Sequence[int]) -> int:
+        if not ids:
+            return 0
+        return self._run(update(MemoryLog).where(MemoryLog.id.in_(ids)).values(llm_raw_response=""))
 
     # ---- 用量帳本：建立早於 cutoff --------------------------------------------------------
 

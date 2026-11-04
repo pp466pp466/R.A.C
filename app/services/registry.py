@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable, Mapping
 
 from sqlalchemy.orm import Session
@@ -24,13 +25,15 @@ from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.lock_strike_repository import LockStrikeRepository
 from app.repositories.alert_state_repository import AlertStateRepository
 from app.repositories.retention_repository import RetentionRepository
+from app.repositories.script_repository import ScriptRepository
+from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.runtime import (
     current_request_id, get_age_policy, get_clock, get_config, get_identity_provider, get_llm_provider, get_mail_sender,
     get_rpg_llm_provider, get_session_factory,
 )
-from app.services.access_policy import LEVEL3_SEXUAL_CONTENT_LEVEL, MAX_ADULT_SEXUAL_CONTENT_LEVEL, AccessPolicy
+from app.services.access_policy import AccessPolicy
 from app.services.admin_service import AdminService
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.account_deletion_executor import AccountDeletionExecutor
@@ -44,6 +47,7 @@ from app.services.appeal_service import AppealService
 from app.services.data_retention_service import DataRetentionService
 from app.services.personal_export_service import PersonalExportService
 from app.services.age_stats_service import AgeStatsService
+from app.services.content_mode_service import ContentModeService
 from app.services.auth_service import AccountMailer, AuthService
 from app.services.chat_service import PROCESSING_STALE_AFTER, ChatService
 from app.services.cs_prompt import leak_marker
@@ -53,6 +57,8 @@ from app.services.health_service import HealthService
 from app.services.llm_service import LlmService
 from app.services.mail_sender import MailSender
 from app.services.password_hasher import PasswordHasherService, parameters_for_env
+from app.services.script_seed_service import SEED_DIRECTORY, ScriptSeedService
+from app.services.session_service import SessionService
 from app.services.summary_service import SummaryService
 from app.services.usage_service import UsageService
 
@@ -135,8 +141,8 @@ def get_access_policy() -> AccessPolicy:
     return AccessPolicy(
         age_policy=get_age_policy(),
         clock=get_clock(),
-        # 等級 3 只能以環境設定開啟（預設關閉）；啟動時已驗證過條件（見 app/config.py）
-        adult_ceiling=LEVEL3_SEXUAL_CONTENT_LEVEL if config.content.level3_enabled else MAX_ADULT_SEXUAL_CONTENT_LEVEL,
+        # 成人模式的部署開關只能以環境設定開啟（預設關閉）；啟動時已驗證過條件（見 app/config.py）
+        adult_mode_enabled=config.content.adult_mode_enabled,
     )
 
 
@@ -309,12 +315,25 @@ def get_account_deletion_service() -> AccountDeletionService:
     )
 
 
+def get_content_mode_service() -> ContentModeService:
+    """目前請求的內容模式服務：只讀寫呼叫者本人的偏好與成年確認紀錄。"""
+    return ContentModeService(users=UserRepository(get_session()), policy=get_access_policy(), clock=get_clock())
+
+
+def get_session_service() -> SessionService:
+    """目前請求的存檔服務：開存檔與開始回合（兩者都只處理呼叫者本人的資料）。"""
+    session = get_session()
+    return SessionService(
+        scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy(), clock=get_clock(),
+    )
+
+
 def get_personal_export_service() -> PersonalExportService:
     """目前請求的匯出服務：只讀取呼叫者本人的帳號與對話（Repository 的方法都以 `user_id` 為第一個參數）。"""
     session = get_session()
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
-        appeals=LockAppealRepository(session), clock=get_clock(),
+        appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session), clock=get_clock(),
     )
 
 
@@ -358,6 +377,16 @@ def build_account_retention_service(session: Session, *, clock: Callable[[], dat
     return AccountRetentionService(
         users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), clock=clock,
         commit=session.commit, rollback=session.rollback,
+    )
+
+
+def build_script_seed_service(
+    session: Session, *, clock: Callable[[], datetime], directory: Path | None = None, forbidden_markers: tuple[str, ...] = (),
+) -> ScriptSeedService:
+    """命令列用：內建劇本全部驗證通過才在單一交易內寫入（全有或全無），失敗時整批回復。"""
+    return ScriptSeedService(
+        scripts=ScriptRepository(session), clock=clock, commit=session.commit, rollback=session.rollback,
+        directory=directory if directory is not None else SEED_DIRECTORY, forbidden_markers=forbidden_markers,
     )
 
 

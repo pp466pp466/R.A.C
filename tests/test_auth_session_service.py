@@ -232,7 +232,7 @@ def test_the_stored_adult_flag_is_only_a_record_and_decides_nothing(member_sessi
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     assert service.profile(current)["age_group"] == "minor"
-    assert AccessPolicy(clock=lambda: TODAY_UTC).content_ceiling(current).safe_mode is True
+    assert AccessPolicy(clock=lambda: TODAY_UTC).content_access(current).age_cap == "safe"
 
 
 # ---- 變更密碼 -----------------------------------------------------------------

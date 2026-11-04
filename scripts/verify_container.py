@@ -442,6 +442,8 @@ def verify_member_flow(image: str) -> None:
         check("[會員流程] 在容器內執行 alembic upgrade head 成功，升級到生日與年齡區間的 0004",
               code == 0 and "0003_users_age_confirmation" in out and "0004_users_birthdate" in out, out.strip()[-200:].replace("\n", " "))
 
+        check("[會員流程] 遷移一路升級到 0012（內容模式與 RPG 資料表）", "0012_rpg_data_and_script" in out, out.strip()[-120:].replace("\n", " "))
+
         # 容器內沒有會呼叫 Gemini 的端點可以直接驗年齡閘門；管理員指令刻意不代為填寫年齡，所以用它建立一個「尚未完成」的帳號
         code, out = docker("exec", "-i", name, "python", "-m", "flask", "--app", "wsgi", "create-admin",
                            "--email", ADMIN_EMAIL, "--display-name", "container-admin", "--password-stdin",
@@ -483,10 +485,30 @@ def verify_member_flow(image: str) -> None:
               not stray_dates and not any(day in logs for day in birthdays), ", ".join(stray_dates)[:160])
 
         verify_retention_commands(name)
+        verify_seed_command(name)
         code, out = docker("exec", name, "sh", "-c", "test ! -e /app/.env && test ! -e /app/tests && echo clean")
         check("[會員流程] 映像內仍然沒有 .env 與測試", code == 0 and out.strip() == "clean", out.strip()[:120])
     finally:
         docker("rm", "-f", name)
+
+
+def verify_seed_command(name: str) -> None:
+    """內建劇本的種子（builtin-script-seed 規格）：資料檔隨映像封裝（`app/data/scripts` 沒有被 .dockerignore 排除），
+    `flask seed-scripts` 在容器內可執行、冪等，輸出只有種子鍵與筆數。資料庫已由前面的 alembic 升級到 head。"""
+    flask = ("exec", name, "python", "-m", "flask", "--app", "wsgi")
+    code, preview = docker(*flask, "seed-scripts", "--dry-run", timeout=120)
+    match = re.search(r"共 (\d+) 份", preview)
+    total = int(match.group(1)) if match else 0
+    check("[內建劇本] seed-scripts --dry-run 在映像內成功執行，找到至少一份資料檔（資料檔已隨映像封裝）",
+          code == 0 and total > 0 and "預覽" in preview, preview.strip()[-160:].replace("\n", " | "))
+    code, listing = docker("exec", name, "sh", "-c", "ls /app/app/data/scripts")
+    check("[內建劇本] 映像內有首發劇本的資料檔", code == 0 and "xianxia-qingyun.json" in listing, listing.strip()[:120])
+    code, applied = docker(*flask, "seed-scripts", timeout=120)
+    check("[內建劇本] 實際執行建立內建劇本，輸出只有種子鍵與筆數、不含劇本文字",
+          code == 0 and f"建立 {total}" in applied and "xianxia-qingyun：建立" in applied
+          and not any(text in applied for text in ("青雲問道", "靈氣", "花小蝶")), applied.strip()[-160:].replace("\n", " | "))
+    code, again = docker(*flask, "seed-scripts", timeout=120)
+    check("[內建劇本] 重複執行沒有任何變動", code == 0 and f"建立 0、更新 0、沒有變動 {total}" in again, again.strip()[-160:].replace("\n", " | "))
 
 
 # 在容器內放入一個 400 天沒登入的帳號（程式碼必須是 ASCII）

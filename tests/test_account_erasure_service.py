@@ -132,6 +132,9 @@ def test_an_exception_rolls_back_and_propagates_without_committing():
     calls: list[str] = []
 
     class Users:
+        def clear_script_version_refs(self, user_id):
+            calls.append("script-refs")
+
         def clear_ledger_conversation_refs(self, user_id):
             calls.append("clear")
 
@@ -147,13 +150,16 @@ def test_an_exception_rolls_back_and_propagates_without_committing():
     )
     with pytest.raises(RuntimeError):
         service.erase(1, delete=boom, reason=REASON_USER_REQUESTED, now=START)
-    assert calls == ["clear", "rollback"]
+    assert calls == ["script-refs", "clear", "rollback"]
 
 
 def test_the_event_is_emitted_only_after_the_commit_and_carries_the_id_only():
     order: list[str] = []
 
     class Users:
+        def clear_script_version_refs(self, user_id):
+            order.append("script-refs")
+
         def clear_ledger_conversation_refs(self, user_id):
             order.append("clear")
 
@@ -163,7 +169,7 @@ def test_the_event_is_emitted_only_after_the_commit_and_carries_the_id_only():
 
     service = AccountErasureService(users=Users(), tombstones=Tombstones(), commit=lambda: order.append("commit"))
     assert service.erase(9, delete=lambda uid: True, reason=REASON_USER_REQUESTED, now=START, on_erased=lambda uid: order.append(f"event:{uid}"))
-    assert order == ["clear", "record", "commit", "event:9"]
+    assert order == ["script-refs", "clear", "record", "commit", "event:9"]
 
 
 def test_inactive_erasure_logs_the_existing_event_and_no_personal_data(member_session, log_lines):

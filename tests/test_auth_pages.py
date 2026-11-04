@@ -274,6 +274,36 @@ def test_a_minor_sees_the_safe_mode_notice_block_driven_by_the_age_group(full_ap
     assert "{{ ageRules.adultAge }}" in html                                           # 數字來自年齡規則
 
 
+@pytest.mark.parametrize("age", [13, 15, 17])
+def test_a_teen_gets_the_safe_mode_notice_with_the_reason_and_the_state_says_minor(full_app, age):
+    page = logged_in(full_app, age=age).get("/account")
+    html = page.get_data(as_text=True)
+    assert state_of(page)["user"]["age_group"] == "minor"
+    assert "目前為安全模式" in html and "年齡限制" in html and "不會自動改變" in html          # 原因，以及滿 18 歲後模式不自動調高
+
+
+@pytest.mark.parametrize("age", [18, 30, 70])
+def test_an_adult_does_not_get_the_safe_mode_notice_because_the_state_is_not_minor(full_app, age):
+    page = logged_in(full_app, age=age).get("/account")
+    assert state_of(page)["user"]["age_group"] != "minor"          # 區塊是 v-if="ageGroup === 'minor'"，成年者不會顯示
+
+
+def test_the_notice_follows_the_birthday_not_the_stored_content_preference(full_app):
+    """依生日於當下計算：儲存的偏好是什麼都不影響（偏好與生日矛盾的資料也一樣）。"""
+    teen_with_adult_preference = logged_in(full_app, age=15, content_tier_preference="adult").get("/account")
+    assert state_of(teen_with_adult_preference)["user"]["age_group"] == "minor"
+    with Session(full_app.extensions["db_engine"]) as s:
+        add_user(s, 2, age=30, content_tier_preference="safe")
+    adult_who_chose_safe = full_app.test_client()
+    login(adult_who_chose_safe, "user2@example.com")
+    assert state_of(adult_who_chose_safe.get("/account"))["user"]["age_group"] != "minor"
+
+
+def test_the_account_state_does_not_expose_the_content_preference_or_the_adult_confirmation(full_app):
+    user = state_of(logged_in(full_app, age=30, content_tier_preference="adult").get("/account"))["user"]
+    assert not {"content_tier_preference", "adult_confirmed_at", "adult_rules_version", "adult_confirm_method"} & set(user)
+
+
 def test_verifying_the_age_on_the_account_page_flow_updates_the_state(full_app):
     client = logged_in_admin_without_age(full_app)
     body = {"birth_date": birth_date_for_age(15).isoformat(), "age_range": "13_17"}

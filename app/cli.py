@@ -1,6 +1,6 @@
 """`flask` 自訂指令（見 AGENTS.md 第 10、11 節：維運工作以指令實作，不用行程內計時器）。
 
-八個指令：
+十個指令：
 - `llm-probe`：開發用，不屬於維運。呼叫 RPG 敘事用途的模型端點一次，印出回覆、模型、延遲、token 與結束原因，
   讓人在 RPG 實作之前先評估端點好不好用（含結構化輸出的穩定度）。只能在 development 與 testing 執行；**不寫帳本與任何資料表**，
   不顯示金鑰，也不印供應商的錯誤本文。
@@ -15,10 +15,14 @@
   對話延遲 p95、帳號鎖定激增），狀態變化時寄電子郵件給 `ALERT_EMAIL_TO`（進入、升級、每 6 小時提醒、恢復各一封）；
   `--dry-run` 與沒有設定收件人時只評估並顯示結果，不寄信也不改變狀態。輸出只有告警名稱、狀態與數值；寄信失敗或某項評估失敗時以非零代碼結束。
 - `purge-expired-data`：由平台排程器觸發，清除超過保存期限的資料（對話與訊息 12 個月、用量帳本 12 個月、失敗的模型原文 14 天、
-  驗證權杖到期後 7 天、管理稽核 24 個月、帳號鎖定計次 7 天）；`--dry-run` 只列出各類筆數。輸出只有各類的筆數，不含任何內容；有任一類失敗時以非零代碼結束。
+  驗證權杖到期後 7 天、管理稽核 24 個月、帳號鎖定計次 7 天、中斷或被擋回合的部分內容 14 天、RPG 存檔最後活動後 12 個月）；`--dry-run` 只列出各類筆數。輸出只有各類的筆數，不含任何內容；有任一類失敗時以非零代碼結束。
 - `execute-account-deletions`：由平台排程器觸發，刪除「申請刪除、寬限期（7 天）已滿」的帳號（與閒置清除共用同一個抹除出口）；
   `--dry-run` 只列出筆數。輸出只有筆數，不含任何個資。
 - `age-stats`：各年齡區間的人數（供定期察看用戶群），只有計數，沒有任何個別使用者的資料。
+- `seed-scripts`：**部署時**由人工或部署流程執行（不排程、不在應用程式啟動時執行；部署順序是備份、遷移、部署、種子），
+  讀取隨映像封裝的內建劇本資料檔（`app/data/scripts/*.json`），全部驗證通過才在單一交易內寫入（全有或全無），以種子鍵與內容雜湊
+  冪等地建立、更新（新增版本並取代舊版）或略過；`--dry-run` 只列出結果。輸出只有種子鍵與筆數，不含劇本內容；
+  資料不合規時以非零代碼結束並指出檔名與欄位路徑，沒有寫入任何資料。
 - `replay-deletions`：**備份還原後、對外開放流量之前**手動執行（不得排程），依 `deletion_tombstones`（以及由日誌取出的
   `使用者編號,刪除時間` 檔案，`--ids-file`）重新抹除復活的帳號；只抹除建立時間不晚於刪除時間且不是管理員的帳號，
   `--dry-run` 只列筆數。檔案先整體驗證，格式錯誤時在抹除任何帳號之前失敗，只指出行號；輸出只有筆數，不含檔案路徑與內容。
@@ -39,9 +43,11 @@ from app.services.alert_messages import ALERT_NAMES, SEVERITY_LABELS, format_thr
 from app.services.llm_output import parse_llm_json
 from app.services.registry import (
     build_account_deletion_executor, build_account_retention_service, build_age_stats_service, build_auth_service,
-    build_alert_service, build_data_retention_service, build_deletion_replay_service,
+    build_alert_service, build_data_retention_service, build_deletion_replay_service, build_script_seed_service,
 )
+from app.services.cs_prompt import leak_marker
 from app.services.deletion_replay_service import ReplayFileError, parse_replay_file
+from app.services.script_seed_service import SEED_CREATED, SEED_UNCHANGED, SEED_UPDATED, SeedDataError
 
 # ---- 指令分類（見 deployment-plan 規格「排程指令的頻率與失敗處理」）----
 # 由平台排程器觸發的指令與頻率（cron，時區 Asia/Taipei）。部署計畫（scripts/launch_plan.py）從這裡產生排程，
@@ -55,7 +61,7 @@ SCHEDULED_COMMANDS: dict[str, str] = {
     "purge-expired-data": "40 3 * * *",
 }
 # 人工操作的指令：開發用、一次性或還原時才執行，不得排程。
-MANUAL_COMMANDS: tuple[str, ...] = ("llm-probe", "create-admin", "age-stats", "replay-deletions")
+MANUAL_COMMANDS: tuple[str, ...] = ("llm-probe", "create-admin", "age-stats", "replay-deletions", "seed-scripts")
 
 # ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
 PROBE_SYSTEM = "你是一位說書人。請一律使用繁體中文（台灣用語）回答，內容保持輕鬆無害。"
@@ -77,6 +83,8 @@ RETENTION_LABELS = {
     "auth_tokens": "驗證權杖",
     "admin_audit": "管理稽核紀錄",
     "lock_strikes": "帳號鎖定計次",
+    "turn_content": "中斷或被擋回合的部分內容",
+    "sessions": "RPG 存檔與回合",
 }
 
 
@@ -298,6 +306,23 @@ def register_cli(app: Flask) -> None:
         click.echo(f"  略過（編號已被還原後的新使用者重新使用）：{report.reissued} 個")
         click.echo(f"  略過（管理員）：{report.admin} 個")
         click.echo(f"  已經不存在：{report.absent} 個")
+
+    @app.cli.command("seed-scripts")
+    @click.option("--dry-run", is_flag=True, help="只列出將建立、更新或沒有變動的內建劇本，不改變任何資料。")
+    def seed_scripts(dry_run: bool) -> None:
+        """建立或更新內建（首發）劇本。**部署後執行**（備份、遷移、部署、種子）；可重複執行，內容沒變就不會有任何變動。"""
+        factory = current_app.extensions["db_session_factory"]
+        marker = leak_marker(get_config().secret_key.reveal())
+        with factory() as session:
+            try:
+                report = build_script_seed_service(session, clock=get_clock(), forbidden_markers=(marker,)).run(dry_run=dry_run)
+            except SeedDataError as error:
+                raise click.ClickException("內建劇本資料不合規，沒有寫入任何資料：\n" + "\n".join(f"  {problem}" for problem in error.problems)) from None
+        label = {SEED_CREATED: "建立", SEED_UPDATED: "更新（新增版本）", SEED_UNCHANGED: "沒有變動"}
+        click.echo("預覽（未改變任何資料）：" if dry_run else "內建劇本：")
+        click.echo(f"  建立 {report.created}、更新 {report.updated}、沒有變動 {report.unchanged}（共 {len(report.results)} 份）")
+        for result in report.results:
+            click.echo(f"  {result.seed_key}：{label[result.action]}")
 
     @app.cli.command("age-stats")
     def age_stats() -> None:

@@ -4,6 +4,8 @@
 新增資料表時由 `tests/architecture/test_account_erasure_coverage.py` 要求登記，不必每個功能各做一套刪除。
 
 每個帳號在**一個交易**內依序做：
+0. 把別人的存檔對這位使用者創作的劇本版本的來源參照清為空值（`sessions.source_version_id` 是無動作的外鍵，
+   SQL Server 不允許多重串聯路徑；不先清掉會擋住刪除）。存檔本身保留，它有自己的劇本複本。
 1. 把用量帳本中該使用者的對話編號清為空值。帳本的 `conversation_id` 沒有外鍵（SQL Server 錯誤 1785），不先清掉的話，
    SQLite 重用整數編號時會錯指別人的新對話。必須在刪除使用者**之前**：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列。
 2. 條件式刪除使用者（條件在刪除當下再確認一次）。對話、訊息、第三方身分、驗證權杖靠資料庫的 `ON DELETE CASCADE`，
@@ -11,8 +13,8 @@
 3. 寫一筆只含內部編號、時間與原因的刪除紀錄。
 4. 提交。
 
-第 2 步沒有刪到任何列（使用者剛好登入、或剛撤銷刪除）時**回復整個交易**，把第 1 步也復原：使用者還活著，
-不能讓他的帳本失去對話連結。事件在提交之後才記錄，且只含內部編號，沒有任何個資。
+第 2 步沒有刪到任何列（使用者剛好登入、或剛撤銷刪除）時**回復整個交易**，把第 0、1 步也復原：使用者還活著，
+不能讓他的帳本失去對話連結、他的劇本也不能被別人的存檔「遺忘」。事件在提交之後才記錄，且只含內部編號，沒有任何個資。
 """
 from __future__ import annotations
 
@@ -56,6 +58,7 @@ class AccountErasureService:
         `write_tombstone=False` 只用於備份還原後的重新抹除：該編號已有不早於這次的刪除紀錄，不必再寫一筆（見 deletion-replay 規格）。
         """
         try:
+            self._users.clear_script_version_refs(user_id)
             self._users.clear_ledger_conversation_refs(user_id)
             if not delete(user_id):
                 self._rollback()

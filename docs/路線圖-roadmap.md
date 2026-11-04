@@ -25,7 +25,7 @@ flowchart LR
     C5C["C-5c cloud-staging-run<br/>雲端預備環境、平台告警與還原演練、雲端壓測"]:::plan
     C5D["C-5d production-launch<br/>production 資源與對外開放"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
-    RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料"]:::plan
+    RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料、固定規格、三種內容模式、內建劇本（已實作，待封存）"]:::active
     RC2["RC-2 rpg-turn-engine<br/>回合引擎、SSE、世界狀態"]:::plan
     RC3["RC-3 rpg-game-ui<br/>/game 頁面"]:::plan
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
@@ -33,7 +33,7 @@ flowchart LR
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
     RC7["RC-7 rpg-script-authoring<br/>玩家創作劇本、固定規格、硬性檢查"]:::plan
     RC8["RC-8 rpg-script-publishing<br/>先審後發、目錄、上下架、檢舉"]:::plan
-    CT["content-tier-modes<br/>程式改為安全、一般、成人三種模式"]:::plan
+    CT["content-tier-modes<br/>三種內容模式（併入 RC-1，已實作，待封存）"]:::active
     WL["W1 token-wallet<br/>代幣帳本與簽到（金流、訂閱另行探索）"]:::plan
 
     C1 --> C2 --> AG --> AB --> C3
@@ -75,8 +75,8 @@ flowchart LR
 | production-launch（C-5d） | 規劃中 | — | production 資源與對外開放真實會員；需要使用者決定：自有網域與信件的 SPF／DKIM／DMARC、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter）、入口層 IP 限流是否補做、成年驗證方式（成人模式；已決定為切換時勾選確認，待法務確認，見 report.md 的 U-28）；上線前要重新確認供應商條款與年齡規則。**「只留 Google 登入」尚未立案**（見專案記憶：管理員的密碼重新驗證有衝突） |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |
 | RPG 規範修訂（劇本創作與分級） | **已完成**（2026-11-03；不是 OpenSpec change，尚未提交） | 2026-11-03 | AGENTS.md 第 5、7、10、11 節、技能鏡像、同步測試與 report.md 的決定紀錄（U-20 至 U-26）：玩家創作並公開分享劇本（先審後發）、自動檢查四類紅線、內容分級改為安全／一般／成人三種模式、暱稱與筆名、自訂結局與已完結存檔、劇本的個資與刪帳號保留偏好。**不含程式碼** |
-| content-tier-modes | 規劃中 | — | `AccessPolicy` 的內容上限與年齡閘門 API 的 `ceiling` 由 `sexual_content_level` 0 至 3 改為 `content_tier` 三種模式；`SEXUAL_CONTENT_LEVEL3_*` 設定與 age-confirmation、launch-gates 規格同步；也可併入 RC-1 |
-| rpg-script-authoring（RC-7） | 規劃中 | — | 玩家創作劇本的 API 與表單、固定規格驗證、額度與送審次數、硬性檢查、暱稱的初次設定頁；依賴 RC-1 |
+| rpg-data-and-script（RC-1，含 content-tier-modes） | **已實作，待封存**（2026-11-03；第 1 組 commit `74f7a35`，其餘待提交） | 2026-11-03 | 劇本與存檔的資料基礎：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）與遷移 `0012`、固定規格 v1 驗證器、`ScriptRepository` 與 `SessionRepository`（狀態與唯一性由資料庫保證、擁有者隔離、回合冪等與不計中斷輪數）、`AccessPolicy` 的三種內容模式（取代 `sexual_content_level` 0 至 3）、`GET`／`PUT /api/account/content-mode`、`ADULT_MODE_ENABLED`／`ADULT_MODE_MODELS`（舊變數淘汰）、內建首發劇本與 `flask seed-scripts`、抹除（別人的存檔保留）、匯出與保存期限。**沒有任何玩家看得到的介面**。封存時須移除 age-confirmation 與 launch-gates 兩份主規格頁首提到「content-tier-modes」的提示 |
+| rpg-script-authoring（RC-7） | 規劃中（RC-1 已實作，可開始規劃） | — | 玩家創作劇本的 API 與表單、固定規格驗證、額度與送審次數、硬性檢查、暱稱的初次設定頁；依賴 RC-1 |
 | rpg-script-publishing（RC-8） | 規劃中 | — | 先審後發的管理員審核佇列、上下架、公開目錄、檢舉、署名、刪帳號的保留偏好；依賴 RC-7 |
 | 錢包與訂閱（W1 至 W3） | 探索中（方向已定，**尚未寫入規範**） | — | W1 token-wallet（只有免費幣，RC-2 的扣款依賴它）、W2 payments-and-subscriptions（金流、法務、未成年付款）、W3 model-catalog-and-pricing；見 report.md U-27 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |

@@ -1,4 +1,4 @@
-"""data-retention 規格：六類資料的期限清除（邊界、帳號刪除紀錄不納入、近期紀錄與額度不受影響、一類失敗不阻止其餘、分批、重跑、事件）。
+"""data-retention 規格：八類資料的期限清除（邊界、帳號刪除紀錄不納入、近期紀錄與額度不受影響、一類失敗不阻止其餘、分批、重跑、事件）。
 
 以 `member_session` 同時在 SQLite 與真實 SQL Server 上執行。
 """
@@ -8,19 +8,22 @@ import pytest
 from sqlalchemy import func, select
 
 from app.models import (
-    AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, LockAppeal, LockStrike, User,
+    AdminAuditLog, AuthToken, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, LockAppeal, LockStrike, MemoryLog,
+    RpgSession, User,
 )
 from app.models.user import TOKEN_RESET_PASSWORD
 from app.repositories.retention_repository import RetentionRepository
 from app.services.data_retention_service import (
     ADMIN_AUDIT_RETENTION, AUTH_TOKEN_RETENTION, CONVERSATION_RETENTION, ERROR_DETAIL_RETENTION, LEDGER_RETENTION,
-    LOCK_STRIKE_RETENTION, DataRetentionService,
+    LOCK_STRIKE_RETENTION, SESSION_RETENTION, TURN_CONTENT_RETENTION, DataRetentionService,
 )
 from tests.support.auth import START, FakeClock, add_user
 
 SECOND = timedelta(seconds=1)
-CATEGORIES = ["conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes"]
-EVERY_ONE = {"conversations": 1, "ledger": 1, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1, "lock_strikes": 1}
+CATEGORIES = ["conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes", "turn_content", "sessions"]
+EVERY_ONE = {
+    "conversations": 1, "ledger": 1, "error_detail": 1, "auth_tokens": 1, "admin_audit": 1, "lock_strikes": 1, "turn_content": 1, "sessions": 1,
+}
 
 
 def make_service(session, **kwargs) -> DataRetentionService:
@@ -85,6 +88,24 @@ def seed_every_category(session) -> dict[str, tuple]:
         session.flush()
         strikes.append(row.id)
     out["lock_strikes"] = tuple(strikes)
+    # RPG 存檔：一個剛好過期（連同它的回合）、一個差一秒；回合的部分內容放在「未過期的存檔」裡，才不會隨存檔一起被刪
+    expired_save = RpgSession(user_id=user, script_snapshot_json={}, player_name="旅人", character_age=18, last_active_at=START - SESSION_RETENTION - SECOND)
+    kept_save = RpgSession(user_id=user, script_snapshot_json={}, player_name="旅人", character_age=18, last_active_at=START - SESSION_RETENTION + SECOND)
+    session.add_all([expired_save, kept_save])
+    session.flush()
+    session.add(MemoryLog(session_id=expired_save.id, client_msg_id="e-1", seq=1, turn_status="complete", turn_number=1, llm_raw_response="隨存檔刪除的劇情"))
+    stale_turn = MemoryLog(
+        session_id=kept_save.id, client_msg_id="s-1", seq=1, turn_status="interrupted", llm_raw_response="過期片段",
+        created_at=START - TURN_CONTENT_RETENTION - SECOND, updated_at=START - TURN_CONTENT_RETENTION - SECOND,
+    )
+    fresh_turn = MemoryLog(
+        session_id=kept_save.id, client_msg_id="s-2", seq=2, turn_status="interrupted", llm_raw_response="未過期片段",
+        created_at=START - TURN_CONTENT_RETENTION + SECOND, updated_at=START - TURN_CONTENT_RETENTION + SECOND,
+    )
+    session.add_all([stale_turn, fresh_turn])
+    session.flush()
+    out["sessions"] = (expired_save.id, kept_save.id)
+    out["turn_content"] = (stale_turn.id, fresh_turn.id)
     session.commit()
     return out
 
@@ -95,6 +116,7 @@ def test_the_periods_are_the_documented_ones():
     assert CONVERSATION_RETENTION == LEDGER_RETENTION == timedelta(days=365)
     assert ERROR_DETAIL_RETENTION == timedelta(days=14) and AUTH_TOKEN_RETENTION == timedelta(days=7)
     assert ADMIN_AUDIT_RETENTION == timedelta(days=730) and LOCK_STRIKE_RETENTION == timedelta(days=7)
+    assert SESSION_RETENTION == timedelta(days=365) and TURN_CONTENT_RETENTION == timedelta(days=14)
 
 
 def test_each_category_removes_only_what_is_past_its_own_period(member_session):
@@ -114,6 +136,10 @@ def test_each_category_removes_only_what_is_past_its_own_period(member_session):
     assert set(s.scalars(select(AuthToken.id))) == {ids["auth_tokens"][1]}
     assert set(s.scalars(select(AdminAuditLog.id))) == {ids["admin_audit"][1]}
     assert set(s.scalars(select(LockStrike.id))) == {ids["lock_strikes"][1]}        # 8 天前的計次清除，6 天前的保留
+    assert set(s.scalars(select(RpgSession.id))) == {ids["sessions"][1]}
+    turns = {t.id: t for t in s.scalars(select(MemoryLog))}                          # 過期存檔的回合隨存檔消失；其餘回合紀錄都保留
+    assert set(turns) == set(ids["turn_content"]) and turns[ids["turn_content"][0]].llm_raw_response == ""
+    assert turns[ids["turn_content"][1]].llm_raw_response == "未過期片段" and turns[ids["turn_content"][0]].turn_status == "interrupted"
 
 
 def test_running_it_twice_leaves_nothing_for_the_second_run(member_session):
@@ -127,13 +153,14 @@ def test_running_it_twice_leaves_nothing_for_the_second_run(member_session):
 def test_the_dry_run_counts_every_category_and_changes_nothing(member_session, log_lines):
     s = member_session
     seed_every_category(s)
-    models = (ChatConversation, LlmCallLog, AuthToken, AdminAuditLog, LockStrike)
+    models = (ChatConversation, LlmCallLog, AuthToken, AdminAuditLog, LockStrike, RpgSession, MemoryLog)
     before = [s.scalar(select(func.count(model.id))) for model in models]
     report = make_service(s).run(dry_run=True)
     s.expire_all()
     after = [s.scalar(select(func.count(model.id))) for model in models]
     assert report.dry_run and counts(report) == EVERY_ONE
     assert before == after and s.scalar(select(LlmCallLog.error_detail).where(LlmCallLog.error_detail == "過期原文")) == "過期原文"
+    assert s.scalar(select(func.count(MemoryLog.id)).where(MemoryLog.llm_raw_response == "過期片段")) == 1
     assert [line for line in log_lines() if line.get("event", "").startswith("retention.")] == []
 
 
@@ -234,8 +261,11 @@ def test_events_carry_only_the_category_and_the_count(member_session, log_lines)
     seed_every_category(s)
     make_service(s).run()
     purged = [(line["reason"], line["count"]) for line in log_lines() if line.get("event") == "retention.purged"]
-    assert purged == [("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1)]
-    for secret in ("機密訊息", "過期原文", "user1@example.com", "使用者1"):
+    assert purged == [
+        ("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1),
+        ("turn_content", 1), ("sessions", 1),
+    ]
+    for secret in ("機密訊息", "過期原文", "user1@example.com", "使用者1", "過期片段", "隨存檔刪除的劇情"):
         assert secret not in log_lines.raw()
 
 

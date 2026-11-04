@@ -149,6 +149,7 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "RateLimited": 429, "DailyQuotaExceeded": 429, "ConversationLimitReached": 409, "ChatSuspended": 403, "SystemBusy": 503,
         "AdminTargetForbidden": 403, "AccountDeletionPending": 403, "AccountLocked": 403, "UnderageAccountErased": 400,
         "AppealPending": 409, "AppealRateLimited": 429,
+        "ContentModeRestricted": 403, "AdultModeUnavailable": 403, "ContentTierRestricted": 403, "SessionEnded": 409,
     }
     made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
     assert made == expected

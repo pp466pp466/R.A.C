@@ -96,7 +96,7 @@ def test_running_it_twice_processes_nothing_the_second_time(app, runner):
     runner.invoke(args=["purge-expired-data"])
     second = runner.invoke(args=["purge-expired-data"])
     assert second.exit_code == 0
-    for label in ("對話與訊息", "用量帳本", "失敗的模型原文", "驗證權杖", "管理稽核紀錄", "帳號鎖定計次"):
+    for label in ("對話與訊息", "用量帳本", "失敗的模型原文", "驗證權杖", "管理稽核紀錄", "帳號鎖定計次", "中斷或被擋回合的部分內容", "RPG 存檔與回合"):
         assert f"{label}：0 筆" in second.output
 
 
@@ -108,7 +108,10 @@ def test_the_output_and_the_logs_carry_only_counts(app, runner, log_lines):
     for secret in ("secret-body", "機密的對話全文", "gone.person@example.com", "使用者1"):
         assert secret not in everything, secret
     purged = [(line["reason"], line["count"]) for line in log_lines() if line.get("event") == "retention.purged"]
-    assert purged == [("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1)]
+    assert purged == [
+        ("conversations", 1), ("error_detail", 1), ("ledger", 1), ("auth_tokens", 1), ("admin_audit", 1), ("lock_strikes", 1),
+        ("turn_content", 0), ("sessions", 0),                 # 這個測試沒有放 RPG 資料
+    ]
 
 
 def test_a_failing_category_is_reported_by_name_with_a_nonzero_exit_code_and_the_others_still_run(app, runner, monkeypatch):

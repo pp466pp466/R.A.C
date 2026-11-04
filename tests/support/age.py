@@ -9,6 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
+from app.models.user import CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, range_for_age
 
 TODAY = date(2026, 10, 27)
@@ -30,7 +31,10 @@ def age_fields(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: 
 
 
 def age_columns(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: date = TODAY, confirmed_at: datetime = TODAY_UTC) -> dict[str, Any]:
-    """直接寫入 `users` 的年齡欄位值（不經過 Service），代表「已完成年齡確認」的帳號。"""
+    """直接寫入 `users` 的年齡欄位值（不經過 Service），代表「已完成年齡確認」的帳號。
+
+    內容模式偏好與正式流程一致：確認當下已成年為 `standard`，未成年為 `safe`（之後滿 18 歲不會自動調高）。
+    """
     chosen = range_for_age(age, policy)
     assert chosen is not None
     return {
@@ -39,4 +43,5 @@ def age_columns(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today:
         "is_adult_at_confirmation": age >= policy.adult_age,
         "age_confirmed_at": confirmed_at,
         "age_policy_version": policy.version,
+        "content_tier_preference": CONTENT_TIER_STANDARD if age >= policy.adult_age else CONTENT_TIER_SAFE,
     }

@@ -87,6 +87,18 @@ def test_the_erasure_service_clears_every_unlinked_conversation_reference():
     assert {"llm_call_logs.conversation_id"} == {item for item in UNLINKED_REFERENCES if item.endswith(".conversation_id")}
 
 
+def test_the_erasure_service_clears_every_no_action_reference_before_deleting_the_user():
+    """無動作的外鍵（`sessions.source_version_id`）不會被資料庫串聯處理，必須由抹除流程在刪除使用者之前明確清空，
+    否則別人的存檔會擋住刪除（rpg-data-and-script）。"""
+    import inspect
+
+    from app.services.account_erasure_service import AccountErasureService
+
+    source = inspect.getsource(AccountErasureService.erase)
+    assert source.index("clear_script_version_refs") < source.index("delete(user_id)")
+    assert {"sessions.source_version_id"} == set(NO_ACTION_REFERENCES), "新增無動作的外鍵時，抹除流程要有對應的清空方法並更新這個測試"
+
+
 # ---- 自我驗證：用暫時的 metadata 證明分類真的偵測得到 ----------------------------------------
 
 def _metadata(*child_columns) -> MetaData:

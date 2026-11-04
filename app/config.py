@@ -170,10 +170,10 @@ class OpenAICompatibleSettings:
 
 @dataclass(frozen=True)
 class ContentSettings:
-    """內容分級的環境設定（AGENTS.md 第 7 節）。等級 3 預設關閉，只能以環境設定開啟。"""
+    """內容模式的環境設定（AGENTS.md 第 7 節）。成人模式的部署開關預設關閉，只能以環境設定開啟。"""
 
-    level3_enabled: bool = False
-    level3_models: tuple[str, ...] = ()     # 取得書面許可所涵蓋的模型識別碼；開啟時 RPG 用途的模型必須都在裡面
+    adult_mode_enabled: bool = False
+    adult_models: tuple[str, ...] = ()      # 取得書面許可所涵蓋的模型識別碼；開啟時 RPG 用途的模型必須都在裡面
 
 
 @dataclass(frozen=True)
@@ -311,15 +311,21 @@ def _get(values: Mapping[str, str], name: str) -> str:
 
 
 OBSOLETE_EMAIL_VERIFICATION_VARIABLE = "EMAIL_VERIFICATION_REQUIRED"
+# 內容分級由 sexual_content_level 0 至 3 改為三種模式後，等級 3 的兩個變數被 `ADULT_MODE_*` 取代
+OBSOLETE_LEVEL3_VARIABLES = ("SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS")
+OBSOLETE_VARIABLES = (OBSOLETE_EMAIL_VERIFICATION_VARIABLE, *OBSOLETE_LEVEL3_VARIABLES)
 
 
 def _warn_obsolete_variables(values: Mapping[str, str]) -> None:
-    """玩家只用 Google 登入，沒有信箱驗證，所以 `EMAIL_VERIFICATION_REQUIRED` 已不再讀取。
+    """已淘汰、不再讀取的變數：`EMAIL_VERIFICATION_REQUIRED`（玩家只用 Google 登入，沒有信箱驗證）與
+    `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`（被 `ADULT_MODE_*` 取代）。
 
-    平台設定裡殘留它不該讓部署失敗（含 production），只提醒移除；警告只含變數名稱，不回顯值。
+    平台設定裡殘留它們不該讓部署失敗（含 production），只提醒移除；警告只含變數名稱，不回顯值。
+    **忽略舊的等級 3 變數 = 成人模式維持關閉**：失敗時偏向保守，舊變數不會讓任何東西開啟。
     """
-    if _get(values, OBSOLETE_EMAIL_VERIFICATION_VARIABLE):
-        logger.warning("%s 已淘汰且不再生效，請自環境設定移除。", OBSOLETE_EMAIL_VERIFICATION_VARIABLE)
+    for name in OBSOLETE_VARIABLES:
+        if _get(values, name):
+            logger.warning("%s 已淘汰且不再生效，請自環境設定移除。", name)
 
 
 def _resolve_base_url(env: str, values: Mapping[str, str]) -> str | None:
@@ -596,33 +602,31 @@ def _resolve_rpg_llm(env: str, values: Mapping[str, str], base: LlmSettings) -> 
     )
 
 
-def _resolve_content(env: str, values: Mapping[str, str], rpg: OpenAICompatibleSettings | None) -> ContentSettings:
-    """內容分級的環境設定。等級 3 預設關閉；開啟必須同時滿足（AGENTS.md 第 7 節）：
-    - 不得在 staging 或 production（強化的成年驗證完成之前不得對一般會員開啟）；
-    - RPG 用途已設定，且 `SEXUAL_CONTENT_LEVEL3_MODELS`（許可涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型。
+def _resolve_content(values: Mapping[str, str], rpg: OpenAICompatibleSettings | None) -> ContentSettings:
+    """內容模式的環境設定。成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉，不得在程式中寫死為開啟；
+    開啟必須同時滿足（AGENTS.md 第 7 節）：
+    - RPG 用途已設定，且 `ADULT_MODE_MODELS`（書面許可涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型。
+    開關本身只是部署層的條件之一：玩家仍須已滿 18 歲並完成成年確認才能使用（由 `AccessPolicy` 判斷）。
+    各環境開啟的規則相同：staging 與 production 沒有明確設定就是關閉。
     清單只在開關開啟時才驗證與生效：關閉時不影響任何行為。錯誤訊息只含變數名稱。"""
-    enabled = _bool_setting(values, "SEXUAL_CONTENT_LEVEL3_ENABLED")
-    models = tuple(part.strip() for part in _get(values, "SEXUAL_CONTENT_LEVEL3_MODELS").split(",") if part.strip())
+    enabled = _bool_setting(values, "ADULT_MODE_ENABLED")
+    models = tuple(part.strip() for part in _get(values, "ADULT_MODE_MODELS").split(",") if part.strip())
     if not enabled:
-        return ContentSettings(level3_enabled=False, level3_models=models)
-    if env in PRODUCTION_LIKE_ENVS:
-        raise ConfigError(
-            f"{env} 環境不得開啟 SEXUAL_CONTENT_LEVEL3_ENABLED：強化的成年驗證尚未完成，不得對一般會員開啟。"
-        )
+        return ContentSettings(adult_mode_enabled=False, adult_models=models)
     if rpg is None:
-        raise ConfigError("SEXUAL_CONTENT_LEVEL3_ENABLED 已開啟，但 RPG 用途尚未設定（OPENROUTER_API_KEY 與 OPENROUTER_MODEL）。")
+        raise ConfigError("ADULT_MODE_ENABLED 已開啟，但 RPG 用途尚未設定（OPENROUTER_API_KEY 與 OPENROUTER_MODEL）。")
     if not models:
-        raise ConfigError("SEXUAL_CONTENT_LEVEL3_ENABLED 已開啟，但 SEXUAL_CONTENT_LEVEL3_MODELS 沒有設定（須列出許可涵蓋的模型）。")
+        raise ConfigError("ADULT_MODE_ENABLED 已開啟，但 ADULT_MODE_MODELS 沒有設定（須列出許可涵蓋的模型）。")
     if any(not _OPENAI_MODEL_NAME.fullmatch(name) for name in models):
-        raise ConfigError("SEXUAL_CONTENT_LEVEL3_MODELS 含有不合法的模型名稱。")
+        raise ConfigError("ADULT_MODE_MODELS 含有不合法的模型名稱。")
     uncovered = [
         variable
         for variable, name in (("OPENROUTER_MODEL", rpg.llm.primary_model), ("OPENROUTER_FALLBACK_MODEL", rpg.llm.fallback_model))
         if name not in models
     ]
     if uncovered:
-        raise ConfigError("SEXUAL_CONTENT_LEVEL3_MODELS 沒有涵蓋 RPG 用途使用的模型：" + "、".join(dict.fromkeys(uncovered)) + "。")
-    return ContentSettings(level3_enabled=True, level3_models=models)
+        raise ConfigError("ADULT_MODE_MODELS 沒有涵蓋 RPG 用途使用的模型：" + "、".join(dict.fromkeys(uncovered)) + "。")
+    return ContentSettings(adult_mode_enabled=True, adult_models=models)
 
 
 def _positive_int(values: Mapping[str, str], name: str, default: int, maximum: int) -> int:
@@ -722,7 +726,7 @@ def load_config(
 
     llm = _resolve_llm(env, values)
     rpg_llm = _resolve_rpg_llm(env, values, llm)
-    content = _resolve_content(env, values, rpg_llm)
+    content = _resolve_content(values, rpg_llm)
     tunnel_trusts_proxy = _resolve_trust_proxy_headers(env, values)
 
     return AppConfig(

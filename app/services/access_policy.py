@@ -6,9 +6,11 @@
 - 會員等級（free、plus、vip）只影響額度，**不參與任何權限判斷**——這個類別刻意不讀 `member_tier`；
 - 會呼叫 Gemini 的功能一律先問 `require_chat_access`：帳號可用（狀態為 active）、已完成年齡確認、且年齡不低於最低使用年齡
   （管理員與各等級都不豁免）；
-- 內容上限由 `content_ceiling` 依「當下」的年齡決定：未滿成年門檻（或尚未完成年齡確認）一律是安全模式；成年者最高到 2，
-  只有組裝時以環境設定開啟等級 3（`SEXUAL_CONTENT_LEVEL3_ENABLED`，預設關閉，見 AGENTS.md 第 7 節）才是 3。
-  年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，這裡不內嵌任何年齡數字；開關不影響未成年者。
+- 內容模式（`content_access`、`effective_tier`，見 AGENTS.md 第 7 節與 content-tier-modes 規格）依「當下」的年齡決定上限：
+  未滿成年門檻（或尚未完成年齡確認）一律是安全模式，不論任何設定都不得提高；成年者最高到一般模式，只有成人模式「啟用中」
+  （部署開關開啟，且玩家已在目前的安全規範版本下完成成年確認）才到成人模式。實際生效的模式是玩家偏好、年齡上限、劇本宣告與
+  存檔記錄中最保守的一個。年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，這裡不內嵌任何年齡數字；
+  管理員與各會員等級都不豁免。
 管理員存取他人資料必須走專用的 Repository 方法並寫入稽核紀錄（`AdminService`，見 admin-console 規格），不是用這裡繞過擁有者檢查；
 `require_admin` 是後台功能的唯一入口，非管理員得到與「不存在」相同的 404。
 """
@@ -22,24 +24,48 @@ from app.models.base import utcnow
 from app.models.user import ROLE_ADMIN, STATUS_ACTIVE
 from app.observability import admin_events, security_events
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, age_on, taipei_today
+from app.services.content_tier import (
+    ADULT_RULES_VERSION, CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, most_conservative, parse_tier,
+)
 from app.services.current_user import CurrentUser
 from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound
 
-# 成年者的內容上限。預設是 2（浪漫、曖昧與感官但不露骨）；sexual_content_level 3（成年角色之間合意的露骨內容）
-# 只能以環境設定開啟（AGENTS.md 第 7 節：預設關閉、須已取得書面許可、staging 與 production 在強化的成年驗證完成前不得開啟），
-# 由組裝處依設定傳入 `adult_ceiling`；這裡不依任何設定自行放寬，也不把 3 寫死為預設。
-MAX_ADULT_SEXUAL_CONTENT_LEVEL = 2
-LEVEL3_SEXUAL_CONTENT_LEVEL = 3
-SAFE_MODE_SEXUAL_CONTENT_LEVEL = 0
-_ALLOWED_ADULT_CEILINGS = (MAX_ADULT_SEXUAL_CONTENT_LEVEL, LEVEL3_SEXUAL_CONTENT_LEVEL)
+# 成人模式目前沒有啟用的原因（`ContentAccess.reason`，也是內容模式 API 回應的列舉值）
+REASON_NOT_ADULT = "not_adult"                  # 未滿成年門檻，或尚未完成年齡確認
+REASON_DISABLED = "disabled"                    # 部署層的開關為關閉
+REASON_NEEDS_CONFIRMATION = "needs_confirmation"  # 尚未確認，或確認的安全規範版本已不是目前的版本
 
 
 @dataclass(frozen=True)
-class ContentCeiling:
-    """目前這位使用者能使用的內容上限。`safe_mode` 為真時介面須顯示安全模式的提示。"""
+class ContentAccess:
+    """一位使用者目前的內容模式狀態（不含劇本與存檔，那兩者只在 `effective_tier` 加入）。
 
-    sexual_content_level: int
-    safe_mode: bool
+    - `preference`：玩家存的偏好（無法判定時為 `safe`）；
+    - `age_cap`：年齡上限，由當下的年齡與成人模式是否啟用決定；
+    - `effective`：偏好與年齡上限中較保守者；
+    - `is_adult`：當下已滿成年門檻（介面據此顯示「現在可以切換為一般模式」）；
+    - `adult_selectable`：玩家可以切換為成人模式（已成年且部署開關開啟；尚未確認時，切換須同時勾選兩項確認）；
+    - `adult_confirmed`：已在目前的安全規範版本下完成成年確認；
+    - `reason`：成人模式目前**沒有啟用**的原因，已啟用時為 `None`。
+    """
+
+    preference: str
+    age_cap: str
+    effective: str
+    is_adult: bool
+    adult_selectable: bool
+    adult_confirmed: bool
+    reason: str | None
+
+    @property
+    def selectable(self) -> tuple[str, ...]:
+        """目前可以切換成的模式（由保守到寬鬆）。安全模式永遠可選，成年玩家也可以自行選擇它。"""
+        modes = [CONTENT_TIER_SAFE]
+        if self.is_adult:
+            modes.append(CONTENT_TIER_STANDARD)
+        if self.adult_selectable:
+            modes.append(CONTENT_TIER_ADULT)
+        return tuple(modes)
 
 
 class AccessPolicy:
@@ -48,13 +74,13 @@ class AccessPolicy:
         *,
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
         clock: Callable[[], datetime] = utcnow,
-        adult_ceiling: int = MAX_ADULT_SEXUAL_CONTENT_LEVEL,
+        adult_mode_enabled: bool = False,
     ) -> None:
-        if adult_ceiling not in _ALLOWED_ADULT_CEILINGS:
-            raise ValueError("成年者的內容上限只能是 2 或 3。")
+        if not isinstance(adult_mode_enabled, bool):
+            raise ValueError("adult_mode_enabled 必須是布林值。")
         self._age_policy = age_policy
         self._clock = clock
-        self._adult_ceiling = adult_ceiling
+        self._adult_mode_enabled = adult_mode_enabled
 
     def is_admin(self, user: CurrentUser) -> bool:
         """只有角色為 admin 且帳號啟用中才是管理員。"""
@@ -86,13 +112,48 @@ class AccessPolicy:
             return None
         return age_on(user.birth_date, taipei_today(self._clock()))
 
-    def content_ceiling(self, user: CurrentUser) -> ContentCeiling:
-        """內容上限。尚未完成年齡確認者保守地視為安全模式（他們本來也不能使用 AI 功能）；
-        未成年者不論等級 3 開關為何都是安全模式，管理員與各會員等級都不豁免。"""
+    # ---- 內容模式 -----------------------------------------------------------
+
+    @property
+    def adult_mode_enabled(self) -> bool:
+        """成人模式的部署開關（由組裝處依環境設定傳入；預設關閉）。"""
+        return self._adult_mode_enabled
+
+    def _adult_confirmed(self, user: CurrentUser) -> bool:
+        return user.adult_confirmed_at is not None and user.adult_rules_version == ADULT_RULES_VERSION
+
+    def content_access(self, user: CurrentUser) -> ContentAccess:
+        """這位使用者目前的內容模式狀態。
+
+        尚未完成年齡確認者保守地視為未成年（他們本來也不能使用 AI 功能）；未成年者不論開關與偏好為何都是安全模式，
+        管理員與各會員等級都不豁免。成年者的上限是一般模式，成人模式啟用中才到成人模式；偏好為成人模式但尚未啟用時
+        退為一般模式，不是錯誤。
+        """
         age = self._age(user)
-        if age is None or age < self._age_policy.adult_age:
-            return ContentCeiling(SAFE_MODE_SEXUAL_CONTENT_LEVEL, safe_mode=True)
-        return ContentCeiling(self._adult_ceiling, safe_mode=False)
+        is_adult = age is not None and age >= self._age_policy.adult_age
+        confirmed = self._adult_confirmed(user)
+        preference = parse_tier(user.content_tier_preference)
+        if not is_adult:
+            return ContentAccess(preference, CONTENT_TIER_SAFE, CONTENT_TIER_SAFE, False, False, confirmed, REASON_NOT_ADULT)
+        selectable = self._adult_mode_enabled
+        if not selectable:
+            reason = REASON_DISABLED
+        elif not confirmed:
+            reason = REASON_NEEDS_CONFIRMATION
+        else:
+            reason = None
+        age_cap = CONTENT_TIER_ADULT if reason is None else CONTENT_TIER_STANDARD
+        return ContentAccess(preference, age_cap, most_conservative(preference, age_cap), True, selectable, confirmed, reason)
+
+    def effective_tier(self, user: CurrentUser, *, script_tier: str | None = None, save_tier: str | None = None) -> str:
+        """實際生效的內容模式：玩家偏好、年齡上限、劇本宣告（有劇本時）與存檔記錄（有存檔時）中最保守的一個。
+
+        沒有劇本或存檔時不傳（`None`）；傳入了卻無法判定的值一律視為安全模式，不會被忽略。存檔的模式只能在上限之內調整，
+        這裡不會因為任何輸入把模式調高。
+        """
+        tiers = [self.content_access(user).effective]
+        tiers += [tier for tier in (script_tier, save_tier) if tier is not None]
+        return most_conservative(*tiers)
 
     # ---- 是否可使用 AI 功能 -------------------------------------------------
 

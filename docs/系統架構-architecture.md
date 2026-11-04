@@ -1,7 +1,8 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-03 ｜ 對應 change：remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-03 ｜ 對應 change：rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
+> 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -41,7 +42,7 @@ flowchart TD
     Pages["controllers：MVC 頁面<br/>只回 HTML 外殼與初始狀態"]
     Api["controllers：Web API<br/>只回 JSON"]
     Sec["security：HTTP 安全輔助<br/>session、CSRF、cookie、重新導向"]
-    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、UsageService、LlmService、AdminService…"]
+    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、SessionService、UsageService、LlmService、AdminService…"]
     Llm["llm：供應商中立型別與轉接器"]
     Repo["repositories：ORM 存取<br/>條件式 UPDATE、擁有者條件"]
     Model["models：SQLAlchemy 資料模型"]
@@ -111,12 +112,28 @@ flowchart TD
 
 | 規則 | 守法 |
 |---|---|
-| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 13 歲的立即抹除，都共用 `AccountErasureService`：先清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
-| 每張指向使用者或對話的資料表都要登記，沒有外鍵的整數參照必須由抹除流程明確清除 | `tests/architecture/test_account_erasure_coverage.py`（新增資料表漏掉就失敗，並有自我驗證） |
-| `RetentionRepository`（依期限刪除對話、帳本、權杖、稽核與鎖定計次）只被 `data_retention_service.py` 與 `registry.py` 匯入；`AdminAuditRepository` 仍沒有更新與刪除 | `tests/architecture/test_retention_boundaries.py` |
+| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 13 歲的立即抹除，都共用 `AccountErasureService`：先把別人的存檔對這位作者的劇本版本的來源參照清為空值（無動作的外鍵，不清會擋住刪除）、再清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
+| 每張指向使用者、對話、存檔、劇本或版本的資料表都要登記（任意父表的串聯與無動作的外鍵都分類），沒有外鍵的整數參照與無動作的外鍵必須由抹除流程在刪除使用者之前明確清除 | `tests/architecture/test_account_erasure_coverage.py`（新增資料表漏掉就失敗，並有自我驗證）；`test_account_erasure_rpg_data.py` 以行為證明作者被抹除時別人的存檔保留 |
+| 劇本版本的狀態與兩個輔助欄位（`live_script_id`、`open_script_id`）只由 `ScriptRepository` 寫入；不得在別處建立 `ScriptVersion`、對它 `update`／`delete` 或對它的 `status` 賦值 | `tests/architecture/test_script_state_writes.py`（AST 掃描 `app/`，並附反向驗證） |
+| `RetentionRepository`（依期限刪除對話、帳本、權杖、稽核、鎖定計次、RPG 存檔與回合的部分內容）只被 `data_retention_service.py` 與 `registry.py` 匯入；`AdminAuditRepository` 仍沒有更新與刪除 | `tests/architecture/test_retention_boundaries.py` |
 | 需要登入的端點預設拒絕三種受限登入狀態（等待刪除、待確認年齡、被鎖定），只有明確允許的端點可用 | `tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則（見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 7a、7b 節） |
 
-匯出（`PersonalExportService`）只透過 `ChatRepository` 與 `UserRepository` 讀取，沿用「擁有者條件寫進簽名」的規則（訊息以 `messages_after` 分頁，簽名第一個參數是 `user_id`），不需要新的繞過路徑。
+匯出（`PersonalExportService`）只透過 `ChatRepository`、`ScriptRepository`、`SessionRepository` 與 `UserRepository` 讀取，沿用「擁有者條件寫進簽名」的規則（訊息以 `messages_after` 分頁；劇本、存檔與回合以產生器逐筆、逐頁讀取，簽名第一個參數是 `user_id`），不需要新的繞過路徑。
+
+### RPG 資料基礎（rpg-data-and-script）
+
+| 元件 | 責任 |
+|---|---|
+| `script_spec.py`（純運算） | 固定規格 v1 的驗證與標準化，輸出標準化內容與 `content_hash`；沒有資料庫、網路與時間的依賴 |
+| `content_tier.py`（純邏輯） | 三種內容模式的順序與「取較保守者」，無法判定視為 `safe`；不內嵌任何年齡數字 |
+| `AccessPolicy.content_access`／`effective_tier` | 依生日於當下計算的年齡、部署開關與成年確認，算出年齡上限與生效模式；管理員與各等級不豁免 |
+| `ContentModeService` | 玩家查詢與切換自己的內容模式、成年確認；`GET`／`PUT /api/account/content-mode` |
+| `ScriptRepository` | 劇本與版本：擁有者範圍的方法都接收 `user_id`，公開讀取只回傳上架版本；狀態轉移集中在少數方法，核可時取代舊版與鎖定筆名在同一個 SAVEPOINT |
+| `SessionRepository`／`SessionService` | 存檔與回合：所有方法接收 `user_id`；開始回合先對存檔列做條件式 UPDATE 取鎖（串行化並行請求）；開存檔先過年齡閘門、檢查來源版本與劇本宣告的內容模式，再複製完整內容 |
+| `ScriptSeedService` | 內建劇本的種子（`flask seed-scripts`）：全部驗證通過才在單一交易內寫入，冪等 |
+
+- 開存檔時複製劇本內容，之後存檔不再讀取劇本；`sessions.source_version_id` 是無動作的外鍵，刪除版本與抹除帳號的流程先清為空值。
+- 組裝在 `registry.py`（`get_content_mode_service()`、`get_session_service()`、`build_script_seed_service()`）；`AccessPolicy` 的成人模式開關來自 `config.content.adult_mode_enabled`。
 
 ## 3. 一個請求的生命週期
 
@@ -182,6 +199,7 @@ flowchart LR
 | admin-console、admin-user-management、admin-content-review、admin-audit-log                                                                          | `app/services/admin_service.py`、`app/repositories/admin_*.py`、`app/controllers/admin_*.py`                   | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md) |
 | security-headers                                                                                                                                     | `app/security/security_headers.py`（HSTS 只在 staging 與 production；不送 CSP） | [營運與部署-operations.md](營運與部署-operations.md) |
 | operational-alerts（及 app-configuration、service-observability 的告警條款）                                                                         | `app/services/alert_rules.py`（純函式）、`alert_service.py`、`alert_messages.py`、`app/repositories/alert_state_repository.py`、`app/observability/alert_events.py`、`app/cli.py` 的 `check-alerts` | [營運與部署-operations.md](營運與部署-operations.md)、[資料模型-data-model.md](資料模型-data-model.md) |
+| content-tier-modes、script-fixed-spec、script-store、rpg-sessions、builtin-script-seed | `app/services/content_tier.py`、`script_spec.py`、`content_mode_service.py`、`session_service.py`、`script_seed_service.py`、`app/repositories/script_repository.py`、`session_repository.py`、`app/data/scripts/` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) |
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |
@@ -203,7 +221,7 @@ flowchart LR
 
 ## 7. 規劃中的 RPG 模組
 
-RPG 與客服共用上述分層與模型呼叫層；差異在串流（SSE）、世界狀態與劇本。細節見 [RPG.md](RPG.md)，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。
+RPG 與客服共用上述分層與模型呼叫層；差異在串流（SSE）、世界狀態與劇本。**資料基礎已實作**（上面的「RPG 資料基礎」）：劇本與版本、存檔與回合、固定規格驗證器、三種內容模式、內建劇本種子。**尚未實作**：創作介面（RC-7）、審核與公開目錄（RC-8）、回合引擎與串流（RC-2）、遊戲介面（RC-3）。細節見 [RPG.md](RPG.md)，進度見 [路線圖-roadmap.md](路線圖-roadmap.md)。
 
 ---
 

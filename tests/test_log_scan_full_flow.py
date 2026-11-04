@@ -327,3 +327,86 @@ def test_a_complete_chat_tour_leaves_no_message_reply_summary_model_output_promp
     assert {c["kind"] for c in calls} == {"chat", "summary"}
     assert [c["level"] for c in calls if c["outcome"] == "config_error"] == ["ERROR"]
     assert all("?" not in line.get("path", "") for line in lines)
+
+
+RPG_SECRETS = {
+    "title": "SCAN-RPG-TITLE-劇本標題",
+    "background": "SCAN-RPG-BACKGROUND-只該出現在劇本裡的設定",
+    "character": "SCAN-RPG-CHARACTER-角色名",
+    "action": "SCAN-RPG-ACTION-玩家的行動文字",
+    "reply": "SCAN-RPG-STORY-模型回覆的劇情原文",
+    "partial": "SCAN-RPG-PARTIAL-中斷時已收到的片段",
+    "notebook": "SCAN-RPG-NOTEBOOK-記事簿的內容",
+    "location": "SCAN-RPG-LOCATION-目前所在地點",
+    "summary": "SCAN-RPG-STATUS-狀態摘要",
+    "protagonist": "SCAN-RPG-HERO-主角姓名",
+}
+
+
+def test_a_complete_rpg_tour_leaves_no_script_action_story_notebook_or_world_state_in_the_logs(log_lines):
+    """rpg-sessions 規格「存檔與回合的刪除與日誌」：建立劇本與存檔、開始與完成與中斷與被擋的回合、更新世界狀態、完結、
+    刪除草稿，並切換內容模式，全程收集日誌，找不到使用者行動、劇情原文、記事簿、世界狀態或劇本文字。"""
+    from app.models.base import utcnow
+    from app.repositories.script_repository import ScriptRepository
+    from app.repositories.session_repository import SessionRepository
+    from app.services.access_policy import AccessPolicy
+    from app.services.current_user import CurrentUser
+    from app.services.errors import SessionEnded
+    from app.services.session_service import SessionService
+    from tests.support.idor import logged_in_client
+    from tests.support.script_data import validated
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}), clock=FakeClock())
+    Base.metadata.create_all(app.extensions["db_engine"])
+    clock = FakeClock()
+    with Session(app.extensions["db_engine"]) as session:
+        from app.models import User
+
+        user = session.get(User, add_user(session, 1, age=30).id)
+        current = CurrentUser.from_model(user)
+        scripts, saves = ScriptRepository(session), SessionRepository(session)
+        service = SessionService(scripts=scripts, sessions=saves, policy=AccessPolicy(clock=clock), clock=clock)
+
+        content = validated(
+            title=RPG_SECRETS["title"][:30], background=RPG_SECRETS["background"], opening=RPG_SECRETS["action"],
+            characters=[{"name": RPG_SECRETS["character"][:20], "personality": "冷靜", "age": 30, "appearance": "高瘦"}],
+        )
+        version = scripts.create_script(
+            user.id, author_name="甲", author_code="aaaaaa", content=content.content, content_hash=content.content_hash, total_chars=content.total_chars,
+        )
+        scripts.submit_for_review(user.id, version.public_id)
+        scripts.approve_version(version.public_id, now=clock.now)
+        draft = scripts.create_draft_version(user.id, scripts.get_script_of(version).public_id, content=content.content, content_hash=content.content_hash, total_chars=content.total_chars)
+
+        save = service.start_session(current, version.public_id, player_name=RPG_SECRETS["protagonist"][:20], character_age=20)
+        service.begin_turn(current, save.public_id, client_msg_id="scan-1", user_action=RPG_SECRETS["action"])
+        saves.complete_turn(user.id, save.public_id, "scan-1", llm_raw_response=RPG_SECRETS["reply"], structured_result={"story": RPG_SECRETS["reply"]}, now=clock.now)
+        service.begin_turn(current, save.public_id, client_msg_id="scan-2", user_action=RPG_SECRETS["action"])
+        saves.interrupt_turn(user.id, save.public_id, "scan-2", partial_response=RPG_SECRETS["partial"])
+        service.begin_turn(current, save.public_id, client_msg_id="scan-2", user_action=RPG_SECRETS["action"])      # 重送中斷的回合
+        saves.block_turn(user.id, save.public_id, "scan-2")
+        saves.update_world_state(
+            user.id, save.public_id, expected_version=1, current_location=RPG_SECRETS["location"], status_summary=RPG_SECRETS["summary"],
+            entities_json={"npc": RPG_SECRETS["character"]},
+        )
+        stored = saves.get_owned(user.id, save.public_id)
+        stored.notebook_text = RPG_SECRETS["notebook"]
+        saves.end_session(user.id, save.public_id, now=clock.now)
+        with pytest.raises(SessionEnded) as ended:                              # 已完結：預期的 409，錯誤訊息也不得帶內容
+            service.begin_turn(current, save.public_id, client_msg_id="scan-3", user_action=RPG_SECRETS["action"])
+        assert not any(sample in ended.value.message for sample in RPG_SECRETS.values())
+        scripts.delete_draft(user.id, draft.public_id)
+        session.commit()
+        user_object = session.get(User, user.id)
+        session.expunge(user_object)
+
+    client = logged_in_client(app, user_object)
+    assert client.put("/api/account/content-mode", json={"mode": "safe"}).status_code == 200
+    assert client.get("/api/account/content-mode").status_code == 200
+
+    raw = log_lines.raw()
+    for sample in RPG_SECRETS.values():
+        assert sample not in raw, f"日誌洩漏了：{sample[:20]}…"
+    for line in log_lines():
+        assert set(line) <= BASE_KEYS | set(ALLOWED_FIELDS), f"出現不允許的欄位：{set(line) - BASE_KEYS - set(ALLOWED_FIELDS)}"
+    assert [line["event"] for line in log_lines() if str(line.get("event", "")).startswith("account.content_mode.")] == ["account.content_mode.safe"]

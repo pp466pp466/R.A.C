@@ -85,8 +85,8 @@ node --test "tests/js/**/*.test.js"
 | `OPENROUTER_BASE_URL` | 否 | OpenAI 相容端點的基底網址，預設為 OpenRouter 官方網址；必須是 `https`（development 與 testing 另允許回送位址的 `http`，供本機模型使用），不得含帳號、密碼或查詢字串 |
 | `OPENROUTER_ZDR` | 否 | `true` 或 `false`，預設 `false`。要求只路由到不保存提示的端點；免費端點通常沒有，要求了卻沒有符合的端點時呼叫失敗，不會改成不帶偏好重送 |
 | `OPENROUTER_JSON_SCHEMA` | 否 | `true` 或 `false`，預設 `false`。該模型支援結構描述輸出參數時才開啟；預設改在系統指令附結構描述 |
-| `SEXUAL_CONTENT_LEVEL3_ENABLED` | 否 | `true` 或 `false`，預設 `false`。是否開啟 `sexual_content_level 3`；development 與 testing 可開啟，**staging 與 production 在強化的成年驗證完成之前設為 `true` 會啟動失敗** |
-| `SEXUAL_CONTENT_LEVEL3_MODELS` | 開啟等級 3 時 | 取得書面許可所涵蓋的模型識別碼（以逗號分隔）；開啟時 RPG 用途的主要與備援模型都必須在清單內，否則啟動失敗。關閉時完全不影響行為 |
+| `ADULT_MODE_ENABLED` | 否 | `true` 或 `false`，預設 `false`。成人模式的部署開關（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_ENABLED`）；各環境規則相同，staging 與 production 須明確設為 `true` 才生效。這只是玩家能使用成人模式的條件之一：玩家仍須已滿 18 歲並在切換時完成成年確認 |
+| `ADULT_MODE_MODELS` | 開啟成人模式時 | 取得書面許可所涵蓋的模型識別碼（以逗號分隔；取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_MODELS`）；開啟時 RPG 用途的主要與備援模型都必須在清單內，否則啟動失敗。關閉時完全不影響行為 |
 
 規則：
 
@@ -99,7 +99,7 @@ node --test "tests/js/**/*.test.js"
 - **Google 登入為選用**：識別碼與密鑰兩者都設定才啟用，只設定一個會啟動失敗；啟用時必須設定 `BASE_URL`。在 Google Cloud Console 把「已授權的重新導向 URI」設為 `<BASE_URL>/auth/google/callback`，本機瀏覽器請一律使用 `BASE_URL` 的主機名稱（例如 `http://localhost:5000`），不要改用 `127.0.0.1`。
 - Gemini 金鑰（`GEMINI_API_KEY`）由客服對話 change（C-3）接上，目前只需存在於本機 `.env`。
 - **RPG 用途的 OpenAI 相容端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：客服與摘要永遠走 Gemini，沒有設定這組變數時只有 RPG 用途不可用。測試階段先用免費模型（識別碼以 `:free` 結尾）確認好不好用；免費端點的上游可能保存或拿去訓練提示，**只用無害的合成文字、不輸入真實個資**。換成付費模型只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`），程式不用動。金鑰一樣只放 `.env` 或平台機密功能。
-- **等級 3 的環境開關**：`sexual_content_level 3` 預設關閉，不能在程式裡寫死為開啟（AGENTS.md 第 7 節）。development 與 testing 可開啟供個人測試；staging 與 production 在強化的成年驗證完成之前開啟會啟動失敗。開啟時必須設定 RPG 用途，並在 `SEXUAL_CONTENT_LEVEL3_MODELS` 列出許可涵蓋的模型。**這只是開關：RPG 尚未實作，所以目前沒有任何送出露骨內容的入口；任何入口出現之前，仍須先完成自家審查層與強化成年驗證。**
+- **成人模式的環境開關**：內容分級已由 `sexual_content_level` 0 至 3 改為三種模式（安全、一般、成人，AGENTS.md 第 7 節）。成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉，不能在程式裡寫死為開啟；development、testing、staging 與 production 的規則相同（staging 與 production 須明確設定才生效）。開啟時必須設定 RPG 用途，並在 `ADULT_MODE_MODELS` 列出書面許可涵蓋的模型（須涵蓋 `OPENROUTER_MODEL` 與 `OPENROUTER_FALLBACK_MODEL`）。**舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED` 與 `SEXUAL_CONTENT_LEVEL3_MODELS` 已淘汰**：應用程式讀到會忽略並在啟動時各警告一次（只含變數名稱），成人模式維持關閉；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕。**這只是部署層的開關：RPG 尚未實作，所以目前沒有任何送出露骨內容的入口；任何入口出現之前，仍須先完成劇情輸出的審查層（RC-2）與法務覆核。**
 
 ## 建立首位管理員
 
@@ -500,6 +500,8 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 |---|---|---|---|
 | `/api/account/delete` | POST | 申請刪除自己的帳號。有密碼的帳號帶 `password`（與登入共用失敗計數與鎖定，連續 5 次鎖定 15 分鐘）；只靠 Google 的帳號帶 `confirm_text`（固定文字「刪除我的帳號」，由伺服器放進頁面狀態，前端不另存一份）。成功後帳號為 `deletion_pending`、`token_version` 加 1（所有裝置登出，這台的 cookie 一併清除）；**不寄通知信**（玩家端不寄任何信）。錯誤：400 欄位錯誤、403 `admin_delete_forbidden`（管理員不可自助刪除）、409 `deletion_not_allowed`（已在待刪除，或停權等不允許的狀態） | 是 |
 | `/api/account/cancel-deletion` | POST | 撤銷刪除（只在申請後 7 天內）：一律還原為 `active`（`pending_verification` 已退役）。**少數允許受限登入狀態的端點之一**；`token_version` 不變，撤銷後目前的登入狀態直接變成完整的。錯誤：409 `grace_expired`、`not_pending` | 是（含待刪除） |
+| `/api/account/content-mode` | GET | 查詢自己的內容模式（安全、一般、成人，見 AGENTS.md 第 7 節）。需登入、先過年齡閘門（尚未確認年齡 403 `age_confirmation_required`，未登入 401）。回應 `content_mode` 只含 `preference`（偏好）、`effective`（生效模式，偏好與年齡上限中較保守者）、`selectable`（`safe`／`standard`／`adult` 各是否可選）、`adult_reason`（成人模式沒有啟用的原因：`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`（是否已在目前的安全規範版本下確認），**不含**生日、年齡區間、年齡確認時間或內部編號；`Cache-Control: no-store`。滿 18 歲不會自動調高偏好，`selectable.standard` 變成真值時介面提示可自行切換 | 是 |
+| `/api/account/content-mode` | PUT | 切換自己的內容模式，本文 `mode`（`safe`、`standard`、`adult`，其餘 400 並指出 `mode`）。成年玩家可選任一種（含安全模式）；未滿成年門檻者只能選 `safe`，否則 403 `content_mode_restricted`。切換為 `adult` 另須：部署開關開啟（否則 403 `adult_mode_unavailable`）、尚未在目前規範版本確認時本文須同時帶 `confirm_adult: true` 與 `confirm_rules: true`（缺哪一項就 400 並指出哪一項）；確認成功記錄時間、規範版本與方式（自行聲明）。已確認後再切換不需再勾選，離開成人模式不清除紀錄。成功時記錄 `account.content_mode.<模式>` 事件（只含事件名稱與使用者編號）。回應同 GET | 是 |
 | `/api/account/export` | POST | 匯出自己的帳號資料與全部對話。本文 `format`：`json` 或 `csv`（其餘 400）。回應是附件與 `Cache-Control: no-store`：JSON 為 UTF-8（無 BOM）；CSV 為一個 zip，內含 `account.csv` 與 `messages.csv`（UTF-8-sig，Excel 開啟繁體中文不亂碼；以 `=`、`+`、`-`、`@`、Tab 或歸位字元開頭的儲存格前加單引號，避免被當成公式）。用 POST 是為了受 CSRF 與來源檢查保護、不被預取連結觸發；請求夾帶的其他使用者識別碼一律忽略。受限登入狀態不可用 | 是 |
 
 `/api/auth/me` 另有 `deletion_scheduled_at`（UTC，只有待刪除的帳號才有）。頁面：`/account` 多了「匯出我的資料」與「刪除帳號」（管理員沒有刪除）；帳號正在等待刪除的人看到的是**另一份 HTML**（預定刪除時間、撤銷、登出，沒有其他區塊；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕）；`/login?notice=deletion_requested` 顯示寬限期的說明（代碼是固定列舉）。
@@ -709,7 +711,7 @@ change `ops-alerting`。讓營運上的異常在使用者抱怨之前被人知�
 
 change `openai-compatible-provider`。為 RPG 敘事新增 OpenAI 相容端點（目前是 OpenRouter 上的開放模型，也可指向本機模型）；客服與摘要**永遠走 Gemini，完全不受影響**。規格見 `openspec/changes/openai-compatible-provider/specs/`（`llm-openai-compatible`、`llm-provider`、`age-confirmation`）；設計見 `docs/模型呼叫層-llm-layer.md` 第 10 節與 `docs/帳號與安全-auth-security.md` 第 5 節。環境變數見「環境變數與機密」。
 
-- **只有基礎**：RPG 尚未實作，所以**目前沒有任何送出露骨內容的入口**。`sexual_content_level 3` 只是環境開關（預設關閉；staging 與 production 在強化的成年驗證完成前開啟會啟動失敗；開啟時須在 `SEXUAL_CONTENT_LEVEL3_MODELS` 列出許可涵蓋的模型）。任何入口出現之前，仍須先完成自家審查層與強化成年驗證。
+- **只有基礎**：RPG 尚未實作，所以**目前沒有任何送出露骨內容的入口**。（以下是當時的描述；內容分級後來已由 `rpg-data-and-script` 改為三種模式，`sexual_content_level 3` 與 `SEXUAL_CONTENT_LEVEL3_*` 已被 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 取代，見下一節。）任何入口出現之前，仍須先完成自家審查層。
 - **免費換付費只改 `OPENROUTER_MODEL`**（與選用的 `OPENROUTER_ZDR`），程式沒有任何依 `:free` 判斷的分支。零保存只有付費端點才有；要求了卻沒有符合的端點時呼叫失敗，**不會改成不帶偏好重送**。
 - **評估端點好不好用**（RPG 出現之前）：`flask llm-probe` 只在 development 與 testing 可用，不寫帳本與任何資料表，不顯示金鑰。`APP_ENV` 必須由行程環境變數提供（不會從 `.env` 讀）：
 
@@ -733,6 +735,70 @@ $env:APP_ENV = "development"
 | `openspec validate openai-compatible-provider --strict` | 通過 |
 | 真實呼叫（使用者同意，只用無害的繁體中文文字、免費端點，第一輪共 8 次請求） | 轉接器對真實的 OpenRouter 端到端正常：驗證標頭、請求格式、回應解析、token 用量、結束原因都正確。**① 原本設定的 `:free` Dolphin 回 404**（已下架，見已知限制①）。② 改用使用者指定的 `poolside/laguna-s-2.1:free`：**一般文字 3 次、延遲 3.6／5.9／8.3 秒；第 1 次回覆是拼音亂碼而不是繁體中文，第 2、3 次是繁體中文但有生造詞、夾雜簡體字與英文**，這是這個模型的表現而非轉接器的問題。**結構化 3 次：2 次通過驗證（合法 JSON 且符合結構描述）、1 次 429**（歸為暫時性錯誤，只回報狀態碼與耗時，沒有供應商本文）。③ **要求零保存：回 404（設定錯誤），沒有重送**；同一個模型不帶偏好的呼叫成功，所以偏好確實被端點遵守，沒有被靜默放寬。**沒有評估使用者真正要用的 Dolphin**（免費版已不存在，付費版未呼叫），所以「這個模型好不好用」尚未有結論。公開的模型目錄顯示付費版輸入每百萬 token 0.20 美元、輸出 0.90 美元、未經額外審核、支援 `response_format` 但沒有列出結構描述輸出，因此 `OPENROUTER_JSON_SCHEMA` 應維持關閉 |
 | 真實呼叫的第二輪（使用者改指定 `nvidia/nemotron-3.5-lightning:free`，同樣只用無害文字，6 次請求，`.env` 未修改） | **繁體中文明顯較好**：一般文字 3 次都通順，用語在地（油條、豆漿），沒有亂碼、簡體字或英文；**結構化 3 次全部通過驗證**。這是推理型模型：每次約 740 至 1,360 個思考 token（轉接器正確回報了 `thinking_tokens`，第一次用真實資料驗證這條路徑），**延遲 7.0 至 19.2 秒**（一般文字 12.6、13.1、19.2 秒），已接近預設的單次逾時 20 秒；RPG 的敘事更長，屆時要靠串流與另訂的逾時，不能直接沿用客服的 20 秒。目錄顯示它支援 `reasoning`、不支援 `response_format`，所以預設的「在系統指令附結構描述」做法正好適用。**沒有測它對成熟內容的反應**（免費端點不得送成熟內容，AGENTS.md 第 11 節）：這是一般的通用模型，不是去審查模型，**成熟內容的許可度可能與先前的 Dolphin 不同，採用前須以付費端點另行評估** |
+
+## RPG 資料、內容模式與內建劇本（rpg-data-and-script）
+
+change `rpg-data-and-script`（RC-1）。RPG 的資料基礎，**還沒有任何玩家看得到的介面**：劇本與存檔的資料表與資料存取、固定規格驗證器、三種內容模式（取代 `sexual_content_level` 0 至 3）、內建的首發劇本，以及這些資料的抹除、匯出與保存期限。創作介面、審核與公開目錄、回合引擎、遊戲介面是後續的 change（RC-7、RC-8、RC-2、RC-3）。規格見 `openspec/changes/rpg-data-and-script/specs/`；設計見 `docs/資料模型-data-model.md`、`docs/帳號與安全-auth-security.md`、`docs/營運與部署-operations.md` 與 `docs/RPG.md`。
+
+### 內容模式（content-tier-modes）
+
+- 三種模式由保守到寬鬆：`safe`（安全模式）、`standard`（一般模式）、`adult`（成人模式）。玩家偏好存在 `users.content_tier_preference`，預設最保守；**年齡確認成功的當下依年齡設定**（已滿 18 歲為 `standard`，未滿為 `safe`），**滿 18 歲不會自動調高**，介面提示玩家自行切換。
+- 實際生效的模式是「玩家偏好、年齡上限、劇本宣告、存檔記錄」中最保守者（`AccessPolicy.effective_tier`）。年齡上限由生日於當下計算：未滿成年門檻或尚未確認年齡一律是 `safe`，管理員與各會員等級都不豁免；成人模式需要**部署開關 `ADULT_MODE_ENABLED`**、已成年、**在目前的安全規範版本下完成成年確認**（切換為成人模式時同時勾選「我確定已滿 18 歲」與同意安全規範，記錄時間、規範版本與方式為自行聲明；規範版本改變後須重新確認）。偏好為 `adult` 但條件不齊時退為 `standard`，不是錯誤。
+- 玩家用 `GET`／`PUT /api/account/content-mode` 查詢與切換（見「個資生命週期（C-4c）」端點表）。目前**沒有切換的介面**（RC-3），`/account` 只對未滿成年門檻者顯示安全模式的提示與原因。
+- **這只是資料與政策基礎**：RPG 尚未實作，沒有任何送出露骨內容的入口；安全模式與一般模式的**內容審查層**（自有審查、不依賴模型拒絕）屬 RC-2，任何入口出現之前仍須完成。
+
+### 劇本與存檔（script-store、script-fixed-spec、rpg-sessions）
+
+- **五張新表**：`scripts`（身分、作者、種子鍵、筆名快照）、`script_versions`（每個版本的內容與狀態；已發佈的版本不可變，修改一律新增版本）、`script_version_tags`、`sessions`（存檔；開局時**複製**劇本版本的完整內容，之後不再讀取劇本）與 `memory_logs`（回合）。`sessions.source_version_id` 是無動作的外鍵（SQL Server 不允許多重串聯路徑），刪除版本與抹除帳號的流程先把參照清為空值。
+- **固定規格 v1**（`app/services/script_spec.py`，純運算）：標題 30、簡介 150、世界觀名稱 50、背景 1500、初始對話 500、規則 800、標籤至多 5 個、角色至多 10 位、地點至多 15 個、里程碑至多 8 個（觸發是結構化的「年齡」或「年份」，不接受自由文字）、全部文字合計至多 8000 字；規格外的欄位被拒絕，圖片欄位 v1 只接受空值；錯誤以欄位路徑回報（`characters[2].age`）且不回顯輸入。數字是暫定值，之後以實際 token 預算校正。
+- **狀態與唯一性由資料庫保證**：版本狀態只有 `draft`、`pending_review`、`published`、`rejected`、`superseded`，轉移集合固定且全部經過 `ScriptRepository`（有架構測試擋住別處寫入）；每個劇本至多一個上架版本與一個進行中的版本（部分唯一索引）；核可時取代舊版與第一次發佈時鎖定筆名在同一個 SAVEPOINT 內完成。
+- **存檔與回合**：同一存檔的並行請求被串行化（開始回合先對存檔那一列做條件式 UPDATE 取鎖）；`(session_id, client_msg_id)` 與 `(session_id, seq)` 唯一；重送已完成的回合回傳原回合、重送中斷或被擋的回合覆蓋該筆、重送串流中的回合回應衝突；**輪數只在回合完成時指派**，中斷與被擋的回合不計輪；已完結的存檔仍可閱讀，但不得再新增回合（`409 session_ended`），也沒有任何方法能把它改回進行中。
+
+### 內建劇本與部署順序
+
+`flask --app wsgi seed-scripts [--dry-run]`（**人工類，不得排程，不在應用程式啟動時執行**）：讀取隨映像封裝的 `app/data/scripts/*.json`（UTF-8），**全部驗證通過才在單一交易內寫入**（全有或全無）；以種子鍵與標準化內容的雜湊冪等地建立、更新（新增版本並取代舊版，已開出的存檔不受影響）或略過；輸出只有種子鍵與筆數，資料不合規時以非零代碼結束並指出檔名與欄位路徑（不回顯劇本文字）。內建劇本沒有作者，筆名「官方」並鎖定，宣告的內容模式不得高於 `standard`；首發劇本「青雲問道」（古風仙俠，宣告 `safe`）。
+
+**部署順序**：備份 → `alembic upgrade head`（0012 只新增、不刪除，舊版程式在新結構上可運作）→ 部署新版程式 → `flask seed-scripts`。
+
+### 抹除、匯出與保存期限
+
+- **抹除**：`scripts.creator_id`、`sessions.user_id` 與其下的版本、標籤、回合都是 `ON DELETE CASCADE`；別的玩家用該作者的劇本開過的存檔**保留**（有自己的劇本複本），抹除前先把它們的來源參照清為空值（`UserRepository.clear_script_version_refs`，在同一個交易，條件不成立時一併回復）。
+- **匯出**：JSON 新增 `scripts`（含全部版本）與 `sessions`（含記事簿全文、每個回合與世界狀態）；CSV 新增 `scripts.csv`（每個版本一列）、`sessions.csv`、`turns.csv`（沒有世界狀態）。存檔內的劇本複本、種子鍵、內容雜湊與內部編號不匯出。
+- **保存期限**（`purge-expired-data` 新增兩類）：RPG 存檔最後活動後 365 天刪除（回合與記事簿一併消失，不論進行中或已完結）；中斷或被擋的回合的部分劇情內容 14 天後清為空字串（回合紀錄保留）。
+
+### 已知限制
+
+- ①**沒有介面**：內容模式的切換、劇本的創作與審核、存檔的遊玩都只有資料與 API 基礎（或完全沒有），玩家目前什麼都看不到。②服務條款與隱私權政策的措辭（「滿 18 歲之後會自動解除」「保存期限表」）與客服提示詞尚未隨新規則修訂，留給法務覆核（見 change 的 tasks.md「Workflow follow-up」）。③成人模式的書面許可、法務意見與劇情輸出的審查層都還沒有，開關開啟只代表部署層的條件之一。④欄位長度與總量上限是暫定值。⑤備份還原後重新執行刪除不區分「匿名保留已發佈劇本」的偏好（該偏好屬 RC-8，尚未實作）。
+
+### 驗收紀錄（rpg-data-and-script，2026-11-03，已實作、待封存）
+
+日期 2026-11-03；對應的 commit：第 1 組（資料模型與遷移）為 `74f7a35`，其餘在其後的提交。依規範分成兩欄，**沒有實際執行的項目一律標為未驗證，不以預期結果代替**。
+
+| 已驗證 | 結果 |
+|---|---|
+| 自動化測試 | pytest **6370 項通過、0 項略過、0 項失敗**（含真實 SQL Server `project_test`：未設定 `TEST_SQLSERVER_URL` 時這些測試會被略過，所以零略過代表 SQLite 與 SQL Server 兩軌都跑了；上次 5585，新增 785 項；另有 1 則既有的警告，子行程輸出解碼，與本 change 無關）；`node --test "tests/js/*.test.js"` **197 項通過**（沒有變動）。新增的測試檔：`test_content_tier`（34）、`test_script_spec`（156，含標準化內容再驗證與雜湊在兩種資料庫往返不變）、`test_rpg_models`（21）、`test_script_repository`（134，含真實執行緒的並行建立版本）、`test_session_repository`（81，含並行重送與序號不重複、世界狀態的版本衝突）、`test_session_service`（66）、`test_content_tier_modes`（41）、`test_content_mode_api`（42）、`test_seed_scripts`（50）、`test_account_erasure_rpg_data`（10）、`test_personal_export_rpg_data`（42）、`test_data_retention_rpg`（38）、`tests/architecture/test_script_state_writes`（4）；既有檔案同步更新（內容上限改為三種模式、設定、匯出檔案清單、保存期限類別、錯誤類型對照） |
+| 遷移 `0012_rpg_data_and_script` | `tests/test_migrations.py` 在 SQLite 與真實 SQL Server 通過：從 `0011` 升級並種入成年、未成年與 `is_adult_at_confirmation` 為空三種既有帳號，回填結果為 `standard`／`safe`／`safe`、五張表與索引存在、再升級一次結果相同、降級後新表與新欄位消失；部分唯一索引同時有 `sqlite_where` 與 `mssql_where`；`alembic.ini` 與 `script.py.mako` 仍是純 ASCII |
+| 資料庫約束（雙軌） | 版本編號在同一劇本內唯一；第二個上架版本、第二個進行中的版本被唯一索引擋下；多個沒有種子鍵的劇本並存、重複的種子鍵被擋；`(session_id, client_msg_id)` 與 `(session_id, seq)` 重複被擋；刪除使用者串聯刪除劇本、版本、標籤、存檔與回合；另一位玩家的存檔參照作者的版本時，沒有先清空參照就刪除會被擋下（SQL Server 錯誤 1785 的修正方向），清空後存檔仍在 |
+| 狀態機與不變量 | 每個狀態 × 每種轉移逐一嘗試：只有固定集合內的成功，其餘一律拒絕且狀態與輔助欄位不變；輔助欄位等於 `script_id` 若且唯若狀態在其集合內；核可時取代舊版與鎖定筆名在同一個 SAVEPOINT，中途失敗兩者保持原狀態；架構測試確認別處不能寫版本狀態（並附反向驗證） |
+| 內容模式 | 年齡 × 部署開關 × 成年確認 × 偏好 × 劇本宣告 × 存檔的組合，證明生效模式永遠不高於任何一項輸入；未成年者不論開關、紀錄或角色（含管理員）一律是安全模式；滿 18 歲上限解除但偏好不自動調高；成人模式缺任一項確認被拒絕並指出缺哪一項；規範版本改變後確認失效；離開成人模式不清除紀錄；API 的未登入 401、尚未確認年齡 403、不合法的模式 400、缺 CSRF、只能讀寫自己的（加上帶別人編號的請求只改到自己）；事件只含名稱與使用者編號 |
+| 設定 | `ADULT_MODE_ENABLED` 預設關閉、各環境規則相同（staging 與 production 須明確設定）、值不合法與條件不齊時啟動失敗且訊息只含變數名稱；舊的 `SEXUAL_CONTENT_LEVEL3_*` 在 production 殘留任何值都能啟動、成人模式維持關閉、各只警告一次且不回顯值；`.env.example` 不再列舊名稱；部署計畫檔含舊名稱被拒絕 |
+| 存檔與回合 | 開存檔的各情境（已發佈版本、未確認年齡、擁有者用自己的草稿、非擁有者用他人草稿得到與不存在相同的 404、分級高於玩家、內容模式取較保守者、15 歲玩家可玩 `safe` 內建劇本）；複本與來源一致且不受之後的修改、取代或刪除影響；重送已完成／中斷／被擋／串流中的回合；兩個請求以同一編號開始回合只有一筆、四個請求以不同編號開始回合序號為 1 至 4；中斷與被擋的回合不佔輪數；已完結的存檔仍可讀、不得再開始回合（`409 session_ended`）、沒有任何方法能改回進行中 |
+| 內建劇本與種子 | `seed-scripts` 第一次執行建立無作者、筆名「官方」並鎖定的劇本與已發佈的第 1 版；重複執行沒有任何資料變動（含更新時間）；預覽不寫入；內容改變新增第 2 版並取代第 1 版而內容不變；只有排版差異視為沒有變動；任何一份不合規整批失敗、資料庫沒有任何變動、輸出只有檔名與欄位路徑（不回顯劇本文字）；首發劇本「青雲問道」通過驗證（1123 字）、宣告 `safe`、4 位角色（含隱藏個性）、4 個地點、年齡與年份兩種里程碑；建立應用程式不會建立任何內建劇本 |
+| 抹除、匯出與保存期限 | 抹除一位有草稿、已發佈劇本、存檔與回合的作者：他的資料全部消失，別人的存檔保留、內容複本不變、來源參照為空值且抹除沒有被阻止；使用者剛好登入而條件不成立時整個交易回復，連清掉的參照一起復原。匯出含劇本全部版本與存檔、記事簿全文與每個回合，不含他人劇本的複本、種子鍵、內容雜湊、內部編號與模型的結構化輸出，CSV 的公式字元被中和、全部以 BOM 開頭，大量資料以分頁逐段產生。保存期限：存檔 365 天（只看最後活動、沒有回合的存檔以建立時間算、已完結的也刪）與回合部分內容 14 天（中斷與被擋清為空字串、完成與串流中不受影響），預覽不改資料、重跑為 0、事件只含類別與筆數 |
+| 日誌掃描 | 建立劇本與存檔、開始／完成／中斷／被擋回合、更新世界狀態、完結、刪除草稿、切換內容模式、匯出與保存期限清除全程收集日誌，找不到劇本文字、玩家行動、劇情原文、記事簿或世界狀態 |
+| 容器驗收（WSL Docker，`scripts/verify_container.py`） | **117 / 117 項通過**（上次 112，新增 5 項：遷移一路升級到 `0012`，以及 `seed-scripts` 的預覽、資料檔已隨映像封裝、實際建立、重複執行無變動；輸出只有種子鍵與筆數） |
+| OpenSpec | `openspec validate rpg-data-and-script --strict` 通過；`openspec validate --specs` 48 項通過 |
+| 設計文件 | `tests/test_design_docs.py` 39 項通過（資料模型、系統架構、帳號與安全、營運與部署、模型呼叫層、RPG 與路線圖已同步）；`tests/test_agents_skill_sync.py` 120 項通過（規範字句「劇本版本 `script_versions` 的 `milestones_json`」逐字一致） |
+
+| 未驗證 | 說明 |
+|---|---|
+| **人工驗收／瀏覽器** | 沒有做：這個 change 沒有任何新的玩家介面（內容模式的切換介面、劇本創作與遊玩介面都在後續的 change）；API 只經由自動測試驅動，沒有經過瀏覽器或 ngrok 通道的真實請求 |
+| **開發用 SQL Server 資料庫 `project` 的遷移** | 沒有執行：`0012` 只在 SQLite、`project_test` 與容器內的 SQLite 驗證過；開發資料庫目前仍在 `0011`，須由使用者在備份後自行執行 `alembic upgrade head` 與 `flask seed-scripts` |
+| **對真實 SQL Server 執行 `flask seed-scripts`** | 沒有做：指令只在 SQLite（測試應用程式與容器）上實際執行；服務層與資料存取在 `project_test` 上通過（雙軌測試） |
+| **雲端部署與一次性 Job** | 沒有做：部署計畫腳本尚未為 `seed-scripts` 產生 Cloud Run Job（屬 C-5c），也沒有可計費的雲端專案 |
+| **成人模式的真實條件** | 沒有：供應商的書面許可、法務意見（含勾選確認是否足夠）與劇情輸出的審查層都不存在；`ADULT_MODE_ENABLED` 只是部署層的條件之一，目前沒有任何送出露骨內容的入口 |
+| **服務條款、隱私權政策與客服提示詞的措辭** | 沒有修訂：「滿 18 歲之後會自動解除」與保存期限表尚未反映新規則（見 change 的 tasks.md「Workflow follow-up」），留給法務覆核 |
+| **欄位上限與總量上限的校正** | 沒有：數字是暫定值，之後以實際 token 預算校正（RC-4） |
 
 ## 撰寫新端點：權限與 IDOR 測試
 

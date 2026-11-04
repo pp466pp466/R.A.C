@@ -1,7 +1,7 @@
-"""RPG 用途的 OpenAI 相容端點與等級 3 環境開關的設定驗證（openai-compatible-provider）。
+"""RPG 用途的 OpenAI 相容端點與成人模式環境開關的設定驗證（openai-compatible-provider、content-tier-modes）。
 
 對應規格：llm-provider（依用途指定供應商、模型名稱、金鑰）、llm-openai-compatible（基底網址必須安全）、
-age-confirmation（等級 3 預設關閉且只能以環境設定開啟、須記錄許可涵蓋的模型）。
+content-tier-modes（成人模式預設關閉且只能以環境設定開啟、須記錄許可涵蓋的模型、舊的等級 3 變數已淘汰）。
 所有錯誤訊息只能指出變數名稱，不得含它的值。
 """
 import pytest
@@ -13,7 +13,7 @@ FAKE_OPENROUTER_KEY = "sk-or-v1-fake-key-for-tests-0123456789"
 FREE_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition:free"
 PAID_MODEL = "cognitivecomputations/dolphin-mistral-24b-venice-edition"
 RPG_ENV = {"OPENROUTER_API_KEY": FAKE_OPENROUTER_KEY, "OPENROUTER_MODEL": FREE_MODEL}
-LEVEL3_ON = {"SEXUAL_CONTENT_LEVEL3_ENABLED": "true", "SEXUAL_CONTENT_LEVEL3_MODELS": f"{FREE_MODEL},{PAID_MODEL}"}
+ADULT_ON = {"ADULT_MODE_ENABLED": "true", "ADULT_MODE_MODELS": f"{FREE_MODEL},{PAID_MODEL}"}
 
 
 def prod_env(**overrides: str) -> dict[str, str]:
@@ -159,92 +159,141 @@ def test_a_base_url_with_credentials_a_query_a_fragment_or_a_bad_shape_is_reject
     assert "OPENROUTER_BASE_URL" in message and "pass" not in message and "abc" not in message and url not in message
 
 
-# ---- 等級 3 的環境開關 ---------------------------------------------------------------------------------
+# ---- 成人模式的部署開關（ADULT_MODE_*）-----------------------------------------------------------------
 
-def test_level_3_is_off_by_default_even_when_the_rpg_purpose_is_configured(tmp_path):
+def test_the_adult_mode_is_off_by_default_even_when_the_rpg_purpose_is_configured(tmp_path):
     for config in (load_dev(tmp_path), load_dev(tmp_path, **RPG_ENV)):
-        assert config.content.level3_enabled is False and config.content.level3_models == ()
+        assert config.content.adult_mode_enabled is False and config.content.adult_models == ()
 
 
-def test_development_can_enable_level_3_with_a_permission_list_that_covers_the_rpg_models(tmp_path):
-    config = load_dev(tmp_path, **RPG_ENV, **LEVEL3_ON)
-    assert config.content.level3_enabled is True
-    assert config.content.level3_models == (FREE_MODEL, PAID_MODEL)
+def test_development_can_enable_the_adult_mode_with_a_permission_list_that_covers_the_rpg_models(tmp_path):
+    config = load_dev(tmp_path, **RPG_ENV, **ADULT_ON)
+    assert config.content.adult_mode_enabled is True
+    assert config.content.adult_models == (FREE_MODEL, PAID_MODEL)
 
 
-def test_testing_can_enable_level_3_too():
-    env = {"APP_ENV": "testing", **RPG_ENV, **LEVEL3_ON}
-    assert load_config(environ=env).content.level3_enabled is True
+def test_testing_can_enable_the_adult_mode_too():
+    env = {"APP_ENV": "testing", **RPG_ENV, **ADULT_ON}
+    assert load_config(environ=env).content.adult_mode_enabled is True
 
 
 @pytest.mark.parametrize("value", ["maybe", "1", "yes", "on", "enabled"])
 def test_the_switch_must_be_a_real_boolean_and_the_error_never_echoes_the_value(tmp_path, value):
     with pytest.raises(ConfigError) as caught:
-        load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED=value)
+        load_dev(tmp_path, ADULT_MODE_ENABLED=value)
     message = str(caught.value)
-    assert "SEXUAL_CONTENT_LEVEL3_ENABLED" in message and value not in message.replace("true、false", "")
+    assert "ADULT_MODE_ENABLED" in message and value not in message.replace("true、false", "")
 
 
 @pytest.mark.parametrize("env_name", ["staging", "production"])
-def test_staging_and_production_refuse_to_start_with_level_3_on_until_adult_verification_exists(env_name):
-    with pytest.raises(ConfigError) as caught:
-        load_config(environ=prod_env(APP_ENV=env_name, **RPG_ENV, **LEVEL3_ON))      # 其他條件都齊備也一樣
-    assert "SEXUAL_CONTENT_LEVEL3_ENABLED" in str(caught.value) and "成年驗證" in str(caught.value)
+def test_staging_and_production_start_with_the_adult_mode_on_when_it_is_set_explicitly_and_every_condition_holds(env_name):
+    config = load_config(environ=prod_env(APP_ENV=env_name, **RPG_ENV, **ADULT_ON))
+    assert config.content.adult_mode_enabled is True and config.content.adult_models == (FREE_MODEL, PAID_MODEL)
 
 
 @pytest.mark.parametrize("env_name", ["staging", "production"])
-def test_staging_and_production_start_normally_with_level_3_off_or_unset(env_name):
-    assert load_config(environ=prod_env(APP_ENV=env_name, **RPG_ENV)).content.level3_enabled is False
-    assert load_config(environ=prod_env(APP_ENV=env_name, SEXUAL_CONTENT_LEVEL3_ENABLED="false", **RPG_ENV)).content.level3_enabled is False
+def test_staging_and_production_are_off_unless_it_is_set_explicitly(env_name):
+    assert load_config(environ=prod_env(APP_ENV=env_name, **RPG_ENV)).content.adult_mode_enabled is False
+    assert load_config(environ=prod_env(APP_ENV=env_name, ADULT_MODE_ENABLED="false", **RPG_ENV)).content.adult_mode_enabled is False
+    assert load_config(environ=prod_env(APP_ENV=env_name, ADULT_MODE_MODELS=FREE_MODEL, **RPG_ENV)).content.adult_mode_enabled is False
 
 
-def test_level_3_on_without_the_rpg_purpose_fails_and_says_so(tmp_path):
+@pytest.mark.parametrize("env_name", ["staging", "production"])
+def test_the_conditions_are_enforced_in_staging_and_production_too(env_name):
     with pytest.raises(ConfigError) as caught:
-        load_dev(tmp_path, **LEVEL3_ON)
+        load_config(environ=prod_env(APP_ENV=env_name, **RPG_ENV, ADULT_MODE_ENABLED="true", ADULT_MODE_MODELS="vendor/something-else"))
+    assert "ADULT_MODE_MODELS" in str(caught.value)
+    with pytest.raises(ConfigError) as caught:
+        load_config(environ=prod_env(APP_ENV=env_name, **ADULT_ON))
     assert "RPG 用途尚未設定" in str(caught.value)
 
 
-def test_level_3_on_with_an_empty_permission_list_fails_naming_the_list_variable(tmp_path):
+def test_the_adult_mode_on_without_the_rpg_purpose_fails_and_says_so(tmp_path):
     with pytest.raises(ConfigError) as caught:
-        load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="true", **RPG_ENV)
-    assert "SEXUAL_CONTENT_LEVEL3_MODELS" in str(caught.value)
+        load_dev(tmp_path, **ADULT_ON)
+    assert "RPG 用途尚未設定" in str(caught.value)
+
+
+def test_the_adult_mode_on_with_an_empty_permission_list_fails_naming_the_list_variable(tmp_path):
+    with pytest.raises(ConfigError) as caught:
+        load_dev(tmp_path, ADULT_MODE_ENABLED="true", **RPG_ENV)
+    assert "ADULT_MODE_MODELS" in str(caught.value)
     assert "沒有設定" in str(caught.value)            # 空清單要有專屬的明確訊息，而不是被「沒有涵蓋」的訊息順帶擋下
 
 
-def test_level_3_on_fails_when_the_primary_model_is_not_in_the_list_and_never_echoes_the_names(tmp_path):
+def test_the_adult_mode_on_fails_when_the_primary_model_is_not_in_the_list_and_never_echoes_the_names(tmp_path):
     with pytest.raises(ConfigError) as caught:
-        load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="true", SEXUAL_CONTENT_LEVEL3_MODELS="vendor/something-else", **RPG_ENV)
+        load_dev(tmp_path, ADULT_MODE_ENABLED="true", ADULT_MODE_MODELS="vendor/something-else", **RPG_ENV)
     message = str(caught.value)
-    assert "SEXUAL_CONTENT_LEVEL3_MODELS" in message and "OPENROUTER_MODEL" in message
+    assert "ADULT_MODE_MODELS" in message and "OPENROUTER_MODEL" in message
     assert FREE_MODEL not in message and "vendor/something-else" not in message
 
 
-def test_level_3_on_fails_when_only_the_fallback_model_is_missing_from_the_list(tmp_path):
+def test_the_adult_mode_on_fails_when_only_the_fallback_model_is_missing_from_the_list(tmp_path):
     with pytest.raises(ConfigError) as caught:
-        load_dev(
-            tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="true", SEXUAL_CONTENT_LEVEL3_MODELS=FREE_MODEL,
-            OPENROUTER_FALLBACK_MODEL=PAID_MODEL, **RPG_ENV,
-        )
+        load_dev(tmp_path, ADULT_MODE_ENABLED="true", ADULT_MODE_MODELS=FREE_MODEL, OPENROUTER_FALLBACK_MODEL=PAID_MODEL, **RPG_ENV)
     message = str(caught.value)
-    assert "SEXUAL_CONTENT_LEVEL3_MODELS" in message and "OPENROUTER_FALLBACK_MODEL" in message
+    assert "ADULT_MODE_MODELS" in message and "OPENROUTER_FALLBACK_MODEL" in message
     assert "OPENROUTER_MODEL" not in message.replace("OPENROUTER_FALLBACK_MODEL", "")      # 主要模型有涵蓋，不該被點名
 
 
 def test_the_permission_list_is_split_on_commas_and_trimmed(tmp_path):
     config = load_dev(
-        tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="true", SEXUAL_CONTENT_LEVEL3_MODELS=f"  {FREE_MODEL} ,, {PAID_MODEL},",
+        tmp_path, ADULT_MODE_ENABLED="true", ADULT_MODE_MODELS=f"  {FREE_MODEL} ,, {PAID_MODEL},",
         OPENROUTER_FALLBACK_MODEL=PAID_MODEL, **RPG_ENV,
     )
-    assert config.content.level3_models == (FREE_MODEL, PAID_MODEL)
+    assert config.content.adult_models == (FREE_MODEL, PAID_MODEL)
 
 
 def test_an_invalid_name_in_the_permission_list_is_rejected_when_the_switch_is_on(tmp_path):
     with pytest.raises(ConfigError) as caught:
-        load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="true", SEXUAL_CONTENT_LEVEL3_MODELS=f"{FREE_MODEL},bad name", **RPG_ENV)
-    assert "SEXUAL_CONTENT_LEVEL3_MODELS" in str(caught.value) and "bad name" not in str(caught.value)
+        load_dev(tmp_path, ADULT_MODE_ENABLED="true", ADULT_MODE_MODELS=f"{FREE_MODEL},bad name", **RPG_ENV)
+    assert "ADULT_MODE_MODELS" in str(caught.value) and "bad name" not in str(caught.value)
 
 
 def test_the_permission_list_has_no_effect_at_all_while_the_switch_is_off(tmp_path):
     """spec：清單不影響開關關閉時的行為，即使清單寫壞了也不能讓應用程式無法啟動。"""
-    config = load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_MODELS="bad name;;", **RPG_ENV)
-    assert config.content.level3_enabled is False
+    config = load_dev(tmp_path, ADULT_MODE_MODELS="bad name;;", **RPG_ENV)
+    assert config.content.adult_mode_enabled is False
+
+
+# ---- 已淘汰的等級 3 變數：忽略、只警告、不會開啟任何東西 ---------------------------------------------------
+
+OBSOLETE_LEVEL3 = ("SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS")
+
+
+def obsolete_warnings(caplog, name):
+    return [record.getMessage() for record in caplog.records if name in record.getMessage()]
+
+
+def test_the_old_level_3_switch_on_leaves_the_adult_mode_off_with_one_warning_naming_only_the_variable(tmp_path, caplog):
+    with caplog.at_level("WARNING", logger="app.config"):
+        config = load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="true", SEXUAL_CONTENT_LEVEL3_MODELS=FREE_MODEL, **RPG_ENV)
+    assert config.content.adult_mode_enabled is False and config.content.adult_models == ()
+    for name in OBSOLETE_LEVEL3:
+        warnings = obsolete_warnings(caplog, name)
+        assert len(warnings) == 1 and "已淘汰" in warnings[0]
+        assert FREE_MODEL not in warnings[0] and "true" not in warnings[0].replace(name, "")
+
+
+@pytest.mark.parametrize("env_name", ["staging", "production"])
+@pytest.mark.parametrize("value", ["true", "false", "maybe"])
+def test_a_leftover_old_variable_never_stops_a_production_like_start_and_its_value_is_not_echoed(env_name, value, caplog):
+    with caplog.at_level("WARNING", logger="app.config"):
+        config = load_config(environ=prod_env(APP_ENV=env_name, SEXUAL_CONTENT_LEVEL3_ENABLED=value, SEXUAL_CONTENT_LEVEL3_MODELS=value, **RPG_ENV))
+    assert config.content.adult_mode_enabled is False
+    for name in OBSOLETE_LEVEL3:
+        warnings = obsolete_warnings(caplog, name)
+        assert len(warnings) == 1 and value not in warnings[0].replace(name, "")
+
+
+def test_the_new_switch_still_works_when_the_old_variables_are_left_behind(tmp_path, caplog):
+    with caplog.at_level("WARNING", logger="app.config"):
+        config = load_dev(tmp_path, SEXUAL_CONTENT_LEVEL3_ENABLED="false", **RPG_ENV, **ADULT_ON)
+    assert config.content.adult_mode_enabled is True
+
+
+def test_without_the_old_variables_there_is_no_obsolete_warning(tmp_path, caplog):
+    with caplog.at_level("WARNING", logger="app.config"):
+        load_dev(tmp_path, **RPG_ENV, **ADULT_ON)
+    assert not [record for record in caplog.records if "SEXUAL_CONTENT" in record.getMessage()]

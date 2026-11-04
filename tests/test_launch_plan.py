@@ -117,6 +117,19 @@ def test_a_plan_file_still_holding_the_retired_verification_variable_is_refused_
 
 
 @pytest.mark.parametrize("env", ["staging", "production"])
+@pytest.mark.parametrize("name", ["SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS"])
+def test_a_plan_file_still_holding_an_old_level_3_variable_is_refused_by_name(env, name):
+    with pytest.raises(plan.PlanError) as error:
+        build(env, plain={**PLAIN, name: "x"})
+    assert name in str(error.value) and "已淘汰" in str(error.value)
+
+
+@pytest.mark.parametrize("env", ["staging", "production"])
+def test_the_adult_mode_variables_are_accepted_in_a_plan_file(env):
+    build(env, plain={**PLAIN, "ADULT_MODE_ENABLED": "false", "ADULT_MODE_MODELS": "vendor/model"})
+
+
+@pytest.mark.parametrize("env", ["staging", "production"])
 def test_the_base_url_is_always_required_because_google_login_and_the_admin_reset_link_need_it(env):
     without = {k: v for k, v in PLAIN.items() if k != "BASE_URL"}
     with pytest.raises(plan.PlanError) as error:

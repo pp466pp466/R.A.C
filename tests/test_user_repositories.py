@@ -191,6 +191,67 @@ def test_an_account_with_only_the_old_checkbox_time_still_counts_as_not_complete
     assert user.birth_date == date(1996, 1, 5) and user.age_policy_version == "v2" and user.age_confirmed_at != old_time
 
 
+# ---- 內容模式偏好與成年確認（content-tier-modes 規格）------------------------------------
+
+MINOR_ARGS = dict(birth_date=date(2011, 10, 28), age_range="13_17", is_adult=False)
+
+
+def test_the_preference_defaults_to_safe_until_the_age_is_confirmed_and_then_follows_the_age_at_confirmation(session, users):
+    adult = users.add_user(make_user(1))
+    minor = users.add_user(make_user(2))
+    assert (adult.content_tier_preference, minor.content_tier_preference) == ("safe", "safe")
+    assert users.complete_age_verification_if_unset(adult, **age_args()) is True
+    assert users.complete_age_verification_if_unset(minor, **age_args(**MINOR_ARGS)) is True
+    assert (adult.content_tier_preference, minor.content_tier_preference) == ("standard", "safe")
+
+
+def test_a_repeated_age_confirmation_neither_overwrites_nor_changes_the_preference(session, users):
+    user = users.add_user(make_user(1))
+    users.complete_age_verification_if_unset(user, **age_args())
+    assert users.set_content_preference(user, "safe") is True               # 成年玩家自行改成安全模式
+    assert users.complete_age_verification_if_unset(user, **age_args()) is False
+    assert user.content_tier_preference == "safe"
+
+
+def test_setting_the_preference_writes_only_that_column_for_that_user(session, users):
+    user = users.add_user(make_user(1))
+    other = users.add_user(make_user(2))
+    for member in (user, other):
+        users.complete_age_verification_if_unset(member, **age_args())
+    assert users.set_content_preference(user, "adult") is True
+    assert (user.content_tier_preference, other.content_tier_preference) == ("adult", "standard")
+    assert user.adult_confirmed_at is None and user.birth_date == date(1996, 1, 5)
+
+
+def test_an_account_without_a_completed_age_check_cannot_get_any_preference_or_confirmation(session, users):
+    user = users.add_user(make_user(1))
+    assert users.set_content_preference(user, "standard") is False
+    assert users.record_adult_confirmation(user, confirmed_at=utcnow(), rules_version="r1", method="self_declared") is False
+    assert user.content_tier_preference == "safe"
+    assert (user.adult_confirmed_at, user.adult_rules_version, user.adult_confirm_method) == (None, None, None)
+
+
+@pytest.mark.parametrize("tier", ["mature", "", None, "SAFE", 1])
+def test_an_unknown_tier_is_a_programming_error_and_writes_nothing(session, users, tier):
+    user = users.add_user(make_user(1))
+    users.complete_age_verification_if_unset(user, **age_args())
+    with pytest.raises(ValueError):
+        users.set_content_preference(user, tier)
+    assert user.content_tier_preference == "standard"
+
+
+def test_the_adult_confirmation_is_recorded_replaced_and_kept_when_the_preference_changes(session, users):
+    user = users.add_user(make_user(1))
+    users.complete_age_verification_if_unset(user, **age_args())
+    first, second = utcnow(), utcnow() + timedelta(days=30)
+    assert users.record_adult_confirmation(user, confirmed_at=first, rules_version="r1", method="self_declared") is True
+    users.set_content_preference(user, "adult")
+    users.set_content_preference(user, "standard")                      # 離開成人模式不清除確認紀錄
+    assert (user.adult_confirmed_at, user.adult_rules_version, user.adult_confirm_method) == (first, "r1", "self_declared")
+    users.record_adult_confirmation(user, confirmed_at=second, rules_version="r2", method="self_declared")
+    assert (user.adult_confirmed_at, user.adult_rules_version) == (second, "r2")      # 只保存目前這一次
+
+
 def test_the_age_statistics_count_per_range_and_expose_nothing_individual(session, users):
     for n, (birth, chosen) in enumerate(
         [(date(2011, 1, 1), "13_17"), (date(2010, 2, 2), "13_17"), (date(1996, 1, 5), "25_34"), (date(1990, 3, 3), "25_34"),
