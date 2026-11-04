@@ -134,6 +134,30 @@ SYNCED_RULES = [
     (11, "只有管理員能在被鎖定或被暫停發佈的帳號下檢視", "references/privacy-observability.md"),
     (11, "被拒絕的送審只保留類別列舉值與時間（送審紀錄保存 12 個月，隨帳號刪除並納入匯出）", "references/privacy-observability.md"),
     (11, "auth_tokens 為到期後 7 天；送審紀錄 12 個月；", "references/privacy-observability.md"),
+    # 2026-11-04：玩家主角（共用劇本角色規格、AI 生成或自創、一個錨定事實）與開場的「第 0 幕」；自我介紹不存
+    (5, "記事簿重點抓取與劇本審查的模型層，以及玩家主角的生成與審查", "references/llm-streaming.md"),
+    (6, "開場的「第 0 幕」（見第 7 節）不是一輪：它沒有玩家訊息，不計輪數，不計入每日對話輪數與記事簿「每完成 10 輪」的計數", "references/llm-streaming.md"),
+    (6, "完成輪數未滿 10 輪之前，它作為歷史最前面的一則 AI 訊息放入上下文，之後隨最近 10 輪的視窗自然滑出", "references/llm-streaming.md"),
+    (7, "主角與錨定事實於開存檔時一併寫入存檔（見「玩家主角」一條）", "references/business-encoding.md"),
+    (7, "玩家主角：玩家開存檔時依「劇本角色規格」自創主角，與劇本角色共用同一份欄位、長度與列舉值上限", "references/business-encoding.md"),
+    (7, "主角年齡是劇中角色的年齡，與使用者年齡無關", "references/business-encoding.md"),
+    (7, "生成只是預覽，不寫入存檔，可重新生成（次數有上限，存放於資料庫的設定表，程式每次使用時現讀而不快取於行程內，以 flask 指令修改並寫入稽核紀錄，初始值由遷移寫入）", "references/business-encoding.md"),
+    (7, "生成失敗、被審查擋下或玩家不想用時，改為自創。按「開始冒險」才開存檔", "references/business-encoding.md"),
+    (7, "錨定事實每位主角一個，內容為主角與劇本中某個人物、地點或里程碑的關係，必須指向該存檔的劇本內容中存在的項目，由 Service 驗證", "references/business-encoding.md"),
+    (7, "模型只提議，玩家接受或自行撰寫後才由 Service 寫入，不由模型直接寫入", "references/business-encoding.md"),
+    (7, "自創時預設也須提供一個（選定項目後自行撰寫一句），玩家可略過，略過時開場僅依背景故事與角色卡", "references/business-encoding.md"),
+    (7, "主角與對象之一為未成年時，錨定事實不得為戀愛或性的關係", "references/business-encoding.md"),
+    (7, "主角的年齡為錨定事實，開存檔後模型與玩家都不能直接寫入", "references/business-encoding.md"),
+    (7, "規則層於每次生成與送出時執行，模型層於開存檔時執行，未通過者不得開存檔；拒絕只告知類別", "references/business-encoding.md"),
+    (7, "開場：主角建立完成後，由回合引擎依主角角色卡與錨定事實產生「第 0 幕」", "references/business-encoding.md"),
+    (7, "產生失敗或被擋時，退回劇本的初始對話，沒有則只顯示背景故事", "references/business-encoding.md"),
+    (7, "它的 token 計入全站每日用量，不計入每日對話輪數", "references/business-encoding.md"),
+    (10, "玩家主角的角色卡、自我介紹與錨定事實，亦同", "references/auth-security.md"),
+    (10, "玩家主角的生成與重新生成另有次數上限（見第 7 節），其 token 計入全站每日上限，不計入每日對話輪數", "references/auth-security.md"),
+    (11, "玩家主角：角色卡與錨定事實由玩家文字構成，視為個資", "references/privacy-observability.md"),
+    (11, "自我介紹僅用於生成當下，不寫入資料庫（資料最小化）", "references/privacy-observability.md"),
+    (11, "玩家主角的角色卡、自我介紹與錨定事實、含權杖的完整網址", "references/privacy-observability.md"),
+    (11, "玩家的角色描述、自我介紹、劇本與記事簿同樣屬於個資", "references/privacy-observability.md"),
 ]
 
 
@@ -194,7 +218,7 @@ def test_every_bullet_of_section_10_is_mirrored_verbatim_in_the_auth_security_re
     assert not stale, f"references/auth-security.md 沒有與 AGENTS.md 第 10 節逐字一致：{stale}"
 
 
-@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱："])
+@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱：", "- 玩家主角："])
 def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
     """第 11 節的這幾條在 reference 裡是逐字鏡像（「絕不記錄」在 reference 是摘要版，另以片段檢查）。"""
     agents_lines = [line.strip() for line in agents_section(11).split("\n") if line.strip().startswith(key)]
@@ -203,7 +227,7 @@ def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
     assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"privacy-observability.md 沒有逐字鏡像：{key}"
 
 
-@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本"])
+@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本", "- 玩家主角：", "- 開場："])
 def test_the_section_7_rpg_bullets_are_mirrored_verbatim(key):
     """第 7 節 RPG 這幾條在 reference 裡是逐字鏡像（分級、劇本創作、結局與角色卡改動頻繁，整行比對才抓得到只改一邊）。"""
     agents_lines = [line.strip() for line in agents_section(7).split("\n") if line.strip().startswith(key)]
