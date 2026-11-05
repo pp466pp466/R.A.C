@@ -1,6 +1,6 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0014_rpg_character_creation` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-05 ｜ 對應 change：rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0014_rpg_character_creation` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件是 SQL Server `project` 資料庫的**結構參考**：共 **18 張資料表、207 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
@@ -20,7 +20,7 @@
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
 
-**驗證紀錄**：本文的型別、可空、索引與唯一約束的名稱、篩選條件與主鍵名稱，已於 2026-11-04 以**唯讀**方式與實際的 `project` 資料庫（`alembic_version` ＝ `0013_rpg_script_authoring`）逐項比對，18 張資料表沒有任何差異；`alembic check` 回報 `No new upgrade operations detected.`。**`0014_rpg_character_creation`（`sessions.protagonist_json`、三個限制鍵）尚未套用到實際的 `project`**，它的結構以 ORM 與 migration 為準；升級後再以同樣的方式比對，並在第 14 節追加一列「套用」。
+**驗證紀錄**：本文的型別、可空、索引與唯一約束的名稱、篩選條件與主鍵名稱，已於 2026-11-04 以**唯讀**方式與實際的 `project` 資料庫（`alembic_version` ＝ `0013_rpg_script_authoring`）逐項比對，18 張資料表沒有任何差異；`alembic check` 回報 `No new upgrade operations detected.`。**`0014_rpg_character_creation`（`sessions.protagonist_json`、三個限制鍵）已於 2026-11-05 套用到實際的 `project`**：`alembic current` 為 `0014_rpg_character_creation (head)`，`alembic check` 回報 `No new upgrade operations detected.`（ORM 與實際資料庫沒有差異），`flask show-script-limits` 列出十個鍵、三個新的值是 5、15、40。
 
 ## 2. 資料表總覽
 
@@ -1436,3 +1436,4 @@ flowchart TD
 | 2026-11-04 | 文件 | 本文件 | 建立本文件，並與實際的 `project` 資料庫逐項比對（18 張資料表、206 個欄位，型別、可空、索引與約束的名稱、篩選條件、主鍵名稱都沒有差異） | 本文件 |
 | 2026-11-04 | 新增 | 欄位 `sessions.protagonist_json`（JSON，可為空） | 玩家主角的角色卡與錨定事實（沿用劇本角色規格）；`player_name`、`character_age` 保留並與它同步；遷移之前建立的存檔此欄為空 | `0014_rpg_character_creation` |
 | 2026-11-04 | 新增 | `runtime_limits` 的三列初始資料（`protagonist_suggest_daily.free／plus／vip` = 5／15／40） | 每個台灣日可請 AI 生成主角的次數上限；只插入資料庫還沒有的鍵 | `0014_rpg_character_creation` |
+| 2026-11-05 | 套用 | 實際資料庫 `project` | 由使用者備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0014_20261105.bak`，`RESTORE VERIFYONLY` 通過）後，由 `0013_rpg_script_authoring` 升級到 `0014_rpg_character_creation`；`alembic current` 為 `0014_rpg_character_creation (head)`，`alembic check` 沒有差異；`flask show-script-limits` 列出十個鍵，三個新的 `protagonist_suggest_daily.*` 為 5／15／40 | `0014_rpg_character_creation` |

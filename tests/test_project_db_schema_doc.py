@@ -288,7 +288,7 @@ def test_the_change_log_notices_a_missing_migration_a_bad_order_a_foreign_type_a
     assert swapped != text
     assert any("由舊到新" in p for p in change_log_problems(swapped))
 
-    stale_header = text.replace("最後更新：2026-11-04", "最後更新：2026-11-01", 1)
+    stale_header = re.sub(r"最後更新：\d{4}-\d{2}-\d{2}", "最後更新：2000-01-01", text, count=1)          # 不寫死日期：每次追加異動紀錄都會換日期
     assert stale_header != text
     assert any("最後更新" in p for p in change_log_problems(stale_header))
 
