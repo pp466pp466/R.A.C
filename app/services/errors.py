@@ -252,6 +252,13 @@ class ScriptRejected(Unprocessable):
     default_message = "這份劇本的內容違反平台的內容規範，無法用來開始遊戲。請修改後再試。"
 
 
+class ProtagonistRejected(Unprocessable):
+    """玩家主角（角色卡、錨定事實或自我介紹）被審查層（規則層或模型層）明確拒絕（422）。回應只帶類別列舉，不指出內容。"""
+
+    code = "protagonist_rejected"
+    default_message = "這個主角的內容違反平台的內容規範，無法使用。請修改後再試。"
+
+
 class NicknameRequired(Conflict):
     """創作劇本之前必須先設定暱稱（409）。"""
 
@@ -324,6 +331,24 @@ class SubmissionLimit(TooManyRequests):
     def __init__(self, retry_after: int = 1, message: str | None = None) -> None:
         super().__init__(message)
         self.retry_after = max(1, int(retry_after))
+
+
+class SuggestionLimit(TooManyRequests):
+    """今日請 AI 生成主角的次數已達會員等級的上限（429）。`retry_after` 是距離明日 00:00（台灣時間）的秒數。"""
+
+    code = "suggestion_limit"
+    default_message = "您今日請 AI 生成主角的次數已用完，將於明日 00:00（台灣時間）重置。也可以自己填寫主角。"
+
+    def __init__(self, retry_after: int = 1, message: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))
+
+
+class SuggestionUnavailable(ServiceUnavailable):
+    """AI 目前無法生成主角（503）：沒有設定模型、全站用量已到上限、輸出兩次都不合格或被供應商過濾。不計入次數；可以自己填寫主角。"""
+
+    code = "suggestion_unavailable"
+    default_message = "AI 目前無法生成主角，請稍後再試，或自己填寫主角。"
 
 
 class ReviewUnavailable(ServiceUnavailable):

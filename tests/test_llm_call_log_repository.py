@@ -194,3 +194,42 @@ def test_the_site_totals_exclude_other_days(ledger):
     record(ledger, prompt_tokens=100, at=DAY_END)
     record(ledger, prompt_tokens=7, at=DAY_START)
     assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (7, 1)
+
+
+# ---- 主角生成的每日計次（protagonist-suggestion：以第一次嘗試的筆數計）------------------------------------
+
+
+def test_count_first_attempts_counts_requests_not_retries_and_respects_user_kind_and_period(ledger, member_session):
+    from app.models import User
+
+    users = []
+    for n in (1, 2):
+        user = User(email=f"p{n}@example.com", email_canonical=f"p{n}@example.com", display_name=f"使用者{n}", status="active")
+        member_session.add(user)
+        member_session.flush()
+        users.append(user)
+    mine, other = users
+    start, end = NOW - timedelta(hours=12), NOW + timedelta(hours=12)
+
+    record(ledger, user_id=mine.id, kind="protagonist_gen", attempt=1)                       # 一次請求
+    record(ledger, user_id=mine.id, kind="protagonist_gen", attempt=2, model=FALLBACK)        # 同一次請求的重試：不重複計
+    record(ledger, user_id=mine.id, kind="protagonist_gen", attempt=1, at=NOW + timedelta(minutes=5))   # 第二次請求
+    record(ledger, user_id=mine.id, kind="protagonist_gen", attempt=1, at=NOW - timedelta(days=1))      # 昨天：不計
+    record(ledger, user_id=mine.id, kind="protagonist_gen", attempt=1, at=end)                          # 訖不含
+    record(ledger, user_id=mine.id, kind="protagonist_review", attempt=1)                    # 其他類別：不計
+    record(ledger, user_id=mine.id, kind="chat", attempt=1)
+    record(ledger, user_id=other.id, kind="protagonist_gen", attempt=1)                      # 別人：不計
+    record(ledger, user_id=None, kind="protagonist_gen", attempt=1)                          # 已匿名化：不計
+    member_session.commit()
+
+    assert ledger.count_first_attempts(mine.id, "protagonist_gen", start=start, end=end) == 2
+    assert ledger.count_first_attempts(mine.id, "protagonist_review", start=start, end=end) == 1
+    assert ledger.count_first_attempts(other.id, "protagonist_gen", start=start, end=end) == 1
+    assert ledger.count_first_attempts(mine.id, "protagonist_gen", start=NOW + timedelta(days=3), end=NOW + timedelta(days=4)) == 0
+
+
+def test_the_new_call_kinds_fit_the_kind_column_and_are_registered():
+    from app.models.llm_call_log import CALL_KINDS, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW
+
+    assert KIND_PROTAGONIST_GEN in CALL_KINDS and KIND_PROTAGONIST_REVIEW in CALL_KINDS
+    assert LlmCallLog.kind.type.length >= max(len(kind) for kind in CALL_KINDS)          # SQL Server 會拒絕超長的字串，SQLite 不會

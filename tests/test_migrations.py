@@ -36,6 +36,10 @@ INITIAL_LIMITS = (
     ("script_submit_daily.free", 3), ("script_submit_daily.plus", 5), ("script_submit_daily.vip", 10),
     ("script_reject_streak", 3),
 )
+CHARACTER_LIMITS = (
+    ("protagonist_suggest_daily.free", 5), ("protagonist_suggest_daily.plus", 15), ("protagonist_suggest_daily.vip", 40),
+)
+HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS
 
 
 def alembic_config(url: str) -> Config:
@@ -572,13 +576,83 @@ def test_0013_adds_nullable_columns_two_tables_and_the_seven_initial_limits_and_
     engine.dispose()
 
 
+def test_0014_adds_a_nullable_protagonist_column_and_only_the_missing_limits_and_keeps_every_row(tmp_path):
+    """rpg-character-creation：sessions 新增可為空的 protagonist_json、runtime_limits 補三個生成次數的鍵（只插入缺少的，
+    不蓋掉部署者調整過的值）；既有的存檔一列不少、姓名與年齡不變；回復只移除新增的東西；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'character.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0014_rpg_character_creation")
+    assert revision.down_revision == "0013_rpg_script_authoring" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0013_rpg_script_authoring")
+    now = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        _insert_user(conn, users, 1)
+        sessions = Table("sessions", MetaData(), autoload_with=conn)
+        conn.execute(sessions.insert().values(
+            user_id=1, public_id="00000000-0000-4000-8000-0000000000b1", script_snapshot_json={"title": "舊"}, snapshot_spec_version=1,
+            player_name="舊存檔", character_age=30, current_location="", status_summary="", version=1, notebook_text="", notebook_version=1,
+            notebook_upto_turn=0, content_tier="safe", status="active", is_archived=False, elapsed_months=0, last_active_at=now,
+            entities_json={}, goals_json={"active": [], "archived": []}, milestone_progress_json={},
+            created_at=now, updated_at=now,
+        ))
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.update().where(limits.c.key == "script_limit.free").values(int_value=9))     # 部署者調整過
+    before_tables = set(inspect(engine).get_table_names())
+    before_columns = {c["name"] for c in inspect(engine).get_columns("sessions")}
+
+    def limits_now() -> dict[str, int]:
+        with engine.connect() as conn:
+            table = Table("runtime_limits", MetaData(), autoload_with=conn)
+            return {row["key"]: row["int_value"] for row in conn.execute(select(table)).mappings()}
+
+    command.upgrade(cfg, "0014_rpg_character_creation")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    columns = {c["name"]: c for c in inspector.get_columns("sessions")}
+    assert set(columns) - before_columns == {"protagonist_json"} and columns["protagonist_json"]["nullable"]
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}                    # 新增三個，調整過的值沒被蓋掉
+    with engine.connect() as conn:
+        save = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().one()
+        assert (save["player_name"], save["character_age"], save["protagonist_json"]) == ("舊存檔", 30, None)
+
+    command.downgrade(cfg, "0013_rpg_script_authoring")
+    assert {c["name"] for c in inspect(engine).get_columns("sessions")} == before_columns
+    assert limits_now() == {**dict(INITIAL_LIMITS), "script_limit.free": 9}
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count()).select_from(Table("sessions", MetaData(), autoload_with=conn))).scalar_one() == 1
+
+    command.upgrade(cfg, "0014_rpg_character_creation")                                    # 再升級一次，不重複
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    engine.dispose()
+
+
+def test_0014_does_not_duplicate_or_overwrite_a_limit_that_already_exists(tmp_path):
+    """資料庫在升級前已經有其中一個新鍵（例如先手動寫入）：保留原值，不產生重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'character_existing.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    command.upgrade(cfg, "0013_rpg_script_authoring")
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.insert().values(key="protagonist_suggest_daily.free", int_value=1, updated_at=utcnow().replace(tzinfo=None)))
+    command.upgrade(cfg, "0014_rpg_character_creation")
+    with engine.connect() as conn:
+        table = Table("runtime_limits", MetaData(), autoload_with=conn)
+        rows = conn.execute(select(table.c.key, table.c.int_value).where(table.c.key.like("protagonist_suggest_daily.%"))).all()
+    assert sorted(rows) == [("protagonist_suggest_daily.free", 1), ("protagonist_suggest_daily.plus", 15), ("protagonist_suggest_daily.vip", 40)]
+    engine.dispose()
+
+
 def test_migrated_authoring_tables_hold_the_initial_limits_and_cascade_with_the_user(migrated_database):
-    """SQLite 與 SQL Server 兩軌：升級後有七個初始限制（鍵唯一）；刪除使用者時送審紀錄一併消失。"""
+    """SQLite 與 SQL Server 兩軌：升級後有十個初始限制（鍵唯一）；刪除使用者時送審紀錄一併消失。"""
     engine = migrated_database
     metadata = MetaData()
     with engine.begin() as conn:
         limits = Table("runtime_limits", metadata, autoload_with=conn)
-        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(INITIAL_LIMITS)
+        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(HEAD_LIMITS)
     with pytest.raises(IntegrityError):                                     # 鍵唯一
         with engine.begin() as conn:
             conn.execute(limits.insert().values(key="script_limit.free", int_value=1, updated_at=utcnow().replace(tzinfo=None)))

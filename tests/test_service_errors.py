@@ -154,6 +154,8 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "Unprocessable": 422, "ScriptAutoRejected": 422, "ScriptRejected": 422, "NicknameRequired": 409, "ScriptLimitReached": 409,
         "DraftChanged": 409, "NotDraft": 409, "NotPending": 409, "OpenVersionExists": 409, "AuthorNameLocked": 409, "NotSuspended": 409,
         "PublishSuspended": 403, "SubmissionLimit": 429, "ReviewUnavailable": 503,
+        # rpg-character-creation
+        "ProtagonistRejected": 422, "SuggestionLimit": 429, "SuggestionUnavailable": 503,
     }
     made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
     assert made == expected

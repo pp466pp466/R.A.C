@@ -201,6 +201,12 @@ status, body, _ = call("POST", "/api/auth/admin-password", {"password": "x"})
 report("the admin password endpoint without the step cookie is 401", status == 401 and body["error"]["code"] == "unauthorized", str(status))
 status, body, _ = call("POST", "/api/appeals", {"content": "x"})
 report("the appeal API needs a login", status == 401, str(status))
+status, body, _ = call("GET", "/api/sessions/setup/00000000-0000-4000-8000-0000000000aa")
+report("the protagonist setup API needs a login", status == 401 and body["error"]["code"] == "unauthorized", str(status))
+status, body, _ = call("POST", "/api/sessions/protagonist/suggest", {"version_id": "x"})
+report("the protagonist suggestion API needs a login", status == 401, str(status))
+status, body, _ = call("POST", "/api/sessions", {"version_id": "x"})
+report("starting a session needs a login", status == 401, str(status))
 status, _, _ = call("GET", "/")
 report("the home page is public for an anonymous visitor", status == 200)
 
@@ -444,6 +450,7 @@ def verify_member_flow(image: str) -> None:
 
         check("[會員流程] 遷移一路升級到 0012（內容模式與 RPG 資料表）", "0012_rpg_data_and_script" in out, out.strip()[-120:].replace("\n", " "))
         check("[劇本創作] 遷移一路升級到 0013（暱稱、審查欄位、送審紀錄與營運限制）", "0013_rpg_script_authoring" in out, out.strip()[-120:].replace("\n", " "))
+        check("[玩家主角] 遷移一路升級到 0014（存檔的主角資料與生成次數限制）", "0014_rpg_character_creation" in out, out.strip()[-120:].replace("\n", " "))
 
         # 容器內沒有會呼叫 Gemini 的端點可以直接驗年齡閘門；管理員指令刻意不代為填寫年齡，所以用它建立一個「尚未完成」的帳號
         code, out = docker("exec", "-i", name, "python", "-m", "flask", "--app", "wsgi", "create-admin",
@@ -513,24 +520,34 @@ def verify_seed_command(name: str) -> None:
     check("[內建劇本] 重複執行沒有任何變動", code == 0 and f"建立 0、更新 0、沒有變動 {total}" in again, again.strip()[-160:].replace("\n", " | "))
 
 
-# 營運限制的七個鍵（與 app/services/runtime_limits.py 的 LIMIT_SPECS 相同；這支腳本在主機上執行，不匯入應用程式）
+# 營運限制的十個鍵（與 app/services/runtime_limits.py 的 LIMIT_SPECS 相同；這支腳本在主機上執行，不匯入應用程式）
 SCRIPT_LIMIT_KEYS = (
     "script_limit.free", "script_limit.plus", "script_limit.vip", "script_submit_daily.free", "script_submit_daily.plus",
-    "script_submit_daily.vip", "script_reject_streak",
+    "script_submit_daily.vip", "protagonist_suggest_daily.free", "protagonist_suggest_daily.plus", "protagonist_suggest_daily.vip",
+    "script_reject_streak",
 )
 
 
 def verify_script_authoring_commands(name: str) -> None:
-    """劇本創作的維運指令（script-limits 規格）：限制存在資料庫，`flask show-script-limits` 列出七個鍵，`flask set-script-limit` 修改後
+    """劇本創作的維運指令（script-limits 規格）：限制存在資料庫，`flask show-script-limits` 列出十個鍵，`flask set-script-limit` 修改後
     可立即讀回；`purge-expired-data` 的預覽含劇本送審紀錄。輸出只有鍵、數值與筆數。資料庫已由前面的 alembic 升級到 head。"""
     flask = ("exec", name, "python", "-m", "flask", "--app", "wsgi")
     code, listing = docker("exec", name, "sh", "-c", "ls /app/app/data/review")
     check("[劇本創作] 映像內有規則層的審查詞表（資料檔已隨映像封裝）", code == 0 and "lexicon.json" in listing, listing.strip()[:120])
     code, loaded = docker("exec", name, "python", "-c", "from app.services.script_rules import load_lexicon; load_lexicon(); print('lexicon-ok')")
     check("[劇本創作] 審查詞表可以在映像內載入", code == 0 and "lexicon-ok" in loaded, loaded.strip()[-160:])
+    code, loaded = docker("exec", name, "python", "-c", "from app.services.script_rules import load_lexicon; print('romantic-ok' if load_lexicon().romantic_relation else 'romantic-missing')")
+    check("[玩家主角] 審查詞表含戀愛與婚姻關係的群組（未成年聯繫的守衛）", code == 0 and "romantic-ok" in loaded, loaded.strip()[-160:])
+    code, schema = docker(
+        "exec", name, "python", "-c",
+        "from app import create_app; from sqlalchemy import inspect; "
+        "app = create_app(); columns = {c['name']: c for c in inspect(app.extensions['db_engine']).get_columns('sessions')}; "
+        "print('protagonist-column-ok' if 'protagonist_json' in columns and columns['protagonist_json']['nullable'] else 'protagonist-column-missing')",
+    )
+    check("[玩家主角] sessions 有可為空的 protagonist_json 欄位", code == 0 and "protagonist-column-ok" in schema, schema.strip()[-160:])
     code, shown = docker(*flask, "show-script-limits", timeout=120)
     listed = [key for key in SCRIPT_LIMIT_KEYS if f"  {key} = " in shown]
-    check("[劇本創作] show-script-limits 列出全部七個鍵，且都來自遷移寫入的資料（沒有保底預設）",
+    check("[劇本創作] show-script-limits 列出全部十個鍵（含主角生成的三個），且都來自遷移寫入的資料（沒有保底預設）",
           code == 0 and len(listed) == len(SCRIPT_LIMIT_KEYS) and "保底預設" not in shown, shown.strip()[-200:].replace("\n", " | "))
     code, changed = docker(*flask, "set-script-limit", "script_limit.free", "5", timeout=120)
     check("[劇本創作] set-script-limit 修改後輸出舊值與新值", code == 0 and "script_limit.free：3 → 5" in changed, changed.strip()[-160:])

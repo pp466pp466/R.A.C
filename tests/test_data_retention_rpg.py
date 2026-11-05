@@ -12,6 +12,7 @@ from app.repositories.retention_repository import RetentionRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.data_retention_service import SESSION_RETENTION, TURN_CONTENT_RETENTION, DataRetentionService
 from tests.support.auth import START, FakeClock, add_user
+from tests.support.protagonist import protagonist
 
 SECOND = timedelta(seconds=1)
 DAY = timedelta(days=1)
@@ -89,8 +90,8 @@ def test_a_save_with_no_turns_is_measured_from_its_creation(member_session):
     s = member_session
     repo = SessionRepository(s)
     user = add_user(s, 1)
-    old = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, player_name="旅人", character_age=18, content_tier="safe", now=START - SESSION_RETENTION - DAY)
-    fresh = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, player_name="旅人", character_age=18, content_tier="safe", now=START - DAY)
+    old = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, protagonist=protagonist(), content_tier="safe", now=START - SESSION_RETENTION - DAY)
+    fresh = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, protagonist=protagonist(), content_tier="safe", now=START - DAY)
     s.commit()
     kept, gone = fresh.id, old.id
     assert counts(service(s).run())["sessions"] == 1 and remaining_saves(s) == {kept} and gone != kept
@@ -108,7 +109,7 @@ def test_recent_activity_through_a_new_turn_keeps_an_old_save(member_session):
     s = member_session
     repo = SessionRepository(s)
     user = add_user(s, 1)
-    old = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, player_name="旅人", character_age=18, content_tier="safe", now=START - SESSION_RETENTION - 10 * DAY)
+    old = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, protagonist=protagonist(), content_tier="safe", now=START - SESSION_RETENTION - 10 * DAY)
     repo.start_turn(user.id, old.public_id, client_msg_id="t-1", user_action="很久以後又回來玩", now=START - DAY)
     s.commit()
     assert counts(service(s).run())["sessions"] == 0 and remaining_saves(s) == {old.id}
@@ -204,7 +205,7 @@ def test_a_resent_turn_gets_fresh_content_and_is_no_longer_stale(member_session)
     s = member_session
     repo = SessionRepository(s)
     user = add_user(s, 1)
-    save = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, player_name="旅人", character_age=18, content_tier="safe", now=START - 40 * DAY)
+    save = repo.create(user.id, source_version_id=None, snapshot={}, snapshot_spec_version=1, protagonist=protagonist(), content_tier="safe", now=START - 40 * DAY)
     repo.start_turn(user.id, save.public_id, client_msg_id="t-1", user_action="行動", now=START - 40 * DAY)
     repo.interrupt_turn(user.id, save.public_id, "t-1", partial_response="舊的半截")
     s.commit()

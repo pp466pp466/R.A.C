@@ -64,6 +64,19 @@ class LlmCallLogRepository:
             )
         ) or 0
 
+    def count_first_attempts(self, user_id: int, kind: str, *, start: datetime, end: datetime) -> int:
+        """這位使用者在期間內、指定類別「實際呼叫了模型」的請求數：以第一次嘗試（`attempt = 1`）的筆數計，重試與切換備援不重複計。
+        起含訖不含，日界由呼叫端以 Asia/Taipei 算好。"""
+        return self._session.scalar(
+            select(func.count(LlmCallLog.id)).where(
+                LlmCallLog.user_id == user_id,
+                LlmCallLog.kind == kind,
+                LlmCallLog.attempt == 1,
+                LlmCallLog.created_at >= start,
+                LlmCallLog.created_at < end,
+            )
+        ) or 0
+
     def blocked_chat_calls(self, user_id: int, *, start: datetime, end: datetime) -> tuple[int, datetime | None]:
         """這位使用者在期間內，對話呼叫被內容安全過濾阻擋的（次數, 最近一次的時間）。摘要呼叫被擋不算。"""
         count, latest = self._session.execute(

@@ -38,7 +38,7 @@
     },
     /* 鎖定原因（app/models/lock_strike.py 的計次類別，也是 users.lock_reason 的值） */
     lockReason: { identity_rejected: '登入或年齡確認多次被拒', rate_limited: '短時間內訊息過多' },
-    kind: { chat: '客服對話', summary: '對話摘要', script_review: '劇本審查' },
+    kind: { chat: '客服對話', summary: '對話摘要', script_review: '劇本審查', protagonist_gen: '主角生成', protagonist_review: '主角審查' },
     messageRole: { user: '使用者', assistant: '客服' },
     messageStatus: { ok: '正常', fallback: '降級回覆' },
     via: { email: '以信箱', id: '以識別碼' }

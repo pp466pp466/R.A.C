@@ -38,14 +38,14 @@
 ### D2. 角色驗證拆出為可單獨使用的函式
 `script_spec.validate_character(raw, *, path, forbidden_markers, collector=None)`：把 `_validate_characters` 迴圈內的單一角色邏輯抽出，劇本驗證改為逐一呼叫它（行為與錯誤欄位路徑完全不變，由既有測試與新增的等價測試守住）。主角呼叫時路徑前綴為 `protagonist`，姓名不重複的檢查（劇本內）不適用。回傳標準化的角色字典與錯誤。為什麼不複製：複製會讓劇本角色與主角的上限日後分岔，違反「沿用劇本角色規格」。
 
-### D3. 錨定事實驗證與未成年的戀愛／婚約守衛（純函式，`app/services/protagonist.py`）
+### D3. 錨定事實驗證與未成年的戀愛／婚姻守衛（純函式，`app/services/protagonist.py`）
 - `validate_anchor(raw, *, script_content, protagonist_age, adult_age, lexicon, forbidden_markers)`：`kind` ∈ {`character`, `location`, `milestone`}；`ref` 依種類比對標準化後的劇本內容（人物以姓名、地點以名稱，皆 NFC＋不分大小寫；里程碑以編號精確比對）；`text` 單行、1 至 60 字、NFC、去控制字元。回傳標準化結果與逐欄位錯誤（`anchor.kind`／`anchor.ref`／`anchor.text`）。
-- 守衛：當 `protagonist_age < adult_age`，或 `kind = character` 且該人物 `age < adult_age`，`text` 不得含詞表群組 `romantic_relation` 的詞。詞表放進既有的 `lexicon.json`（新群組、版本字串更新），以同一個載入函式讀取，程式不內嵌詞（沿用 script-review 的作法）；群組內容的初稿（戀人、情侶、未婚夫／妻、道侶、夫妻、婚約、定親、結為連理、愛慕、暗戀等）由實作時擬定，提交前請使用者審閱。
+- 守衛分兩層：①當 `protagonist_age < adult_age`，或 `kind = character` 且該人物 `age < adult_age`，`text` 不得含詞表群組 `romantic_relation` 的詞（戀愛類、已成婚類與童養媳）；②**婚約類**（群組 `betrothal`：娃娃親、指腹為婚、婚約、訂婚、定親、未婚夫妻）只在主角與對象**一成年、一未成年**時才擋（`kind = character` 才有對象年齡；兩位都未成年的娃娃親是歷史題材常見的背景設定，指向地點或里程碑時沒有可比較的年齡，也不擋）。AGENTS.md 擋的是「戀愛或性」，婚約本身不是；成年與未成年之間的婚約則一律擋，因為那是成年人與兒童的關係。使用者於 2026-11-05 選定這個折衷。詞表放進既有的 `lexicon.json`（新群組、版本字串更新），以同一個載入函式讀取，程式不內嵌詞（沿用 script-review 的作法）；群組內容的初稿（戀人、情侶、未婚夫／妻、道侶、夫妻、婚約、定親、結為連理、愛慕、暗戀等）由實作時擬定，提交前請使用者審閱。
 - 守衛是**欄位錯誤**而不是審查 `reject`：它是結構規則（像長度上限），不是內容裁決，所以不帶審查類別、不進任何拒絕計次，玩家看得到是哪個欄位要改。詞表抓不到的語意（「許了終身」）由模型層與提示詞補強，這是已知的限制。
 - 成年門檻取 `AccessPolicy.adult_age`（年齡規則的單一來源），不寫死 18。
 
 ### D4. 審查：規則層共用引擎，模型層另立呼叫類別
-- **規則層**：`script_rules` 把 `check_rules` 的核心拆成「給一串文字與角色年齡、回傳判定」的內部函式，`check_rules`（劇本）與新增的 `check_protagonist_rules(character, anchor_text, intro, *, tier)`（主角）共用。主角版本把角色卡文字、錨定事實與自我介紹各自切句檢查（不跨欄位串接），年齡取主角年齡；`minor_suspected` 的判定同樣適用（主角年齡小於成年門檻且內容模式為一般或成人時，個人文字出現性相關詞 → `flag`）。
+- **規則層**：`script_rules` 把 `check_rules` 的核心拆成「給一串文字與角色年齡、回傳判定」的內部函式，`check_rules`（劇本）與新增的 `check_protagonist_rules(character, anchor_text, intro, *, tier)`（主角）共用。主角版本把角色卡文字、錨定事實與自我介紹各自切句檢查（不跨欄位串接），年齡取主角年齡；`minor_suspected` 的判定同樣適用（主角年齡小於成年門檻且內容模式為一般或成人時，個人文字出現性相關詞 → `flag`）。**唯一更嚴的地方**：主角年齡小於成年門檻，而主角自己的文字（角色卡、錨定事實、自我介紹）出現**露骨**的性用語時，直接 `reject` 為 `minor_sexual`——劇本只標示，是因為劇本有人工複審；主角沒有人工審核佇列，而規範無論模式一律禁止涉及未成年角色的性內容。引擎以兩個旗標區分（`extra_own_texts`、`minor_explicit_rejects`），劇本的判定結果不變（既有測試不改而通過）。
 - **模型層**：`ProtagonistReviewService.review(user_id, protagonist, anchor, tier)`，呼叫類別 `protagonist_review`，沿用審查的結構化輸出（verdict、categories）與語意規則，**提示詞另立**（`protagonist_prompt.py`）：資料是一張主角角色卡與一句錨定事實（加上劇本中被指向的項目名稱，供判斷關係合理性），審查標準與劇本審查一致，並特別提示未成年的戀愛或性的關係。結果**不快取**（沒有可附著的版本列；每次開存檔審查一次）。
 - 結果處置：`reject` → 422 `protagonist_rejected`（類別列舉）；`flag` → 放行；`unavailable`（未設定、預算用盡、降級、被過濾）→ 503 `review_unavailable`，不放行。理由：主角只屬於玩家自己的存檔，沒有人工審核佇列可接 `flag`，絕對禁止項靠 `reject` 與回合層（RC-2）的審查把關；與劇本不同，沒有「公開給他人」的風險。
 - 替代方案：把主角塞進劇本審查的 `ModelReview.ensure_reviewed`（它以版本列的內容雜湊快取結果，主角沒有版本列）；用簽章令牌讓預覽通過審查後開存檔時免審（多一組金鑰輪替與令牌失效的複雜度，預覽的候選本來就會被玩家修改，節省的呼叫有限）。
@@ -59,14 +59,14 @@
 - 為什麼預覽無狀態：玩家可能反覆生成、修改、放棄；寫入資料庫只會製造要清理的半成品，也會把自我介紹留在資料庫（違反資料最小化）。
 
 ### D6. 開存檔 API 與 `SessionService.start_session` 改版
-- 簽名：`start_session(current, version_public_id, *, protagonist, anchor, skip_anchor)`。順序：①`require_chat_access` ②取版本（404）③內容模式（403）④劇本審查把關（沿用 `ReviewGate.ensure_reviewed`；內建劇本豁免）⑤**主角驗證**（D2）與**錨定事實存在性**（`anchor` 與 `skip_anchor` 二選一，皆無 → `anchor` 欄位錯誤）與**守衛**（D3）⑥**規則層**（D4）⑦**模型層**（D4）⑧`SessionRepository.create(…, protagonist=…)`。所有欄位錯誤一次回報；⑥⑦失敗不寫資料庫。
+- 簽名：`start_session(current, version_public_id, *, protagonist, anchor, skip_anchor)`。順序：①`require_chat_access` ②取版本（404）③內容模式（403）④**主角驗證**（D2）、**錨定事實存在性**（`anchor` 與 `skip_anchor` 二選一，皆無 → `anchor` 欄位錯誤）與**守衛**（D3）——所有欄位錯誤一次回報（400）⑤**規則層**（D4）⑥劇本審查把關（沿用 `ReviewGate.ensure_reviewed`；內建劇本豁免）⑦主角的**模型層**（D4）⑧`SessionRepository.create(…, protagonist=…)`。便宜的檢查在前：主角不合格時不會浪費劇本審查的模型呼叫；⑤⑥⑦失敗不寫資料庫。
 - 內容模式 `tier`：與存檔相同——玩家生效模式與劇本宣告中較保守者。
 - 控制器：新 `session_api_controller.py`（Blueprint `/api/sessions`）：`GET /setup/<version_id>`、`POST /protagonist/suggest`、`POST ""`；固定路徑放在前面，沿用 `read_json_object`、`require_login`、統一錯誤轉換；`/api/sessions/` 加入 `cache_headers.py` 的禁止快取前綴。受限登入狀態由 `require_login` 預設拒絕。
 - 逾時：開存檔最長約 30 秒（劇本審查若尚未審過加上主角審查，各自受 `request_budget_seconds` 約束，最壞兩次依序，約 60 秒）。**RC-3 的前端 axios 逾時須設為 65 秒並於離開頁面時中止**；本 change 在 API 文件與 README 記載。為了降低最壞情況：劇本審查結果已快取者（已上架的劇本在送審時已審查）不再呼叫，所以常態只有主角審查一次。
 - 回應：201 `{ok, session: {id, title, protagonist, anchor}}`；`id` 是存檔的對外識別碼（UUID）。
 
 ### D7. 創角資料 `GET /api/sessions/setup/<version_id>`
-回傳 `{title, background, characters: [{name, occupation}], locations: [...], milestones: [{id, title}], limits: {name, personality, …, intro, anchor_text}, suggestions_remaining}`。人物只給姓名與職業（**不給年齡與隱藏特質**：年齡是錨定事實的判定依據之一，但前端不需要；隱藏特質是劇情祕密）。限制值取自 `script_spec` 常數與 `protagonist` 常數，單一來源。剩餘次數讀 `runtime_limits` 與帳本。可見性與錯誤與開存檔相同（404）。
+回傳 `{title, background, characters: [{name, occupation}], locations: [...], milestones: [{id, title}], limits: {name, personality, …, intro, anchor_text}, suggestions_remaining}`。人物只給姓名與職業（**不給年齡與隱藏特質**：年齡是錨定事實的判定依據之一，但前端不需要；隱藏特質是劇情祕密）。限制值取自 `script_spec` 常數與 `protagonist` 常數，單一來源。剩餘次數讀 `runtime_limits` 與帳本。可見性與內容模式的限制與開存檔相同（404、403 `content_tier_restricted`）。
 
 ### D8. 限制、帳本與觀測
 - `runtime_limits.py`：`SUGGEST_DAILY_PREFIX = "protagonist_suggest_daily"`，`LIMIT_SPECS` 以 `_per_tier` 加三個鍵（0 至 100）；`suggest_daily_for(tier)` 沿用「不認得的等級套用 free」。`flask set-script-limit／show-script-limits` 不用改（它們讀 `LIMIT_SPECS`），輸出自動變成十個鍵。
@@ -82,7 +82,7 @@
 
 - [每次開存檔多一次審查呼叫，加上最多兩次生成] → 常態是 1 次審查；生成有每日上限；token 計入全站預算，預算用盡時優雅降級為自創。
 - [`flag` 放行：主角沒有人工審核] → 絕對禁止項靠規則層／模型層 `reject`；回合層（RC-2）對模型輸出再審；`flag` 與 `reject` 的差別寫進測試。若日後發現 `flag` 常是真問題，再改為擋下（不影響資料形狀）。
-- [戀愛／婚約守衛靠詞表，抓不到婉轉說法] → 提示詞與模型層補強；詞表為資料檔、有版本，可在不改程式下調整；這是已知限制，寫進測試的「反向案例」說明邊界。
+- [戀愛／婚姻守衛靠詞表，抓不到婉轉說法] → 提示詞與模型層補強；詞表為資料檔、有版本，可在不改程式下調整；這是已知限制，寫進測試的「反向案例」說明邊界。
 - [開存檔最壞約 60 秒（兩次審查依序）] → 劇本審查常態命中快取；RC-3 的前端逾時設 65 秒、按鈕禁用；監控屬 RC-4。
 - [生成次數並行超額] → 節流而非安全邊界，與送審相同，不另做鎖定。
 - [雙寫 `player_name`／`character_age` 與 `protagonist_json` 可能分歧] → 唯一寫入點是 `SessionRepository.create`，AST 架構測試掃描其他地方不得寫這兩欄；contract 階段再移除。

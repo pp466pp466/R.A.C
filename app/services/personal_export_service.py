@@ -58,9 +58,13 @@ SCRIPT_COLUMNS = (
     "milestones", "author_name", "author_code", "created_at", "published_at",
 )
 SESSION_COLUMNS = (
-    "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "current_location", "status_summary",
+    "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "personality", "appearance", "occupation",
+    "speech_style", "hidden_trait", "anchor_kind", "anchor_ref", "anchor_text", "current_location", "status_summary",
     "elapsed_months", "created_at", "last_active_at", "ended_at", "notebook_text",
 )
+# sessions.csv 的主角欄位：由 `protagonist` 攤平（舊存檔沒有主角資料，這些欄位為空）
+PROTAGONIST_CARD_COLUMNS = ("personality", "appearance", "occupation", "speech_style", "hidden_trait")
+PROTAGONIST_ANCHOR_COLUMNS = {"anchor_kind": "kind", "anchor_ref": "ref", "anchor_text": "text"}
 TURN_COLUMNS = ("session_id", "script_title", "seq", "turn_number", "status", "user_action", "story", "created_at")
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -199,11 +203,18 @@ class PersonalExportService:
             yield {"outcome": row["outcome"], "categories": row["categories"], "created_at": self._when(row["created_at"])}
 
     def _session_head(self, save: dict[str, Any], *, world_state: bool) -> dict[str, Any]:
-        head = {key: value for key, value in save.items() if key != "world_state"}
+        head = {key: value for key, value in save.items() if key not in ("world_state", "protagonist")}
         for key in ("created_at", "last_active_at", "ended_at"):
             head[key] = self._when(head[key])
-        if world_state:
+        protagonist = save.get("protagonist")
+        if world_state:                                          # JSON：完整的角色卡與錨定事實（舊存檔為 null）
+            head["protagonist"] = protagonist
             head["world_state"] = save["world_state"]
+        else:                                                    # CSV：攤平成欄位（舊存檔的這些欄位為空）
+            card = (protagonist or {}).get("character") or {}
+            anchor = (protagonist or {}).get("anchor") or {}
+            head.update({name: card.get(name) for name in PROTAGONIST_CARD_COLUMNS})
+            head.update({column: anchor.get(key) for column, key in PROTAGONIST_ANCHOR_COLUMNS.items()})
         return head
 
     def _turns(self, user_id: int, session_public_id: str):

@@ -1,9 +1,10 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
+> 注意（2026-11-04）：change `rpg-character-creation`（RC-9）加入玩家主角與開存檔 API：`ProtagonistService`（創角資料與 AI 生成預覽）、`ProtagonistReviewService`（開存檔時主角的模型層審查）、`StartableVersions`（開存檔、創角資料與生成預覽共用的版本可見性與內容模式判定），以及純運算的 `protagonist`、`protagonist_prompt`；`SessionService.start_session` 改為接收主角角色卡與錨定事實（見下方「玩家主角與開存檔」）。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -43,7 +44,7 @@ flowchart TD
     Pages["controllers：MVC 頁面<br/>只回 HTML 外殼與初始狀態"]
     Api["controllers：Web API<br/>只回 JSON"]
     Sec["security：HTTP 安全輔助<br/>session、CSRF、cookie、重新導向"]
-    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、SessionService、UsageService、LlmService、AdminService…"]
+    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、SessionService、ProtagonistService、UsageService、LlmService、AdminService…"]
     Llm["llm：供應商中立型別與轉接器"]
     Repo["repositories：ORM 存取<br/>條件式 UPDATE、擁有者條件"]
     Model["models：SQLAlchemy 資料模型"]
@@ -169,6 +170,40 @@ flowchart TD
 - **依賴方向**：Service 只透過 Repository 與 `LlmService`；`SessionService` 只依賴 `ReviewGate`（Protocol），不認識模型層的實作，測試以替身注入。審查結果欄位只由 `ScriptRepository.record_review` 寫入，`tests/architecture/test_script_state_writes.py` 擋住別處的賦值。
 - 組裝在 `registry.py`（`get_runtime_limits()`、`get_script_review_service()`、`get_script_authoring_service()`、`get_script_submission_service()`、`get_nickname_service()`）；自動拒絕與暫停的稽核走 `_system_audit`（管理員欄位為空）。
 
+### 玩家主角與開存檔（rpg-character-creation）
+
+```mermaid
+flowchart TD
+    Ctl["session_api_controller<br/>/api/sessions/*"] --> PSvc["ProtagonistService<br/>setup 與 suggest 生成預覽 無狀態"]
+    Ctl --> SSvc["SessionService.start_session<br/>主角驗證 兩層審查 寫入"]
+    PSvc --> Start["StartableVersions<br/>可見性 404 與內容模式 403"]
+    SSvc --> Start
+    PSvc --> Pro["protagonist 純運算<br/>角色卡 錨定事實 未成年戀愛婚姻守衛 婚約只擋成年與未成年之間"]
+    SSvc --> Pro
+    Pro --> Spec["script_spec.validate_character<br/>與劇本角色同一套"]
+    PSvc --> Rules["script_rules<br/>check_text_rules 與 check_protagonist_rules"]
+    SSvc --> Rules
+    PSvc --> Llm["LlmService.run_structured<br/>kind protagonist_gen RPG 用途 不使用 Gemini"]
+    SSvc --> PRev["ProtagonistReviewService<br/>kind protagonist_review"]
+    PRev --> Llm
+    SSvc -->|"ReviewGate 內建劇本免審"| Rev["ScriptReviewService"]
+    PSvc --> Lim["RuntimeLimits.suggest_daily<br/>每次現讀"]
+    PSvc --> Ledger["LlmCallLogRepository.count_first_attempts<br/>attempt 為 1 的筆數計次"]
+    SSvc --> SRepo["SessionRepository.create<br/>唯一寫入 player_name character_age protagonist_json"]
+```
+
+| 元件 | 責任 |
+|---|---|
+| `session_api_controller.py` | `GET /api/sessions/setup/<id>`、`POST /api/sessions/protagonist/suggest`、`POST /api/sessions`；只讀請求、呼叫 Service、回應；沒有權限判斷，也不匯入資料層；回應禁止快取 |
+| `ProtagonistService` | `setup`：序章與創角資料（人物只給姓名與職業）；`suggest`：年齡閘門 → 版本 → 自我介紹標準化 → 自我介紹的規則層（拒絕不呼叫模型、不計次）→ 每日次數 → 模型未設定或預算用盡（不計次）→ 呼叫模型 → 再標準化。**無狀態**：唯一的資料庫寫入是用量帳本；自我介紹不落地 |
+| `SessionService.start_session` | 年齡閘門 → 版本（404）→ 內容模式（403）→ 主角與錨定事實驗證（400，一次回報）→ 主角規則層（422）→ 劇本審查把關 → 主角模型層審查 → `SessionRepository.create`；任何一步失敗都不留存檔。便宜的檢查在前 |
+| `protagonist.py`／`protagonist_prompt.py`（純運算） | 角色卡（沿用劇本角色規格）、錨定事實（指向劇本中存在的人物、地點、里程碑，文字 60 字）、未成年的主角或對象不得有戀愛或婚姻的聯繫、成年與未成年之間不得是婚約（兩位都未成年的娃娃親是背景設定）（詞表群組 `romantic_relation`，欄位錯誤）；生成與審查的提示詞、結構描述與語意規則（標記字串與劇本審查分開；給模型的人物資料不含隱藏特質） |
+| `ProtagonistReviewService` | 開存檔時對最終的主角做模型層審查，不快取；`reject` 擋下、`flag` 放行、不可用一律擋下 |
+| `script_rules.py` 的主角入口 | 與劇本共用同一個引擎；唯一更嚴的地方：未成年主角自己的文字出現露骨用語即直接拒絕 |
+
+- **依賴方向**：`SessionService` 依賴 `ProtagonistReviewGate`（Protocol）與 `ReviewGate`，測試以替身注入；`ProtagonistService`、`SessionService` 的公開方法第一個陳述式都是 `self._policy.require_chat_access(<呼叫者>)`（`tests/architecture/test_protagonist_boundaries.py` 以 AST 守住，附反向驗證）。主角姓名、角色年齡與主角資料只由 `SessionRepository.create` 寫入（`test_protagonist_writes.py`）。
+- 組裝在 `registry.py`（`get_protagonist_service()`、`get_protagonist_review_service()`、`get_session_service()`）；兩個主角服務與開存檔共用同一個標記字串（`protagonist_marker`，由 `SECRET_KEY` 導出）。
+
 ## 3. 一個請求的生命週期
 
 ```mermaid
@@ -235,6 +270,7 @@ flowchart LR
 | operational-alerts（及 app-configuration、service-observability 的告警條款）                                                                         | `app/services/alert_rules.py`（純函式）、`alert_service.py`、`alert_messages.py`、`app/repositories/alert_state_repository.py`、`app/observability/alert_events.py`、`app/cli.py` 的 `check-alerts` | [營運與部署-operations.md](營運與部署-operations.md)、[資料模型-data-model.md](資料模型-data-model.md) |
 | content-tier-modes、script-fixed-spec、script-store、rpg-sessions、builtin-script-seed | `app/services/content_tier.py`、`script_spec.py`、`content_mode_service.py`、`session_service.py`、`script_seed_service.py`、`app/repositories/script_repository.py`、`session_repository.py`、`app/data/scripts/` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) |
 | script-authoring、script-review、script-submission、runtime-limits、player-nickname、appeal-shortcut | `app/services/script_authoring_service.py`、`script_submission_service.py`、`script_review_service.py`、`script_review_prompt.py`、`script_rules.py`、`runtime_limits.py`、`nickname.py`、`nickname_service.py`、`app/repositories/script_submission_repository.py`、`runtime_limit_repository.py`、`app/controllers/script_api_controller.py`、`script_page_controller.py`、`app/data/review/lexicon.json` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[前端結構-frontend.md](前端結構-frontend.md)、[營運與部署-operations.md](營運與部署-operations.md) |
+| rpg-protagonist、protagonist-suggestion | `app/services/protagonist.py`、`protagonist_prompt.py`、`protagonist_service.py`、`protagonist_review_service.py`、`startable.py`、`session_service.py`、`app/controllers/session_api_controller.py` | [系統架構-architecture.md](系統架構-architecture.md)（本文）、[資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |

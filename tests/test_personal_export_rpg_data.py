@@ -26,6 +26,7 @@ from app.services.current_user import CurrentUser
 from app.services.personal_export_service import PersonalExportService, SCRIPT_COLUMNS, SESSION_COLUMNS, TURN_COLUMNS
 from tests.support.auth import START, FakeClock, add_user
 from tests.support.script_data import validated
+from tests.support.protagonist import protagonist
 
 OTHER_BACKGROUND = "別人的劇本才有的背景設定OTHER-BACKGROUND"
 OTHER_CHARACTER = "別人的角色OTHER-CHARACTER"
@@ -80,7 +81,7 @@ def make_script(session, owner: User, *, publish_first: bool = True, **changes):
 def make_save(session, owner: User, snapshot: dict, *, source=None, turns: int = 0, notebook: str = "", **overrides):
     saves = SessionRepository(session)
     values = dict(
-        source_version_id=source.id if source else None, snapshot=snapshot, snapshot_spec_version=1, player_name="旅人", character_age=18,
+        source_version_id=source.id if source else None, snapshot=snapshot, snapshot_spec_version=1, protagonist=protagonist(),
         content_tier="safe", now=START,
     )
     values.update(overrides)
@@ -242,7 +243,7 @@ def test_another_players_saves_and_turns_are_never_included(member_session):
     s = member_session
     me, other = add_user(s, 1), add_user(s, 2)
     make_save(s, me, validated(title="我的存檔劇本").content, turns=1)
-    make_save(s, other, validated(title="別人的存檔劇本").content, turns=2, notebook="別人的記事簿OTHER-NOTEBOOK", player_name="別人的主角")
+    make_save(s, other, validated(title="別人的存檔劇本").content, turns=2, notebook="別人的記事簿OTHER-NOTEBOOK", protagonist=protagonist("別人的主角"))
     s.commit()
     raw = json.dumps(export_json(s, me), ensure_ascii=False)
     assert "我的存檔劇本" in raw and "別人的存檔劇本" not in raw and "OTHER-NOTEBOOK" not in raw and "別人的主角" not in raw
@@ -349,3 +350,85 @@ def test_the_export_does_not_log_any_script_or_story_text(member_session, log_li
     export_csv(s, me)
     raw = log_lines.raw()
     assert "日誌不應出現" not in raw and "劇情1" not in raw and "行動1" not in raw
+
+
+# ---- 玩家主角（rpg-character-creation）：角色卡與錨定事實隨存檔匯出，自我介紹本來就不存在 ------------------------------
+
+PROTAGONIST_ANCHOR = {"kind": "location", "ref": "古劍山莊", "text": "出生的地方PROTAGONIST-ANCHOR"}
+
+
+def make_protagonist_save(session, owner, **extra):
+    return make_save(
+        session, owner, validated().content,
+        protagonist=protagonist("林舟PROTAGONIST-NAME", 19, anchor=PROTAGONIST_ANCHOR, occupation="遊方郎中", speech_style="說話慢", hidden_trait="怕黑", **extra),
+    )
+
+
+def test_the_json_has_the_protagonist_card_and_anchor_in_each_save(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_protagonist_save(s, me)
+    s.commit()
+    (entry,) = export_json(s, me)["sessions"]
+    assert (entry["player_name"], entry["character_age"]) == ("林舟PROTAGONIST-NAME", 19)
+    card = entry["protagonist"]["character"]
+    assert (card["name"], card["age"], card["personality"], card["appearance"]) == ("林舟PROTAGONIST-NAME", 19, "沉默愛思考", "高瘦，常穿灰衣")
+    assert (card["occupation"], card["speech_style"], card["hidden_trait"]) == ("遊方郎中", "說話慢", "怕黑") and "image" not in card
+    assert entry["protagonist"]["anchor"] == PROTAGONIST_ANCHOR
+
+
+def test_a_save_without_an_anchor_exports_a_null_anchor(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_save(s, me, validated().content, protagonist=protagonist("無聯繫", 20))
+    s.commit()
+    (entry,) = export_json(s, me)["sessions"]
+    assert entry["protagonist"]["anchor"] is None and entry["protagonist"]["character"]["name"] == "無聯繫"
+
+
+def test_a_save_from_before_the_protagonist_column_exports_name_and_age_without_error(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    legacy = RpgSession(
+        user_id=me.id, script_snapshot_json={"title": "舊"}, player_name="舊存檔主角", character_age=30,
+        entities_json={}, goals_json={"active": [], "archived": []}, milestone_progress_json={},
+    )
+    s.add(legacy)
+    s.commit()
+    data = export_json(s, me)
+    (entry,) = data["sessions"]
+    assert (entry["player_name"], entry["character_age"], entry["protagonist"]) == ("舊存檔主角", 30, None)
+    (row,) = rows(export_csv(s, me)["sessions.csv"])
+    assert (row["player_name"], row["character_age"]) == ("舊存檔主角", "30")
+    assert all(row[name] == "" for name in ("personality", "appearance", "occupation", "speech_style", "hidden_trait", "anchor_kind", "anchor_ref", "anchor_text"))
+
+
+def test_the_csv_flattens_the_card_and_anchor_into_columns_and_neutralises_formulas(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_protagonist_save(s, me, personality='=HYPERLINK("http://evil")')
+    s.commit()
+    (row,) = rows(export_csv(s, me)["sessions.csv"])
+    assert row["personality"].startswith("'=") and row["appearance"] == "高瘦，常穿灰衣" and row["occupation"] == "遊方郎中"
+    assert (row["anchor_kind"], row["anchor_ref"], row["anchor_text"]) == ("location", "古劍山莊", "出生的地方PROTAGONIST-ANCHOR")
+    assert {"personality", "appearance", "occupation", "speech_style", "hidden_trait", "anchor_kind", "anchor_ref", "anchor_text"} <= set(SESSION_COLUMNS)
+
+
+def test_another_users_protagonist_never_appears_in_my_export(member_session):
+    s = member_session
+    me, other = add_user(s, 1), add_user(s, 2)
+    make_save(s, me, validated().content, protagonist=protagonist("我的主角", 20))
+    make_protagonist_save(s, other)
+    s.commit()
+    assert "PROTAGONIST-NAME" not in json.dumps(export_json(s, me), ensure_ascii=False)
+    assert b"PROTAGONIST" not in export_csv(s, me)["sessions.csv"]
+
+
+def test_the_export_has_no_intro_and_no_internal_fields_of_the_protagonist(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_protagonist_save(s, me)
+    s.commit()
+    raw = json.dumps(export_json(s, me), ensure_ascii=False)
+    for forbidden in ("intro", "自我介紹", "protagonist_json", '"image"'):
+        assert forbidden not in raw

@@ -1,16 +1,20 @@
-"""RPG 存檔的建立與回合的開始（見 rpg-sessions 規格、AGENTS.md 第 7、10 節、rpg-data-and-script 的 design D3、D4、D11）。
+"""RPG 存檔的建立與回合的開始（見 rpg-sessions、rpg-protagonist 規格、AGENTS.md 第 7、10 節、rpg-data-and-script 的 design D3、D4、D11、
+rpg-character-creation 的 design D6）。
 
-開存檔的順序（每一步失敗就停下，不留下半個存檔）：
+開存檔的順序（每一步失敗就停下，不留下半個存檔；便宜的檢查在前，不會為了不合格的主角浪費審查的模型呼叫）：
 1. 先過 `AccessPolicy` 的年齡閘門（帳號啟用、已完成年齡確認、年齡不低於最低使用年齡；管理員與各會員等級不豁免）；
-2. 驗證主角姓名與角色年齡（劇中角色的年齡，與使用者的年齡無關）；
-3. 找來源版本：上架中的任何版本，或呼叫者自己的任何版本；別人的非上架版本與不存在的一樣是 404；
-4. 劇本宣告的內容模式不得高於玩家目前**生效**的模式（玩家偏好與年齡上限中較保守者），否則 `ContentTierRestricted`（403）；
-5. **審查的把關**（script-review 規格）：非內建劇本的版本，對應「目前內容」的模型層結果必須是通過或有疑慮（沒有結果時先審查）；
-   結果為拒絕 -> `ScriptRejected`（422，只帶類別），模型層不可用 -> `ReviewUnavailable`（503，一律擋下、不放行）。
-   內建的種子劇本（有 `seed_key`，沒有作者）視為已審查，不呼叫審查。審查用的就是接下來要複製的那一份內容。
-6. 把版本標準化後的完整內容複製進存檔，存檔的內容模式取玩家生效模式與劇本宣告兩者中較保守者。之後存檔不再讀取劇本。
+2. 找來源版本：上架中的任何版本，或呼叫者自己的任何版本；別人的非上架版本與不存在的一樣是 404；
+3. 劇本宣告的內容模式不得高於玩家目前**生效**的模式（玩家偏好與年齡上限中較保守者），否則 `ContentTierRestricted`（403）；
+4. **主角驗證**：角色卡沿用劇本角色規格；錨定事實指向劇本中存在的項目，未成年的主角或對象不得有戀愛或婚姻的聯繫；
+   帶錨定事實或明確略過二選一。所有欄位錯誤一次回報（400）；
+5. **主角的規則層**：明確違規 -> `ProtagonistRejected`（422，只帶類別）；
+6. **劇本審查的把關**（script-review 規格）：非內建劇本的版本，對應「目前內容」的模型層結果必須是通過或有疑慮（沒有結果時先審查）；
+   拒絕 -> `ScriptRejected`（422），模型層不可用 -> `ReviewUnavailable`（503，一律擋下、不放行）。內建的種子劇本視為已審查；
+7. **主角的模型層審查**：結果為拒絕 -> `ProtagonistRejected`；不可用 -> `ReviewUnavailable`；有疑慮放行（主角只屬於玩家自己的存檔，
+   沒有人工審核佇列；絕對禁止項靠拒絕與回合層的審查）；
+8. 把版本標準化後的完整內容與主角複製進存檔，存檔的內容模式取玩家生效模式與劇本宣告兩者中較保守者。之後存檔不再讀取劇本。
 
-存檔與回合的內容是個資：這裡不記錄任何日誌。
+存檔與回合的內容（含主角）是個資：這裡不記錄任何日誌（事件只有內部編號與列舉）。
 """
 from __future__ import annotations
 
@@ -22,17 +26,17 @@ from app.models.script import REVIEW_REJECT, ScriptVersion
 from app.repositories.errors import SessionEndedError, TurnInProgressError
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository, TurnStart
+from app.observability import protagonist_events
+from app.services import protagonist as pro
 from app.services.access_policy import AccessPolicy
-from app.services.content_tier import most_conservative, tier_rank
 from app.services.current_user import CurrentUser
 from app.services.errors import (
-    Conflict, ContentTierRestricted, NotFound, ReviewUnavailable, ScriptRejected, SessionEnded, ValidationError,
+    Conflict, NotFound, ProtagonistRejected, ReviewUnavailable, ScriptRejected, SessionEnded, ValidationError,
 )
 from app.services.script_review_service import ModelReview
-from app.services.script_spec import normalize_single_line
+from app.services.script_rules import check_protagonist_rules
+from app.services.startable import StartableVersions
 
-PLAYER_NAME_MAX = 20
-CHARACTER_AGE_MAX = 9999
 CLIENT_MSG_ID_MAX = 64            # 與 memory_logs.client_msg_id 的欄位長度一致
 
 TURN_IN_PROGRESS_MESSAGE = "這個回合仍在處理中，請稍候。"
@@ -44,6 +48,20 @@ class ReviewGate(Protocol):
     def ensure_reviewed(self, user_id: int, version: ScriptVersion, content: dict[str, Any]) -> ModelReview: ...
 
 
+def session_view(save: RpgSession) -> dict[str, Any]:
+    """開存檔後回給呼叫者的存檔摘要：對外識別碼、劇本標題、內容模式與主角。沒有內部編號、來源版本與劇本複本的其他內容。"""
+    return {
+        "id": save.public_id, "title": save.script_snapshot_json.get("title"), "content_tier": save.content_tier,
+        "protagonist": save.protagonist_json,
+    }
+
+
+class ProtagonistReviewGate(Protocol):
+    """開存檔時主角的模型層審查（實作見 `ProtagonistReviewService`；測試可注入替身）。"""
+
+    def review(self, user_id: int, protagonist: dict[str, Any], script_content: dict[str, Any], tier: str) -> ModelReview: ...
+
+
 class SessionService:
     def __init__(
         self,
@@ -52,38 +70,63 @@ class SessionService:
         sessions: SessionRepository,
         policy: AccessPolicy,
         reviews: ReviewGate,
+        protagonist_reviews: ProtagonistReviewGate,
+        protagonist_marker: str,
         clock: Callable[[], datetime],
     ) -> None:
         self._scripts = scripts
         self._sessions = sessions
         self._policy = policy
         self._reviews = reviews
+        self._protagonist_reviews = protagonist_reviews
+        self._marker = protagonist_marker
+        self._startable = StartableVersions(scripts=scripts, policy=policy)
         self._clock = clock
 
     def start_session(
-        self, current: CurrentUser, version_public_id: str, *, player_name: object, character_age: object
+        self, current: CurrentUser, version_public_id: object, *, protagonist: object, anchor: object = None, skip_anchor: object = None
     ) -> RpgSession:
-        """用一個劇本版本開新存檔，回傳存檔。"""
+        """用一個劇本版本與一張主角角色卡開新存檔，回傳存檔。`anchor` 與 `skip_anchor`（恰為 `True`）二選一。"""
         self._policy.require_chat_access(current)
-        name, age = _validate_protagonist(player_name, character_age)
-        version = self._scripts.get_startable(current.id, version_public_id) if isinstance(version_public_id, str) else None
-        if version is None:
-            raise NotFound()
-        effective = self._policy.effective_tier(current)
-        if tier_rank(version.content_tier) > tier_rank(effective):
-            raise ContentTierRestricted()
-        snapshot = self._scripts.content_of(version)
-        if self._scripts.get_script_of(version).seed_key is None:           # 內建的種子劇本視為已審查
-            review = self._reviews.ensure_reviewed(current.id, version, snapshot)
+        found = self._startable.resolve(current, version_public_id)
+        markers = [self._marker]
+        adult_age = self._policy.adult_age
+
+        character, errors = pro.validate_protagonist(protagonist, forbidden_markers=markers)
+        anchor_value, anchor_errors = pro.validate_anchor_choice(
+            anchor, skip_anchor, script_content=found.content, protagonist_age=character["age"] if character else None,
+            adult_age=adult_age, forbidden_markers=markers,
+        )
+        errors.update(anchor_errors)
+        if errors or character is None:
+            raise ValidationError(fields=errors or {"protagonist": "主角資料不合格。"})
+
+        rules = check_protagonist_rules(character, anchor_value["text"] if anchor_value else None, None, tier=found.tier, adult_age=adult_age)
+        if rules.verdict == REVIEW_REJECT:
+            protagonist_events.log_rejected(user_id=current.id, stage="start", layer="rules", categories=rules.categories)
+            raise ProtagonistRejected(rules.categories)
+
+        if found.script.seed_key is None:                                    # 內建的種子劇本視為已審查
+            review = self._reviews.ensure_reviewed(current.id, found.version, found.content)
             if review.verdict is None:
                 raise ReviewUnavailable()
             if review.verdict == REVIEW_REJECT:
                 raise ScriptRejected(review.categories)
-        return self._sessions.create(
-            current.id, source_version_id=version.id, snapshot=snapshot,
-            snapshot_spec_version=version.spec_version, player_name=name, character_age=age,
-            content_tier=most_conservative(effective, version.content_tier), now=self._clock(),
+
+        stored = pro.build_protagonist(character, anchor_value)
+        model = self._protagonist_reviews.review(current.id, stored, found.content, found.tier)
+        if model.verdict is None:
+            raise ReviewUnavailable("主角審查目前無法使用，請稍後再試。")
+        if model.verdict == REVIEW_REJECT:
+            protagonist_events.log_rejected(user_id=current.id, stage="start", layer="model", categories=model.categories)
+            raise ProtagonistRejected(model.categories)
+
+        save = self._sessions.create(
+            current.id, source_version_id=found.version.id, snapshot=found.content,
+            snapshot_spec_version=found.version.spec_version, protagonist=stored, content_tier=found.tier, now=self._clock(),
         )
+        protagonist_events.log_session_started(user_id=current.id, tier=found.tier, anchor="anchored" if anchor_value else "skipped")
+        return save
 
     def begin_turn(self, current: CurrentUser, session_public_id: str, *, client_msg_id: object, user_action: object) -> TurnStart:
         """開始一個回合（冪等；細節見 `SessionRepository.start_turn`），把資料層的錯誤轉成業務錯誤：
@@ -105,21 +148,3 @@ class SessionService:
             raise NotFound()
         return started
 
-
-def _validate_protagonist(player_name: object, character_age: object) -> tuple[str, int]:
-    errors: dict[str, str] = {}
-    name = ""
-    if not isinstance(player_name, str) or not (name := normalize_single_line(player_name)):
-        errors["player_name"] = "請填寫主角的姓名。"
-    elif len(name) > PLAYER_NAME_MAX:
-        errors["player_name"] = f"最多 {PLAYER_NAME_MAX} 字。"
-    age = 0
-    if isinstance(character_age, bool) or not isinstance(character_age, int):
-        errors["character_age"] = "主角的年齡必須是整數。"
-    elif not 0 <= character_age <= CHARACTER_AGE_MAX:
-        errors["character_age"] = f"必須介於 0 與 {CHARACTER_AGE_MAX} 之間。"
-    else:
-        age = character_age
-    if errors:
-        raise ValidationError(fields=errors)
-    return name, age

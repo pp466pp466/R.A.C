@@ -619,3 +619,51 @@ def test_reading_the_json_columns_back_from_either_database_gives_the_same_hash(
         "characters": stored.characters_json, "locations": stored.locations_json, "milestones": stored.milestones_json,
     }
     assert validate_script(rebuilt, max_tier="safe").content_hash == result.content_hash
+
+
+# ---- 玩家主角與劇本角色共用同一套角色驗證（rpg-protagonist「與劇本角色同一套規則」）--------------------------
+
+def _as_script_character(raw) -> tuple[dict | None, dict[str, str]]:
+    """把同一份資料放進劇本的 characters[0] 驗證，回傳 (標準化的角色或 None, 指向 characters[0] 的錯誤，路徑改寫為主角前綴)。"""
+    content = valid()
+    content["characters"] = [raw]
+    try:
+        return validate_script(content, max_tier="adult").content["characters"][0], {}
+    except ValidationError as exc:
+        return None, {
+            key.replace("characters[0]", "protagonist", 1): message
+            for key, message in exc.fields.items() if key.startswith("characters[0]")
+        }
+
+
+@pytest.mark.parametrize("raw", [
+    char(),
+    char(name="  林　曉 ", occupation=" 學徒 ", speech_style="說話很快\r\n愛用「欸」", hidden_trait="其實很怕黑"),
+    char(age=0), char(age=17), char(age=9999),
+    char(name=""), char(appearance=None), char(personality="字" * 61), char(age="十八歲"), char(age=True), char(age=3.5),
+    char(name="字" * 21), char(appearance="字" * 151), char(occupation="字" * 21), char(speech_style="字" * 101),
+    char(hidden_trait="字" * 61), char(image="https://example.com/a.png"), char(image="  "), char(extra="不在規格內"),
+])
+def test_a_protagonist_and_a_script_character_are_validated_by_the_same_rules(raw):
+    character, errors = script_spec.validate_character(copy.deepcopy(raw), path="protagonist")
+    script_character, script_errors = _as_script_character(copy.deepcopy(raw))
+    assert errors == script_errors
+    assert character == script_character
+
+
+def test_a_protagonist_that_is_not_a_mapping_fails_at_its_own_path():
+    for raw in (None, "林曉", [], 7):
+        character, errors = script_spec.validate_character(raw, path="protagonist")
+        assert character is None and list(errors) == ["protagonist"]
+
+
+def test_protagonist_errors_do_not_echo_the_input_and_forbidden_markers_are_refused():
+    _, errors = script_spec.validate_character(char(name=SENTINEL, age="x"), path="protagonist")
+    assert SENTINEL not in str(errors)
+    _, errors = script_spec.validate_character(char(personality="含有 SECRET-MARK 的文字"), path="protagonist", forbidden_markers=["secret-mark"])
+    assert list(errors) == ["protagonist.personality"] and "secret" not in str(errors).lower()
+
+
+def test_a_protagonist_may_share_a_name_with_a_script_character_because_uniqueness_belongs_to_the_script():
+    character, errors = script_spec.validate_character(char(name="花小蝶"), path="protagonist")
+    assert errors == {} and character["name"] == "花小蝶"

@@ -17,6 +17,9 @@
 
 比對前先去除空白、零寬字元與常見的拆字符號並做字元摺疊（NFKC、不分大小寫），所以以空白或全形字拆開的詞仍會命中。
 結果與日誌只有類別列舉，**不含命中的詞、句子或欄位**。
+
+詞表另有 `romantic_relation`（戀愛與婚姻關係的用語）與 `betrothal`（婚約類的用語）兩個群組，**不屬於本模組的判定**：它只供玩家主角的錨定事實守衛使用
+（`protagonist.validate_anchor`，見 rpg-protagonist 規格），所以改動它不會改變任何劇本的審查結果。
 """
 from __future__ import annotations
 
@@ -82,6 +85,8 @@ class Lexicon:
     sexual_violence: tuple[Term, ...]
     non_consent: tuple[Term, ...]
     real_person: tuple[Term, ...]
+    romantic_relation: tuple[Term, ...]    # 只供玩家主角的錨定事實守衛使用（未成年不得有戀愛或婚姻的聯繫）；`check_rules` 不使用
+    betrothal: tuple[Term, ...]            # 同上；純婚約類（娃娃親、指腹為婚、未婚夫妻…），只在成年與未成年之間才擋
 
 
 def _fold(text: str) -> str:
@@ -111,7 +116,7 @@ def load_lexicon(path: Path = LEXICON_PATH) -> Lexicon:
     return Lexicon(
         version=str(data["version"]), sexual_explicit=terms("sexual_explicit"), sexual_suggestive=terms("sexual_suggestive"),
         minor=terms("minor"), rape=terms("rape"), sexual_violence=terms("sexual_violence"), non_consent=terms("non_consent"),
-        real_person=terms("real_person"),
+        real_person=terms("real_person"), romantic_relation=terms("romantic_relation"), betrothal=terms("betrothal"),
     )
 
 
@@ -175,14 +180,63 @@ def _sentences(texts: Iterable[str]) -> list[str]:
     return folded
 
 
+def mentions_romantic_relation(text: str, *, lexicon: Lexicon | None = None) -> bool:
+    """一句話是否含戀愛或婚姻關係的用語（詞表群組 `romantic_relation`；玩家主角的錨定事實守衛使用）。純函式，不回傳命中的詞。"""
+    lex = lexicon or load_lexicon()
+    return any(_any(lex.romantic_relation, sentence) for sentence in _sentences([text]))
+
+
+def mentions_betrothal(text: str, *, lexicon: Lexicon | None = None) -> bool:
+    """一句話是否含婚約類的用語（詞表群組 `betrothal`：娃娃親、指腹為婚、訂婚、未婚夫妻…）。古代的婚約是歷史題材常見的背景設定，
+    所以它和戀愛關係分開判定（玩家主角的錨定事實守衛只在成年與未成年之間才擋）。純函式，不回傳命中的詞。"""
+    lex = lexicon or load_lexicon()
+    return any(_any(lex.betrothal, sentence) for sentence in _sentences([text]))
+
+
 def check_rules(content: dict[str, Any], *, tier: str, adult_age: int = DEFAULT_ADULT_AGE, lexicon: Lexicon | None = None) -> RulesResult:
     """對標準化後的劇本內容做規則層審查。`tier` 是劇本宣告的內容模式；`adult_age` 是成年門檻（由年齡規則提供）。"""
-    lex = lexicon or load_lexicon()
+    return _evaluate(
+        _text_fields(content), content.get("characters") or [], tier=tier, adult_age=adult_age, lex=lexicon or load_lexicon(),
+        extra_own_texts=(), minor_explicit_rejects=False,
+    )
+
+
+def check_protagonist_rules(
+    character: dict[str, Any], anchor_text: str | None, intro: str | None, *, tier: str, adult_age: int = DEFAULT_ADULT_AGE,
+    lexicon: Lexicon | None = None,
+) -> RulesResult:
+    """對玩家主角做規則層審查（rpg-protagonist 規格）：角色卡的文字欄位、錨定事實與自我介紹各自切句檢查，不跨欄位串接。
+
+    與劇本共用同一個引擎，所以四類紅線、誤擋防線與詞表版本都一樣。**唯一更嚴的地方**：主角年齡低於成年門檻，而主角自己的文字
+    （角色卡、錨定事實、自我介紹）出現露骨的性用語時直接拒絕 `minor_sexual`——劇本只標示（`minor_suspected`），因為劇本有人工複審，
+    主角沒有人工審核佇列，而無論模式一律禁止涉及未成年角色的性內容（AGENTS.md 第 7 節）。
+    """
+    own_extra = [text for text in (anchor_text, intro) if isinstance(text, str) and text]
+    return _evaluate(
+        _character_texts(character) + own_extra, [character], tier=tier, adult_age=adult_age, lex=lexicon or load_lexicon(),
+        extra_own_texts=own_extra, minor_explicit_rejects=True,
+    )
+
+
+def check_text_rules(texts: Iterable[str], *, tier: str, adult_age: int = DEFAULT_ADULT_AGE, lexicon: Lexicon | None = None) -> RulesResult:
+    """對一串自由文字（例如玩家的自我介紹）做規則層審查：沒有角色年齡，其餘判定與劇本相同。每段各自切句，不跨段串接。"""
+    return _evaluate(
+        [text for text in texts if isinstance(text, str) and text], [], tier=tier, adult_age=adult_age, lex=lexicon or load_lexicon(),
+        extra_own_texts=(), minor_explicit_rejects=False,
+    )
+
+
+def _evaluate(
+    texts: Iterable[str], characters: Iterable[dict[str, Any]], *, tier: str, adult_age: int, lex: Lexicon,
+    extra_own_texts: Iterable[str], minor_explicit_rejects: bool,
+) -> RulesResult:
+    """規則層的核心。`texts` 是會被模型讀到的文字（每段各自切句）；`characters` 是有年齡的角色；`extra_own_texts` 是主角額外的自述
+    （錨定事實、自我介紹），計入該角色自己的文字。"""
     rejected: set[str] = set()
     flagged: set[str] = set()
     saw_explicit = saw_suggestive = saw_real_person = False
 
-    for sentence in _sentences(_text_fields(content)):
+    for sentence in _sentences(texts):
         explicit = _any(lex.sexual_explicit, sentence)
         suggestive = _any(lex.sexual_suggestive, sentence)
         real_person = _any(lex.real_person, sentence)
@@ -203,14 +257,23 @@ def check_rules(content: dict[str, Any], *, tier: str, adult_age: int = DEFAULT_
         if explicit and real_person:
             rejected.add(CATEGORY_REAL_PERSON_SEXUAL)
 
+    extra = list(extra_own_texts)
+    if minor_explicit_rejects:
+        for character in characters:
+            age = character.get("age")
+            if isinstance(age, int) and not isinstance(age, bool) and age < adult_age:
+                own = _sentences(_character_texts(character) + extra)
+                if any(_any(lex.sexual_explicit, s) for s in own):
+                    rejected.add(CATEGORY_MINOR_SEXUAL)
+
     if rejected:
         return RulesResult(REVIEW_REJECT, tuple(sorted(rejected)), lex.version)
 
     if tier in (CONTENT_TIER_STANDARD, CONTENT_TIER_ADULT):
-        for character in content.get("characters") or []:
+        for character in characters:
             age = character.get("age")
-            if isinstance(age, int) and age < adult_age:
-                own = _sentences(_character_texts(character))
+            if isinstance(age, int) and not isinstance(age, bool) and age < adult_age:
+                own = _sentences(_character_texts(character) + extra)
                 if any(_any(lex.sexual_explicit, s) or _any(lex.sexual_suggestive, s) for s in own):
                     flagged.add(CATEGORY_MINOR_SUSPECTED)
     if (saw_explicit or saw_suggestive) and saw_real_person:

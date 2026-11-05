@@ -23,3 +23,22 @@ class PassingReviews:
         if self.verdict is None:
             return ModelReview(None, unavailable=self.unavailable or "degraded")
         return ModelReview(self.verdict, self.categories)
+
+
+PROTAGONIST_MARKER = "test-protagonist-marker-000000"
+
+
+class PassingProtagonistReviews:
+    """開存檔時主角的模型層審查的替身（`ProtagonistReviewGate`）：永遠回報指定的結果，記下被問過幾次與問了什麼。"""
+
+    def __init__(self, verdict: str | None = REVIEW_PASS, categories: tuple[str, ...] = (), unavailable: str | None = None) -> None:
+        self.verdict = verdict
+        self.categories = tuple(categories)
+        self.unavailable = unavailable
+        self.calls: list[tuple[int, dict[str, Any], str]] = []
+
+    def review(self, user_id: int, protagonist: dict[str, Any], script_content: dict[str, Any], tier: str) -> ModelReview:
+        self.calls.append((user_id, protagonist, tier))
+        if self.verdict is None:
+            return ModelReview(None, unavailable=self.unavailable or "degraded")
+        return ModelReview(self.verdict, self.categories)

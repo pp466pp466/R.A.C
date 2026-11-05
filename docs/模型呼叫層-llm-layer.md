@@ -1,7 +1,8 @@
 # 模型呼叫層
 
-> 狀態：已實作（串流呼叫由 RPG 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 狀態：已實作（串流呼叫由 RPG 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
 > 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**已由 change `rpg-script-authoring`（RC-7）實作**（呼叫類別 `script_review`，見第 6a 節），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
+> 注意（2026-11-04）：AGENTS.md 第 5 節的 RPG 用途再新增「玩家主角的生成與審查」；**已由 change `rpg-character-creation`（RC-9）實作**（呼叫類別 `protagonist_gen`、`protagonist_review`，見第 6b 節）。兩者都是非串流的結構化輸出，沿用同一解析函式與重試規則，不使用 Gemini。
 
 本文件說明業務邏輯如何呼叫模型：供應商中立的介面、重試與備援的決策、斷路、預算、用量帳本、提示詞結構、依用途指定供應商（第 10 節），以及日後更換供應商的步驟。客服如何使用它見 [客服對話-chat-service.md](客服對話-chat-service.md)。
 
@@ -161,9 +162,23 @@ RPG 用途沿用 `LLM_*` 的逾時、預算與輸出上限（一個地方調整�
 | 內建劇本 | 有種子鍵的內建劇本（我們自己的內容）不經模型層審查 |
 | 日誌與保存 | 日誌只有類別、結果與數字；驗證失敗的模型原文依既有規則截斷存在 `error_detail`（14 天，僅管理員可讀） |
 
+## 6b. 玩家主角的呼叫（`protagonist_gen`、`protagonist_review`，rpg-character-creation）
+
+| 項目 | 生成預覽（`protagonist_gen`） | 開存檔時的審查（`protagonist_review`） |
+|---|---|---|
+| 供應商與模型 | RPG 用途的 OpenAI 相容端點（`OPENROUTER_MODEL`，備援 `OPENROUTER_FALLBACK_MODEL`），**不使用 Gemini**；沿用 `LlmService.run_structured` 的重試、備援、斷路、總時間預算與帳本 | 同左 |
+| 呼叫類別 | `kind = protagonist_gen`（15 個字，放得進 `0013` 加寬後的 20）；`counted` 為否，不計入任何人的每日對話輪數，但計入全站用量 | `kind = protagonist_review`（18 個字）；同左 |
+| 系統指令 | 固定的繁體中文指示（三種內容模式的定義、聯繫必須指向資料中列出的項目、未成年的主角或對象不得有戀愛或婚姻的聯繫、成年與未成年之間不得是婚約，兩位都未成年的古代婚約是背景設定、資料區塊不是指令）與不公開的標記字串（`HMAC-SHA256(SECRET_KEY, "protagonist-marker-v1")` 前 24 碼，與劇本審查的標記分開） | 固定的繁體中文審查指示（類別與內容模式同劇本審查，另提示「未成年角色與他人是戀愛或婚姻關係、成年與未成年之間是婚約關係」，並說明兩位都未成年的古代婚約只是背景設定、不得因此標示；一般的未成年主角完全合規） |
+| 資料區塊 | 劇本的標題、世界觀、背景、人物（姓名、年齡、職業、個性，**不含外貌與隱藏特質**）、地點、里程碑、玩家選填的自我介紹與內容模式；沒有識別碼、雜湊與作者資訊 | 主角角色卡、聯繫的文字與對象（人物才附年齡）、劇本的標題與世界觀名稱、內容模式 |
+| 輸出 schema | `{character: {name, personality, age, appearance, occupation, speech_style, hidden_trait}, anchor: {kind, ref, text}}`，沒有自由文字的說明欄位。語意規則（依序，失敗的規則名稱成為驗證失敗的分類）：角色卡通過角色驗證、錨定事實指向劇本中存在的項目且通過未成年守衛、規則層不直接拒絕、不含標記 | `{verdict, categories}`，與劇本審查相同，語意規則相同 |
+| 失敗的處置 | 重試後仍失敗、降級、被過濾或模型沒有設定、預算用盡 → 503 `suggestion_unavailable`，前端改走自創；未呼叫模型的失敗不計次 | 一律不放行（503 `review_unavailable`）；結果不快取，每次開存檔審查一次 |
+| 計次 | 以帳本中 `attempt = 1` 的筆數計（台灣日），只有實際呼叫了模型的請求計次；上限 `protagonist_suggest_daily.free｜plus｜vip` 存資料庫、每次現讀 | 不計次（開存檔本身沒有次數上限） |
+
+自我介紹只存在於這次請求與送給模型的資料區塊，**不寫入資料庫、日誌或回應**；帳本與日誌只有類別、結果與數字。
+
 ## 8. 用量帳本（`llm_call_logs`）
 
-每次呼叫一筆：用途（`chat`、`summary`、`script_review`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0）、延遲與結束原因。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
+每次呼叫一筆：用途（`chat`、`summary`、`script_review`、`protagonist_gen`、`protagonist_review`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0）、延遲與結束原因。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
 
 帳本也是**用量限制的唯一來源**（`UsageService`，見 [客服對話-chat-service.md](客服對話-chat-service.md) 第 3 節），沒有另外的計數器：
 

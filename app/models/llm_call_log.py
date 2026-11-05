@@ -22,7 +22,9 @@ from app.models.base import Base, UTCDateTime, utcnow
 KIND_CHAT = "chat"
 KIND_SUMMARY = "summary"
 KIND_SCRIPT_REVIEW = "script_review"       # 劇本審查的模型層（RPG 用途的模型；script-review 規格）
-CALL_KINDS = (KIND_CHAT, KIND_SUMMARY, KIND_SCRIPT_REVIEW)
+KIND_PROTAGONIST_GEN = "protagonist_gen"          # AI 生成主角角色卡與錨定事實的預覽（RPG 用途的模型；protagonist-suggestion 規格）
+KIND_PROTAGONIST_REVIEW = "protagonist_review"    # 開存檔時主角文字的模型層審查（RPG 用途的模型；rpg-protagonist 規格）
+CALL_KINDS = (KIND_CHAT, KIND_SUMMARY, KIND_SCRIPT_REVIEW, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW)
 
 STATUS_OK = "ok"
 STATUS_VALIDATION_FAILED = "validation_failed"

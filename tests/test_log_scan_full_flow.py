@@ -16,7 +16,8 @@ from tests.support.auth import GOOD_PASSWORD, FakeClock, add_user
 from tests.support.config_env import AUTH_ENV
 from tests.support.email_flow import FakeSender
 from tests.support.google import FakeProvider, google_sign_in
-from tests.support.review import PassingReviews
+from tests.support.protagonist import start_kwargs
+from tests.support.review import PROTAGONIST_MARKER, PassingProtagonistReviews, PassingReviews
 
 pytestmark = pytest.mark.usefixtures("generous_free_limits")      # 掃描日誌用的流程不是用量限制（見 conftest）
 
@@ -366,7 +367,10 @@ def test_a_complete_rpg_tour_leaves_no_script_action_story_notebook_or_world_sta
         user = session.get(User, add_user(session, 1, age=30).id)
         current = CurrentUser.from_model(user)
         scripts, saves = ScriptRepository(session), SessionRepository(session)
-        service = SessionService(scripts=scripts, sessions=saves, policy=AccessPolicy(clock=clock), reviews=PassingReviews(), clock=clock)
+        service = SessionService(
+            scripts=scripts, sessions=saves, policy=AccessPolicy(clock=clock), reviews=PassingReviews(),
+            protagonist_reviews=PassingProtagonistReviews(), protagonist_marker=PROTAGONIST_MARKER, clock=clock,
+        )
 
         content = validated(
             title=RPG_SECRETS["title"][:30], background=RPG_SECRETS["background"], opening=RPG_SECRETS["action"],
@@ -379,7 +383,7 @@ def test_a_complete_rpg_tour_leaves_no_script_action_story_notebook_or_world_sta
         scripts.approve_version(version.public_id, now=clock.now)
         draft = scripts.create_draft_version(user.id, scripts.get_script_of(version).public_id, content=content.content, content_hash=content.content_hash, total_chars=content.total_chars)
 
-        save = service.start_session(current, version.public_id, player_name=RPG_SECRETS["protagonist"][:20], character_age=20)
+        save = service.start_session(current, version.public_id, **start_kwargs(name=RPG_SECRETS["protagonist"][:20], age=20))
         service.begin_turn(current, save.public_id, client_msg_id="scan-1", user_action=RPG_SECRETS["action"])
         saves.complete_turn(user.id, save.public_id, "scan-1", llm_raw_response=RPG_SECRETS["reply"], structured_result={"story": RPG_SECRETS["reply"]}, now=clock.now)
         service.begin_turn(current, save.public_id, client_msg_id="scan-2", user_action=RPG_SECRETS["action"])

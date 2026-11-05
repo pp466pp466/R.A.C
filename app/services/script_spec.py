@@ -198,6 +198,40 @@ def _list_of_text(collector: _Collector, value: Any, path: str, *, maximum_count
     return result
 
 
+def _character_fields(collector: _Collector, raw: dict[str, Any], path: str) -> dict[str, Any]:
+    """單一角色的欄位驗證與標準化（劇本角色與玩家主角共用；姓名是否重複不在這裡，那是劇本才有的規則）。"""
+    _unknown_fields(collector, raw, _CHARACTER_FIELDS, f"{path}.")
+    name = collector.text(raw.get("name"), f"{path}.name", maximum=CHARACTER_NAME_MAX, required=True)
+    personality = collector.text(raw.get("personality"), f"{path}.personality", maximum=CHARACTER_PERSONALITY_MAX, required=True)
+    age = collector.integer(raw.get("age"), f"{path}.age", minimum=0, maximum=CHARACTER_AGE_MAX, required=True)
+    appearance = collector.text(raw.get("appearance"), f"{path}.appearance", maximum=CHARACTER_APPEARANCE_MAX, required=True, multiline=True)
+    occupation = collector.text(raw.get("occupation"), f"{path}.occupation", maximum=CHARACTER_OCCUPATION_MAX)
+    speech_style = collector.text(raw.get("speech_style"), f"{path}.speech_style", maximum=CHARACTER_SPEECH_STYLE_MAX, multiline=True)
+    hidden_trait = collector.text(raw.get("hidden_trait"), f"{path}.hidden_trait", maximum=CHARACTER_HIDDEN_TRAIT_MAX)
+    if not _is_empty(raw.get("image")):
+        collector.fail(f"{path}.image", "圖片功能尚未開放。")
+    return {
+        "name": name, "personality": personality, "age": age, "appearance": appearance, "occupation": occupation,
+        "speech_style": speech_style, "hidden_trait": hidden_trait, "image": None,
+    }
+
+
+def validate_character(
+    raw: Any, *, path: str, forbidden_markers: Iterable[str] = (), collector: _Collector | None = None
+) -> tuple[dict[str, Any] | None, dict[str, str]]:
+    """驗證並標準化單一角色（玩家主角使用，欄位、上限與規則與劇本角色相同）。
+
+    回傳 `(標準化的角色或 None, 逐欄位的錯誤)`；錯誤的鍵是以 `path` 開頭的欄位路徑，訊息不回顯輸入。
+    不傳 `collector` 時自成一組；傳入時錯誤加進它（回傳的錯誤是它目前累積的全部）。
+    """
+    c = collector or _Collector(forbidden_markers)
+    if not isinstance(raw, dict):
+        c.fail(path, "必須是一位角色的資料。")
+        return None, dict(c.errors)
+    character = _character_fields(c, raw, path)
+    return (None if c.errors else character), dict(c.errors)
+
+
 def _validate_characters(collector: _Collector, value: Any) -> list[dict[str, Any]]:
     if value is None:
         return []
@@ -213,25 +247,13 @@ def _validate_characters(collector: _Collector, value: Any) -> list[dict[str, An
         if not isinstance(raw, dict):
             collector.fail(path, "必須是一位角色的資料。")
             continue
-        _unknown_fields(collector, raw, _CHARACTER_FIELDS, f"{path}.")
-        name = collector.text(raw.get("name"), f"{path}.name", maximum=CHARACTER_NAME_MAX, required=True)
-        if name is not None:
-            key = fold(name)
+        character = _character_fields(collector, raw, path)
+        if character["name"] is not None:
+            key = fold(character["name"])
             if key in seen_names:
                 collector.fail(f"{path}.name", "角色姓名不可重複。")
             seen_names.add(key)
-        personality = collector.text(raw.get("personality"), f"{path}.personality", maximum=CHARACTER_PERSONALITY_MAX, required=True)
-        age = collector.integer(raw.get("age"), f"{path}.age", minimum=0, maximum=CHARACTER_AGE_MAX, required=True)
-        appearance = collector.text(raw.get("appearance"), f"{path}.appearance", maximum=CHARACTER_APPEARANCE_MAX, required=True, multiline=True)
-        occupation = collector.text(raw.get("occupation"), f"{path}.occupation", maximum=CHARACTER_OCCUPATION_MAX)
-        speech_style = collector.text(raw.get("speech_style"), f"{path}.speech_style", maximum=CHARACTER_SPEECH_STYLE_MAX, multiline=True)
-        hidden_trait = collector.text(raw.get("hidden_trait"), f"{path}.hidden_trait", maximum=CHARACTER_HIDDEN_TRAIT_MAX)
-        if not _is_empty(raw.get("image")):
-            collector.fail(f"{path}.image", "圖片功能尚未開放。")
-        result.append({
-            "name": name, "personality": personality, "age": age, "appearance": appearance, "occupation": occupation,
-            "speech_style": speech_style, "hidden_trait": hidden_trait, "image": None,
-        })
+        result.append(character)
     return result
 
 

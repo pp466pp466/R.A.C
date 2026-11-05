@@ -21,17 +21,19 @@ from app.services.errors import (
 from app.services.session_service import SessionService
 from tests.support.age import TODAY_UTC
 from tests.support.auth import FakeClock, add_user
-from tests.support.review import PassingReviews
+from tests.support.protagonist import start_kwargs
+from tests.support.review import PROTAGONIST_MARKER, PassingProtagonistReviews, PassingReviews
 from tests.support.script_data import validated
 
 GHOST = "00000000-0000-4000-8000-000000000000"
 
 
-def service_for(session, adult_mode=False, reviews=None):
+def service_for(session, adult_mode=False, reviews=None, protagonist_reviews=None):
     clock = FakeClock()
     return SessionService(
         scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        policy=AccessPolicy(clock=clock, adult_mode_enabled=adult_mode), reviews=reviews or PassingReviews(), clock=clock,
+        policy=AccessPolicy(clock=clock, adult_mode_enabled=adult_mode), reviews=reviews or PassingReviews(),
+        protagonist_reviews=protagonist_reviews or PassingProtagonistReviews(), protagonist_marker=PROTAGONIST_MARKER, clock=clock,
     ), clock
 
 
@@ -64,9 +66,8 @@ def count(session, model) -> int:
 
 
 def start(service, user, version, **overrides):
-    values = dict(player_name="旅人", character_age=18)
-    values.update(overrides)
-    return service.start_session(user, version.public_id, **values)
+    """用 `start_kwargs()` 的預設主角（旅人、18 歲、明確略過錨定事實）開存檔；`overrides` 覆蓋 `name`／`age` 等角色欄位。"""
+    return service.start_session(user, version.public_id, **start_kwargs(**overrides))
 
 
 # ---- 誰可以用哪個版本 -------------------------------------------------------------------------
@@ -98,7 +99,7 @@ def test_the_owner_may_start_from_their_own_draft_but_another_player_gets_a_404(
     with pytest.raises(NotFound) as for_draft:
         start(service, other, draft)
     with pytest.raises(NotFound) as for_missing:
-        service.start_session(other, GHOST, player_name="旅人", character_age=18)
+        service.start_session(other, GHOST, **start_kwargs())
     assert (for_draft.value.code, for_draft.value.message) == (for_missing.value.code, for_missing.value.message)
     assert count(member_session, RpgSession) == 1
 
@@ -132,7 +133,7 @@ def test_a_non_string_version_id_is_a_404_not_an_error(member_session):
     user = player(member_session)
     for bad in (None, 7, ["x"]):
         with pytest.raises(NotFound):
-            service.start_session(user, bad, player_name="旅人", character_age=18)
+            service.start_session(user, bad, **start_kwargs())
 
 
 # ---- 內容模式 -----------------------------------------------------------------------------
@@ -245,17 +246,19 @@ def test_a_new_save_starts_with_an_empty_notebook_even_when_another_save_has_one
 def test_the_protagonist_name_is_normalised_and_the_age_is_a_character_age_not_the_players(member_session):
     service, _ = service_for(member_session)
     teenager = player(member_session, age=15)
-    save = start(service, teenager, publish_script(member_session), player_name="  旅\n  人 ", character_age=3)
+    save = start(service, teenager, publish_script(member_session), name="  旅\n  人 ", age=3)
     assert (save.player_name, save.character_age) == ("旅 人", 3)
 
 
 @pytest.mark.parametrize(
     ("overrides", "field"),
     [
-        ({"player_name": ""}, "player_name"), ({"player_name": "   "}, "player_name"), ({"player_name": None}, "player_name"),
-        ({"player_name": "字" * 21}, "player_name"), ({"player_name": 5}, "player_name"),
-        ({"character_age": "十八"}, "character_age"), ({"character_age": 18.5}, "character_age"), ({"character_age": True}, "character_age"),
-        ({"character_age": -1}, "character_age"), ({"character_age": 10000}, "character_age"), ({"character_age": None}, "character_age"),
+        ({"name": ""}, "protagonist.name"), ({"name": "   "}, "protagonist.name"), ({"name": None}, "protagonist.name"),
+        ({"name": "字" * 21}, "protagonist.name"), ({"name": 5}, "protagonist.name"),
+        ({"age": "十八"}, "protagonist.age"), ({"age": 18.5}, "protagonist.age"), ({"age": True}, "protagonist.age"),
+        ({"age": -1}, "protagonist.age"), ({"age": 10000}, "protagonist.age"), ({"age": None}, "protagonist.age"),
+        ({"appearance": ...}, "protagonist.appearance"), ({"personality": "字" * 61}, "protagonist.personality"),
+        ({"image": "https://example.com/a.png"}, "protagonist.image"),
     ],
 )
 def test_an_invalid_protagonist_is_a_400_naming_the_field_and_no_save_is_created(member_session, overrides, field):

@@ -24,6 +24,8 @@ from app.services.script_review_service import (
 from app.services.session_service import SessionService
 from tests.support.auth import FakeClock, add_user
 from tests.support.llm import FakeLLMProvider, Step
+from tests.support.protagonist import start_kwargs
+from tests.support.review import PROTAGONIST_MARKER, PassingProtagonistReviews
 from tests.support.script_data import validated
 from tests.test_llm_service import build
 
@@ -328,7 +330,8 @@ def make_sessions(session, provider, *, llm=True, exhausted=False):
     clock = FakeClock()
     reviews = make_review(session, provider, llm=llm, exhausted=exhausted, clock=clock)
     return SessionService(
-        scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=AccessPolicy(clock=clock), reviews=reviews, clock=clock,
+        scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=AccessPolicy(clock=clock), reviews=reviews,
+        protagonist_reviews=PassingProtagonistReviews(), protagonist_marker=PROTAGONIST_MARKER, clock=clock,
     ), reviews
 
 
@@ -337,7 +340,7 @@ def player(session, n=1, **overrides) -> CurrentUser:
 
 
 def open_save(service, current, version):
-    return service.start_session(current, version.public_id, player_name="旅人", character_age=18)
+    return service.start_session(current, version.public_id, **start_kwargs())
 
 
 def test_the_owners_unreviewed_draft_is_reviewed_first_and_then_opens(member_session):

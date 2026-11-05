@@ -18,9 +18,10 @@ from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.services.runtime_limits import LIMIT_KEYS, LIMIT_SPECS, LimitError, RuntimeLimits
 from tests.support.auth import FakeClock
 
-SEVEN_KEYS = (
+ALL_KEYS = (
     "script_limit.free", "script_limit.plus", "script_limit.vip",
     "script_submit_daily.free", "script_submit_daily.plus", "script_submit_daily.vip",
+    "protagonist_suggest_daily.free", "protagonist_suggest_daily.plus", "protagonist_suggest_daily.vip",
     "script_reject_streak",
 )
 
@@ -35,18 +36,28 @@ def put(session, key, value):
 
 
 def migration_initial_limits() -> dict[str, int]:
-    path = PROJECT_ROOT / "migrations" / "versions" / "20261104_0013_rpg_script_authoring.py"
-    spec = importlib.util.spec_from_file_location("migration_0013", path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return dict(module.INITIAL_LIMITS)
+    """各遷移寫入的初始限制合計（0013 的七個加上 0014 的三個）。"""
+    limits: dict[str, int] = {}
+    for filename, name in (("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014")):
+        spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / "migrations" / "versions" / filename)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert not set(limits) & set(dict(module.INITIAL_LIMITS)), "兩個遷移不應寫入同一個鍵"
+        limits.update(dict(module.INITIAL_LIMITS))
+    return limits
 
 
 # ---- 鍵、範圍與初始值 -----------------------------------------------------------------
 
 
-def test_the_seven_keys_are_fixed():
-    assert LIMIT_KEYS == SEVEN_KEYS and set(LIMIT_SPECS) == set(SEVEN_KEYS)
+def test_the_ten_keys_are_fixed():
+    assert LIMIT_KEYS == ALL_KEYS and set(LIMIT_SPECS) == set(ALL_KEYS)
+
+
+def test_the_protagonist_suggestion_keys_range_from_0_to_100():
+    for tier in ("free", "plus", "vip"):
+        spec = LIMIT_SPECS[f"protagonist_suggest_daily.{tier}"]
+        assert (spec.minimum, spec.maximum) == (0, 100)
 
 
 def test_the_fallback_defaults_equal_the_values_the_migration_writes():
@@ -55,6 +66,7 @@ def test_the_fallback_defaults_equal_the_values_the_migration_writes():
     assert migration_initial_limits() == {
         "script_limit.free": 3, "script_limit.plus": 10, "script_limit.vip": 30,
         "script_submit_daily.free": 3, "script_submit_daily.plus": 5, "script_submit_daily.vip": 10,
+        "protagonist_suggest_daily.free": 5, "protagonist_suggest_daily.plus": 15, "protagonist_suggest_daily.vip": 40,
         "script_reject_streak": 3,
     }
 
@@ -144,10 +156,33 @@ def test_rows_reports_every_key_with_its_effective_value_and_where_it_comes_from
     put(member_session, "script_limit.plus", 20)
     put(member_session, "script_limit.vip", 9999)                                       # 不合法
     rows = {row.key: row for row in make_limits(member_session).rows()}
-    assert list(rows) == list(SEVEN_KEYS)
+    assert list(rows) == list(ALL_KEYS)
     assert rows["script_limit.plus"].value == 20 and rows["script_limit.plus"].from_database
     assert rows["script_limit.vip"].value == 30 and not rows["script_limit.vip"].from_database
     assert rows["script_limit.free"].value == 3 and not rows["script_limit.free"].from_database
+
+
+def test_suggest_daily_reads_the_tier_value_each_time_and_falls_back_to_free_for_unknown_tiers(member_session):
+    limits = make_limits(member_session)
+    assert [limits.suggest_daily(tier) for tier in ("free", "plus", "vip")] == [5, 15, 40]
+    assert limits.suggest_daily("gold") == limits.suggest_daily(None) == limits.suggest_daily(7) == 5
+    put(member_session, "protagonist_suggest_daily.plus", 20)
+    assert make_limits(member_session).suggest_daily("plus") == 20                      # 下一次呼叫立即讀到新值
+    member_session.query(RuntimeLimit).filter_by(key="protagonist_suggest_daily.plus").one().int_value = 101
+    member_session.flush()
+    assert make_limits(member_session).suggest_daily("plus") == 15                      # 範圍外：保底預設
+
+
+def test_setting_the_new_keys_is_audited_and_out_of_range_values_are_refused(member_session):
+    calls, audit = recording_audit()
+    limits = make_limits(member_session, audit)
+    assert limits.set("protagonist_suggest_daily.vip", 50) == (40, 50)
+    assert calls[-1][2] == {"limit_key": "protagonist_suggest_daily.vip", "old_value": 40, "new_value": 50}
+    with pytest.raises(LimitError):
+        limits.set("protagonist_suggest_daily.vip", 101)
+    with pytest.raises(LimitError):
+        limits.set("protagonist_suggest_daily.vip", -1)
+    assert limits.suggest_daily("vip") == 50
 
 
 # ---- 修改：驗證與稽核 -------------------------------------------------------------------
@@ -252,13 +287,13 @@ def test_the_set_command_refuses_a_non_integer_value(app):
     assert result.exit_code != 0 and stored(app) == {}
 
 
-def test_the_show_command_lists_the_seven_keys_and_marks_the_fallback_defaults(app):
+def test_the_show_command_lists_the_ten_keys_and_marks_the_fallback_defaults(app):
     runner = app.test_cli_runner()
     runner.invoke(args=["set-script-limit", "script_limit.plus", "12"])
     result = runner.invoke(args=["show-script-limits"])
     assert result.exit_code == 0
     lines = [line for line in result.output.splitlines() if line.strip()]
-    assert [line.split()[0] for line in lines] == list(SEVEN_KEYS)
+    assert [line.split()[0] for line in lines] == list(ALL_KEYS)
     by_key = {line.split()[0]: line for line in lines}
     assert "script_limit.plus = 12" in by_key["script_limit.plus"] and "保底預設" not in by_key["script_limit.plus"]
     assert "script_limit.free = 3" in by_key["script_limit.free"] and "保底預設" in by_key["script_limit.free"]

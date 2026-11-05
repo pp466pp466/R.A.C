@@ -148,7 +148,7 @@ def test_readme_member_auth_endpoint_tables_list_exactly_the_registered_routes()
 
 
 def test_readme_script_authoring_tables_list_exactly_the_registered_routes_and_both_limit_commands():
-    """劇本創作的端點與頁面表格必須與實際註冊的路由完全一致；兩個營運限制指令與七個鍵都要記載。"""
+    """劇本創作的端點與頁面表格必須與實際註冊的路由完全一致；兩個營運限制指令與全部的鍵（分散在創作劇本與玩家主角兩節）都要記載。"""
     from app import create_app
     from app.config import load_config
     from app.services.runtime_limits import LIMIT_KEYS
@@ -170,8 +170,33 @@ def test_readme_script_authoring_tables_list_exactly_the_registered_routes_and_b
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
     for command in ("set-script-limit", "show-script-limits"):
         assert command in section, command
+    whole = README.read_text(encoding="utf-8-sig")                                    # 十個鍵分散在創作劇本與玩家主角兩節
     for key in LIMIT_KEYS:
-        assert key.split(".")[0] in section, key
+        assert key.split(".")[0] in whole, key
+
+
+def test_readme_protagonist_table_lists_exactly_the_registered_session_routes_and_the_timeout_advice():
+    """玩家主角與開存檔的端點表必須與實際註冊的 `/api/sessions` 路由完全一致；逾時提醒與新限制鍵、錯誤代碼都要記載。"""
+    from app import create_app
+    from app.config import load_config
+
+    section = readme_section("玩家主角與開存檔（rpg-character-creation）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/[^`]*`", cells[0]):
+            methods = set(cells[1].split("、")) if re.fullmatch(r"[A-Z]+(、[A-Z]+)*", cells[1]) else {"GET"}
+            documented.update((cells[0].strip("`"), method) for method in methods)
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual: set[tuple[str, str]] = set()
+    for rule in app.url_map.iter_rules():
+        if rule.rule.startswith("/api/sessions"):
+            actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
+    assert len(actual) == 3, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+    for needed in ("protagonist_suggest_daily", "65 秒", "suggestion_unavailable", "suggestion_limit", "protagonist_rejected", "review_unavailable", "十個鍵"):
+        assert needed in section, needed
 
 
 def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():

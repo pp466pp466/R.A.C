@@ -51,7 +51,7 @@ def test_the_module_is_a_pure_function_without_database_network_or_model_imports
 def test_the_lexicon_is_a_utf8_data_file_with_a_version_and_all_groups():
     data = json.loads(Path(LEXICON_PATH).read_text(encoding="utf-8-sig"))
     assert data["version"] and set(data["groups"]) == {
-        "sexual_explicit", "sexual_suggestive", "minor", "rape", "sexual_violence", "non_consent", "real_person",
+        "sexual_explicit", "sexual_suggestive", "minor", "rape", "sexual_violence", "non_consent", "real_person", "romantic_relation", "betrothal",
     }
     assert all(data["groups"][name] for name in data["groups"])
     lexicon = load_lexicon()
@@ -298,3 +298,124 @@ def test_checking_does_not_change_the_content_it_was_given():
     before = json.dumps(content, sort_keys=True, ensure_ascii=False)
     check_rules(content, tier="safe")
     assert json.dumps(content, sort_keys=True, ensure_ascii=False) == before
+
+
+# ---- romantic_relation 群組（rpg-character-creation：只供玩家主角的錨定事實守衛）------------------------------
+
+
+def test_the_romantic_relation_group_is_loaded_and_the_lexicon_version_moved_on():
+    lexicon = load_lexicon()
+    assert lexicon.romantic_relation, "詞表應載入戀愛與婚姻關係的群組"
+    assert lexicon.version != "2026-11-04-4" and re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d+", lexicon.version)
+    texts = {term.text for term in lexicon.romantic_relation}
+    assert {"戀人", "道侶", "夫妻", "結婚", "童養媳"} <= texts
+    # 純婚約類在獨立的群組：歷史題材常見的背景設定，不和戀愛混在一起
+    assert not texts & {"未婚妻", "未婚夫", "婚約", "訂婚", "定親", "指腹為婚", "娃娃親"}
+    assert {"未婚妻", "未婚夫", "婚約", "訂婚", "定親", "指腹為婚", "娃娃親"} <= {term.text for term in lexicon.betrothal}
+
+
+@pytest.mark.parametrize(("sentence", "hit"), [
+    ("他的未婚妻", False), ("從小指腹為婚", False), ("舊日的戀人", True), ("被賣去當童養媳", True), ("兩人已經成親", True), ("兩人是道侶", True), ("她愛慕他多年", True), ("他的老婆", True), ("她的男友", True),
+    ("他的同門師弟", False), ("同鄉的鄰家哥哥", False), ("大丈夫能屈能伸", False), ("老婆婆開的茶鋪", False),
+    ("愛慕虛榮的商人", False), ("男友人送來的信", False), ("結拜的兄妹", False),
+])
+def test_romantic_relation_terms_hit_relationships_and_skip_common_false_positives(sentence, hit):
+    from app.services.script_rules import _any, _fold
+
+    assert _any(load_lexicon().romantic_relation, _fold(sentence)) is hit
+
+
+@pytest.mark.parametrize(("sentence", "hit"), [
+    ("他的未婚妻", True), ("從小指腹為婚", True), ("兩家自幼訂下娃娃親", True), ("已經訂婚多年", True), ("婚約在身", True),
+    ("舊日的戀人", False), ("他的同門師弟", False), ("兩人已經成親", False),
+])
+def test_betrothal_terms_hit_only_the_betrothal_group(sentence, hit):
+    from app.services.script_rules import _any, _fold
+
+    assert _any(load_lexicon().betrothal, _fold(sentence)) is hit
+
+
+def test_the_mention_helpers_are_pure_and_do_not_echo_the_match():
+    from app.services.script_rules import mentions_betrothal, mentions_romantic_relation
+
+    assert mentions_betrothal("從小訂有娃娃親") is True and mentions_betrothal("同門師弟") is False
+    assert mentions_romantic_relation("舊日的戀人") is True and mentions_romantic_relation("從小訂有娃娃親") is False
+
+
+def test_the_rules_layer_ignores_both_protagonist_groups():
+    """check_rules 的判定與這兩個群組無關：同一份劇本加上戀愛與婚約用語，結果不變（既有劇本的審查結果不受影響）。"""
+    plain = check(background="少年與同門師弟一同修行。")
+    romantic = check(background="少年與他的未婚妻、戀人與道侶，還有指腹為婚的對象一同修行。")
+    assert plain == romantic
+
+
+# ---- 玩家主角的規則層（rpg-protagonist）：共用引擎，唯一更嚴的是未成年主角自己的露骨文字 --------------------
+
+
+def protagonist_check(*, tier="safe", anchor=None, intro=None, adult_age=18, **fields):
+    from app.services.script_rules import check_protagonist_rules
+
+    card = {"name": "林舟", "personality": "沉默愛思考", "age": 19, "appearance": "高瘦，常穿灰衣", "occupation": None, "speech_style": None, "hidden_trait": None}
+    card.update(fields)
+    return check_protagonist_rules(card, anchor, intro, tier=tier, adult_age=adult_age)
+
+
+def test_an_ordinary_protagonist_of_any_age_passes():
+    assert protagonist_check().verdict == REVIEW_PASS
+    assert protagonist_check(age=10, personality="天真愛哭的學童", appearance="圓臉，扎著兩根辮子").verdict == REVIEW_PASS
+    assert protagonist_check(age=15, tier="standard", anchor="他的同門師弟", intro="我是個十五歲的遊方學徒，想拜師。").verdict == REVIEW_PASS
+
+
+@pytest.mark.parametrize(("field", "sentence"), [
+    ("personality", "十歲的少女與他做愛。"), ("appearance", "高中生之間發生了性交。"), ("hidden_trait", "未成年的孩子們自慰。"),
+])
+def test_the_four_red_lines_apply_to_each_card_field_just_like_a_script(field, sentence):
+    result = protagonist_check(age=30, **{field: sentence})
+    assert result.verdict == REVIEW_REJECT and "minor_sexual" in result.categories
+
+
+def test_the_red_lines_apply_to_the_anchor_and_the_intro():
+    assert protagonist_check(anchor="十歲的少女與他做愛。").verdict == REVIEW_REJECT
+    assert protagonist_check(intro="他們做愛，她被迫屈服。").categories == ("non_consensual",)
+    assert protagonist_check(anchor="他們發生性交，對象是現實人物。").verdict == REVIEW_REJECT
+
+
+def test_a_card_that_is_not_in_the_same_sentence_is_not_joined():
+    """四類紅線只在同一句共現；分在不同欄位的兩半不會被串接成拒絕。"""
+    assert protagonist_check(age=30, personality="他們發生性行為。", appearance="十歲的少女。").verdict != REVIEW_REJECT
+
+
+def test_a_minor_protagonist_with_an_explicit_term_in_their_own_text_is_rejected_unlike_a_script():
+    for place in ({"personality": "喜歡性愛的少年"}, {"appearance": "性行為"}, {"anchor": "與他發生性關係的人"}, {"intro": "我想要做愛。"}):
+        result = protagonist_check(age=15, tier="adult", **place)
+        assert result.verdict == REVIEW_REJECT and result.categories == ("minor_sexual",), place
+    # 同樣的文字，成年主角不受影響（成人模式下的露骨文字交給模型層與回合層）
+    assert protagonist_check(age=30, tier="adult", personality="喜歡性愛的少年").verdict == REVIEW_PASS
+    # 劇本裡未成年角色加露骨詞只標示，不直接拒絕（有人工複審）
+    script = check(tier="adult", characters=[character(age=15, personality="喜歡性愛的少年")])
+    assert script.verdict == REVIEW_FLAG and script.categories == ("minor_suspected",)
+
+
+def test_a_suggestive_term_on_a_minor_protagonist_is_flagged_only_in_standard_and_adult_modes():
+    suggestive = "渴望情慾的少年"
+    assert protagonist_check(age=15, tier="standard", personality=suggestive).categories == ("minor_suspected",)
+    assert protagonist_check(age=15, tier="adult", personality=suggestive).verdict == REVIEW_FLAG
+    safe = protagonist_check(age=15, tier="safe", personality=suggestive)
+    assert safe.verdict == REVIEW_FLAG and safe.categories == ("tier_mismatch",)
+
+
+def test_the_adult_threshold_comes_from_the_caller_for_protagonists_too():
+    assert protagonist_check(age=19, tier="adult", personality="喜歡性愛的少年").verdict == REVIEW_PASS
+    assert protagonist_check(age=19, tier="adult", adult_age=20, personality="喜歡性愛的少年").categories == ("minor_sexual",)
+
+
+def test_protagonist_results_carry_only_categories_and_the_lexicon_version():
+    result = protagonist_check(age=15, personality="喜歡性愛的少年")
+    assert set(RulesResult.__dataclass_fields__) == {"verdict", "categories", "lexicon_version"}
+    assert "性愛" not in str(result) and result.lexicon_version == load_lexicon().version
+
+
+def test_an_unreadable_age_is_not_treated_as_a_minor():
+    """年齡不是整數時（不該發生，驗證會先擋下）規則層不因此誤判。"""
+    assert protagonist_check(age=True, tier="adult", personality="喜歡性愛的少年").verdict == REVIEW_PASS
+    assert protagonist_check(age=None, tier="adult", personality="喜歡性愛的少年").verdict == REVIEW_PASS

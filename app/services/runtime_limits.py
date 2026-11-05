@@ -1,6 +1,7 @@
 """存放在資料庫的營運限制（見 runtime-limits 規格與 rpg-script-authoring 的 design D10）。
 
-七個限制：每位作者可擁有的劇本數（依會員等級）、每個台灣日的送審次數（依會員等級）、連續被自動拒絕幾次就暫停發佈。
+十個限制：每位作者可擁有的劇本數（依會員等級）、每個台灣日的送審次數（依會員等級）、每個台灣日的主角生成與重新生成次數
+（依會員等級，rpg-character-creation）、連續被自動拒絕幾次就暫停發佈。
 - **每次使用時現讀**，沒有模組層快取、也不放進行程內變數（AGENTS.md 第 9 節）：改了資料庫，下一個請求就用新值，多個 worker 一致。
 - 缺值、不是整數或在合法範圍外時使用內建的保底預設（與遷移 `0013` 寫入的初始值相同，由測試比對），並記一筆只含鍵名的警告
   事件；不會因此放行無上限，也不會讓創作與送審全部失敗。不認得的會員等級套用最保守的 free（同 `quota_policy`）。
@@ -20,6 +21,7 @@ from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 
 SCRIPT_LIMIT_PREFIX = "script_limit"                 # 每位作者可擁有的劇本數
 SUBMIT_DAILY_PREFIX = "script_submit_daily"          # 每個台灣日的送審次數
+SUGGEST_DAILY_PREFIX = "protagonist_suggest_daily"   # 每個台灣日的主角生成與重新生成次數
 REJECT_STREAK_KEY = "script_reject_streak"           # 連續被自動拒絕幾次就暫停發佈
 
 
@@ -38,6 +40,7 @@ def _per_tier(prefix: str, defaults: Mapping[str, int], minimum: int, maximum: i
 LIMIT_SPECS: dict[str, LimitSpec] = {
     **_per_tier(SCRIPT_LIMIT_PREFIX, {TIER_FREE: 3, TIER_PLUS: 10, TIER_VIP: 30}, 0, 500),
     **_per_tier(SUBMIT_DAILY_PREFIX, {TIER_FREE: 3, TIER_PLUS: 5, TIER_VIP: 10}, 0, 100),
+    **_per_tier(SUGGEST_DAILY_PREFIX, {TIER_FREE: 5, TIER_PLUS: 15, TIER_VIP: 40}, 0, 100),
     REJECT_STREAK_KEY: LimitSpec(REJECT_STREAK_KEY, 3, 1, 20),
 }
 LIMIT_KEYS = tuple(LIMIT_SPECS)
@@ -84,11 +87,15 @@ class RuntimeLimits:
         """該會員等級每個台灣日可送審的次數；不認得的等級套用 free。"""
         return self.get(f"{SUBMIT_DAILY_PREFIX}.{_tier_or_free(tier)}")
 
+    def suggest_daily(self, tier: object) -> int:
+        """該會員等級每個台灣日可請 AI 生成主角的次數（含重新生成）；不認得的等級套用 free。"""
+        return self.get(f"{SUGGEST_DAILY_PREFIX}.{_tier_or_free(tier)}")
+
     def reject_streak(self) -> int:
         return self.get(REJECT_STREAK_KEY)
 
     def rows(self) -> list[LimitRow]:
-        """全部七個限制的目前狀態（一次查詢），給 `show-script-limits` 使用。"""
+        """全部限制的目前狀態（一次查詢），給 `show-script-limits` 使用。"""
         stored = self._limits.all_values()
         rows = []
         for spec in LIMIT_SPECS.values():

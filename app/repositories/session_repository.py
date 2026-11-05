@@ -53,6 +53,15 @@ class TurnStart:
     outcome: str
 
 
+def _exported_protagonist(stored: Any) -> dict[str, Any] | None:
+    """匯出的主角：角色卡的各欄位（不含保留的圖片欄位）與錨定事實；沒有主角資料的舊存檔回傳 `None`。"""
+    if not isinstance(stored, dict) or not isinstance(stored.get("character"), dict):
+        return None
+    character = {key: value for key, value in stored["character"].items() if key != "image"}
+    anchor = stored.get("anchor")
+    return {"character": character, "anchor": dict(anchor) if isinstance(anchor, dict) else None}
+
+
 class SessionRepository(BaseRepository[RpgSession]):
     model = RpgSession
 
@@ -60,12 +69,17 @@ class SessionRepository(BaseRepository[RpgSession]):
 
     def create(
         self, user_id: int, *, source_version_id: int | None, snapshot: Mapping[str, Any], snapshot_spec_version: int,
-        player_name: str, character_age: int, content_tier: str, now: datetime,
+        protagonist: Mapping[str, Any], content_tier: str, now: datetime,
     ) -> RpgSession:
-        """開存檔：複製劇本版本標準化後的完整內容，並給所有欄位初始值（版本號 1、經過 0 個月、記事簿為空…）。"""
+        """開存檔：複製劇本版本標準化後的完整內容，並給所有欄位初始值（版本號 1、經過 0 個月、記事簿為空…）。
+
+        `protagonist` 是 `{"character": {...}, "anchor": {...} 或 None}`（見 `services/protagonist.build_protagonist`）；
+        主角姓名與角色年齡欄位**只在這裡**由角色卡寫入，開存檔之後沒有任何方法能修改它們（角色年齡是錨定事實）。"""
+        character = protagonist["character"]
         save = RpgSession(
             user_id=user_id, source_version_id=source_version_id, script_snapshot_json=copy.deepcopy(dict(snapshot)),
-            snapshot_spec_version=snapshot_spec_version, player_name=player_name, character_age=character_age,
+            snapshot_spec_version=snapshot_spec_version, player_name=character["name"], character_age=character["age"],
+            protagonist_json=copy.deepcopy(dict(protagonist)),
             content_tier=content_tier, last_active_at=now,
             entities_json={}, goals_json={"active": [], "archived": []}, milestone_progress_json={},
         )
@@ -214,7 +228,7 @@ class SessionRepository(BaseRepository[RpgSession]):
     def export_sessions(self, user_id: int, *, page_size: int = 50) -> Iterator[dict[str, Any]]:
         """這位使用者的全部存檔（含已完結與已封存的），由舊到新逐筆產生（以存檔編號為游標分頁）。回合另以 `export_turns` 分頁讀取。
 
-        含劇本標題（取自存檔自己的複本）、狀態、內容模式、主角姓名與角色年齡、所在地點、狀態摘要、各時間、記事簿全文與世界狀態
+        含劇本標題（取自存檔自己的複本）、狀態、內容模式、主角姓名與角色年齡、主角的角色卡與錨定事實（`protagonist`；遷移之前建立的存檔為空）、所在地點、狀態摘要、各時間、記事簿全文與世界狀態
         （`world_state`，只給 JSON 匯出使用）。**不含**劇本複本本身（那是來源劇本作者的內容）、來源版本編號、版本號與其他內部編號。
         """
         after = 0
@@ -231,7 +245,7 @@ class SessionRepository(BaseRepository[RpgSession]):
                     "player_name": save.player_name, "character_age": save.character_age, "current_location": save.current_location,
                     "status_summary": save.status_summary, "elapsed_months": save.elapsed_months, "is_archived": save.is_archived,
                     "created_at": save.created_at, "last_active_at": save.last_active_at, "ended_at": save.ended_at,
-                    "notebook_text": save.notebook_text,
+                    "notebook_text": save.notebook_text, "protagonist": _exported_protagonist(save.protagonist_json),
                     "world_state": {
                         "entities": save.entities_json, "goals": save.goals_json, "milestone_progress": save.milestone_progress_json,
                     },

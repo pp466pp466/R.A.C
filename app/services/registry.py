@@ -66,7 +66,11 @@ from app.services.script_submission_service import ScriptSubmissionService
 from app.services.script_review_prompt import review_marker
 from app.services.script_review_service import ScriptReviewService
 from app.services.script_seed_service import SEED_DIRECTORY, ScriptSeedService
+from app.services.protagonist_prompt import protagonist_marker
+from app.services.protagonist_review_service import ProtagonistReviewService
+from app.services.protagonist_service import ProtagonistService
 from app.services.session_service import SessionService
+from app.services.startable import StartableVersions
 from app.services.summary_service import SummaryService
 from app.services.usage_service import UsageService
 
@@ -362,12 +366,34 @@ def get_script_review_service() -> ScriptReviewService:
     )
 
 
+def get_protagonist_review_service() -> ProtagonistReviewService:
+    """目前請求的主角審查（模型層）：RPG 用途的 `LlmService`（沒有設定供應商時為 None，審查一律回報不可用）與全站用量上限的檢查。"""
+    session, config, clock = get_session(), get_config(), get_clock()
+    usage = build_usage_service(session, settings=config.usage, clock=clock)
+    return ProtagonistReviewService(
+        llm=get_rpg_llm_service(), marker=protagonist_marker(config.secret_key.reveal()), budget_exhausted=usage.global_budget_exhausted,
+    )
+
+
 def get_session_service() -> SessionService:
-    """目前請求的存檔服務：開存檔與開始回合（兩者都只處理呼叫者本人的資料）。"""
-    session = get_session()
+    """目前請求的存檔服務：開存檔（含主角的驗證與兩層審查）與開始回合（兩者都只處理呼叫者本人的資料）。"""
+    session, config = get_session(), get_config()
     return SessionService(
         scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy(),
-        reviews=get_script_review_service(), clock=get_clock(),
+        reviews=get_script_review_service(), protagonist_reviews=get_protagonist_review_service(),
+        protagonist_marker=protagonist_marker(config.secret_key.reveal()), clock=get_clock(),
+    )
+
+
+def get_protagonist_service() -> ProtagonistService:
+    """目前請求的主角服務：創角所需的資料與 AI 生成預覽（無狀態；唯一的寫入是用量帳本）。"""
+    session, config, clock = get_session(), get_config(), get_clock()
+    policy = get_access_policy()
+    usage = build_usage_service(session, settings=config.usage, clock=clock)
+    return ProtagonistService(
+        startable=StartableVersions(scripts=ScriptRepository(session), policy=policy), policy=policy, limits=get_runtime_limits(),
+        ledger=LlmCallLogRepository(session), llm=get_rpg_llm_service(), marker=protagonist_marker(config.secret_key.reveal()),
+        budget_exhausted=usage.global_budget_exhausted, clock=clock,
     )
 
 

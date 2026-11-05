@@ -52,6 +52,10 @@ class RpgSession(Base, PublicIdMixin, TimestampMixin):
     # 主角：劇中角色的姓名與年齡（與使用者的年齡無關，使用者年齡一律由生日計算）
     player_name: Mapped[str] = mapped_column(Unicode(50))
     character_age: Mapped[int] = mapped_column(Integer)
+    # 主角的完整資料（rpg-protagonist）：`{"character": {name, personality, age, appearance, occupation, speech_style, hidden_trait, image},
+    # "anchor": {kind, ref, text} 或 None}`。`player_name`、`character_age` 由角色卡於同一個 INSERT 寫入（expand 階段保留兩欄，
+    # 舊程式與匯出照常運作）；遷移之前建立的存檔此欄為空。個資：不進日誌、不進管理員預設範圍；不得依內容篩選查詢。
+    protagonist_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
 
     # 世界狀態：更新時以 `version` 做條件式更新（成功加 1），不一致以後端為準
     current_location: Mapped[str] = mapped_column(Unicode(100), default="")

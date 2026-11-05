@@ -24,6 +24,7 @@ from app.repositories.errors import (
 )
 from app.repositories.session_repository import TURN_CREATED, TURN_REPLAYED, TURN_RESTARTED, SessionRepository
 from tests.support.script_data import validated
+from tests.support.protagonist import protagonist
 
 NOW = utcnow()
 SNAPSHOT = validated().content
@@ -43,7 +44,7 @@ def repo(member_session):
 
 def open_save(repo, user, **overrides) -> RpgSession:
     values = dict(
-        source_version_id=None, snapshot=SNAPSHOT, snapshot_spec_version=1, player_name="旅人", character_age=18,
+        source_version_id=None, snapshot=SNAPSHOT, snapshot_spec_version=1, protagonist=protagonist(),
         content_tier="safe", now=NOW,
     )
     values.update(overrides)
@@ -464,3 +465,46 @@ def test_a_new_save_can_be_opened_from_the_same_script_after_the_old_one_ended(r
     second = open_save(repo, alice)
     assert (second.status, second.id != first.id) == (SESSION_ACTIVE, True)
     assert start(repo, alice, second).outcome == TURN_CREATED
+
+
+# ---- 主角（rpg-protagonist：存放與姓名、年齡同步）-----------------------------------------------------------
+
+
+def test_the_protagonist_is_stored_and_name_and_age_follow_the_card(repo, member_session):
+    alice = make_user(member_session)
+    anchor = {"kind": "location", "ref": "古劍山莊", "text": "出生的地方"}
+    save = open_save(repo, alice, protagonist=protagonist("林舟", 19, anchor=anchor, personality="沉默愛思考"))
+    member_session.commit()
+    member_session.expire_all()
+    stored = repo.get_owned(alice.id, save.public_id)
+    assert (stored.player_name, stored.character_age) == ("林舟", 19)
+    assert stored.protagonist_json["character"]["name"] == "林舟" and stored.protagonist_json["character"]["age"] == 19
+    assert stored.protagonist_json["anchor"] == anchor
+    assert (stored.player_name, stored.character_age) == (stored.protagonist_json["character"]["name"], stored.protagonist_json["character"]["age"])
+
+
+def test_a_save_without_an_anchor_keeps_the_card_and_an_empty_anchor(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    member_session.commit()
+    assert save.protagonist_json["anchor"] is None and save.protagonist_json["character"]["name"] == "旅人"
+
+
+def test_the_stored_protagonist_is_a_copy_so_later_changes_to_the_input_do_not_touch_it(repo, member_session):
+    alice = make_user(member_session)
+    given = protagonist("林舟", 19)
+    save = open_save(repo, alice, protagonist=given)
+    given["character"]["name"] = "被改的名字"
+    member_session.commit()
+    assert save.protagonist_json["character"]["name"] == "林舟" and save.player_name == "林舟"
+
+
+def test_a_save_created_before_the_column_existed_reads_normally(repo, member_session):
+    """遷移之前建立的存檔沒有主角資料：欄位為空，姓名與年齡照舊可讀。"""
+    alice = make_user(member_session)
+    legacy = RpgSession(user_id=alice.id, script_snapshot_json={"title": "舊"}, player_name="舊存檔", character_age=30)
+    member_session.add(legacy)
+    member_session.commit()
+    member_session.expire_all()
+    stored = repo.get_owned(alice.id, legacy.public_id)
+    assert stored.protagonist_json is None and (stored.player_name, stored.character_age) == ("舊存檔", 30)

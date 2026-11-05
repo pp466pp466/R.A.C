@@ -1,9 +1,9 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
-> 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，change（暫名 `rpg-character-creation`）尚未立案、未實作**，本文只在第 7e 節與第 8 節記錄與帳號安全有關的規則，程式與端點以實作後為準。
+> 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
 
 本文件說明玩家如何以 Google 登入、登入後完成年齡確認，管理員如何先 Google 再輸入密碼，年齡如何決定能做什麼，權限如何集中判斷，以及管理員後台的存取規則。端點的完整清單見本文第 6 節（會員）與第 7 節（後台）；請求本身的處理順序見 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -186,6 +186,9 @@ flowchart TD
 | `/api/account/cancel-deletion` | POST | 是（含受限狀態） | 寬限期內撤銷刪除，還原為申請前的狀態 |
 | `/api/account/export` | POST | 是 | 匯出自己的帳號資料與全部對話（JSON 或 CSV zip）；受限狀態不可用 |
 | `/api/account/nickname` | PUT | 是 | 更改公開暱稱（2 至 20 字；短代號不變）；不合格只回欄位錯誤 |
+| `/api/sessions/setup/<version_id>` | GET | 是 | 序章與創角所需的資料（背景故事、可聯繫的人物／地點／里程碑、欄位上限、今日剩餘的生成次數）；可見性與內容模式與開存檔相同 |
+| `/api/sessions/protagonist/suggest` | POST | 是 | AI 生成主角的預覽（無狀態；自我介紹不保存）；每日次數有上限，失敗回 503 讓前端改走自創 |
+| `/api/sessions` | POST | 是 | 開存檔：主角與錨定事實的驗證、規則層與模型層審查通過才寫入；管理員與各會員等級不豁免年齡閘門 |
 
 頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/scripts`（劇本創作，第 7d 節）、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
 
@@ -353,7 +356,7 @@ flowchart TD
 - **申訴捷徑**：`/cs`（使用中才被鎖定時 API 回 `account_locked`）、`/scripts` 與 `/account` 都在受限時顯示同一個元件 `UiRestrictionNotice`；判定集中在純函式 `UI.restrictionOf`（`static/js/ui/restriction.js`）。
 - **管理員的可讀範圍**：申訴只看得到被鎖定或被暫停發佈帳號送出的；解除暫停與解除鎖定同樣要重新輸入密碼並寫稽核；仍不得任意讀取其他對話全文。
 
-## 7e. 玩家主角與聯繫（規範已修訂，尚未實作）
+## 7e. 玩家主角與聯繫（rpg-character-creation）
 
 ```mermaid
 flowchart TD
@@ -374,14 +377,15 @@ flowchart TD
 - **年齡**：主角年齡是劇中角色的年齡，與使用者年齡無關（使用者年齡一律由生日計算）；開存檔後是錨定事實，模型與玩家都不能直接寫入。未滿 18 歲的內容上限不因主角設定而改變。
 - **錨定事實**：每位主角一個，必須指向該存檔劇本內容中存在的人物、地點或里程碑，由 Service 驗證；模型只提議，玩家接受或自行撰寫後才由 Service 寫入。主角與對象之一為未成年時，不得為戀愛或性的關係。
 - **用量**：生成與重新生成有次數上限（存資料庫的設定表，每次使用時現讀，以 flask 指令修改並寫稽核）；其 token 計入全站每日上限，不計入每日對話輪數。
-- **管理員的可讀範圍**：不變。主角的角色卡、錨定事實不在管理員預設可檢視的範圍內。
+- **管理員的可讀範圍**：不變。主角的角色卡、錨定事實不在管理員預設可檢視的範圍內（`tests/test_protagonist_lifecycle.py` 守住：管理員沒有任何路徑讀到玩家的存檔與主角，後台的 Repository 與 Service 從不提到主角）。
+- **實作現況**：三支端點在 `/api/sessions/*`，每個公開方法先過 `AccessPolicy.require_chat_access`；別人的草稿與不存在的版本逐字相同的 404；劇本宣告的內容模式高於玩家生效的模式回 403 `content_tier_restricted`。審查不可用一律擋下（503 `review_unavailable`），`flag` 放行；規則層比劇本更嚴的一點是，未成年主角自己的文字出現露骨用語即直接拒絕。
 
 ## 8. 個資與保存
 
 - 生日與年齡區間：不進 API 回應、日誌與模型；管理員只看年齡區間的彙總統計（`flask age-stats` 與後台總覽），後台看不到任何個別使用者的生日、年齡區間或年齡群組。
 - 連續 12 個月未登入的帳號由 `flask purge-inactive-accounts` 直接刪除（管理員不納入）；使用者自助刪除寬限期滿後由 `flask execute-account-deletions` 刪除。兩者走同一個抹除出口（先清帳本的對話編號，再刪使用者，並寫入只含內部編號、日期與原因的 `deletion_tombstones`，見 [資料模型-data-model.md](資料模型-data-model.md)）。各類資料的保存期限由 `flask purge-expired-data` 清除。
 - 使用者可在帳號頁匯出自己的帳號資料（含生日與年齡區間）與全部對話；匯出不含密碼雜湊、權杖與模型內部欄位，CSV 的公式字元會被中和。
-- 玩家主角（規範已修訂，尚未實作）：角色卡與錨定事實隨所屬存檔保存、刪除與匯出；自我介紹只用於生成當下，不寫入資料庫，但會傳送至 RPG 模型供應商，適用供應商的個資限制；日誌只記內部編號與整數長度。
+- 玩家主角（`sessions.protagonist_json`）：角色卡與錨定事實隨所屬存檔保存、刪除與匯出；自我介紹只用於生成當下，不寫入資料庫，但會傳送至 RPG 模型供應商，適用供應商的個資限制；日誌只記內部編號與整數長度。
 - 日誌只記錄白名單欄位，絕不記錄 email、密碼、權杖、生日、訊息全文與模型輸出（見 [營運與部署-operations.md](營運與部署-operations.md)）。
 
 ---

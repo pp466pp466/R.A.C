@@ -19,6 +19,7 @@ from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 from tests.support.auth import START, add_user
 from tests.support.script_data import validated
+from tests.support.protagonist import protagonist
 
 CUTOFF = START + timedelta(days=1)
 
@@ -51,11 +52,11 @@ def build_world(session):
     scripts.create_draft_version(author.id, scripts.get_script_of(published).public_id, content=second.content, content_hash=second.content_hash, total_chars=second.total_chars)
     snapshot = scripts.content_of(published)
     reader_save = saves.create(
-        reader.id, source_version_id=published.id, snapshot=snapshot, snapshot_spec_version=1, player_name="讀者", character_age=18, content_tier="safe", now=START,
+        reader.id, source_version_id=published.id, snapshot=snapshot, snapshot_spec_version=1, protagonist=protagonist("讀者", 18), content_tier="safe", now=START,
     )
     saves.start_turn(reader.id, reader_save.public_id, client_msg_id="r-1", user_action="讀者的行動", now=START)
     author_save = saves.create(
-        author.id, source_version_id=published.id, snapshot=snapshot, snapshot_spec_version=1, player_name="作者自己", character_age=18, content_tier="safe", now=START,
+        author.id, source_version_id=published.id, snapshot=snapshot, snapshot_spec_version=1, protagonist=protagonist("作者自己", 18), content_tier="safe", now=START,
     )
     saves.start_turn(author.id, author_save.public_id, client_msg_id="a-1", user_action="作者的行動", now=START)
     session.commit()
@@ -113,7 +114,7 @@ def test_a_players_own_saves_from_their_own_scripts_do_not_block_the_erasure(mem
     scripts, saves = ScriptRepository(s), SessionRepository(s)
     content = validated()
     version = scripts.create_script(author.id, author_name="甲", author_code="aaaaaa", content=content.content, content_hash=content.content_hash, total_chars=content.total_chars)
-    saves.create(author.id, source_version_id=version.id, snapshot=content.content, snapshot_spec_version=1, player_name="自己", character_age=18, content_tier="safe", now=START)
+    saves.create(author.id, source_version_id=version.id, snapshot=content.content, snapshot_spec_version=1, protagonist=protagonist("自己", 18), content_tier="safe", now=START)
     s.commit()
     author_id = author.id
     assert erase_inactive(s, author_id) is True
@@ -127,7 +128,7 @@ def test_erasing_an_author_with_many_readers_saves_clears_every_reference(member
     saves = SessionRepository(s)
     for n in range(3, 6):
         other = old_user(s, n)
-        saves.create(other.id, source_version_id=published.id, snapshot={"title": f"複本{n}"}, snapshot_spec_version=1, player_name="旅人", character_age=18, content_tier="safe", now=START)
+        saves.create(other.id, source_version_id=published.id, snapshot={"title": f"複本{n}"}, snapshot_spec_version=1, protagonist=protagonist("旅人", 18), content_tier="safe", now=START)
     s.commit()
     assert erase_inactive(s, author_id) is True
     s.expire_all()
