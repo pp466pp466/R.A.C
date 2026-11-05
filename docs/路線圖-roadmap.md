@@ -1,6 +1,6 @@
 # 路線圖與待決定事項
 
-> 狀態：持續更新 ｜ 最後更新：2026-11-04 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
+> 狀態：持續更新 ｜ 最後更新：2026-11-05 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
 
 本文件說明各個 change 的順序、相依與目前狀態，以及尚未決定的事項。細節與理由在 report.md 與 RPG.md；這裡只維護「現在在哪裡、下一步是什麼」。
 
@@ -26,7 +26,11 @@ flowchart LR
     C5D["C-5d production-launch<br/>production 資源與對外開放"]:::plan
     C6["C-6 order-integration<br/>訂單查詢與退款申請"]:::plan
     RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料、固定規格、三種內容模式、內建劇本（已封存）"]:::done
-    RC2["RC-2 rpg-turn-engine<br/>回合引擎、SSE、世界狀態"]:::plan
+    RC2["RC-2a rpg-turn-engine<br/>回合引擎、SSE、世界狀態、第 0 幕、輸出審查、預扣遊戲幣"]:::plan
+    RC2B["RC-2b rpg-notebook<br/>記事簿抓取與玩家編輯"]:::plan
+    RC2C["RC-2c rpg-turn-revision<br/>重新生成、編輯最後一輪輸入、理由回饋"]:::plan
+    PH["player-hub<br/>錢包、記錄、個人頁"]:::plan
+    PP["player-personas<br/>對話人設（可重用的主角模板）"]:::plan
     RC3["RC-3 rpg-game-ui<br/>/game 頁面"]:::plan
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
     RC5["RC-5 rpg-persona-library<br/>性格原型庫"]:::plan
@@ -35,7 +39,7 @@ flowchart LR
     RC8["RC-8 rpg-script-publishing<br/>先審後發、目錄、上下架、檢舉"]:::plan
     RC9["RC-9 rpg-character-creation<br/>玩家角色卡、AI 生成與自創、錨定事實、開存檔 API（已封存）"]:::done
     CT["content-tier-modes<br/>三種內容模式（併入 RC-1，已封存）"]:::done
-    WL["W1 token-wallet<br/>代幣帳本與簽到（金流、訂閱另行探索）"]:::plan
+    WL["W1 game-wallet<br/>遊戲幣錢包、帳本、首登贈幣、每日簽到、預扣與退款（金流、訂閱屬 W2）"]:::plan
 
     C1 --> C2 --> AG --> AB --> C3
     C3 --> C4A --> C4B --> C4C --> C4D --> C5A --> C5B --> C5C --> C5D
@@ -48,6 +52,10 @@ flowchart LR
     RC7 --> RC9 --> RC2
     CT --> RC1
     WL --> RC2
+    RC2 --> RC2B
+    RC2 --> RC2C
+    WL --> PH
+    RC9 --> PP --> PH
     C4C --> RC6
 
     classDef done fill:#1f3d2b,stroke:#4c9a6a,color:#e2e4e9
@@ -81,7 +89,9 @@ flowchart LR
 | rpg-script-authoring（RC-7） | **已封存**（2026-11-04，規劃 commit `071f559`、規範修訂 `ed836fb`、實作 `cdc1b9f`；封存時新增 6 個主規格 `appeal-shortcut`、`player-nickname`、`runtime-limits`、`script-authoring`、`script-review`、`script-submission`，修改 10 個既有規格，`openspec validate --specs` 59 項） | 2026-11-04 | 玩家創作劇本的 API 與 `/scripts` 頁面、固定規格驗證、規則層與模型層審查（模型不可用一律不放行）、送審、連續被拒的暫停發佈（獨立旗標）與申訴捷徑、暱稱的初次設定頁與帳號頁更改、營運限制存資料庫（`flask set-script-limit`）、送審紀錄的匯出與 12 個月保存；依賴 RC-1。AGENTS.md 第 7、10、11 節的修訂已先提交（`ed836fb`） |
 | rpg-script-publishing（RC-8） | 規劃中 | — | 先審後發的管理員審核佇列、上下架、公開目錄、檢舉、署名、刪帳號的保留偏好；依賴 RC-7 |
 | rpg-character-creation（RC-9） | **已封存**（2026-11-05；規劃 `9ebbcac`、實作 `ac05484`、規範修訂 `4f91946`、探索結論 `780bce5`；封存時新增 2 個主規格 `rpg-protagonist`、`protagonist-suggestion`，修改 5 個既有規格，`openspec validate --specs` 61 項） | 2026-11-05 | 玩家主角角色卡（共用劇本角色規格的欄位、驗證與審查）、選填自我介紹、AI 生成角色卡與一個錨定事實（生成只是預覽，按「開始冒險」才開存檔）、自創、生成與重新生成的次數上限（存 `runtime_limits`）、開存檔改版（`POST /api/sessions` 與 `GET /api/sessions/setup/<id>`、`POST /api/sessions/protagonist/suggest`）、`sessions.protagonist_json`（遷移 `0014`，只新增）、匯出；依賴 RC-1、RC-7，排在 RC-2 之前。**開存檔最壞約 60 秒，RC-3 的前端逾時請設 65 秒**。第 0 幕的開場屬 RC-2，序章、聯繫與創角畫面屬 RC-3。細節見 RPG.md T-13 與 README |
-| 錢包與訂閱（W1 至 W3） | 探索中（方向已定，**尚未寫入規範**） | — | W1 token-wallet（只有免費幣，RC-2 的扣款依賴它）、W2 payments-and-subscriptions（金流、法務、未成年付款）、W3 model-catalog-and-pricing；見 report.md U-27 |
+| 錢包與訂閱（W1 至 W3） | W1 已探索（2026-11-05，**尚未寫入規範、尚未立案**）；W2、W3 待探索 | — | **W1 game-wallet**（RC-2 的前置）：RPG 聊天一輪 30 幣、客服不扣；首登送 200、每日簽到 200（台北 0 點刷新）、免費幣上限 1000；免費與付費幣皆不過期、先扣免費再扣付費；免費與付費兩個餘額加帳本；預扣、確認、退回；數值放資料庫設定表。W2 payments-and-subscriptions（金流、法務、未成年付款、付費幣退款）、W3 model-catalog-and-pricing；見 report.md U-31、[RPG.md](RPG.md) 7.7 |
+| rpg-turn-engine（RC-2a）、rpg-notebook（RC-2b）、rpg-turn-revision（RC-2c） | 已探索（2026-11-05），**尚未立案** | — | RC-2 探索後切為三段，順序為 AGENTS.md 修訂（RA-16 至 RA-20，使用者核可後單獨提交）→ W1 → 2a → 2b、2c。2a：串流轉接器（推理設定、tick 輪詢）、`GameService`、上下文組裝、NPC 卡與階段驗證、狀態呼叫、里程碑與目標、第 0 幕、輸出審查（逐句緩衝、規則層）、被擋回合、SSE 端點、預扣遊戲幣；2b：記事簿；2c：玩家重新生成與編輯最後一輪輸入（附理由回饋、回合前快照）。第一次對真實 RPG 模型的探測：推理型，須關閉推理。見 [RPG.md](RPG.md) 第 7 章、report.md U-29 至 U-34 |
+| player-hub、player-personas、故事偏好 | 已探索（2026-11-05），**尚未立案** | — | `player-hub`（W1 之後）：錢包頁、記錄頁、個人頁、底部導覽、語言列（只有繁體中文）、聊天顯示（模型選擇目前只有一個）；`player-personas`（依賴 RC-9）：可重用的主角模板，free 3、plus 5、vip 10，可標記預設人設；主角新增「來歷」（穿越者）；故事偏好（男頻、女頻、全讀者）只影響目錄排序，劇本規格新增 `audience`，隨 RC-8 的目錄。見 [RPG.md](RPG.md) 7.10、report.md U-33 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |
 
 ## 2. 待決定與待辦
@@ -90,13 +100,14 @@ flowchart LR
 |---|---|---|
 | 客服提示詞的小偏差 ③：建議動作偶爾不貼題（意見回饋後出現「了解會員額度」；已列出全部等級又給三個「查看 X 額度」） | 偏差 ①（說了「改善」）與 ②（重複範圍說明）已微調並以 5 則真實呼叫快速驗證，兩者改善；③ 未處理，是否調整待使用者決定，調整後須再同意一次真實呼叫 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、README |
 | 客服回覆的繁體中文用語與語氣 | 待使用者目視確認 | — |
-| **RPG 的開場流程與玩家創角**：第一輪前先顯示背景故事；玩家依「劇本角色規格」自創主角（選填自我介紹，可請 AI 生成角色卡加一個錨定事實，或自創）；開場由回合引擎產生「第 0 幕」；劇情的 350 至 1000 字只是期望值（RPG.md T-13） | **主角的資料與 API 已實作（`rpg-character-creation`，2026-11-04，見上方 RC-9）**；開場的第 0 幕屬 RC-2，序章、聯繫與創角畫面屬 RC-3。結論與仍待設計的項目（關係類型清單、字數與次數的校正、第 0 幕在回合表的區分）寫在 RPG.md T-13 | [RPG.md](RPG.md)、[前端結構-frontend.md](前端結構-frontend.md) |
+| **RPG 的開場流程與玩家創角**：第一輪前先顯示背景故事；玩家依「劇本角色規格」自創主角（選填自我介紹，可請 AI 生成角色卡加一個錨定事實，或自創）；開場由回合引擎產生「第 0 幕」；劇情的 350 至 1000 字只是期望值（RPG.md T-13） | **主角的資料與 API 已實作（`rpg-character-creation`，2026-11-04，見上方 RC-9）**；開場的第 0 幕屬 RC-2，序章、聯繫與創角畫面屬 RC-3。結論與仍待設計的項目（關係類型清單、字數與次數的校正、第 0 幕在回合表的區分〔已於 2026-11-05 決定：放 `sessions` 的新欄位，見 RPG.md 7.6〕）寫在 RPG.md T-13 | [RPG.md](RPG.md)、[前端結構-frontend.md](前端結構-frontend.md) |
 | 正式環境改用 OpenAI API（使用者計畫） | 未開始；屆時新增轉接器與環境變數 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 9 節、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)（年齡規則的前提）、AGENTS.md 第 5、9、11 節、隱私權政策 |
 | 過渡期的模型：本機與驗收環境用 `gemini-3.5-flash-lite` | 已決定（`gemini-3.8-flash` 免費層每日約 20 次） | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
 | 逾時（20 / 30 / 35 秒）要不要調整 | 等正式模型確定後以量測資料決定 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) |
 | 規範已修訂（AGENTS.md 第 10、11 節、技能檔與同步測試；決定紀錄見 report.md 的 U-12 至 U-16），① 已實作並封存（google-first-login，2026-11-03），② 已實作並封存（remove-player-password-auth，2026-11-03）。**已決定**：玩家只用 Google 登入，畫面只有 Google 與條款勾選框（新使用者必勾、回訪不必勾）；生日與年齡區間在登入之後才填，沒填什麼都不能做，帳號最多保留 24 小時，逾時刪除；補填時未滿 13 歲立即抹除帳號與個資；登入有效期閒置 30 天、每次使用就續期、不設絕對上限；管理員每次先 Google 登入再驗證一次密碼；預設頁面現為 /cs，RPG 上線後改為選擇劇本的首頁；拆成兩個 change（① 新的 Google 登入體驗，② 移除玩家端密碼功能）。管理員忘記密碼：在密碼驗證那一步按「忘記密碼」寄重設信；登入與註冊合一為 /login，登入後另有年齡確認頁，沒有 /register。帳號鎖定與申訴：同一帳號 15 分鐘內 Google 登入被拒達 5 次或被訊息數上限擋下達 10 次即鎖定，只有管理員能解除，被鎖定者只進申訴頁，管理員只看得到申訴（取代「登入失敗激增」告警，改為「帳號鎖定激增」）；門檻為預設值。起因：C-5b 的 Google 登入人工驗收發現登入頁每次都要求重填條款與生日（README「驗收紀錄（C-5b）」第 5 點） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、AGENTS.md 第 10、11 節 |
 | 登入後的預設頁面（單一常數 `app/security/redirects.py` 的 `DEFAULT_AFTER_LOGIN`） | 已實作（2026-11-02，change ①）：目前是 `/cs`，RPG 上線後改為選擇劇本的首頁（只改這一個常數）；首頁、登入頁與 Google 回呼共用 `landing_for` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | RPG 玩家創作劇本與三種內容模式（2026-11-03 已決定，見 report.md 的 U-20 至 U-26） | 規範已修訂（AGENTS.md 第 5、7、10、11 節）。**待處理**：成人模式勾選確認是否足夠的法務確認、供應商書面許可須涵蓋新模型、公開分享的法務關卡、劇情輸出的審查層與串流（RC-2）、RPG 開場流程與玩家創角（已於 2026-11-04 探索，見上一列）、各欄位上限以實際 token 預算校正（RC-4） | [RPG.md](RPG.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、AGENTS.md 第 7、10、11 節 |
+| **RC-2 探索的後續（2026-11-05）**：結論已寫入 [RPG.md](RPG.md) 第 7 章與 report.md U-29 至 U-34 | **下一步**：把 AGENTS.md 的修訂草案（RA-16 至 RA-20，見 RPG.md 7.12）貼給使用者審，核可後單獨提交，再依序 propose W1、RC-2a。待辦：RPG 轉接器新增推理設定並修正 `flask llm-probe` 的編碼問題；選定正式的 RPG 模型後重跑提示詞驗收；多開帳號與簽到農幣列為監控項目（不設關卡） | [RPG.md](RPG.md)、[report.md](report.md) |
 | 全站每日用量上限的預設值綁定 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、500 RPD） | 換模型或正式環境改用 OpenAI 時須重設 `USAGE_DAILY_TOKEN_LIMIT`、`USAGE_DAILY_CALL_LIMIT`；15 RPM 是全站共用，多人同時使用才需要另加全站每分鐘閘門 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | 成人模式的成年確認方式（AGENTS.md 第 7 節） | **已決定（2026-11-03）**：切換為成人模式時勾選「我確定已滿 18 歲」與同意安全規範，並記錄確認時間、規範版本與方式（自行聲明）；書面許可（須涵蓋新模型）、法務意見與部署層開關仍須具備，**法務若認為不足，只更換確認方式**。原評估的備選（若法務要求更強的方式）：台灣數位身分（自然人憑證等）依內政部的申請要點對一般民間企業多半不開放；信用卡在台灣有附卡（約 15 歲起）與金融卡（約 7 歲起）的漏洞，強度偏低且專案沒有金流；第三方證件加活體或自拍估齡是唯一現實的選項，但各家對台灣證件的支援須逐家確認（Yoti 列有台灣國民身分證） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | 成人模式的許可涵蓋的供應商、模型與日期 | 使用者表示已取得許可，內容尚未提供；取得後寫入 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 並填入 `ADULT_MODE_MODELS`（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_MODELS`） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
