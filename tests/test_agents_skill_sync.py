@@ -158,6 +158,37 @@ SYNCED_RULES = [
     (11, "自我介紹僅用於生成當下，不寫入資料庫（資料最小化）", "references/privacy-observability.md"),
     (11, "玩家主角的角色卡、自我介紹與錨定事實、含權杖的完整網址", "references/privacy-observability.md"),
     (11, "玩家的角色描述、自我介紹、劇本與記事簿同樣屬於個資", "references/privacy-observability.md"),
+    # 2026-11-05：遊戲幣、玩家重新生成與編輯輸入（理由回饋）、輸出審查與被擋回合、主角來歷、讀者頻道、故事偏好與對話人設
+    (7, "遊戲幣（RPG）：RPG 劇情對話一律消耗遊戲幣；會員制智能客服不消耗", "references/business-encoding.md"),
+    (7, "一輪（一則玩家訊息加一則完整的 AI 回應，含該輪的狀態呼叫與記事簿抓取）消耗 30 幣；第 0 幕不消耗", "references/business-encoding.md"),
+    (7, "首次註冊登入送 200 免費幣（於年齡確認通過時發放）；每日簽到每次 200 免費幣，台灣時間 0 點刷新", "references/business-encoding.md"),
+    (7, "免費幣上限 1000，只限制新發放（簽到、贈幣）", "references/business-encoding.md"),
+    (7, "幣不過期（免費、付費相同）；扣款先扣免費幣、再扣付費幣", "references/business-encoding.md"),
+    (7, "扣款於回合開始時原子預扣、完成時結算、失敗時原路退回", "references/business-encoding.md"),
+    (7, "玩家只能對「最後一輪」重新生成其 AI 回應，或編輯該輪的玩家輸入後重送；AI 的輸出玩家不能直接修改", "references/business-encoding.md"),
+    (7, "每個回合前 2 次免費，第 3 次起每次消耗 30 幣", "references/business-encoding.md"),
+    (7, "玩家必須選擇分類並填寫理由（5 至 50 字，只需重點）才能送出", "references/business-encoding.md"),
+    (7, "新回應須完整通過審查與狀態驗證才原子替換舊回應；失敗、中斷或被擋時保留舊內容、退回預扣、不消耗免費次數；被取代的輸入與輸出不保存", "references/business-encoding.md"),
+    (7, "理由只供營運檢視，不得送入模型、不得進入 system_instruction", "references/business-encoding.md"),
+    (7, "主角另有「來歷」欄位：本地人或穿越者，劇本角色沒有", "references/business-encoding.md"),
+    (7, "來歷為穿越者時，由固定的 system_instruction 加入平台規則", "references/business-encoding.md"),
+    (7, "讀者頻道（audience）為單選：男頻、女頻、全讀者；既有劇本視為全讀者", "references/business-encoding.md"),
+    (7, "故事偏好：玩家可選男頻、女頻、全讀者，預設全讀者，只影響劇本目錄的排序", "references/business-encoding.md"),
+    (7, "對話人設：玩家可保存可重用的主角角色卡模板（不含錨定事實，錨定事實綁特定劇本）", "references/business-encoding.md"),
+    (7, "劇情輸出在送達玩家之前，須由伺服器端自有的審查層逐句檢查（以保留一句緩衝的方式串流，通過才釋放）", "references/business-encoding.md"),
+    (7, "不另設每回合的模型層審查（模型層用於劇本、主角與記事簿條目）", "references/business-encoding.md"),
+    (7, "RPG 劇情對話不使用每日對話輪數與每分鐘訊息數，改以遊戲幣控制", "references/business-encoding.md"),
+    (6, "於玩家送出下一輪、該輪回覆寫入後觸發（此時前一輪已不可重新生成或編輯）", "references/llm-streaming.md"),
+    (6, "與主角的來歷（本地人或穿越者）", "references/llm-streaming.md"),
+    (10, "RPG：輸出被擋時，前端丟棄未完成的內容並以一行劇情轉場文字取代，不顯示錯誤", "references/auth-security.md"),
+    (10, "仍被擋則再顯示轉場文字並解鎖輸入，請玩家換個行動；重新生成不另外扣遊戲幣並須記錄", "references/auth-security.md"),
+    (10, "玩家於重新生成時填寫的回饋（僅分類統計與理由文字，不含帳號資料，每次讀取都寫入稽核紀錄）", "references/auth-security.md"),
+    (10, "停權、刪除內容、調整會員等級與調整遊戲幣餘額等高風險操作須重新輸入密碼並寫入稽核", "references/auth-security.md"),
+    (10, "RPG 的用量以遊戲幣控制（見第 7 節），不適用每日對話輪數與每分鐘訊息數", "references/auth-security.md"),
+    (11, "遊戲幣與帳本：錢包與帳本（每筆的種類、金額與關聯的存檔內部編號）視為個資", "references/privacy-observability.md"),
+    (11, "重新生成回饋：理由由玩家文字構成，視為個資", "references/privacy-observability.md"),
+    (11, "玩家於重新生成時填寫的理由會提供營運團隊檢視、玩家的對話人設會經 AI 處理、遊戲幣與帳本會保存", "references/privacy-observability.md"),
+    (11, "user_identities、auth_tokens、遊戲幣錢包與帳本與全部對話", "references/privacy-observability.md"),
 ]
 
 
@@ -218,7 +249,7 @@ def test_every_bullet_of_section_10_is_mirrored_verbatim_in_the_auth_security_re
     assert not stale, f"references/auth-security.md 沒有與 AGENTS.md 第 10 節逐字一致：{stale}"
 
 
-@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱：", "- 玩家主角："])
+@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱：", "- 玩家主角：", "- 遊戲幣與帳本：", "- 重新生成回饋："])
 def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
     """第 11 節的這幾條在 reference 裡是逐字鏡像（「絕不記錄」在 reference 是摘要版，另以片段檢查）。"""
     agents_lines = [line.strip() for line in agents_section(11).split("\n") if line.strip().startswith(key)]
@@ -227,7 +258,7 @@ def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
     assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"privacy-observability.md 沒有逐字鏡像：{key}"
 
 
-@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本", "- 玩家主角：", "- 開場："])
+@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本", "- 玩家主角：", "- 開場：", "- 遊戲幣（RPG）：", "- 玩家重新生成與編輯輸入（RPG）：", "- 故事偏好：", "- 對話人設："])
 def test_the_section_7_rpg_bullets_are_mirrored_verbatim(key):
     """第 7 節 RPG 這幾條在 reference 裡是逐字鏡像（分級、劇本創作、結局與角色卡改動頻繁，整行比對才抓得到只改一邊）。"""
     agents_lines = [line.strip() for line in agents_section(7).split("\n") if line.strip().startswith(key)]
