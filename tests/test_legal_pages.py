@@ -90,7 +90,7 @@ def test_the_table_also_discloses_the_tombstone_that_is_kept_without_a_limit(cli
 def test_the_rights_section_describes_the_real_features_and_no_longer_says_they_are_coming(client):
     html = client.get("/privacy").get_data(as_text=True)
     assert "後續版本提供" not in html and "將提供" not in html and "將於" not in html
-    section = html.split("<h2>5. 您的權利</h2>", 1)[1].split("<h2>6.", 1)[0]
+    section = html.split("<h2>6. 您的權利</h2>", 1)[1].split("<h2>7.", 1)[0]
     for needle in ("匯出我的資料", "下載 JSON", "CSV（zip）", "含生日與年齡區間", "刪除帳號", "7 天寬限期", "撤銷刪除", "永久刪除",
                    "匿名化保留統計", "備份最長 30 天", "管理員帳號無法自行刪除"):
         assert needle in section, needle
@@ -102,7 +102,7 @@ def test_the_privacy_page_numbers_for_age_still_come_from_the_policy_not_the_tex
 
 
 def test_the_terms_version_names_the_new_draft_and_the_registration_records_it():
-    assert CURRENT_TERMS_VERSION == "2026-11-02-draft-4" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION == "2026-11-05-draft-5" and len(CURRENT_TERMS_VERSION) <= 40
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
@@ -151,3 +151,64 @@ def test_the_terms_no_longer_point_to_a_registration_page(client):
     assert 'href="/register"' not in html and "前往註冊" not in html
     assert 'href="/login"' in html and 'href="/privacy"' in html
     assert "請到「帳號設定」補填" not in html                                       # 舊的補填說法已不存在
+
+
+# ---- RPG、劇本與主角（rpg-script-authoring、rpg-character-creation）新增的揭露 ----------------------------------
+
+def test_the_retention_table_lists_the_rpg_rows_with_the_same_periods_as_the_purge_command(client):
+    table = retention_table(client.get("/privacy").get_data(as_text=True))
+    (save_label,) = [key for key in table if key.startswith("RPG 存檔")]
+    assert "主角" in save_label and period_text(retention.SESSION_RETENTION) in table[save_label] and "刪除帳號" in table[save_label]
+    (submission_label,) = [key for key in table if key.startswith("劇本送審紀錄")]
+    assert "只含結果、類別與時間" in submission_label and period_text(retention.SCRIPT_SUBMISSION_RETENTION) in table[submission_label]
+    (script_label,) = [key for key in table if key.startswith("劇本（")]
+    assert "刪除帳號時一併刪除" in table[script_label]
+    (intro_label,) = [key for key in table if "自我介紹" in key]
+    assert table[intro_label] == "不保存"
+    # 每一列只含自己的期限
+    assert "12 個月" not in table["管理稽核紀錄"]
+
+
+def test_the_privacy_policy_says_what_is_sent_to_the_rpg_model_service_and_that_it_is_separate_from_gemini(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>4. RPG 與劇本的資料會傳送至 RPG 模型服務</h2>", 1)[1].split("<h2>5.", 1)[0]
+    for needle in ("OpenRouter", "與客服使用的 Google Gemini 分開", "劇本設定", "主角", "自我介紹", "不含隱藏特質", "免費模型的輸入輸出可能被供應商留存",
+                   "勿在劇本、主角與自我介紹中填寫真實的個人資料", "零保存", "信箱、生日與年齡區間", "不會", "只告知類別"):
+        assert needle in section, needle
+
+
+def test_the_privacy_policy_lists_the_new_personal_data_and_says_the_intro_is_never_stored_and_admins_cannot_read_scripts_by_default(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>1. 我們蒐集哪些資料</h2>", 1)[1].split("<h2>2.", 1)[0]
+    for needle in ("暱稱與短代號", "筆名", "管理員預設看不到", "稽核紀錄", "只保留<strong>類別與時間</strong>", "存檔與主角", "不會儲存"):
+        assert needle in section, needle
+
+
+def test_the_rights_section_covers_the_exported_and_deleted_rpg_data(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>6. 您的權利</h2>", 1)[1].split("<h2>7.", 1)[0]
+    for needle in ("暱稱與短代號", "您創作的劇本（全部版本）", "存檔（含主角與聯繫）", "送審紀錄", "自我介紹不保存", "以及您的暱稱、劇本、存檔與主角"):
+        assert needle in section, needle
+
+
+def test_the_privacy_policy_does_not_promise_features_that_do_not_exist_yet(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    assert "目前沒有公開分享" not in html and "現階段沒有公開分享" in html
+    for forbidden in ("將提供", "後續版本提供", "將於"):
+        assert forbidden not in html
+
+
+def test_the_terms_describe_the_rpg_the_content_modes_and_the_absolute_prohibitions(client):
+    html = client.get("/terms").get_data(as_text=True)
+    section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+    for needle in ("安全模式、一般模式與成人模式", "成人模式預設關閉", "自行聲明", "無論哪一種模式，一律禁止", "未成年（含看似未成年的角色）的性內容",
+                   "性暴力", "非自願的性情節", "以真人名義的性內容", "我們只告知類別", "暫停而不是放行", "暫停送審權限", "申訴頁",
+                   "筆名", "先審後發", "授權本平台保存", "不含您的署名", "公開分享尚未開放", "AI 生成的主角與聯繫只是建議", "婚姻關係", "婚約關係", "隨帳號一併刪除"):
+        assert needle in section, needle
+    assert "RPG" in html.split("<h2>2.", 1)[0] and "劇本創作" in html.split("<h2>2.", 1)[0]          # 服務內容也提到了
+
+
+def test_the_age_numbers_in_the_new_terms_section_come_from_the_age_policy(client):
+    html = client.get("/terms").get_data(as_text=True)
+    section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+    assert "13 至 17 歲的使用者固定使用安全模式" in section and "我確定已滿 18 歲" in section        # 數字來自年齡政策
