@@ -6,8 +6,13 @@
   主角另有「來歷」（`origin`：`native` 本地人或 `transmigrator` 穿越者；劇本角色沒有這個欄位）：它是列舉不是自由文字，不經過文字審查，
   缺值補 `native`，不合法的值是 `protagonist.origin` 的欄位錯誤；遷移之前建立的存檔沒有這個欄位，讀取時以 `origin_of` 視為本地人。
 - 錨定事實：每位主角至多一個，結構 `{kind, ref, text}`：`ref` 必須指向該劇本內容中存在的人物（姓名）、地點（名稱）或里程碑（編號）；
-  `text` 是單行文字，1 至 60 字。主角或對象（指向人物時）未成年時，`text` 不得含戀愛或婚姻關係的用語（童養媳與已成婚類也在內）；**婚約類**（娃娃親、指腹為婚、訂婚、未婚夫妻）是歷史題材常見的背景設定，只在主角與對象一成年、一未成年時才擋——這是**欄位錯誤**，
-  不是審查的 `reject`：它是結構規則，不帶審查類別，也不進任何拒絕計次。
+  `text` 是單行文字，1 至 60 字。關係的規則（使用者 2026-11-09 修訂；這是**欄位錯誤**，不是審查的 `reject`：它是結構規則，不帶審查類別，也不進任何拒絕計次）：
+  - 任何年齡：不得是性奴等禁斷關係（詞表 `sexual_violence`）；
+  - 主角或對象（指向人物時）未成年：不得是性的關係；
+  - 戀愛關係：兩位都成年，或兩位都未成年（青梅竹馬、同門的情侶等，不涉性）才允許；一成年一未成年不允許，指向的不是人物而主角未成年時也不允許（對方的年齡不明，
+    無法確認也是未成年）；
+  - 婚姻關係（結婚、成親、夫妻、童養媳…，詞表 `marriage_relation`）：兩位都成年才允許，任一方未成年不允許；
+  - **婚約類**（娃娃親、指腹為婚、訂婚、未婚夫妻）是歷史題材常見的背景設定，只在主角與對象一成年、一未成年時才擋。
 - 自我介紹：選填的使用者文字（至多 300 字），這裡只做標準化與長度檢查；它只用於生成預覽，不保存。
 - 錯誤訊息只描述規則，**不回顯輸入**，也不顯示不公開的標記字串。
 - 成年門檻由呼叫端提供（年齡規則的單一來源 `AccessPolicy.adult_age`），這裡不寫死。
@@ -16,7 +21,9 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping
 
-from app.services.script_rules import Lexicon, mentions_betrothal, mentions_romantic_relation
+from app.services.script_rules import (
+    Lexicon, mentions_betrothal, mentions_forbidden_relation, mentions_marriage, mentions_romantic_relation, mentions_sexual,
+)
 from app.services.script_spec import fold, normalize_multi_line, normalize_single_line, validate_character
 
 INTRO_MAX = 300
@@ -152,16 +159,34 @@ def validate_anchor(
         else:
             text = cleaned
 
-    if text is not None and _someone_is_minor(protagonist_age, target_age, adult_age) and mentions_romantic_relation(text, lexicon=lexicon):
-        errors["anchor.text"] = "主角或對象未成年時，聯繫不能是戀愛或婚姻關係。"
-        text = None
-    elif text is not None and _adult_with_minor(protagonist_age, target_age, adult_age) and mentions_betrothal(text, lexicon=lexicon):
-        errors["anchor.text"] = "成年與未成年之間的聯繫，不能是婚約關係。"
+    problem = relation_problem(text, protagonist_age, target_age, adult_age, lexicon) if text is not None else None
+    if problem is not None:
+        errors["anchor.text"] = problem
         text = None
 
     if errors or target is None or text is None:
         return None, errors
     return {"kind": kind, "ref": target, "text": text}, {}
+
+
+def relation_problem(text: str, protagonist_age: int | None, target_age: int | None, adult_age: int, lexicon: Lexicon | None = None) -> str | None:
+    """錨定事實的關係規則（見模組說明）；有問題時回傳不含輸入內容的說明，沒有問題回傳 `None`。開存檔的錨定事實與遊戲中模型提議的
+    NPC 錨定事實（`rpg_world`）共用這一份規則；`target_age` 為 `None` 代表對象的年齡不明（地點、里程碑，或沒有年齡紀錄的 NPC）。"""
+    if mentions_forbidden_relation(text, lexicon=lexicon):
+        return "聯繫不能是性奴等禁斷關係。"
+    if protagonist_age is None:                       # 角色卡本身不合格，玩家得先修正，年齡相關的守衛略過
+        return None
+    someone_minor = _someone_is_minor(protagonist_age, target_age, adult_age)
+    if someone_minor and mentions_sexual(text, lexicon=lexicon):
+        return "主角或對象未成年時，聯繫不能是性的關係。"
+    if mentions_romantic_relation(text, lexicon=lexicon):
+        if _adult_with_minor(protagonist_age, target_age, adult_age) or (target_age is None and protagonist_age < adult_age):
+            return "主角與對象一成年、一未成年（或對象的年齡不明而主角未成年）時，聯繫不能是戀愛或婚姻關係。"
+        if someone_minor and mentions_marriage(text, lexicon=lexicon):
+            return "未成年的聯繫可以是戀愛關係，但不能是婚姻關係。"
+    if _adult_with_minor(protagonist_age, target_age, adult_age) and mentions_betrothal(text, lexicon=lexicon):
+        return "成年與未成年之間的聯繫，不能是婚約關係。"
+    return None
 
 
 def _adult_with_minor(protagonist_age: int | None, target_age: int | None, adult_age: int) -> bool:

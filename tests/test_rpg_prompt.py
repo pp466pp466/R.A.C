@@ -131,8 +131,11 @@ def test_the_absolute_bans_are_in_every_mode():
         assert "未成年" in opening and "真人名義" in opening
 
 
-def test_the_adult_mode_requires_an_adult_age_record_for_explicit_scenes():
-    assert "明確的成年年齡紀錄" in system("adult") and "明確的成年年齡紀錄" not in system("standard")
+def test_the_adult_mode_keeps_explicitly_underage_characters_out_but_does_not_require_an_age_for_everyone():
+    adult_text = system("adult")
+    assert "未滿 18 歲" in adult_text and "不得出現在露骨場景" in adult_text
+    assert "沒有明確年齡的角色不需要特別處理" in adult_text and "沒有明確年齡的角色不需要特別處理" not in system("standard")
+    assert "都必須在資料中有明確的成年年齡紀錄" not in adult_text            # 使用者 2026-11-09 修訂：玩家對話產生的角色不需要明確年齡
 
 
 # ---- 穿越者與結局 -----------------------------------------------------------------------

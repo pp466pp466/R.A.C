@@ -22,7 +22,7 @@ import copy
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from app.services.protagonist import ANCHOR_CHARACTER
+from app.services.protagonist import ANCHOR_CHARACTER, relation_problem
 from app.services.script_rules import DEFAULT_ADULT_AGE, REVIEW_PASS, check_text_rules
 from app.services.script_spec import CHARACTER_NAME_MAX, LOCATION_MAX, TRIGGER_AGE, TRIGGER_YEAR, fold, normalize_single_line
 
@@ -512,6 +512,10 @@ class _Applier:
 
     def anchor_fact(self, card: dict[str, Any], proposed: Any) -> None:
         text = self.checked(proposed, ANCHOR_FACT_MAX)
+        if text is not None and relation_problem(
+            text, protagonist_age(self.entities, self.ctx.protagonist, self.elapsed), card_age(card, self.elapsed), self.ctx.adult_age,
+        ) is not None:
+            text = None                                           # 與開存檔的錨定事實同一份關係規則：性奴等禁斷關係、未成年的性關係、成年與未成年之間的戀愛或婚姻
         if text is None:
             self.dropped += 1
         elif not card.get("anchor_fact"):

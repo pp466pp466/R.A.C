@@ -18,7 +18,8 @@
 比對前先去除空白、零寬字元與常見的拆字符號並做字元摺疊（NFKC、不分大小寫），所以以空白或全形字拆開的詞仍會命中。
 結果與日誌只有類別列舉，**不含命中的詞、句子或欄位**。
 
-詞表另有 `romantic_relation`（戀愛與婚姻關係的用語）與 `betrothal`（婚約類的用語）兩個群組，**不屬於本模組的判定**：它只供玩家主角的錨定事實守衛使用
+詞表另有 `romantic_relation`（戀愛與婚姻關係的用語）、`betrothal`（婚約類的用語）與 `marriage_relation`（婚姻與配偶類，`romantic_relation` 的子集）三個群組，
+**不屬於本模組的判定**：它們只供玩家主角的錨定事實守衛使用
 （`protagonist.validate_anchor`，見 rpg-protagonist 規格），所以改動它不會改變任何劇本的審查結果。
 """
 from __future__ import annotations
@@ -89,6 +90,7 @@ class Lexicon:
     real_person: tuple[Term, ...]
     romantic_relation: tuple[Term, ...]    # 只供玩家主角的錨定事實守衛使用（未成年不得有戀愛或婚姻的聯繫）；`check_rules` 不使用
     betrothal: tuple[Term, ...]            # 同上；純婚約類（娃娃親、指腹為婚、未婚夫妻…），只在成年與未成年之間才擋
+    marriage_relation: tuple[Term, ...]    # 同上；婚姻與配偶類（結婚、成親、夫妻、童養媳…）：romantic_relation 的子集，兩位都未成年時只有它仍擋
 
 
 def fold_text(text: str) -> str:
@@ -119,6 +121,7 @@ def load_lexicon(path: Path = LEXICON_PATH) -> Lexicon:
         version=str(data["version"]), sexual_explicit=terms("sexual_explicit"), sexual_suggestive=terms("sexual_suggestive"),
         minor=terms("minor"), rape=terms("rape"), sexual_violence=terms("sexual_violence"), non_consent=terms("non_consent"),
         real_person=terms("real_person"), romantic_relation=terms("romantic_relation"), betrothal=terms("betrothal"),
+        marriage_relation=terms("marriage_relation"),
     )
 
 
@@ -196,6 +199,26 @@ def mentions_betrothal(text: str, *, lexicon: Lexicon | None = None) -> bool:
     所以它和戀愛關係分開判定（玩家主角的錨定事實守衛只在成年與未成年之間才擋）。純函式，不回傳命中的詞。"""
     lex = lexicon or load_lexicon()
     return any(matches_any(lex.betrothal, sentence) for sentence in split_sentences([text]))
+
+
+def mentions_marriage(text: str, *, lexicon: Lexicon | None = None) -> bool:
+    """一句話是否含婚姻與配偶類的用語（詞表群組 `marriage_relation`：結婚、成親、夫妻、童養媳…，是 `romantic_relation` 的子集）。
+    玩家主角的錨定事實守衛用它區分「戀愛」與「婚姻」：兩位都未成年時允許戀愛、不允許婚姻。純函式，不回傳命中的詞。"""
+    lex = lexicon or load_lexicon()
+    return any(matches_any(lex.marriage_relation, sentence) for sentence in split_sentences([text]))
+
+
+def mentions_forbidden_relation(text: str, *, lexicon: Lexicon | None = None) -> bool:
+    """一句話是否含性奴等禁斷關係的用語（詞表群組 `sexual_violence`：性奴、性虐、強暴、凌辱…）。玩家主角的錨定事實不論年齡都不得是這類關係。
+    純函式，不回傳命中的詞。"""
+    lex = lexicon or load_lexicon()
+    return any(matches_any(lex.sexual_violence, sentence) for sentence in split_sentences([text]))
+
+
+def mentions_sexual(text: str, *, lexicon: Lexicon | None = None) -> bool:
+    """一句話是否含性相關的用語（詞表群組 `sexual_explicit` 或 `sexual_suggestive`）。純函式，不回傳命中的詞。"""
+    lex = lexicon or load_lexicon()
+    return any(matches_any(lex.sexual_explicit, s) or matches_any(lex.sexual_suggestive, s) for s in split_sentences([text]))
 
 
 def check_rules(content: dict[str, Any], *, tier: str, adult_age: int = DEFAULT_ADULT_AGE, lexicon: Lexicon | None = None) -> RulesResult:

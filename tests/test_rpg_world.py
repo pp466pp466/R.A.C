@@ -176,6 +176,26 @@ def test_the_anchor_fact_is_limited_and_never_overwritten_once_set():
     assert "anchor_fact" not in card_of(too_long, "阿福") and too_long.dropped == 1
 
 
+@pytest.mark.parametrize(("hero_age", "npc_age", "text", "kept"), [
+    (16, 15, "青梅竹馬的戀人，國中時就開始交往", True),      # 兩位都未成年：戀愛關係可以（使用者 2026-11-09）
+    (25, 28, "舊日的戀人", True),                          # 兩位都成年
+    (25, None, "舊日的戀人", True),                        # NPC 年齡未知：不擋
+    (25, 15, "舊日的戀人", False),                         # 單方面 NPC 未成年
+    (16, 30, "舊日的戀人", False),                         # 主角未成年、NPC 成年
+    (16, None, "舊日的戀人", False),                       # 主角未成年、對方的年齡不明：無法確認也是未成年
+    (16, 15, "兩人已經成親", False),                       # 兩位都未成年也不能是婚姻
+    (25, 15, "兩家自幼訂下娃娃親", False), (16, 15, "兩家自幼訂下娃娃親", True),
+    (25, 28, "他是我的性奴", False), (16, 15, "他是我的性奴", False),    # 禁斷關係一律不行
+    (16, 15, "兩人發生過性關係", False), (25, 15, "兩人發生過性關係", False),
+    (16, 15, "同門的師兄妹", True),
+])
+def test_an_npc_anchor_fact_follows_the_same_relationship_rules_as_the_protagonists_anchor(hero_age, npc_age, text, kept):
+    state = world_with(with_card("阿福", age=npc_age) if npc_age else with_card("阿福"))
+    result = apply_proposal(state, proposal(npc_updates=[npc("阿福", anchor_fact=text)]), ctx(protagonist=make_protagonist("旅人", hero_age)))
+    assert ("anchor_fact" in card_of(result, "阿福")) is kept, (hero_age, npc_age, text)
+    assert result.dropped == (0 if kept else 1)
+
+
 def test_text_that_the_rules_layer_does_not_pass_is_dropped_item_by_item():
     flagged = "性愛"      # 安全模式下出現性相關詞：規則層標示（tier_mismatch），輸出再進上下文前就必須丟棄
     result = apply_proposal(

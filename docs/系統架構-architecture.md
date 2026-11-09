@@ -178,7 +178,7 @@ flowchart TD
     Ctl --> SSvc["SessionService.start_session<br/>主角驗證 兩層審查 寫入"]
     PSvc --> Start["StartableVersions<br/>可見性 404 與內容模式 403"]
     SSvc --> Start
-    PSvc --> Pro["protagonist 純運算<br/>角色卡 錨定事實 未成年戀愛婚姻守衛 婚約只擋成年與未成年之間"]
+    PSvc --> Pro["protagonist 純運算<br/>角色卡 錨定事實 聯繫的關係規則 婚約只擋成年與未成年之間"]
     SSvc --> Pro
     Pro --> Spec["script_spec.validate_character<br/>與劇本角色同一套"]
     PSvc --> Rules["script_rules<br/>check_text_rules 與 check_protagonist_rules"]
@@ -197,7 +197,7 @@ flowchart TD
 | `session_api_controller.py` | `GET /api/sessions/setup/<id>`、`POST /api/sessions/protagonist/suggest`、`POST /api/sessions`；只讀請求、呼叫 Service、回應；沒有權限判斷，也不匯入資料層；回應禁止快取 |
 | `ProtagonistService` | `setup`：序章與創角資料（人物只給姓名與職業）；`suggest`：年齡閘門 → 版本 → 自我介紹標準化 → 自我介紹的規則層（拒絕不呼叫模型、不計次）→ 每日次數 → 模型未設定或預算用盡（不計次）→ 呼叫模型 → 再標準化。**無狀態**：唯一的資料庫寫入是用量帳本；自我介紹不落地 |
 | `SessionService.start_session` | 年齡閘門 → 版本（404）→ 內容模式（403）→ 主角與錨定事實驗證（400，一次回報）→ 主角規則層（422）→ 劇本審查把關 → 主角模型層審查 → `SessionRepository.create`；任何一步失敗都不留存檔。便宜的檢查在前 |
-| `protagonist.py`／`protagonist_prompt.py`（純運算） | 角色卡（沿用劇本角色規格）、錨定事實（指向劇本中存在的人物、地點、里程碑，文字 60 字）、未成年的主角或對象不得有戀愛或婚姻的聯繫、成年與未成年之間不得是婚約（兩位都未成年的娃娃親是背景設定）（詞表群組 `romantic_relation`，欄位錯誤）；生成與審查的提示詞、結構描述與語意規則（標記字串與劇本審查分開；給模型的人物資料不含隱藏特質） |
+| `protagonist.py`／`protagonist_prompt.py`（純運算） | 角色卡（沿用劇本角色規格）、錨定事實（指向劇本中存在的人物、地點、里程碑，文字 60 字）、聯繫的關係規則（性與性奴等禁斷關係一律不行；戀愛只在兩位都成年或都未成年時允許；婚姻只在兩位都成年時允許；成年與未成年之間不得是婚約，兩位都未成年的娃娃親是背景設定）（詞表群組 `romantic_relation`、`marriage_relation`、`sexual_violence`，欄位錯誤；NPC 的錨定事實同規則，見 `rpg_world`）；生成與審查的提示詞、結構描述與語意規則（標記字串與劇本審查分開；給模型的人物資料不含隱藏特質） |
 | `ProtagonistReviewService` | 開存檔時對最終的主角做模型層審查，不快取；`reject` 擋下、`flag` 放行、不可用一律擋下 |
 | `script_rules.py` 的主角入口 | 與劇本共用同一個引擎；唯一更嚴的地方：未成年主角自己的文字出現露骨用語即直接拒絕 |
 

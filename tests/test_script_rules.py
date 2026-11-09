@@ -51,7 +51,7 @@ def test_the_module_is_a_pure_function_without_database_network_or_model_imports
 def test_the_lexicon_is_a_utf8_data_file_with_a_version_and_all_groups():
     data = json.loads(Path(LEXICON_PATH).read_text(encoding="utf-8-sig"))
     assert data["version"] and set(data["groups"]) == {
-        "sexual_explicit", "sexual_suggestive", "minor", "rape", "sexual_violence", "non_consent", "real_person", "romantic_relation", "betrothal",
+        "sexual_explicit", "sexual_suggestive", "minor", "rape", "sexual_violence", "non_consent", "real_person", "romantic_relation", "betrothal", "marriage_relation",
     }
     assert all(data["groups"][name] for name in data["groups"])
     lexicon = load_lexicon()
@@ -333,6 +333,40 @@ def test_betrothal_terms_hit_only_the_betrothal_group(sentence, hit):
     from app.services.script_rules import fold_text, matches_any
 
     assert matches_any(load_lexicon().betrothal, fold_text(sentence)) is hit
+
+
+def test_the_marriage_group_is_a_subset_of_the_romantic_group_so_the_existing_behavior_is_unchanged():
+    lexicon = load_lexicon()
+    romantic = {(term.text, term.not_after, term.not_before) for term in lexicon.romantic_relation}
+    marriage = {(term.text, term.not_after, term.not_before) for term in lexicon.marriage_relation}
+    assert marriage and marriage <= romantic
+    assert not {term.text for term in lexicon.marriage_relation} & {"戀人", "情侶", "道侶", "暗戀", "戀愛"}
+
+
+@pytest.mark.parametrize(("sentence", "hit"), [
+    ("兩人已經成親", True), ("被賣去當童養媳", True), ("他們是夫妻", True), ("他的老婆", True), ("新娘子", True), ("大丈夫能屈能伸", False),
+    ("舊日的戀人", False), ("兩人是道侶", False), ("暗戀多年", False), ("他的同門師弟", False), ("老婆婆開的茶鋪", False),
+])
+def test_mentions_marriage_separates_marriage_from_dating(sentence, hit):
+    from app.services.script_rules import mentions_marriage
+
+    assert mentions_marriage(sentence) is hit
+
+
+@pytest.mark.parametrize(("sentence", "hit"), [
+    ("他是我的性奴", True), ("性奴隸般的主僕", True), ("被他凌辱多年", True), ("遭到強暴", True), ("舊日的戀人", False), ("他的同門師弟", False), ("兩人是道侶", False),
+])
+def test_mentions_forbidden_relation_uses_the_sexual_violence_group(sentence, hit):
+    from app.services.script_rules import mentions_forbidden_relation
+
+    assert mentions_forbidden_relation(sentence) is hit
+
+
+@pytest.mark.parametrize(("sentence", "hit"), [("兩人發生過性關係", True), ("彼此情慾糾纏", True), ("牽手與擁抱", False), ("舊日的戀人", False)])
+def test_mentions_sexual_covers_explicit_and_suggestive_wording(sentence, hit):
+    from app.services.script_rules import mentions_sexual
+
+    assert mentions_sexual(sentence) is hit
 
 
 def test_the_mention_helpers_are_pure_and_do_not_echo_the_match():

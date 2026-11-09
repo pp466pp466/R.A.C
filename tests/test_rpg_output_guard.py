@@ -166,6 +166,14 @@ def test_the_age_boundary_is_exclusive_at_eighteen():
     assert run(text, tier="adult", characters=[adult("小七", 18)])[1] == ()
 
 
+def test_an_unknown_age_npc_is_never_blocked_for_the_missing_record_even_in_an_explicit_adult_mode_paragraph():
+    """使用者 2026-11-09 的決定：只擋明確未成年的角色（年齡紀錄 < 18 或文字明確寫出未成年）；年齡未知放行，成人模式的露骨段落也一樣。"""
+    unknown = CharacterAge("路人甲", None)
+    released, categories, _ = run("路人甲與阿福發生了性行為。", tier="adult", characters=[unknown, adult("阿福")])
+    assert categories == () and released == "路人甲與阿福發生了性行為。"
+    assert run("路人甲與阿福發生了性行為。", tier="adult", characters=[unknown])[1] == ()
+
+
 def test_an_unknown_age_never_blocks_by_itself():
     assert run("小七低著頭站在一旁。他們之間瀰漫著情慾。", tier="standard", characters=[CharacterAge("小七", None)])[1] == ()
 

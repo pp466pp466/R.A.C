@@ -86,6 +86,29 @@ def test_a_betrothal_between_two_minors_is_a_valid_output_but_an_adult_minor_bet
     assert reason_of(bad, script, marker) == "semantic:invalid_anchor"
 
 
+def test_both_instructions_allow_pure_romance_between_two_minors_but_not_marriage_slavery_or_adult_minor_romance(marker):
+    suggest = prompt.build_suggest_instruction(marker)
+    review = prompt.build_review_instruction(marker)
+    assert "青梅竹馬" in suggest and "符合劇本世界觀的說法" in suggest and "不涉及性" in suggest
+    assert "性奴等禁斷關係" in suggest and "性奴等禁斷關係" in review
+    assert "兩位都未成年卻是婚姻關係" in review and "成年與未成年之間是戀愛、婚姻" in review
+    assert "青梅竹馬等純情戀愛（不涉及性）完全合規" in review
+    assert "不要寫成兩人的戀愛" not in suggest
+
+
+def test_a_romantic_link_between_two_minors_is_a_valid_output_but_marriage_slavery_and_adult_minor_romance_are_not(script, marker):
+    ok = good(age=15)
+    ok["anchor"].update(ref="林曉", text="青梅竹馬的戀人，國中時就開始交往")
+    assert parse(ok, script, marker)["anchor"]["text"] == "青梅竹馬的戀人，國中時就開始交往"
+    for text in ("兩人已經成親", "他是我的性奴"):
+        bad = good(age=15)
+        bad["anchor"].update(ref="林曉", text=text)
+        assert reason_of(bad, script, marker) == "semantic:invalid_anchor", text
+    adult_minor = good(age=30)
+    adult_minor["anchor"].update(ref="林曉", text="青梅竹馬的戀人，國中時就開始交往")
+    assert reason_of(adult_minor, script, marker) == "semantic:invalid_anchor"
+
+
 def test_the_review_instruction_does_not_misflag_ordinary_minor_protagonists(marker):
     text = prompt.build_review_instruction(marker)
     assert "學童" in text and "完全合規" in text

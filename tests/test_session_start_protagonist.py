@@ -134,6 +134,18 @@ def test_a_romantic_marriage_or_adult_minor_betrothal_link_is_refused_for_a_mino
     assert count(member_session, RpgSession) == 0
 
 
+def test_two_minors_with_a_romantic_childhood_link_open_a_save_but_a_marriage_or_sexual_slavery_does_not(member_session):
+    """使用者 2026-11-09：青梅竹馬、國中時就開始交往是可以的；婚姻關係與性奴等禁斷關係仍不行。"""
+    service, _ = service_for(member_session)
+    user, version = player(member_session), script(member_session)
+    save = open_save(service, user, version, **start_kwargs(name="小舟", age=16, anchor={"kind": "character", "ref": "林曉", "text": "青梅竹馬的戀人，國中時就開始交往"}))
+    assert save.protagonist_json["anchor"]["text"] == "青梅竹馬的戀人，國中時就開始交往"
+    for text in ("兩人已經成親", "他是我的性奴"):
+        with pytest.raises(ValidationError) as caught:
+            open_save(service, user, version, **start_kwargs(name="小舟", age=16, anchor={"kind": "character", "ref": "林曉", "text": text}))
+        assert list(caught.value.fields) == ["anchor.text"] and text not in str(caught.value.fields)
+
+
 def test_a_betrothal_between_two_minors_opens_a_save_as_a_historical_backdrop(member_session):
     service, _ = service_for(member_session)
     save = open_save(service, player(member_session), script(member_session), **start_kwargs(name="小舟", age=17, anchor={"kind": "character", "ref": "林曉", "text": "兩家自幼訂下娃娃親"}))
