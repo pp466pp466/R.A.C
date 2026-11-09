@@ -220,6 +220,7 @@
 {% endif %}
 {% endblock %}
 {% block page_script %}
+  <script src="{{ url_for('static', filename='js/auth/auth-flows.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account-lifecycle.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account.js') }}"></script>
 {% endblock %}

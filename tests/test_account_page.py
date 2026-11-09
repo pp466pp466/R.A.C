@@ -147,3 +147,23 @@ def test_the_login_page_explains_the_grace_period_only_for_the_known_notice_code
         assert state_of(response)["info"] is None
         assert "alert(1)" not in response.get_data(as_text=True)
     assert 'v-if="info"' in client.get("/login").get_data(as_text=True)
+
+
+def test_account_page_loads_every_script_that_account_js_depends_on(app):
+    """帳號頁腳本用到的每個 `Auth.xxx` 都必須由同一頁載入的其他腳本提供。
+
+    曾經漏載 `auth-flows.js`，暱稱儲存時 `Auth.validateNickname is not a function`，按鈕沒有任何反應；
+    Node 測試只測純函式檔案，不會發現頁面漏載，所以由這裡以頁面實際載入的腳本清單檢查。
+    """
+    html = page_for(app).get_data(as_text=True)
+    sources = re.findall(r'<script[^>]+src="/static/(js/[^"?]+)', html)
+    assert "js/auth/auth-flows.js" in sources and "js/auth/account.js" in sources
+    assert sources.index("js/auth/auth-flows.js") < sources.index("js/auth/account.js")      # 先載入被依賴的檔案
+
+    used = set(re.findall(r"\bAuth\.([A-Za-z]+)", (JS_DIR / "account.js").read_text(encoding="utf-8-sig")))
+    provided = "\n".join(
+        (PROJECT_ROOT / "app" / "static" / source).read_text(encoding="utf-8-sig")
+        for source in sources if source != "js/auth/account.js"
+    )
+    missing = sorted(name for name in used if not re.search(rf"\b{name}\b\s*[:=(]", provided))
+    assert not missing, f"account.js 用到但頁面沒有載入的 Auth 函式：{missing}"
