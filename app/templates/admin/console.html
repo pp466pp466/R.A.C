@@ -291,6 +291,7 @@
           <div class="admin-fact"><dt>最後登入</dt><dd>{{ fmt.taipeiDateTime(user.last_login_at) }}</dd></div>
           <div class="admin-fact"><dt>今日對話</dt><dd>{{ user.usage.daily.used }} / {{ user.usage.daily.limit }} 輪</dd></div>
           <div class="admin-fact"><dt>對話數</dt><dd>{{ user.usage.conversations.count }} / {{ user.usage.conversations.limit }}</dd></div>
+          <div class="admin-fact"><dt>遊戲幣</dt><dd>免費 {{ fmt.count(user.wallet.free_balance) }}　付費 {{ fmt.count(user.wallet.paid_balance) }}</dd></div>
         </dl>
         <p v-if="suspensionNote(user.usage.suspended_until)" class="admin-chip admin-chip--alert">{{ suspensionNote(user.usage.suspended_until) }}</p>
 
@@ -299,6 +300,7 @@
           <button v-if="userActions.suspend" type="button" class="ui-btn admin-btn--danger" @click="askSuspend">停權</button>
           <button v-if="userActions.unsuspend" type="button" class="ui-btn" @click="askUnsuspend">解除停權</button>
           <button v-if="userActions.tier" type="button" class="ui-btn" @click="askTier">調整會員等級</button>
+          <button v-if="userActions.wallet" type="button" class="ui-btn" @click="askWallet">調整遊戲幣</button>
         </div>
       </article>
     </section>
@@ -392,6 +394,21 @@
         <option v-for="option in tierOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
       </select>
       <p v-if="confirmState.error.tier" class="admin-field-error" role="alert">{{ confirmState.error.tier }}</p>
+    </div>
+
+    <div v-if="confirmSpec.needsWallet" class="admin-field">
+      <label for="admin-confirm-bucket" class="admin-label">要調整的餘額</label>
+      <select id="admin-confirm-bucket" class="admin-input" v-model="confirmState.bucket">
+        <option value="paid">{{ fmt.bucketLabel('paid') }}</option>
+        <option value="free">{{ fmt.bucketLabel('free') }}</option>
+      </select>
+      <p v-if="confirmState.error.bucket" class="admin-field-error" role="alert">{{ confirmState.error.bucket }}</p>
+    </div>
+    <div v-if="confirmSpec.needsWallet" class="admin-field">
+      <label for="admin-confirm-delta" class="admin-label">增減量（不為 0 的整數，扣除用負數）</label>
+      <input id="admin-confirm-delta" class="admin-input" type="text" inputmode="numeric" autocomplete="off" maxlength="10"
+             v-model="confirmState.delta" @keydown.enter="onConfirmEnter">
+      <p v-if="confirmState.error.delta" class="admin-field-error" role="alert">{{ confirmState.error.delta }}</p>
     </div>
 
     <div v-if="confirmSpec.needsReason" class="admin-field">

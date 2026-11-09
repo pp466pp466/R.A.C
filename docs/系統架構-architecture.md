@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-09 ｜ 對應 change：game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -204,6 +204,32 @@ flowchart TD
 - **依賴方向**：`SessionService` 依賴 `ProtagonistReviewGate`（Protocol）與 `ReviewGate`，測試以替身注入；`ProtagonistService`、`SessionService` 的公開方法第一個陳述式都是 `self._policy.require_chat_access(<呼叫者>)`（`tests/architecture/test_protagonist_boundaries.py` 以 AST 守住，附反向驗證）。主角姓名、角色年齡與主角資料只由 `SessionRepository.create` 寫入（`test_protagonist_writes.py`）。
 - 組裝在 `registry.py`（`get_protagonist_service()`、`get_protagonist_review_service()`、`get_session_service()`）；兩個主角服務與開存檔共用同一個標記字串（`protagonist_marker`，由 `SECRET_KEY` 導出）。
 
+### 遊戲幣錢包（game-wallet）
+
+```mermaid
+flowchart TD
+    Ctl["wallet_api_controller<br/>/api/wallet/*"] --> WSvc["WalletService<br/>view checkin entries"]
+    Turn["RC-2 回合引擎（規劃中）"] -.->|"hold settle refund 只由伺服器端呼叫"| WSvc
+    Adm["AdminService.adjust_wallet<br/>重新輸入密碼 稽核 wallet.adjust"] --> WSvc
+    Auth["AuthService<br/>年齡確認通過後的回呼"] -->|"ensure_signup_grant 失敗不影響年齡確認"| WSvc
+    WSvc --> Tx["_transact<br/>讀錢包 算新餘額與帳本列 以 version 條件式更新 重試至多 5 次"]
+    Tx --> WRepo["WalletRepository<br/>wallets 與 wallet_entries 唯一寫入點"]
+    WSvc --> Lim["RuntimeLimits<br/>五個 coin 設定 每次現讀"]
+    WSvc --> Evt["wallet_events<br/>只有整數與列舉"]
+    Exp["個人資料匯出與帳號抹除"] --> WRepo
+```
+
+| 元件 | 責任 |
+|---|---|
+| `wallet_api_controller.py` | `GET /api/wallet`、`POST /api/wallet/checkin`、`GET /api/wallet/entries`；只讀請求、呼叫 Service、回應；`require_login()` 預設拒絕受限登入狀態；回應禁止快取；**沒有任何 HTTP 端點能花費或增加餘額**（簽到除外） |
+| `WalletService` | 簽到（預覽與實際入帳共用 `checkin_amounts`，所以不分歧）、記錄頁、首次註冊贈幣、預扣／結算／退回（冪等鍵由呼叫端決定）、管理員調整。所有改變餘額的操作走同一個 `_transact`；`_prepare`（查詢、預扣、簽到與記錄之前）建立錢包、補發贈幣、退回逾時的預扣，三者都冪等且有界 |
+| `WalletRepository` | 餘額與帳本只由它寫入（`tests/architecture/test_wallet_writes.py` 守住）；以 `version` 做條件式更新，結算與退回互斥由預扣列的 `resolution` 裁判；SQLite 的 SAVEPOINT 前先做一次不影響列的條件式 UPDATE（否則 `RELEASE` 等於 `COMMIT`） |
+| `wallet_messages.py`、`wallet_events.py` | 記錄頁的繁體中文說明（每個帳本種類都有，斷言守住）；日誌事件（見 [營運與部署-operations.md](營運與部署-operations.md)） |
+
+- **依賴方向**：`AdminService` 與 `AuthService` 依賴錢包（以回呼或元件注入），錢包不依賴它們；`WalletService` 不匯入 `AdminService` 或回合引擎。回呼在 `registry.py` 的 `_grant_signup_coins_on_age_verified` 組裝，包在 SAVEPOINT 內。
+- **逾時預扣沒有排程**：`coin.hold_timeout_seconds`（預設 180，須大於 RC-2 的單回合上限）之後，在該玩家下一次存取錢包時退回；後台檢視餘額不觸發清理。
+- 組裝在 `registry.py`（`build_wallet_service()`、`get_wallet_service()`）。
+
 ## 3. 一個請求的生命週期
 
 ```mermaid
@@ -271,6 +297,7 @@ flowchart LR
 | content-tier-modes、script-fixed-spec、script-store、rpg-sessions、builtin-script-seed | `app/services/content_tier.py`、`script_spec.py`、`content_mode_service.py`、`session_service.py`、`script_seed_service.py`、`app/repositories/script_repository.py`、`session_repository.py`、`app/data/scripts/` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) |
 | script-authoring、script-review、script-submission、runtime-limits、player-nickname、appeal-shortcut | `app/services/script_authoring_service.py`、`script_submission_service.py`、`script_review_service.py`、`script_review_prompt.py`、`script_rules.py`、`runtime_limits.py`、`nickname.py`、`nickname_service.py`、`app/repositories/script_submission_repository.py`、`runtime_limit_repository.py`、`app/controllers/script_api_controller.py`、`script_page_controller.py`、`app/data/review/lexicon.json` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[前端結構-frontend.md](前端結構-frontend.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | rpg-protagonist、protagonist-suggestion | `app/services/protagonist.py`、`protagonist_prompt.py`、`protagonist_service.py`、`protagonist_review_service.py`、`startable.py`、`session_service.py`、`app/controllers/session_api_controller.py` | [系統架構-architecture.md](系統架構-architecture.md)（本文）、[資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| game-wallet、wallet-api | `app/models/wallet.py`、`app/repositories/wallet_repository.py`、`app/services/wallet_service.py`、`wallet_messages.py`、`app/controllers/wallet_api_controller.py`、`app/observability/wallet_events.py` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |

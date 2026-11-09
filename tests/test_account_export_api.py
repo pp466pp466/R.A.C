@@ -83,7 +83,7 @@ def test_csv_export_is_a_zip_with_the_documented_files(app):
     assert response.headers["Content-Disposition"] == "attachment; filename=my-data-20261027.zip"
     assert response.headers["Cache-Control"] == "no-store"
     with zipfile.ZipFile(io.BytesIO(response.get_data())) as archive:
-        assert sorted(archive.namelist()) == ["account.csv", "appeals.csv", "messages.csv", "script_submissions.csv", "scripts.csv", "sessions.csv", "turns.csv"]
+        assert sorted(archive.namelist()) == ["account.csv", "appeals.csv", "messages.csv", "script_submissions.csv", "scripts.csv", "sessions.csv", "turns.csv", "wallet_entries.csv"]
         messages = archive.read("messages.csv")
     assert messages.startswith(b"\xef\xbb\xbf") and "'=1+1 我的內容".encode("utf-8") in messages
 

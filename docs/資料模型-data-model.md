@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0014_rpg_character_creation` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-09 ｜ 對應 change：game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0015_game_wallet` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -17,6 +17,9 @@ erDiagram
     users ||--o{ lock_strikes : "鎖定計次 CASCADE"
     users ||--o{ lock_appeals : "申訴 CASCADE"
     users ||--o{ script_submissions : "送審紀錄 CASCADE"
+    users ||--o| wallets : "錢包 一對一 CASCADE"
+    users ||--o{ wallet_entries : "帳本 CASCADE"
+    sessions ||..o{ wallet_entries : "只存存檔的對外識別碼 無外鍵"
     chat_conversations ||--o{ chat_messages : "包含 CASCADE"
     users |o--o{ llm_call_logs : "產生 SET NULL 匿名化"
     chat_conversations ||..o{ llm_call_logs : "只存編號 無外鍵"
@@ -240,11 +243,35 @@ erDiagram
     admin_audit_logs {
         int id PK
         int admin_user_id FK "可為空 SET NULL"
-        string action "15 個固定動作"
+        string action "16 個固定動作"
         string target_user_public_id "對外識別碼 無外鍵"
         string target_conversation_public_id "對外識別碼 無外鍵"
         string reason "管理員填寫 至多 200 字"
         json detail_json "只放列舉值與整數"
+        datetime created_at
+    }
+    wallets {
+        int id PK
+        int user_id FK "唯一 一人一個 CASCADE"
+        int free_balance "CHECK 不小於 0"
+        int paid_balance "CHECK 不小於 0"
+        int version "每次餘額異動加 1 樂觀鎖"
+        datetime created_at
+        datetime updated_at
+    }
+    wallet_entries {
+        int id PK
+        int user_id FK "CASCADE"
+        int seq "與使用者唯一 等於當時錢包的 version"
+        string kind "5 個固定種類"
+        string idempotency_key UK "全站唯一 同一鍵只生效一次"
+        int free_delta
+        int paid_delta
+        int free_after
+        int paid_after
+        string session_public_id "存檔對外識別碼 無外鍵 可為空"
+        string ref_key "退回列指向被退回的預扣 可為空"
+        string resolution "僅預扣列 settled 或 refunded 只能設定一次"
         datetime created_at
     }
 ```
@@ -285,6 +312,9 @@ erDiagram
 | 營運限制存在資料庫（`0013`、`0014`） | `runtime_limits.key` 唯一，十個鍵由遷移植入（`0013` 七個、`0014` 三個每日主角生成次數，只插入缺少的）；程式**每次使用時現讀**，不在行程內快取；範圍與缺值時的保底預設在 `app/services/runtime_limits.py`，資料庫不設值域約束；只能由 `flask set-script-limit` 修改並寫 `limit.set` 稽核 | 多 worker 不得依賴行程記憶體（AGENTS.md 第 9 節），所以調整不必重新部署也立即生效；資料被誤改時讀取端仍有保守的後備值並記錄警告（只記鍵名） |
 | 主角資料放在存檔的一個 JSON 欄位（`0014`） | `sessions.protagonist_json` 可為空，內容 `{character, anchor}`；`player_name`、`character_age` 保留並由同一個 INSERT 依角色卡寫入，唯一寫入點是 `SessionRepository.create`（架構測試守住，開存檔後沒有任何方法能改年齡） | 角色年齡是錨定事實；expand 階段舊程式、匯出與保存期限照常讀兩個舊欄位，移除它們屬日後的 contract。錨定事實不放進 `entities_json`，因為那個欄位的結構由回合引擎（RC-2）決定 |
 | 帳本的類別欄位加寬（`0013`） | `llm_call_logs.kind` 由 10 加寬為 20，`script_review` 共 13 個字 | SQL Server 會以錯誤拒絕過長的字串，SQLite 不會，只在 SQLite 測試看不出來，所以在真實 SQL Server 的測試中守住；降級前先刪除非客服類別的列，才能安全縮回 |
+| 錢包兩個餘額加只增不改的帳本（`0015`） | `wallets` 一人一列（免費與付費兩個整數，資料庫 `CHECK` 不小於 0 是第二道防線）；`wallet_entries` 每次異動同一個交易寫一筆，`seq` 是這位使用者的第幾筆（等於寫入當下的 `version`），記錄頁以它分頁；帳本只放固定列舉與整數，沒有任何玩家文字 | 不做批次制：幣不過期，批次只剩 W2「付費幣按購買退款」一個用途，屆時以 expand 加欄位。以 `version` 做 CAS 並重試，不用 `SELECT … FOR UPDATE`（SQLite 沒有、AGENTS.md 第 4 節禁止原生 SQL），雙軌行為才一致 |
+| 帳本以存檔的對外識別碼關聯、不設外鍵（`0015`） | `wallet_entries.session_public_id` 存 UUID；兩張表的 `user_id` 都是 `ON DELETE CASCADE`（錢包是個資，隨帳號刪除，不匿名化保留） | 帳本比存檔活得久，SQLite 會重用整數編號而錯指別人的存檔；SQL Server 也不允許 `users` 到帳本有兩條串聯路徑。AGENTS.md 第 11 節已依此改為「存檔識別碼」 |
+| 結算與退回互斥靠 `resolution`（`0015`） | 預扣列的 `resolution` 只能從空值以條件式更新設定一次為 `settled` 或 `refunded`；結算不另寫帳本列 | 避免零增減的雜訊列；代價是帳本有這一個可改欄位的例外，規格明寫。逾時預扣在該玩家下一次存取錢包時退回，不設排程 |
 | 標籤獨立成表 | `script_version_tags` 以顯示形式儲存（保留大小寫，版本內容可由欄位完整還原、雜湊不變），查詢以小寫比對 | 不得依 JSON 內容篩選；同一版本內由驗證器以 NFC 與不分大小寫去除重複，所以兩種資料庫的唯一約束不會誤判 |
 
 ## 3. Migration 歷程
@@ -304,6 +334,7 @@ flowchart LR
     M11 --> M12["0012 rpg_data_and_script<br/>users 的內容模式四欄與回填、scripts、script_versions、script_version_tags、sessions、memory_logs"]
     M12 --> M13["0013 rpg_script_authoring<br/>users 的暱稱與暫停發佈三欄、script_versions 的審查四欄、script_submissions、runtime_limits 與七個初始值、llm_call_logs.kind 加寬"]
     M13 --> M14["0014 rpg_character_creation<br/>sessions.protagonist_json、runtime_limits 補三個每日主角生成次數的初始值"]
+    M14 --> M15["0015 game_wallet<br/>wallets、wallet_entries、runtime_limits 補五個遊戲幣設定的初始值"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -311,6 +342,7 @@ flowchart LR
 - `0012_rpg_data_and_script` 只新增（四個 `users` 欄位與五張新表，部分唯一索引同時有 `sqlite_where` 與 `mssql_where`），並用 ORM 表達式一次回填 `content_tier_preference`；舊版程式在新結構上可運作，所以部署順序仍是「備份 → 遷移 → 部署 → `flask seed-scripts`」；降級會移除新表與新欄位，只在還沒有任何真實資料時使用。
 - `0013_rpg_script_authoring` 只新增與加寬（七個可為空的新欄位、兩張新表、`kind` 由 10 加寬為 20）；七個限制的初始值以 `op.bulk_insert` 與 ORM 資料表物件寫入，沒有原生 SQL；舊版程式在新結構上可運作。降級先刪除非客服類別的帳本列才縮回 `kind`，所以只在還沒有真實資料時使用。
 - `0014_rpg_character_creation` 只新增一個可為空的欄位並補三個限制鍵（先查再插，已有的鍵不蓋掉、不重複）；舊版程式在新結構上可運作，降級對 `sessions` 同樣用 `recreate="never"`。
+- `0015_game_wallet` 只新增兩張表並補五個設定鍵（先查再插，已有的鍵不蓋掉、不重複）；沒有資料回填，既有玩家的贈幣在第一次存取錢包時補發；降級會刪除兩張表（錢包資料一併消失），只在還沒有真實資料時使用。
 - SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。
@@ -338,6 +370,7 @@ flowchart TD
     Sub["script_submissions（送審紀錄）"] -->|"建立後 365 天（purge-expired-data）"| Del10["刪除，只刪紀錄 暫停旗標不受影響"]
     Sub -->|"隨帳號抹除 CASCADE"| Era
     Scr["scripts、script_versions、script_version_tags"] -->|"隨作者的帳號抹除"| Era
+    Wal["wallets、wallet_entries（錢包與帳本）"] -->|"隨帳號抹除 CASCADE，不匿名化保留"| Era
     Appeal["lock_appeals（申訴）"] -->|"與帳號同進退，不由期限清除"| Era
 ```
 

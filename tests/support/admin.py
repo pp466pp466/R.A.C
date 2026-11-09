@@ -14,13 +14,17 @@ from app.repositories.admin_repository import AdminRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
+from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.wallet_repository import WalletRepository
 from app.services.access_policy import AccessPolicy
 from app.services.admin_service import AdminService
 from app.services.age_stats_service import AgeStatsService
 from app.services.auth_service import AuthService
 from app.services.current_user import CurrentUser
+from app.services.runtime_limits import RuntimeLimits
 from app.services.usage_service import UsageService
+from app.services.wallet_service import WalletService
 from tests.support.auth import FAST_HASHER, GOOD_PASSWORD, FakeClock, add_user
 
 STATE = {"member_tier": "free", "last_intent": None, "pending_entities": {}, "open_issue": None}
@@ -61,6 +65,10 @@ class AdminKit:
             usage=usage, age_stats=AgeStatsService(users=UserRepository(session)), usage_settings=self.settings,
             confirm_password=self.auth.confirm_password,
             persist_on_error=self.persisted, clock=self.clock,
+            wallet=WalletService(
+                wallets=WalletRepository(session), limits=RuntimeLimits(limits=RuntimeLimitRepository(session), clock=self.clock),
+                clock=self.clock,
+            ),
         )
         self._n = 100
 

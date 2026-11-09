@@ -51,6 +51,7 @@ def make_auth_service(
     mailer: RecordingMailer | None = None,
     hasher: PasswordHasherService | None = None,
     age_policy: AgePolicy = DEFAULT_AGE_POLICY,
+    on_age_verified=None,
 ) -> AuthService:
     clock = clock or FakeClock()
     users = UserRepository(session)
@@ -66,6 +67,7 @@ def make_auth_service(
             users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
         ),
         lock=build_account_lock_service(session, clock=clock),
+        on_age_verified=on_age_verified,
     )
 
 

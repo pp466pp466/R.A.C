@@ -136,3 +136,11 @@ def db_engine(request):
         engine = create_engine_for(require_sqlserver_test_url())
     yield engine
     engine.dispose()
+
+
+@pytest.fixture()
+def wallet_kit(member_session):
+    """錢包 Service 與它周邊的東西（真的 Repository 與設定表，假的只有時鐘）；SQLite 與 SQL Server 各跑一次。"""
+    from tests.support.wallet import WalletKit
+
+    return WalletKit(member_session)

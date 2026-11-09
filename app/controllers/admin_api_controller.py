@@ -81,6 +81,16 @@ def change_tier(public_id: str):
     return jsonify(user=service.change_tier(admin, public_id, tier=body.get("tier"), password=body.get("password")))
 
 
+@admin_api_bp.post("/users/<public_id>/wallet/adjust")
+def adjust_wallet(public_id: str):
+    """調整玩家的遊戲幣餘額（高風險：帶管理員的密碼；稽核 `wallet.adjust`）。回傳調整後的使用者檢視（含兩個餘額）。"""
+    admin, service = _admin()
+    body = read_json_object()
+    return jsonify(user=service.adjust_wallet(
+        admin, public_id, bucket=body.get("bucket"), delta=body.get("delta"), reason=body.get("reason"), password=body.get("password"),
+    ))
+
+
 # ---- 帳號鎖定與申訴 ---------------------------------------------------------------------------
 
 @admin_api_bp.get("/locked")

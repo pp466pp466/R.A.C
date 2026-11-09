@@ -8,12 +8,14 @@ Service 不匯入 flask，也不知道 HTTP；時間由注入的時鐘提供。
 """
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta
 from typing import Callable, Protocol
 
 from app.models.lock_strike import STRIKE_IDENTITY_REJECTED
 from app.models.user import PROVIDER_GOOGLE, ROLE_ADMIN, STATUS_ACTIVE, STATUS_SUSPENDED, User
 from app.observability import security_events
+from app.observability.errors import describe_exception
 from app.repositories.errors import DuplicateUserError
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
@@ -41,6 +43,9 @@ AGE_STEP_MISMATCH_MESSAGE = "資料有誤，請重新填寫。"
 _DISABLED_STATUSES = (STATUS_SUSPENDED,)
 
 
+logger = logging.getLogger(__name__)
+
+
 class AccountMailer(Protocol):
     """帳號相關的寄信動作（實作見 EmailFlowService）。沒有寄信設定時不需要，傳入 None。"""
 
@@ -64,8 +69,11 @@ class AuthService:
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
         erasure: AccountErasureService | None = None,
         lock: AccountLockService | None = None,
+        on_age_verified: Callable[[CurrentUser], None] | None = None,
     ) -> None:
         self._age_policy = age_policy
+        # 補填年齡確認成功之後呼叫（game-wallet：玩家的首次註冊贈幣）。它失敗**不影響**年齡確認，由呼叫端之後補做
+        self._on_age_verified = on_age_verified
         self._erasure = erasure          # 補填年齡時發現未滿 13 歲的玩家：走單一抹除出口
         self._lock = lock                # 補填年齡時的不一致：計入帳號鎖定的計次
         self._users = users
@@ -203,7 +211,17 @@ class AuthService:
             nickname_code=new_code() if clean_nickname else None,
         ):
             security_events.log_event(security_events.AGE_CONFIRMED_LATER, user_id=user.id)
+            self._notify_age_verified(user)
         return CurrentUser.from_model(user)
+
+    def _notify_age_verified(self, user: User) -> None:
+        """年齡確認成功之後的回呼（發放首次註冊贈幣）：任何失敗都只記錄類型與位置，不使年齡確認失敗或回復。"""
+        if self._on_age_verified is None:
+            return
+        try:
+            self._on_age_verified(CurrentUser.from_model(user))
+        except Exception as exc:                                        # noqa: BLE001 — 回呼不得影響已完成的年齡確認
+            logger.error("年齡確認後的回呼失敗", extra=describe_exception(exc))
 
     def _age_step_error(self, user: User, error: ValidationError) -> ValidationError:
         """補填年齡不通過時要拋出的錯誤；未滿 13 歲的玩家會在這裡被抹除，不一致會在這裡計次。"""

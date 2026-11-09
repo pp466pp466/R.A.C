@@ -51,6 +51,10 @@ ALLOWED_FIELDS = (
     "count",
     # 營運告警的嚴重度（固定列舉：warning、critical）
     "severity",
+    # 遊戲幣事件（wallet_events.py）：整數的幣量與餘額，函式沒有接收任何文字內容的參數
+    "coins",
+    "lost_coins",
+    "balance",
 )
 
 MAX_TEXT_LENGTH = 300

@@ -1,6 +1,6 @@
 # 路線圖與待決定事項
 
-> 狀態：持續更新 ｜ 最後更新：2026-11-05 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
+> 狀態：持續更新 ｜ 最後更新：2026-11-09 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
 
 本文件說明各個 change 的順序、相依與目前狀態，以及尚未決定的事項。細節與理由在 report.md 與 RPG.md；這裡只維護「現在在哪裡、下一步是什麼」。
 
@@ -39,7 +39,7 @@ flowchart LR
     RC8["RC-8 rpg-script-publishing<br/>先審後發、目錄、上下架、檢舉"]:::plan
     RC9["RC-9 rpg-character-creation<br/>玩家角色卡、AI 生成與自創、錨定事實、開存檔 API（已封存）"]:::done
     CT["content-tier-modes<br/>三種內容模式（併入 RC-1，已封存）"]:::done
-    WL["W1 game-wallet<br/>遊戲幣錢包、帳本、首登贈幣、每日簽到、預扣與退款（金流、訂閱屬 W2）"]:::plan
+    WL["W1 game-wallet<br/>遊戲幣錢包、帳本、首登贈幣、每日簽到、預扣與退款（已實作 2026-11-09，待驗收與提交；金流、訂閱屬 W2）"]:::active
 
     C1 --> C2 --> AG --> AB --> C3
     C3 --> C4A --> C4B --> C4C --> C4D --> C5A --> C5B --> C5C --> C5D
@@ -89,7 +89,7 @@ flowchart LR
 | rpg-script-authoring（RC-7） | **已封存**（2026-11-04，規劃 commit `071f559`、規範修訂 `ed836fb`、實作 `cdc1b9f`；封存時新增 6 個主規格 `appeal-shortcut`、`player-nickname`、`runtime-limits`、`script-authoring`、`script-review`、`script-submission`，修改 10 個既有規格，`openspec validate --specs` 59 項） | 2026-11-04 | 玩家創作劇本的 API 與 `/scripts` 頁面、固定規格驗證、規則層與模型層審查（模型不可用一律不放行）、送審、連續被拒的暫停發佈（獨立旗標）與申訴捷徑、暱稱的初次設定頁與帳號頁更改、營運限制存資料庫（`flask set-script-limit`）、送審紀錄的匯出與 12 個月保存；依賴 RC-1。AGENTS.md 第 7、10、11 節的修訂已先提交（`ed836fb`） |
 | rpg-script-publishing（RC-8） | 規劃中 | — | 先審後發的管理員審核佇列、上下架、公開目錄、檢舉、署名、刪帳號的保留偏好；依賴 RC-7 |
 | rpg-character-creation（RC-9） | **已封存**（2026-11-05；規劃 `9ebbcac`、實作 `ac05484`、規範修訂 `4f91946`、探索結論 `780bce5`；封存時新增 2 個主規格 `rpg-protagonist`、`protagonist-suggestion`，修改 5 個既有規格，`openspec validate --specs` 61 項） | 2026-11-05 | 玩家主角角色卡（共用劇本角色規格的欄位、驗證與審查）、選填自我介紹、AI 生成角色卡與一個錨定事實（生成只是預覽，按「開始冒險」才開存檔）、自創、生成與重新生成的次數上限（存 `runtime_limits`）、開存檔改版（`POST /api/sessions` 與 `GET /api/sessions/setup/<id>`、`POST /api/sessions/protagonist/suggest`）、`sessions.protagonist_json`（遷移 `0014`，只新增）、匯出；依賴 RC-1、RC-7，排在 RC-2 之前。**開存檔最壞約 60 秒，RC-3 的前端逾時請設 65 秒**。第 0 幕的開場屬 RC-2，序章、聯繫與創角畫面屬 RC-3。細節見 RPG.md T-13 與 README |
-| 錢包與訂閱（W1 至 W3） | W1 已探索（2026-11-05，**尚未寫入規範、尚未立案**）；W2、W3 待探索 | — | **W1 game-wallet**（RC-2 的前置）：RPG 聊天一輪 30 幣、客服不扣；首登送 200、每日簽到 200（台北 0 點刷新）、免費幣上限 1000；免費與付費幣皆不過期、先扣免費再扣付費；免費與付費兩個餘額加帳本；預扣、確認、退回；數值放資料庫設定表。W2 payments-and-subscriptions（金流、法務、未成年付款、付費幣退款）、W3 model-catalog-and-pricing；見 report.md U-31、[RPG.md](RPG.md) 7.7 |
+| 錢包與訂閱（W1 至 W3） | **W1 已實作**（2026-11-09，遷移 `0015`、`/api/wallet/*`、管理員調整、兩個指令；規範於 `51d4330` 修訂；尚待使用者驗收、提交與封存）；W2、W3 待探索 | — | **W1 game-wallet**（RC-2 的前置）：RPG 聊天一輪 30 幣、客服不扣；首登送 200、每日簽到 200（台北 0 點刷新）、免費幣上限 1000；免費與付費幣皆不過期、先扣免費再扣付費；免費與付費兩個餘額加帳本；預扣、確認、退回；數值放資料庫設定表。W2 payments-and-subscriptions（金流、法務、未成年付款、付費幣退款）、W3 model-catalog-and-pricing；見 report.md U-31、[RPG.md](RPG.md) 7.7 |
 | rpg-turn-engine（RC-2a）、rpg-notebook（RC-2b）、rpg-turn-revision（RC-2c） | 已探索（2026-11-05），**尚未立案** | — | RC-2 探索後切為三段，順序為 AGENTS.md 修訂（RA-16 至 RA-20，使用者核可後單獨提交）→ W1 → 2a → 2b、2c。2a：串流轉接器（推理設定、tick 輪詢）、`GameService`、上下文組裝、NPC 卡與階段驗證、狀態呼叫、里程碑與目標、第 0 幕、輸出審查（逐句緩衝、規則層）、被擋回合、SSE 端點、預扣遊戲幣；2b：記事簿；2c：玩家重新生成與編輯最後一輪輸入（附理由回饋、回合前快照）。第一次對真實 RPG 模型的探測：推理型，須關閉推理。見 [RPG.md](RPG.md) 第 7 章、report.md U-29 至 U-34 |
 | player-hub、player-personas、故事偏好 | 已探索（2026-11-05），**尚未立案** | — | `player-hub`（W1 之後）：錢包頁、記錄頁、個人頁、底部導覽、語言列（只有繁體中文）、聊天顯示（模型選擇目前只有一個）；`player-personas`（依賴 RC-9）：可重用的主角模板，free 3、plus 5、vip 10，可標記預設人設；主角新增「來歷」（穿越者）；故事偏好（男頻、女頻、全讀者）只影響目錄排序，劇本規格新增 `audience`，隨 RC-8 的目錄。見 [RPG.md](RPG.md) 7.10、report.md U-33 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |

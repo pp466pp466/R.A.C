@@ -13,7 +13,7 @@ from werkzeug.exceptions import HTTPException
 from app.observability.errors import describe_exception
 from app.security.errors import HttpSecurityError
 from app.services.errors import (
-    ChatSuspended, Conflict, Forbidden, NotFound, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated,
+    ChatSuspended, CheckinOverflow, Conflict, Forbidden, InsufficientCoins, NotFound, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated,
     Unprocessable, ValidationError, VersionConflict,
 )
 
@@ -98,6 +98,10 @@ def register_error_handlers(app: Flask) -> None:
             extra = {"conversation": exc.conversation}
         elif isinstance(exc, Unprocessable):
             extra = {"categories": list(exc.categories)}             # 只有固定列舉的類別，不含內容的位置或文字
+        elif isinstance(exc, InsufficientCoins):
+            extra = {"balance": exc.balance, "needed": exc.needed}                    # 只有合計餘額與所需數量，不洩漏兩個餘額的拆分
+        elif isinstance(exc, CheckinOverflow):
+            extra = {"checkin": {"would_gain": exc.would_gain, "would_lose": exc.would_lose}}   # 預覽：玩家確認前不執行
         elif isinstance(exc, ChatSuspended) and exc.until is not None:
             extra = {"suspended_until": exc.until.isoformat(timespec="seconds")}      # 前端據此停用輸入並顯示恢復時間
         response = respond_with_error(_status_for(exc), exc.code, exc.message, fields, extra)

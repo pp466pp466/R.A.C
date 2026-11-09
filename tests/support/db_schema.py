@@ -26,6 +26,7 @@ DOMAIN_ORDER: dict[str, tuple[str, ...]] = {
     "模型用量與營運": ("llm_call_logs", "admin_audit_logs", "alert_states", "runtime_limits"),
     "RPG 劇本": ("scripts", "script_versions", "script_version_tags", "script_submissions"),
     "RPG 存檔": ("sessions", "memory_logs"),
+    "遊戲幣": ("wallets", "wallet_entries"),
 }
 ORDERED_TABLES: tuple[str, ...] = tuple(name for names in DOMAIN_ORDER.values() for name in names)
 
@@ -158,6 +159,7 @@ def enumerations() -> dict[str, tuple[str, ...]]:
     from app.llm.openai_compatible import PROVIDER_NAME
     from app.models import (
         admin_audit_log, alert_state, chat, deletion_tombstone, llm_call_log, lock_strike, rpg_session, script, script_submission, user,
+        wallet,
     )
     from app.services import cs_intents
     from app.services.age_policy import DEFAULT_AGE_POLICY
@@ -197,6 +199,8 @@ def enumerations() -> dict[str, tuple[str, ...]]:
         "sessions.content_tier": user.CONTENT_TIERS,
         "sessions.status": rpg_session.SESSION_STATUSES,
         "memory_logs.turn_status": rpg_session.TURN_STATUSES,
+        "wallet_entries.kind": wallet.ENTRY_KINDS,
+        "wallet_entries.resolution": wallet.RESOLUTIONS,
     }
 
 

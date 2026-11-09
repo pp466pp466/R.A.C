@@ -8,7 +8,7 @@ const Format = require('../../app/static/js/admin/admin-format.js');
 const STATUSES = ['active', 'suspended', 'deletion_pending'];
 const TIERS = ['free', 'plus', 'vip'];
 const ACTIONS = ['user.lookup', 'user.suspend', 'user.unsuspend', 'user.change_tier', 'conversation.read', 'conversation.delete', 'failures.read', 'reauth.failed',
-  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock', 'limit.set', 'publish.suspend', 'publish.lift'];
+  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock', 'limit.set', 'publish.suspend', 'publish.lift', 'wallet.adjust'];
 
 test('every status, tier, role, action, kind and message value has a Chinese label', () => {
   for (const value of STATUSES) { assert.notEqual(Format.statusLabel(value), value, value); }
@@ -166,3 +166,34 @@ test('audit details are turned into one readable line and never throw on odd sha
   assert.equal(Format.auditDetailText('conversation.read', {}), '');
   assert.equal(Format.auditDetailText('something.else', { x: 1 }), '');
 });
+
+test('wallet adjustments get a Chinese action label, bucket labels and a readable detail line', () => {
+  assert.equal(Format.actionLabel('wallet.adjust'), '調整遊戲幣');
+  assert.equal(Format.bucketLabel('free'), '免費幣');
+  assert.equal(Format.bucketLabel('paid'), '付費幣');
+  assert.equal(Format.bucketLabel('gold'), 'gold');                                   // 不認得的值退回原始代碼
+  assert.deepEqual(Object.keys(Format.LABELS.bucket).sort(), ['free', 'paid']);
+  assert.equal(Format.auditDetailText('wallet.adjust', { bucket: 'paid', delta: 500, balance_after: 1500 }), '付費幣 +500，調整後 1,500');
+  assert.equal(Format.auditDetailText('wallet.adjust', { bucket: 'free', delta: -30, balance_after: 170 }), '免費幣 -30，調整後 170');
+  assert.equal(Format.auditDetailText('wallet.adjust', { bucket: 'free' }), '');
+  assert.equal(Format.auditDetailText('wallet.adjust', null), '');
+});
+
+test('signed counts show a plus for gains and a minus for losses and a dash for bad data', () => {
+  assert.equal(Format.signedCount(500), '+500');
+  assert.equal(Format.signedCount(1234567), '+1,234,567');
+  assert.equal(Format.signedCount(-30), '-30');
+  assert.equal(Format.signedCount(0), '0');
+  for (const bad of [null, undefined, 'x', NaN, Infinity]) { assert.equal(Format.signedCount(bad), Format.EMPTY); }
+});
+
+test('the coin amount an administrator types must be a non-zero whole number', () => {
+  assert.equal(Format.parseCoinDelta('500'), 500);
+  assert.equal(Format.parseCoinDelta('+500'), 500);
+  assert.equal(Format.parseCoinDelta('-30'), -30);
+  assert.equal(Format.parseCoinDelta('  12  '), 12);
+  for (const bad of ['', '  ', '0', '-0', '+0', '1.5', '1,000', '１２', 'abc', '12a', '--5', '1e3', '1234567890', null, undefined, 12, {}]) {
+    assert.equal(Format.parseCoinDelta(bad), null, JSON.stringify(bad));
+  }
+});
+

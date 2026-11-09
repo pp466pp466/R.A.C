@@ -29,6 +29,7 @@ LOCK_TABLES = ("lock_strikes", "lock_appeals")
 RPG_TABLES = ("scripts", "script_versions", "script_version_tags", "sessions", "memory_logs")
 CONTENT_MODE_COLUMNS = ("content_tier_preference", "adult_confirmed_at", "adult_rules_version", "adult_confirm_method")
 AUTHORING_TABLES = ("script_submissions", "runtime_limits")
+WALLET_TABLES = ("wallets", "wallet_entries")
 AUTHORING_USER_COLUMNS = ("nickname", "nickname_code", "publish_suspended_at")
 REVIEW_COLUMNS = ("review_hash", "review_verdict", "review_categories_json", "reviewed_at")
 INITIAL_LIMITS = (
@@ -39,7 +40,12 @@ INITIAL_LIMITS = (
 CHARACTER_LIMITS = (
     ("protagonist_suggest_daily.free", 5), ("protagonist_suggest_daily.plus", 15), ("protagonist_suggest_daily.vip", 40),
 )
-HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS
+WALLET_LIMITS = (
+    ("coin.turn_cost.standard", 30), ("coin.signup_grant", 200), ("coin.checkin_grant", 200), ("coin.free_cap", 1000),
+    ("coin.hold_timeout_seconds", 180),
+)
+HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS
+CHARACTER_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS       # 0014 當時的十個
 
 
 def alembic_config(url: str) -> Config:
@@ -61,7 +67,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -613,7 +619,7 @@ def test_0014_adds_a_nullable_protagonist_column_and_only_the_missing_limits_and
     assert set(inspector.get_table_names()) == before_tables
     columns = {c["name"]: c for c in inspector.get_columns("sessions")}
     assert set(columns) - before_columns == {"protagonist_json"} and columns["protagonist_json"]["nullable"]
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}                    # 新增三個，調整過的值沒被蓋掉
+    assert limits_now() == {**dict(CHARACTER_HEAD_LIMITS), "script_limit.free": 9}          # 新增三個，調整過的值沒被蓋掉
     with engine.connect() as conn:
         save = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().one()
         assert (save["player_name"], save["character_age"], save["protagonist_json"]) == ("舊存檔", 30, None)
@@ -625,7 +631,7 @@ def test_0014_adds_a_nullable_protagonist_column_and_only_the_missing_limits_and
         assert conn.execute(select(func.count()).select_from(Table("sessions", MetaData(), autoload_with=conn))).scalar_one() == 1
 
     command.upgrade(cfg, "0014_rpg_character_creation")                                    # 再升級一次，不重複
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    assert limits_now() == {**dict(CHARACTER_HEAD_LIMITS), "script_limit.free": 9}
     engine.dispose()
 
 
@@ -667,6 +673,90 @@ def test_migrated_authoring_tables_hold_the_initial_limits_and_cascade_with_the_
         assert conn.execute(select(func.count()).select_from(submissions)).scalar_one() == 0
 
 
+def test_0015_adds_the_wallet_tables_and_only_the_missing_coin_settings_and_keeps_every_row(tmp_path):
+    """game-wallet：新增 wallets 與 wallet_entries（約束與串聯）、runtime_limits 補五個遊戲幣設定（只插入缺少的，不蓋掉部署者
+    調整過的值）；既有資料一列不少；回復只移除新增的東西；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'wallet.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0015_game_wallet")
+    assert revision.down_revision == "0014_rpg_character_creation" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0014_rpg_character_creation")
+    with engine.begin() as conn:
+        _insert_user(conn, Table("users", MetaData(), autoload_with=conn), 1)
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.update().where(limits.c.key == "script_limit.free").values(int_value=9))     # 部署者調整過
+        conn.execute(limits.insert().values(key="coin.free_cap", int_value=500, updated_at=utcnow().replace(tzinfo=None)))   # 先手動寫入的新鍵
+    before_tables = set(inspect(engine).get_table_names())
+
+    def limits_now() -> dict[str, int]:
+        with engine.connect() as conn:
+            table = Table("runtime_limits", MetaData(), autoload_with=conn)
+            return {row["key"]: row["int_value"] for row in conn.execute(select(table)).mappings()}
+
+    command.upgrade(cfg, "0015_game_wallet")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(WALLET_TABLES)
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9, "coin.free_cap": 500}      # 新增四個，調整過與先寫入的不被蓋掉
+
+    wallet_columns = {c["name"]: c for c in inspector.get_columns("wallets")}
+    assert set(wallet_columns) == {"id", "user_id", "free_balance", "paid_balance", "version", "created_at", "updated_at"}
+    assert not any(c["nullable"] for c in wallet_columns.values())
+    assert [sorted(u["column_names"]) for u in inspector.get_unique_constraints("wallets")] == [["user_id"]]
+    entry_columns = {c["name"]: c for c in inspector.get_columns("wallet_entries")}
+    assert {name for name, c in entry_columns.items() if c["nullable"]} == {"session_public_id", "ref_key", "resolution"}
+    assert sorted(sorted(u["column_names"]) for u in inspector.get_unique_constraints("wallet_entries")) == [["idempotency_key"], ["seq", "user_id"]]
+    assert "ix_wallet_entries_user_id_created_at" in {i["name"] for i in inspector.get_indexes("wallet_entries")}
+    for table in WALLET_TABLES:
+        (foreign_key,) = inspector.get_foreign_keys(table)
+        assert foreign_key["referred_table"] == "users" and foreign_key["options"].get("ondelete") == "CASCADE", table
+
+    command.downgrade(cfg, "0014_rpg_character_creation")
+    assert set(inspect(engine).get_table_names()) == before_tables
+    assert limits_now() == {**dict(CHARACTER_HEAD_LIMITS), "script_limit.free": 9}                  # 五個遊戲幣鍵（含手動寫入的）一併移除
+    with engine.connect() as conn:
+        assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 1
+
+    command.upgrade(cfg, "0015_game_wallet")                                                        # 再升級一次，不重複
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    engine.dispose()
+
+
+def test_migrated_wallet_tables_enforce_their_constraints_and_cascade_with_the_user(migrated_database):
+    """SQLite 與 SQL Server 兩軌：升級後有十五個設定（鍵唯一）；餘額不得為負、冪等鍵唯一、刪除使用者串聯刪除錢包與帳本。"""
+    engine = migrated_database
+    metadata = MetaData()
+    now = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", metadata, autoload_with=conn)
+        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(HEAD_LIMITS)
+        users = Table("users", metadata, autoload_with=conn)
+        _insert_user(conn, users, 61)
+        user_id = conn.execute(select(users.c.id).where(users.c.email == "u61@example.com")).scalar_one()
+    wallets = Table("wallets", metadata, autoload_with=engine)
+    entries = Table("wallet_entries", metadata, autoload_with=engine)
+    with pytest.raises(IntegrityError):                                     # 餘額不得為負（CHECK）
+        with engine.begin() as conn:
+            conn.execute(wallets.insert().values(user_id=user_id, free_balance=-1, paid_balance=0, version=0, created_at=now, updated_at=now))
+    with engine.begin() as conn:
+        conn.execute(wallets.insert().values(user_id=user_id, free_balance=200, paid_balance=0, version=1, created_at=now, updated_at=now))
+        conn.execute(entries.insert().values(
+            user_id=user_id, seq=1, kind="signup_grant", idempotency_key="signup:61", free_delta=200, paid_delta=0, free_after=200,
+            paid_after=0, created_at=now,
+        ))
+    with pytest.raises(IntegrityError):                                     # 冪等鍵唯一
+        with engine.begin() as conn:
+            conn.execute(entries.insert().values(
+                user_id=user_id, seq=2, kind="signup_grant", idempotency_key="signup:61", free_delta=0, paid_delta=0, free_after=200,
+                paid_after=0, created_at=now,
+            ))
+    with engine.begin() as conn:
+        conn.execute(users.delete().where(users.c.id == user_id))
+        assert conn.execute(select(func.count()).select_from(wallets)).scalar_one() == 0
+        assert conn.execute(select(func.count()).select_from(entries)).scalar_one() == 0
+
+
 def test_migration_scripts_do_not_import_application_code():
     """migration 描述的是「當時」的結構，不應隨應用程式的修改而改變，因此不匯入 app。"""
     for path in (PROJECT_ROOT / "migrations" / "versions").glob("*.py"):
@@ -705,7 +795,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):

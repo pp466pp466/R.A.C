@@ -22,7 +22,7 @@ from tests.support.idor import logged_in_client
 
 ENDPOINTS = (
     "overview", "audit", "lookup", "user", "suspend", "unsuspend", "tier", "feedback", "flagged", "read", "delete", "failures",
-    "locked", "appeals", "unlock",
+    "locked", "appeals", "unlock", "wallet",
 )
 
 
@@ -81,6 +81,7 @@ class World:
             "locked": ("GET", "/api/admin/locked", None),
             "appeals": ("GET", "/api/admin/appeals", None),
             "unlock": ("POST", f"/api/admin/users/{self.locked_public}/unlock", password),
+            "wallet": ("POST", f"/api/admin/users/{self.target_public}/wallet/adjust", {**password, "bucket": "paid", "delta": 50, "reason": "活動補償"}),
         }[name]
 
     def send(self, who, name, **overrides):
@@ -128,7 +129,7 @@ def test_a_logged_in_non_admin_gets_the_same_404_as_a_missing_endpoint_and_nothi
     assert (world.user(world.target_id), world.user(world.suspended_id), world.user(world.locked_id), world.count(ChatConversation), world.count(AdminAuditLog)) == before
 
 
-@pytest.mark.parametrize("name", [n for n in ENDPOINTS if n in ("lookup", "suspend", "unsuspend", "tier", "delete", "unlock")])
+@pytest.mark.parametrize("name", [n for n in ENDPOINTS if n in ("lookup", "suspend", "unsuspend", "tier", "delete", "unlock", "wallet")])
 @pytest.mark.parametrize("body", [{"data": "not json"}, None])
 def test_a_non_admin_with_a_malformed_body_still_only_sees_404_never_415_or_400(world, name, body):
     method, path, _ = world.request(name)
@@ -180,7 +181,7 @@ def test_a_missing_admin_path_is_no_store_too(world):
     assert not_found_body(world).headers.get("Cache-Control") == "no-store"
 
 
-@pytest.mark.parametrize("name", ["lookup", "suspend", "unsuspend", "tier", "delete", "unlock"])
+@pytest.mark.parametrize("name", ["lookup", "suspend", "unsuspend", "tier", "delete", "unlock", "wallet"])
 def test_a_write_without_a_csrf_token_is_403_and_changes_nothing(world, name):
     method, path, body = world.request(name)
     client = raw_client(world.app)
@@ -210,7 +211,7 @@ def test_there_are_no_endpoints_for_listing_users_changing_the_audit_or_deleting
     assert world.client("admin").open(path, method=method, json={} if method != "GET" else None).status_code in (404, 405)
 
 
-def test_the_registered_admin_routes_are_exactly_the_seventeen_documented_ones(world):
+def test_the_registered_admin_routes_are_exactly_the_eighteen_documented_ones(world):
     routes = {(rule.rule, method) for rule in world.app.url_map.iter_rules() if rule.rule.startswith("/api/admin") for method in rule.methods - {"HEAD", "OPTIONS"}}
     assert routes == {
         ("/api/admin/overview", "GET"), ("/api/admin/audit", "GET"), ("/api/admin/users/lookup", "POST"),
@@ -220,6 +221,7 @@ def test_the_registered_admin_routes_are_exactly_the_seventeen_documented_ones(w
         ("/api/admin/conversations/<public_id>/delete", "POST"), ("/api/admin/failures", "GET"),
         ("/api/admin/locked", "GET"), ("/api/admin/appeals", "GET"), ("/api/admin/users/<public_id>/unlock", "POST"),
         ("/api/admin/publish-suspended", "GET"), ("/api/admin/users/<public_id>/lift-publish-suspension", "POST"),      # rpg-script-authoring
+        ("/api/admin/users/<public_id>/wallet/adjust", "POST"),                                                          # game-wallet
     }
 
 
@@ -299,3 +301,66 @@ def test_the_state_changing_endpoints_work_end_to_end(world):
     assert world.count(ChatConversation) == 0
     actions = [e["action"] for e in admin.get("/api/admin/audit").get_json()["entries"]]
     assert actions == ["conversation.delete", "user.unsuspend", "user.suspend", "user.change_tier"]
+
+
+# ---- 調整遊戲幣（game-wallet）------------------------------------------------------------------------------
+
+
+def wallet_url(world) -> str:
+    return f"/api/admin/users/{world.target_public}/wallet/adjust"
+
+
+def wallet_body(**overrides) -> dict:
+    return {"password": GOOD_PASSWORD, "bucket": "paid", "delta": 500, "reason": "活動補償", **overrides}
+
+
+def test_adjusting_the_wallet_returns_the_user_view_with_the_new_balances_and_writes_the_audit_row(world):
+    response = world.client("admin").post(wallet_url(world), json=wallet_body())
+    assert response.status_code == 200
+    assert response.get_json()["user"]["wallet"] == {"free_balance": 0, "paid_balance": 500}
+    with Session(world.engine) as session:
+        row = session.scalar(select(AdminAuditLog).where(AdminAuditLog.action == "wallet.adjust"))
+        assert (row.reason, row.detail_json) == ("活動補償", {"bucket": "paid", "delta": 500, "balance_after": 500})
+        assert row.target_user_public_id == world.target_public and row.admin_user_id == world.admin_id
+
+
+@pytest.mark.parametrize(
+    "overrides, field",
+    [({"bucket": "gold"}, "bucket"), ({"delta": 0}, "delta"), ({"delta": "5"}, "delta"), ({"reason": ""}, "reason"), ({"password": ""}, "password")],
+)
+def test_invalid_wallet_fields_are_400_naming_the_field_and_change_nothing(world, overrides, field):
+    response = world.client("admin").post(wallet_url(world), json=wallet_body(**overrides))
+    assert response.status_code == 400 and field in response.get_json()["error"]["fields"]
+    with Session(world.engine) as session:
+        assert session.scalar(select(func.count()).select_from(AdminAuditLog).where(AdminAuditLog.action == "wallet.adjust")) == 0
+
+
+def test_taking_more_than_the_balance_is_409_insufficient_coins_with_the_balance_and_the_amount(world):
+    response = world.client("admin").post(wallet_url(world), json=wallet_body(bucket="free", delta=-30))
+    assert response.status_code == 409
+    body = response.get_json()
+    assert body["error"]["code"] == "insufficient_coins" and (body["balance"], body["needed"]) == (0, 30)
+
+
+def test_a_wrong_password_is_400_and_leaves_a_reauth_failure(world):
+    response = world.client("admin").post(wallet_url(world), json=wallet_body(password="definitely-not-the-password"))
+    assert response.status_code == 400
+    with Session(world.engine) as session:
+        failure = session.scalar(select(AdminAuditLog).where(AdminAuditLog.action == "reauth.failed"))
+        assert failure.detail_json == {"attempted": "wallet.adjust"}
+
+
+def test_an_administrator_cannot_be_adjusted_through_the_api(world):
+    with Session(world.engine) as session:
+        admin_public = session.get(User, world.admin_id).public_id
+    response = world.client("admin").post(f"/api/admin/users/{admin_public}/wallet/adjust", json=wallet_body())
+    assert response.status_code == 403
+
+
+def test_the_user_view_shows_the_balances_after_an_adjustment_and_nothing_more(world):
+    admin = world.client("admin")
+    admin.post(wallet_url(world), json=wallet_body(bucket="free", delta=120))
+    view = admin.get(f"/api/admin/users/{world.target_public}").get_json()["user"]
+    assert view["wallet"] == {"free_balance": 120, "paid_balance": 0}
+    assert "entries" not in json.dumps(view) and "idempotency" not in json.dumps(view)
+

@@ -33,7 +33,7 @@
       'user.lookup': '查詢使用者', 'user.suspend': '停權', 'user.unsuspend': '解除停權', 'user.change_tier': '調整會員等級',
       'conversation.read': '讀取對話', 'conversation.delete': '刪除對話', 'failures.read': '查看模型失敗原文',
       'reauth.failed': '重新輸入密碼失敗',
-      'limit.set': '修改營運限制', 'publish.suspend': '暫停發佈', 'publish.lift': '解除暫停發佈',
+      'limit.set': '修改營運限制', 'publish.suspend': '暫停發佈', 'publish.lift': '解除暫停發佈', 'wallet.adjust': '調整遊戲幣',
       'account.lock': '帳號自動鎖定', 'appeal.submit': '玩家送出申訴', 'appeal.read': '檢視申訴', 'account.unlock': '解除帳號鎖定'
     },
     /* 鎖定原因（app/models/lock_strike.py 的計次類別，也是 users.lock_reason 的值） */
@@ -41,7 +41,9 @@
     kind: { chat: '客服對話', summary: '對話摘要', script_review: '劇本審查', protagonist_gen: '主角生成', protagonist_review: '主角審查' },
     messageRole: { user: '使用者', assistant: '客服' },
     messageStatus: { ok: '正常', fallback: '降級回覆' },
-    via: { email: '以信箱', id: '以識別碼' }
+    via: { email: '以信箱', id: '以識別碼' },
+    /* 遊戲幣的兩個餘額（app/models/wallet.py 的 BUCKETS） */
+    bucket: { free: '免費幣', paid: '付費幣' }
   };
 
   function pad(number) { return (number < 10 ? '0' : '') + number; }
@@ -108,6 +110,7 @@
   function messageRoleLabel(value) { return label('messageRole', value); }
   function messageStatusLabel(value) { return label('messageStatus', value); }
   function lockReasonLabel(value) { return label('lockReason', value); }
+  function bucketLabel(value) { return label('bucket', value); }
 
   /* 比例（0 到 1，可超過 1）轉成百分比文字。無條件捨去：0.998 顯示 99% 而不是 100%，
      這樣「100%」只在真的用滿時出現，與 ratioLevel 的界線一致。資料不是有限的非負數時回傳「—」。 */
@@ -136,6 +139,21 @@
     return sign + String(Math.floor(Math.abs(value))).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
   }
 
+  /* 帶正負號的千分位（遊戲幣的增減量）：+500、-30；不是整數的資料回傳「—」。 */
+  function signedCount(value) {
+    if (typeof value !== 'number' || !isFinite(value)) { return EMPTY; }
+    return (value > 0 ? '+' : '') + count(value);
+  }
+
+  /* 管理員輸入的增減量：只接受不為 0 的整數（可帶 + 或 -，不接受小數、千分位與空白以外的字元）；其餘回傳 null。 */
+  function parseCoinDelta(text) {
+    if (typeof text !== 'string') { return null; }
+    var trimmed = text.trim();
+    if (!/^[+-]?\d{1,9}$/.test(trimmed)) { return null; }
+    var value = parseInt(trimmed, 10);
+    return value === 0 ? null : value;
+  }
+
   /* 對外識別碼（UUID）在表格裡只顯示前 8 碼；完整值放在 title 與操作中。 */
   function shortId(value) {
     return typeof value === 'string' && value ? value.slice(0, 8) : EMPTY;
@@ -160,6 +178,10 @@
     if (action === 'account.lock') { return d.reason ? '原因：' + lockReasonLabel(d.reason) : ''; }
     if (action === 'appeal.submit') { return typeof d.length === 'number' ? d.length + ' 字' : ''; }
     if (action === 'appeal.read') { return typeof d.count === 'number' ? d.count + ' 則' : ''; }
+    if (action === 'wallet.adjust') {
+      if (typeof d.delta !== 'number' || typeof d.balance_after !== 'number') { return ''; }
+      return bucketLabel(d.bucket) + ' ' + signedCount(d.delta) + '，調整後 ' + count(d.balance_after);
+    }
     return '';
   }
 
@@ -168,6 +190,7 @@
     parseTime: parseTime, taipeiDate: taipeiDate, taipeiDateTime: taipeiDateTime, taipeiClock: taipeiClock, shortDate: shortDate,
     statusLabel: statusLabel, tierLabel: tierLabel, roleLabel: roleLabel, actionLabel: actionLabel, kindLabel: kindLabel,
     messageRoleLabel: messageRoleLabel, messageStatusLabel: messageStatusLabel, lockReasonLabel: lockReasonLabel,
+    bucketLabel: bucketLabel, signedCount: signedCount, parseCoinDelta: parseCoinDelta,
     ratioPercent: ratioPercent, ratioLevel: ratioLevel, ratioWidth: ratioWidth, count: count, shortId: shortId,
     suspensionText: suspensionText, auditDetailText: auditDetailText
   };

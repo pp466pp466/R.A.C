@@ -109,9 +109,9 @@ def test_the_container_acceptance_covers_the_script_authoring_migration_limits_a
     for needed in ("0013_rpg_script_authoring", "show-script-limits", "set-script-limit", "script_limit.free", "purge-expired-data", "劇本送審紀錄"):
         assert needed in script, needed
     namespace = runpy.run_path(str(PROJECT_ROOT / "scripts" / "verify_container.py"))
-    from app.services.runtime_limits import LIMIT_KEYS
+    from app.services.runtime_limits import SCRIPT_LIMIT_KEYS
 
-    assert tuple(namespace["SCRIPT_LIMIT_KEYS"]) == tuple(LIMIT_KEYS)                  # 驗收腳本的鍵與程式的規格一致
+    assert tuple(namespace["SCRIPT_LIMIT_KEYS"]) == tuple(SCRIPT_LIMIT_KEYS)                  # 驗收腳本的鍵與程式的規格一致
 
 
 def test_the_container_acceptance_covers_the_model_key_and_the_chat_flow():
@@ -138,3 +138,14 @@ def test_the_container_acceptance_covers_the_protagonist_migration_schema_lexico
     compile(flow, "flow", "exec")
     assert flow.isascii() and flow.count('/api/sessions') >= 3
     assert len(namespace["SCRIPT_LIMIT_KEYS"]) == 10
+
+
+def test_the_container_acceptance_covers_the_wallet_migration_tables_settings_and_login_gates():
+    """game-wallet：遷移升級到 0015、兩張表、五個設定鍵（與程式的規格一致）與修改讀回、兩組指令互相拒絕對方的鍵、三支 /api/wallet 端點未登入為 401。"""
+    script = (PROJECT_ROOT / "scripts" / "verify_container.py").read_text(encoding="utf-8-sig")
+    for needed in ("0015_game_wallet", "wallets", "wallet_entries", "show-wallet-settings", "set-wallet-setting", "/api/wallet", "/api/wallet/checkin", "/api/wallet/entries"):
+        assert needed in script, needed
+    namespace = runpy.run_path(str(PROJECT_ROOT / "scripts" / "verify_container.py"))
+    from app.services.runtime_limits import WALLET_LIMIT_KEYS
+
+    assert tuple(namespace["WALLET_SETTING_KEYS"]) == tuple(WALLET_LIMIT_KEYS)                  # 驗收腳本的鍵與程式的規格一致

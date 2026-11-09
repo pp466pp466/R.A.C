@@ -364,3 +364,61 @@ class SystemBusy(ServiceUnavailable):
     code = "system_busy"
     default_message = "目前使用人數較多，請稍後再試。"
     retry_after = 60
+
+
+# ---- 遊戲幣（game-wallet）---------------------------------------------------------------
+
+
+class InsufficientCoins(Conflict):
+    """遊戲幣不足（409）：預扣或管理員扣款會使餘額低於 0。`balance` 是目前的合計餘額，`needed` 是所需的數量；
+    不洩漏兩個餘額的拆分。"""
+
+    code = "insufficient_coins"
+    default_message = "遊戲幣不足，可以先到簽到領取今日的遊戲幣。"
+
+    def __init__(self, balance: int, needed: int, message: str | None = None) -> None:
+        super().__init__(message)
+        self.balance = int(balance)
+        self.needed = int(needed)
+
+
+class CheckinOverflow(Conflict):
+    """簽到會使一部分幣作廢（409）：玩家確認前不執行簽到，也不消耗當日的簽到。`would_gain`、`would_lose` 是預覽。"""
+
+    code = "checkin_overflow"
+    default_message = "領取後免費遊戲幣會超過上限，超出的部分將作廢。要繼續領取嗎？"
+
+    def __init__(self, would_gain: int, would_lose: int, message: str | None = None) -> None:
+        super().__init__(message)
+        self.would_gain = int(would_gain)
+        self.would_lose = int(would_lose)
+
+
+class AlreadyCheckedIn(Conflict):
+    """今日（台灣日）已簽到（409）。"""
+
+    code = "already_checked_in"
+    default_message = "您今天已經簽到過了，明天 00:00（台灣時間）後可以再簽到。"
+
+
+class HoldAlreadySettled(Conflict):
+    """這筆預扣已結算，不能再退回（409）。只有伺服器端的回合流程會遇到。"""
+
+    code = "hold_already_settled"
+    default_message = "這筆預扣已經結算，無法退回。"
+
+
+class HoldAlreadyRefunded(Conflict):
+    """這筆預扣已退回，不能再結算（409）。只有伺服器端的回合流程會遇到。"""
+
+    code = "hold_already_refunded"
+    default_message = "這筆預扣已經退回，無法結算。"
+
+
+class WalletBusy(ServiceUnavailable):
+    """同一個錢包的並行更新重試多次仍沒有成功（503）：請稍後再試。"""
+
+    code = "wallet_busy"
+    default_message = "遊戲幣目前較忙碌，請稍後再試。"
+    retry_after = 1
+

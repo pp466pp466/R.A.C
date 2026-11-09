@@ -8,8 +8,9 @@ from app.controllers.request_helpers import read_json_object
 from datetime import datetime, timezone
 
 from app.services.errors import (
-    AgeConfirmationRequired, AgeRestricted, ChatSuspended, Conflict, ConversationLimitReached, DailyQuotaExceeded, Forbidden,
-    NotFound, RateLimited, ServiceError, ServiceUnavailable, SystemBusy, TooManyRequests, Unauthenticated, ValidationError,
+    AgeConfirmationRequired, AgeRestricted, AlreadyCheckedIn, ChatSuspended, CheckinOverflow, Conflict, ConversationLimitReached,
+    DailyQuotaExceeded, Forbidden, HoldAlreadyRefunded, HoldAlreadySettled, InsufficientCoins, NotFound, RateLimited, ServiceError,
+    ServiceUnavailable, SystemBusy, TooManyRequests, Unauthenticated, ValidationError, WalletBusy,
 )
 
 TRACE_MARKERS = ("Traceback", 'File "', "app\\", "app/", "sqlalchemy", "SELECT ")
@@ -44,6 +45,13 @@ def app():
         "system-busy": SystemBusy(),
         "custom": Unauthenticated("信箱或密碼不正確。", code="invalid_credentials"),
         "unknown-subclass": type("Odd", (ServiceError,), {})("特殊錯誤"),
+        # game-wallet
+        "insufficient-coins": InsufficientCoins(20, 30),
+        "checkin-overflow": CheckinOverflow(100, 100),
+        "already-checked-in": AlreadyCheckedIn(),
+        "hold-settled": HoldAlreadySettled(),
+        "hold-refunded": HoldAlreadyRefunded(),
+        "wallet-busy": WalletBusy(),
     }
     for name, error in cases.items():
         app.add_url_rule(f"/api/_t/{name}", f"api_{name}", raiser(error))
@@ -156,8 +164,14 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "PublishSuspended": 403, "SubmissionLimit": 429, "ReviewUnavailable": 503,
         # rpg-character-creation
         "ProtagonistRejected": 422, "SuggestionLimit": 429, "SuggestionUnavailable": 503,
+        # game-wallet
+        "InsufficientCoins": 409, "CheckinOverflow": 409, "AlreadyCheckedIn": 409, "HoldAlreadySettled": 409,
+        "HoldAlreadyRefunded": 409, "WalletBusy": 503,
     }
-    made = {cls.__name__: _status_for(cls({"id": "x"}) if cls is errors.VersionConflict else cls()) for cls in defined}
+    needs_arguments = {
+        errors.VersionConflict: ({"id": "x"},), errors.InsufficientCoins: (20, 30), errors.CheckinOverflow: (100, 100),
+    }
+    made = {cls.__name__: _status_for(cls(*needs_arguments.get(cls, ()))) for cls in defined}
     assert made == expected
 
 
@@ -263,3 +277,40 @@ def test_age_restricted_is_a_forbidden_but_a_different_one_from_age_confirmation
     assert not issubclass(AgeRestricted, AgeConfirmationRequired) and not issubclass(AgeConfirmationRequired, AgeRestricted)
     assert AgeRestricted().code == "age_restricted" and AgeConfirmationRequired().code == "age_confirmation_required"
     assert "補填" not in AgeRestricted().message              # 補填也沒有用，所以不引導
+
+
+# ---- 遊戲幣的錯誤（game-wallet）--------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("name", "status", "code"),
+    [
+        ("insufficient-coins", 409, "insufficient_coins"), ("checkin-overflow", 409, "checkin_overflow"),
+        ("already-checked-in", 409, "already_checked_in"), ("hold-settled", 409, "hold_already_settled"),
+        ("hold-refunded", 409, "hold_already_refunded"), ("wallet-busy", 503, "wallet_busy"),
+    ],
+)
+def test_wallet_errors_have_their_status_and_code_with_a_chinese_message(client, name, status, code):
+    response = client.get(f"/api/_t/{name}")
+    assert response.status_code == status
+    error = response.get_json()["error"]
+    assert error["code"] == code and any("一" <= ch <= "鿿" for ch in error["message"])
+    for marker in TRACE_MARKERS:
+        assert marker not in response.get_data(as_text=True)
+
+
+def test_insufficient_coins_carries_only_the_total_balance_and_the_price(client):
+    body = client.get("/api/_t/insufficient-coins").get_json()
+    assert (body["balance"], body["needed"]) == (20, 30)
+    assert set(body) == {"error", "balance", "needed"}                  # 不洩漏兩個餘額的拆分
+
+
+def test_checkin_overflow_carries_the_preview_and_changes_nothing(client):
+    body = client.get("/api/_t/checkin-overflow").get_json()
+    assert body["checkin"] == {"would_gain": 100, "would_lose": 100} and set(body) == {"error", "checkin"}
+
+
+def test_wallet_busy_asks_the_caller_to_retry_soon(client):
+    response = client.get("/api/_t/wallet-busy")
+    assert response.headers["Retry-After"] == "1"
+

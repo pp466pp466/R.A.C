@@ -48,7 +48,7 @@
     appeals: { path: '/appeals', key: 'appeals', paged: true }
   };
 
-  /* 六個危險操作。needsReason：停權與刪除對話必須填原因；needsTier：調整等級要選新的等級。 */
+  /* 七個危險操作。needsReason：停權、刪除對話與調整遊戲幣必須填原因；needsTier：調整等級要選新的等級；needsWallet：調整遊戲幣要選餘額種類與增減量。 */
   var CONFIRMS = {
     suspend: {
       code: 'ADMIN_SUSPEND_USER', title: '停權這位使用者？', confirmText: '確認停權', needsReason: true, needsTier: false,
@@ -75,13 +75,19 @@
       intro: '解除後，這位玩家可以再次送審劇本；待處理的申訴會標為已處理。解除之後若再被自動拒絕，要重新累積連續的次數才會再次暫停。',
       path: function (id) { return '/users/' + encodeURIComponent(id) + '/lift-publish-suspension'; }, done: '已解除暫停發佈。'
     },
+    wallet: {
+      code: 'ADMIN_ADJUST_WALLET', title: '調整遊戲幣', confirmText: '確認調整', needsReason: true, needsTier: false, needsWallet: true,
+      intro: '增加或扣除這位玩家的遊戲幣（扣除用負數）。調整不受免費幣上限限制，餘額不會低於 0；每一筆都會留下稽核紀錄。',
+      path: function (id) { return '/users/' + encodeURIComponent(id) + '/wallet/adjust'; }, done: '已調整遊戲幣。'
+    },
     remove: {
       code: 'ADMIN_DELETE_CONVERSATION', title: '刪除這個對話？', confirmText: '確認刪除', needsReason: true, needsTier: false,
       intro: '整個對話與其中所有訊息會被永久刪除，無法復原；用量紀錄會保留。',
       path: function (id) { return '/conversations/' + encodeURIComponent(id) + '/delete'; }, done: '已刪除對話。'
     }
   };
-  var NO_CONFIRM = { code: 'ADMIN_CONFIRM', title: '', confirmText: '確認', needsReason: false, needsTier: false, intro: '' };
+  var NO_CONFIRM = { code: 'ADMIN_CONFIRM', title: '', confirmText: '確認', needsReason: false, needsTier: false, needsWallet: false, intro: '' };
+  var BUCKETS = ['free', 'paid'];
 
   function onAuthLost() { window.location.assign(Auth.loginUrlFor('/admin')); }
 
@@ -221,7 +227,8 @@
         return {
           suspend: manageable && SUSPENDABLE.indexOf(current.status) !== -1,
           unsuspend: manageable && current.status === 'suspended',
-          tier: manageable && current.status !== 'deletion_pending'
+          tier: manageable && current.status !== 'deletion_pending',
+          wallet: manageable && current.status !== 'deletion_pending'
         };
       });
       var userNote = Vue.computed(function () {
@@ -312,8 +319,8 @@
       // ---- 危險操作的確認視窗 -----------------------------------------------------------------
       var confirmOpen = Vue.ref(false);
       var confirmState = Vue.reactive({
-        kind: '', targetId: '', targetLabel: '', currentTier: '', reason: '', tier: '', password: '', busy: false,
-        error: { reason: '', password: '', tier: '', general: '' }
+        kind: '', targetId: '', targetLabel: '', currentTier: '', reason: '', tier: '', bucket: 'paid', delta: '', password: '', busy: false,
+        error: { reason: '', password: '', tier: '', bucket: '', delta: '', general: '' }
       });
       var confirmSpec = Vue.computed(function () { return CONFIRMS[confirmState.kind] || NO_CONFIRM; });
       var tierOptions = Vue.computed(function () {
@@ -326,6 +333,8 @@
         confirmState.error.reason = '';
         confirmState.error.password = '';
         confirmState.error.tier = '';
+        confirmState.error.bucket = '';
+        confirmState.error.delta = '';
         confirmState.error.general = '';
       }
 
@@ -338,10 +347,12 @@
         confirmState.password = '';
         confirmState.busy = false;
         confirmState.tier = kind === 'tier' ? (TIERS.filter(function (value) { return value !== target.tier; })[0] || '') : '';
+        confirmState.bucket = 'paid';
+        confirmState.delta = '';
         clearConfirmErrors();
         confirmOpen.value = true;
         window.setTimeout(function () {                      // 把焦點放在第一個要填的欄位
-          var field = document.getElementById(kind === 'tier' ? 'admin-confirm-tier' : (CONFIRMS[kind].needsReason ? 'admin-confirm-reason' : 'admin-confirm-password'));
+          var field = document.getElementById(kind === 'tier' ? 'admin-confirm-tier' : (kind === 'wallet' ? 'admin-confirm-bucket' : (CONFIRMS[kind].needsReason ? 'admin-confirm-reason' : 'admin-confirm-password')));
           if (field) { field.focus(); }
         }, 60);
       }
@@ -361,6 +372,7 @@
       function askSuspend() { if (user.value) { openConfirm('suspend', userTarget()); } }
       function askUnsuspend() { if (user.value) { openConfirm('unsuspend', userTarget()); } }
       function askTier() { if (user.value) { openConfirm('tier', userTarget()); } }
+      function askWallet() { if (user.value) { openConfirm('wallet', userTarget()); } }
       function askUnlock(publicId, displayName) { openConfirm('unlock', { id: publicId, label: displayName }); }
       function askLift(publicId, displayName) { openConfirm('lift', { id: publicId, label: displayName }); }
       function askDeleteConversation() {
@@ -398,6 +410,8 @@
         if (fields.password) { confirmState.error.password = fields.password; return; }
         if (fields.reason) { confirmState.error.reason = fields.reason; return; }
         if (fields.tier) { confirmState.error.tier = fields.tier; return; }
+        if (fields.bucket) { confirmState.error.bucket = fields.bucket; return; }
+        if (fields.delta) { confirmState.error.delta = fields.delta; return; }
         if (error.code === 'no_password') { confirmState.error.password = error.message; return; }
         confirmState.error.general = error.message || '操作失敗，請稍後再試。';
       }
@@ -419,6 +433,12 @@
           confirmState.error.tier = '請選擇新的會員等級。';
           invalid = true;
         }
+        var delta = null;
+        if (spec.needsWallet) {
+          if (BUCKETS.indexOf(confirmState.bucket) === -1) { confirmState.error.bucket = '請選擇要調整的餘額。'; invalid = true; }
+          delta = fmt.parseCoinDelta(String(confirmState.delta));
+          if (delta === null) { confirmState.error.delta = '增減量必須是不為 0 的整數（扣除請用負數，例如 -30）。'; invalid = true; }
+        }
         if (!confirmState.password) {
           confirmState.error.password = '請輸入您的密碼。';
           invalid = true;
@@ -429,6 +449,7 @@
         confirmState.password = '';                            // 送出的當下立即清空，不論結果
         if (spec.needsReason) { body.reason = reason; }
         if (spec.needsTier) { body.tier = confirmState.tier; }
+        if (spec.needsWallet) { body.bucket = confirmState.bucket; body.delta = delta; }
         confirmState.busy = true;
 
         return request('post', spec.path(targetId), { data: body }).then(function (data) {
@@ -468,7 +489,7 @@
         openUserById: openUserById, refreshUser: refreshUser, lookupUser: lookupUser,
         convOpen: convOpen, conv: conv, openConversation: openConversation, viewConversationUser: viewConversationUser,
         confirmOpen: confirmOpen, confirmState: confirmState, confirmSpec: confirmSpec, tierOptions: tierOptions,
-        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askUnlock: askUnlock, askLift: askLift,
+        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askWallet: askWallet, askUnlock: askUnlock, askLift: askLift,
         askDeleteConversation: askDeleteConversation,
         onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm
       };

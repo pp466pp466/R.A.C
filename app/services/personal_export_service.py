@@ -11,6 +11,9 @@
   它是來源劇本作者的內容，存檔只帶該劇本的標題。劇本與存檔也以產生器逐筆、逐頁讀取，記憶體用量與總量無關。
   **自己的送審紀錄**（結果、被拒絕的類別、時間；CSV 為 `script_submissions.csv`）：紀錄本來就只有固定列舉與時間，沒有任何劇本文字；
   劇本區塊也**不含**審查結果的欄位（判定、類別、審查時間與內容雜湊）——那是系統的判斷而不是使用者提供的資料。
+  **自己的遊戲幣錢包**（game-wallet）：兩個餘額與**全部**帳本列（含已退回的預扣與退回列，與記錄頁不同）；每筆只有種類、免費與付費的增減量、
+  異動後的兩個餘額、預扣的結算結果、關聯存檔的對外識別碼與時間，**不含**冪等鍵與內部編號；JSON 為 `wallet` 區塊，CSV 為 `wallet_entries.csv`。
+  從未存取過錢包的使用者得到兩個 0 與空的帳本，**匯出本身不會建立錢包或發放贈幣**。
   **不含**密碼雜湊、`token_version`、驗證權杖、Google 的識別值、內部整數編號、種子鍵、內容雜湊、帳號鎖定的計次，以及意圖、實體、信心值、
   建議動作、對話狀態與回合的結構化輸出等模型內部欄位（不是使用者提供的資料，而是系統推論的副產品）。
 """
@@ -34,6 +37,7 @@ from app.repositories.script_submission_repository import ScriptSubmissionReposi
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.wallet_repository import WalletRepository
 from app.services.age_policy import taipei_today
 from app.services.current_user import CurrentUser, iso_utc
 from app.services.errors import Unauthenticated, ValidationError
@@ -66,6 +70,7 @@ SESSION_COLUMNS = (
 PROTAGONIST_CARD_COLUMNS = ("personality", "appearance", "occupation", "speech_style", "hidden_trait")
 PROTAGONIST_ANCHOR_COLUMNS = {"anchor_kind": "kind", "anchor_ref": "ref", "anchor_text": "text"}
 TURN_COLUMNS = ("session_id", "script_title", "seq", "turn_number", "status", "user_action", "story", "created_at")
+WALLET_ENTRY_COLUMNS = ("kind", "free_delta", "paid_delta", "free_after", "paid_after", "resolution", "session_id", "created_at")
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
 
@@ -98,7 +103,9 @@ class PersonalExportService:
         sessions: SessionRepository,
         submissions: ScriptSubmissionRepository,
         clock: Callable[[], datetime],
+        wallets: WalletRepository | None = None,
     ) -> None:
+        self._wallets = wallets
         self._scripts = scripts
         self._submissions = submissions
         self._sessions = sessions
@@ -217,6 +224,22 @@ class PersonalExportService:
             head.update({column: anchor.get(key) for column, key in PROTAGONIST_ANCHOR_COLUMNS.items()})
         return head
 
+    def _wallet_balances(self, user_id: int) -> dict[str, int]:
+        """兩個餘額；沒有錢包（或沒有組裝錢包元件）為 0。唯讀，不建立錢包。"""
+        state = self._wallets.state(user_id) if self._wallets is not None else None
+        return {"free_balance": 0, "paid_balance": 0} if state is None else {"free_balance": state.free_balance, "paid_balance": state.paid_balance}
+
+    def _wallet_rows(self, user_id: int) -> Iterator[dict[str, Any]]:
+        """全部帳本列（含已退回的預扣與退回列），依序號；沒有冪等鍵、內部編號與退回列指向的鍵。"""
+        if self._wallets is None:
+            return
+        for row in self._wallets.iter_entries(user_id, page_size=PAGE_SIZE):
+            yield {
+                "kind": row.kind, "free_delta": row.free_delta, "paid_delta": row.paid_delta, "free_after": row.free_after,
+                "paid_after": row.paid_after, "resolution": row.resolution, "session_id": row.session_public_id,
+                "created_at": self._when(row.created_at),
+            }
+
     def _turns(self, user_id: int, session_public_id: str):
         for turn in self._sessions.export_turns(user_id, session_public_id):
             yield {**turn, "created_at": self._when(turn["created_at"]), "updated_at": self._when(turn["updated_at"])}
@@ -261,6 +284,10 @@ class PersonalExportService:
         for index, row in enumerate(self._submission_rows(user.id)):
             put(("," if index else "") + dump(row))
         put(']')
+        put(',"wallet":' + dump(self._wallet_balances(user.id))[:-1] + ',"entries":[')
+        for index, row in enumerate(self._wallet_rows(user.id)):
+            put(("," if index else "") + dump(row))
+        put(']}')
         put('}')
 
     # ---- CSV（zip）------------------------------------------------------------------
@@ -322,6 +349,12 @@ class PersonalExportService:
                         for turn in self._turns(user.id, save["id"]):
                             cells = {**turn, "session_id": save["id"], "script_title": save["script_title"]}
                             writer.writerow([csv_safe(cells[name]) for name in TURN_COLUMNS])
+            with archive.open("wallet_entries.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(WALLET_ENTRY_COLUMNS)
+                    for row in self._wallet_rows(user.id):
+                        writer.writerow([csv_safe(row[name]) for name in WALLET_ENTRY_COLUMNS])
             with archive.open("messages.csv", "w") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
                     writer = csv.writer(text)

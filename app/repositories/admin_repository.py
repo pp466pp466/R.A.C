@@ -24,6 +24,7 @@ from app.models.script_submission import SUBMISSION_LIFTED
 from app.models.user import (
     MEMBER_TIERS, STATUS_ACTIVE, STATUS_SUSPENDED, User,
 )
+from app.models.wallet import Wallet
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.lock_strike_repository import LockStrikeRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
@@ -346,6 +347,11 @@ class AdminRepository:
             .limit(limit).offset(offset)
         )
         return [AppealRow(*row[:6], restriction="locked" if row[6] is not None else "suspended") for row in rows]
+
+    def wallet_balances(self, user_id: int) -> tuple[int, int]:
+        """管理員檢視用的唯讀餘額（免費, 付費）；沒有錢包回傳（0, 0），**不建立錢包**，也不處理逾時的預扣。只有兩個整數，沒有帳本。"""
+        row = self._session.execute(select(Wallet.free_balance, Wallet.paid_balance).where(Wallet.user_id == user_id)).one_or_none()
+        return (0, 0) if row is None else (int(row[0]), int(row[1]))
 
     def _update_user(self, user: User, statement) -> bool:
         """先 flush 以保留尚未寫入的修改，執行條件式 UPDATE，讓物件在下次存取時重新讀取；回傳是否真的寫入。"""

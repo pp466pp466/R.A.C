@@ -17,6 +17,7 @@ CASCADED_FROM_USERS = {
     "lock_strikes.user_id", "lock_appeals.user_id",     # google-first-login：鎖定計次與申訴（申訴是個資，隨帳號刪除）
     "scripts.creator_id", "sessions.user_id",           # rpg-data-and-script：劇本與存檔（玩家文字，隨帳號刪除；失敗時偏向刪除）
     "script_submissions.user_id",                       # rpg-script-authoring：送審紀錄（只有結果、類別與時間，隨帳號刪除）
+    "wallets.user_id", "wallet_entries.user_id",        # game-wallet：錢包與帳本（個資，隨帳號刪除；不匿名化保留）
 }
 CASCADED_FROM_CONVERSATIONS = {"chat_messages.conversation_id"}
 # rpg-data-and-script：往下的串聯層。每一層都要登記，新增的子表才不會變成沒人負責的個資

@@ -96,7 +96,9 @@ def test_the_profile_has_exactly_the_minimum_fields_and_today_usage(kit):
     view = kit.service.get_user(admin, member.public_id)
     assert set(view) == {
         "public_id", "display_name", "email", "role", "status", "tier", "email_verified", "created_at", "last_login_at", "usage",
+        "wallet",                                                                  # game-wallet：只有兩個餘額
     }
+    assert view["wallet"] == {"free_balance": 0, "paid_balance": 0}
     assert (view["tier"], view["role"], view["status"], view["email_verified"]) == ("plus", "user", "active", False)
     assert set(view["usage"]) == {"tier", "daily", "per_minute_limit", "conversations", "suspended_until"}
     assert view["usage"]["daily"]["limit"] == 100 and view["usage"]["per_minute_limit"] == 10

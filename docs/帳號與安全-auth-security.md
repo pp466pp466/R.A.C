@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-04 ｜ 對應 change：rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-09 ｜ 對應 change：game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -186,6 +186,9 @@ flowchart TD
 | `/api/account/cancel-deletion` | POST | 是（含受限狀態） | 寬限期內撤銷刪除，還原為申請前的狀態 |
 | `/api/account/export` | POST | 是 | 匯出自己的帳號資料與全部對話（JSON 或 CSV zip）；受限狀態不可用 |
 | `/api/account/nickname` | PUT | 是 | 更改公開暱稱（2 至 20 字；短代號不變）；不合格只回欄位錯誤 |
+| `/api/wallet` | GET | 是 | 遊戲幣餘額與簽到狀態（第 7f 節）；先完成年齡確認，否則 403 `age_confirmation_required` |
+| `/api/wallet/checkin` | POST | 是 | 每日簽到；會有幣作廢時須帶 `confirm_overflow` |
+| `/api/wallet/entries` | GET | 是 | 遊戲幣記錄（游標分頁） |
 | `/api/sessions/setup/<version_id>` | GET | 是 | 序章與創角所需的資料（背景故事、可聯繫的人物／地點／里程碑、欄位上限、今日剩餘的生成次數）；可見性與內容模式與開存檔相同 |
 | `/api/sessions/protagonist/suggest` | POST | 是 | AI 生成主角的預覽（無狀態；自我介紹不保存）；每日次數有上限，失敗回 503 讓前端改走自創 |
 | `/api/sessions` | POST | 是 | 開存檔：主角與錨定事實的驗證、規則層與模型層審查通過才寫入；管理員與各會員等級不豁免年齡閘門 |
@@ -204,7 +207,7 @@ flowchart TD
     Admin -->|"否"| N404["404（與不存在的路徑逐字相同）<br/>記錄 admin.access_denied（只有內部編號）"]
     Admin -->|"是"| Kind{"操作種類"}
     Kind -->|"讀取：總覽、清單、查詢、對話全文、失敗原文"| Read["先寫稽核再回傳內容<br/>稽核寫入失敗就不回傳"]
-    Kind -->|"危險：停權、解除、調整等級、刪除對話"| Pw["confirm_password<br/>管理員自己的密碼"]
+    Kind -->|"危險：停權、解除、調整等級、調整遊戲幣、刪除對話"| Pw["confirm_password<br/>管理員自己的密碼"]
     Pw -->|"錯誤或鎖定"| Fail["400，欄位 password<br/>寫 reauth.failed 並保存"]
     Pw -->|"通過"| Do["條件式 UPDATE 或刪除<br/>稽核與動作同一個交易"]
 ```
@@ -216,7 +219,7 @@ flowchart TD
 | 找使用者 | 主要入口是警告（總覽的今日警告 → 被標記對話 → 看使用者）；信箱精確查詢是次要入口、供客服反應時使用；沒有使用者清單與模糊搜尋 |
 | 重新輸入密碼 | `AuthService.confirm_password`：與登入共用失敗計數與鎖定（連續 5 次鎖定 15 分鐘），鎖定中即使正確也拒絕且訊息相同；成功不重設計數；沒有設定密碼的管理員不能執行（`no_password`） |
 | 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
-| 稽核 | `admin_audit_logs`：15 個固定動作，只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
+| 稽核 | `admin_audit_logs`：16 個固定動作，只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
 | 回應 | `/admin` 與 `/api/admin/` 一律 `Cache-Control: no-store`；非 GET 須通過 CSRF |
 
 `/api/admin/*` 端點（全部需要登入且是管理員；`POST` 另需 CSRF）：
@@ -240,6 +243,7 @@ flowchart TD
 | `/api/admin/users/<public_id>/unlock` | POST | 解除鎖定（重新輸入密碼）；清計次、申訴標為已處理、寫 `account.unlock` |
 | `/api/admin/publish-suspended` | GET | 目前被暫停發佈的玩家帳號（識別碼、顯示名稱、暫停時間；不含 email 與暱稱） |
 | `/api/admin/users/<public_id>/lift-publish-suspension` | POST | 解除暫停發佈（重新輸入密碼）；補一筆 `lifted` 送審紀錄使連續被拒中斷、申訴標為已處理、寫 `publish.lift` |
+| `/api/admin/users/<public_id>/wallet/adjust` | POST | 調整玩家的遊戲幣餘額（`bucket`、`delta`、`reason`、密碼）；不受免費幣上限限制，不能使餘額低於 0（409 `insufficient_coins`）；稽核 `wallet.adjust` 與調整同一個交易 |
 
 頁面：`/admin`（只有管理員的顯示名稱，所有資料經由 API 取得；前端見 [前端結構-frontend.md](前端結構-frontend.md)）。
 
@@ -379,6 +383,14 @@ flowchart TD
 - **用量**：生成與重新生成有次數上限（存資料庫的設定表，每次使用時現讀，以 flask 指令修改並寫稽核）；其 token 計入全站每日上限，不計入每日對話輪數。
 - **管理員的可讀範圍**：不變。主角的角色卡、錨定事實不在管理員預設可檢視的範圍內（`tests/test_protagonist_lifecycle.py` 守住：管理員沒有任何路徑讀到玩家的存檔與主角，後台的 Repository 與 Service 從不提到主角）。
 - **實作現況**：三支端點在 `/api/sessions/*`，每個公開方法先過 `AccessPolicy.require_chat_access`；別人的草稿與不存在的版本逐字相同的 404；劇本宣告的內容模式高於玩家生效的模式回 403 `content_tier_restricted`。審查不可用一律擋下（503 `review_unavailable`），`flag` 放行；規則層比劇本更嚴的一點是，未成年主角自己的文字出現露骨用語即直接拒絕。
+
+## 7f. 遊戲幣的存取與稽核（game-wallet）
+
+- **誰能用**：`/api/wallet/*` 用 `require_login()`（預設拒絕受限登入狀態）：待確認年齡 403 `age_confirmation_required`、鎖定 403 `account_locked`，所以尚未確認年齡的帳號也不會領到任何幣。這不是 AI 功能，不另做 `require_chat_access`；管理員與各會員等級一視同仁（等級只影響額度，幣價不因等級而異）。
+- **玩家無法經 HTTP 花費或增加餘額**（簽到除外）：預扣、結算與退回只由伺服器端的回合流程（RC-2）呼叫 `WalletService`。
+- **贈幣時機**：首次註冊的 200 免費幣在年齡確認通過時由 `AuthService` 呼叫錢包回呼發放（帳號 24 小時內未確認會被刪除，不會送出又收不回）；回呼失敗不影響年齡確認，記 `wallet.grant_deferred`，由下一次存取錢包補發，冪等鍵相同；既有玩家同樣在第一次存取時補發。
+- **管理員調整**：高風險，與停權、調整等級同一套重新輸入密碼（失敗寫 `reauth.failed`）；稽核 `wallet.adjust` 的細節只有餘額種類、增減量與調整後的餘額，原因放在理由欄；目標只能是一般使用者；後台檢視餘額不觸發逾時預扣的清理。
+- **個資**：錢包與帳本視為個資，隨帳號抹除（`CASCADE`）、納入個人資料匯出，不在管理員預設可讀的範圍（只有 `wallet.adjust` 的結果會顯示在使用者檢視）；日誌只記內部編號與整數。
 
 ## 8. 個資與保存
 

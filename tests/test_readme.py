@@ -199,6 +199,34 @@ def test_readme_protagonist_table_lists_exactly_the_registered_session_routes_an
         assert needed in section, needed
 
 
+def test_readme_wallet_table_lists_exactly_the_registered_routes_and_both_wallet_commands():
+    """遊戲幣的端點表必須與實際註冊的 `/api/wallet` 路由完全一致；兩個指令、五個設定鍵與錯誤代碼都要記載。"""
+    from app import create_app
+    from app.config import load_config
+    from app.services.runtime_limits import WALLET_LIMIT_KEYS
+
+    section = readme_section("遊戲幣錢包（game-wallet）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/api/wallet[^`]*`", cells[0]):
+            documented.add((cells[0].strip("`"), cells[1]))
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual = {
+        (rule.rule, method) for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/wallet")
+        for method in rule.methods - {"HEAD", "OPTIONS"}
+    }
+    assert len(actual) == 3, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+    for command in ("set-wallet-setting", "show-wallet-settings"):
+        assert command in section, command
+    for key in WALLET_LIMIT_KEYS:
+        assert f"`{key}`" in section, key
+    for code in ("insufficient_coins", "checkin_overflow", "already_checked_in", "wallet_busy"):
+        assert code in section, code
+
+
 def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():
     """客服的端點與頁面表格必須與實際註冊的路由完全一致；同一路徑的不同方法各佔一列。"""
     from app import create_app
@@ -241,7 +269,7 @@ def test_readme_admin_endpoint_tables_list_exactly_the_registered_routes():
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/admin/") or rule.endpoint.startswith("admin_pages."):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 18, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 19, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 

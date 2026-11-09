@@ -20,12 +20,13 @@ from app.models.admin_audit_log import (
     ACTION_ACCOUNT_UNLOCK, ACTION_APPEAL_READ, ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ,
     ACTION_PUBLISH_LIFT,
     ACTION_REAUTH_FAILED, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
-    MAX_REASON_CHARS,
+    ACTION_WALLET_ADJUST, MAX_REASON_CHARS,
 )
 from app.models.user import (
     MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
     USER_STATUSES, User,
 )
+from app.models.wallet import BUCKET_FREE, BUCKETS
 from app.observability import admin_events, script_events, security_events
 from app.repositories.admin_audit_repository import AdminAuditRepository
 from app.repositories.admin_repository import AdminRepository, ReviewableConversation
@@ -39,6 +40,7 @@ from app.services.input_cleaning import clean_single_line
 from app.services.normalization import canonical_email, is_valid_email
 from app.services.quota_policy import suspension_until, taipei_day_bounds
 from app.services.usage_service import UsageService
+from app.services.wallet_service import WalletService
 
 # 客服在這兩種情況都會告訴使用者「管理員會看到」，所以兩者都算意見回饋（使用者的決定；只有 `unknown` 的對話不算）
 FEEDBACK_INTENTS = (INTENT_COMPLAINT_FEEDBACK, INTENT_HUMAN_HANDOFF)
@@ -77,7 +79,9 @@ class AdminService:
         confirm_password: Callable[[CurrentUser, object], None],
         persist_on_error: Callable[[], None],
         clock: Callable[[], datetime],
+        wallet: WalletService | None = None,
     ) -> None:
+        self._wallet = wallet                              # 調整遊戲幣餘額用（game-wallet）；沒有組裝時該操作不可用
         self._policy = policy
         self._admins = admins
         self._audit = audit
@@ -214,6 +218,35 @@ class AdminService:
         if not self._admins.change_tier(user, tier=tier):
             raise Conflict("這位使用者的等級已經改變，請重新整理後再試。", code="state_changed")
         self._record(admin, ACTION_USER_CHANGE_TIER, target_user=user, detail={"from_tier": previous, "to_tier": tier}, changed=True)
+        return self._user_view(user)
+
+    def adjust_wallet(
+        self, admin: CurrentUser, public_id: str, *, bucket: object, delta: object, reason: object, password: object
+    ) -> dict[str, Any]:
+        """調整一位玩家的遊戲幣餘額（高風險：重新輸入密碼；稽核與調整同一個交易）。調整不受免費幣上限限制；
+        該餘額會因此低於 0 時拋出 `InsufficientCoins`（409），餘額與稽核都不變。"""
+        self._policy.require_admin(admin)
+        if self._wallet is None:
+            raise RuntimeError("沒有設定錢包元件，無法調整遊戲幣。")
+        errors: dict[str, str] = {}
+        if bucket not in BUCKETS:
+            errors["bucket"] = "餘額種類必須是 free 或 paid。"
+        if isinstance(delta, bool) or not isinstance(delta, int) or delta == 0:
+            errors["delta"] = "增減量必須是不為 0 的整數。"
+        cleaned_reason = ""
+        try:
+            cleaned_reason = self._reason(reason)
+        except ValidationError as error:
+            errors.update(error.fields)
+        if errors:
+            raise ValidationError(fields=errors)
+        user = self._manageable_target(public_id)
+        self._confirm(admin, password, ACTION_WALLET_ADJUST, target_user=user)
+        free, paid = self._wallet.adjust(user.id, bucket=bucket, delta=delta)                     # type: ignore[arg-type]
+        self._record(
+            admin, ACTION_WALLET_ADJUST, target_user=user, reason=cleaned_reason,
+            detail={"bucket": bucket, "delta": delta, "balance_after": free if bucket == BUCKET_FREE else paid}, changed=True,
+        )
         return self._user_view(user)
 
     # =========================================================================
@@ -437,4 +470,10 @@ class AdminService:
             "status": user.status, "tier": user.member_tier, "email_verified": user.email_verified_at is not None,
             "created_at": _iso(user.created_at), "last_login_at": _iso(user.last_login_at),
             "usage": usage.to_dict(),
+            "wallet": self._wallet_view(user),
         }
+
+    def _wallet_view(self, user: User) -> dict[str, int]:
+        """兩個餘額（唯讀；沒有錢包為 0，不建立錢包）。沒有帳本、沒有任何其他錢包資料。"""
+        free, paid = self._admins.wallet_balances(user.id)
+        return {"free_balance": free, "paid_balance": paid}

@@ -207,6 +207,12 @@ status, body, _ = call("POST", "/api/sessions/protagonist/suggest", {"version_id
 report("the protagonist suggestion API needs a login", status == 401, str(status))
 status, body, _ = call("POST", "/api/sessions", {"version_id": "x"})
 report("starting a session needs a login", status == 401, str(status))
+status, body, _ = call("GET", "/api/wallet")
+report("the wallet API needs a login", status == 401 and body["error"]["code"] == "unauthorized", str(status))
+status, body, _ = call("POST", "/api/wallet/checkin", {})
+report("the daily check-in needs a login", status == 401, str(status))
+status, body, _ = call("GET", "/api/wallet/entries")
+report("the wallet history needs a login", status == 401, str(status))
 status, _, _ = call("GET", "/")
 report("the home page is public for an anonymous visitor", status == 200)
 
@@ -451,6 +457,7 @@ def verify_member_flow(image: str) -> None:
         check("[會員流程] 遷移一路升級到 0012（內容模式與 RPG 資料表）", "0012_rpg_data_and_script" in out, out.strip()[-120:].replace("\n", " "))
         check("[劇本創作] 遷移一路升級到 0013（暱稱、審查欄位、送審紀錄與營運限制）", "0013_rpg_script_authoring" in out, out.strip()[-120:].replace("\n", " "))
         check("[玩家主角] 遷移一路升級到 0014（存檔的主角資料與生成次數限制）", "0014_rpg_character_creation" in out, out.strip()[-120:].replace("\n", " "))
+        check("[遊戲幣] 遷移一路升級到 0015（錢包、帳本與五個設定）", "0015_game_wallet" in out, out.strip()[-120:].replace("\n", " "))
 
         # 容器內沒有會呼叫 Gemini 的端點可以直接驗年齡閘門；管理員指令刻意不代為填寫年齡，所以用它建立一個「尚未完成」的帳號
         code, out = docker("exec", "-i", name, "python", "-m", "flask", "--app", "wsgi", "create-admin",
@@ -495,6 +502,7 @@ def verify_member_flow(image: str) -> None:
         verify_retention_commands(name)
         verify_seed_command(name)
         verify_script_authoring_commands(name)
+        verify_wallet_commands(name)
         code, out = docker("exec", name, "sh", "-c", "test ! -e /app/.env && test ! -e /app/tests && echo clean")
         check("[會員流程] 映像內仍然沒有 .env 與測試", code == 0 and out.strip() == "clean", out.strip()[:120])
     finally:
@@ -562,6 +570,42 @@ def verify_script_authoring_commands(name: str) -> None:
     check("[劇本創作] purge-expired-data 預覽含劇本送審紀錄，只有類別名稱與筆數",
           code == 0 and "預覽" in preview and "劇本送審紀錄：0 筆" in preview and "未改變" in preview,
           preview.strip()[-240:].replace("\n", " | "))
+
+
+# 遊戲幣的五個設定鍵（與 app/services/runtime_limits.py 的 WALLET_LIMIT_KEYS 相同；這支腳本在主機上執行，不匯入應用程式）
+WALLET_SETTING_KEYS = (
+    "coin.turn_cost.standard", "coin.signup_grant", "coin.checkin_grant", "coin.free_cap", "coin.hold_timeout_seconds",
+)
+
+
+def verify_wallet_commands(name: str) -> None:
+    """遊戲幣（game-wallet）：兩張新表存在、五個設定鍵由遷移寫入，`flask show-wallet-settings` 列出、`set-wallet-setting` 修改後可立即讀回，
+    且兩組指令各自拒絕對方的鍵。輸出只有鍵與數值。資料庫已由前面的 alembic 升級到 head。"""
+    flask = ("exec", name, "python", "-m", "flask", "--app", "wsgi")
+    code, schema = docker(
+        "exec", name, "python", "-c",
+        "from app import create_app; from sqlalchemy import inspect; "
+        "app = create_app(); tables = set(inspect(app.extensions['db_engine']).get_table_names()); "
+        "print('wallet-tables-ok' if {'wallets', 'wallet_entries'} <= tables else 'wallet-tables-missing')",
+    )
+    check("[遊戲幣] 資料庫有 wallets 與 wallet_entries 兩張表", code == 0 and "wallet-tables-ok" in schema, schema.strip()[-160:])
+    code, shown = docker(*flask, "show-wallet-settings", timeout=120)
+    listed = [key for key in WALLET_SETTING_KEYS if f"  {key} = " in shown]
+    check("[遊戲幣] show-wallet-settings 列出全部五個鍵，且都來自遷移寫入的資料（沒有保底預設）",
+          code == 0 and len(listed) == len(WALLET_SETTING_KEYS) and "保底預設" not in shown, shown.strip()[-240:].replace("\n", " | "))
+    code, changed = docker(*flask, "set-wallet-setting", "coin.checkin_grant", "150", timeout=120)
+    check("[遊戲幣] set-wallet-setting 修改後輸出舊值與新值", code == 0 and "coin.checkin_grant：200 → 150" in changed, changed.strip()[-160:])
+    code, read_back = docker(*flask, "show-wallet-settings", timeout=120)
+    check("[遊戲幣] 修改立即生效：重新讀取看到新的值（不必重新部署）", code == 0 and "coin.checkin_grant = 150" in read_back,
+          read_back.strip()[-240:].replace("\n", " | "))
+    code, refused = docker(*flask, "set-wallet-setting", "coin.checkin_grant", "not-a-number", timeout=120)
+    check("[遊戲幣] 不合法的值被拒絕且不改變現有的值", code != 0, refused.strip()[-160:])
+    code, wrong_group = docker(*flask, "set-wallet-setting", "script_limit.free", "5", timeout=120)
+    check("[遊戲幣] set-wallet-setting 拒絕劇本組的鍵並指出該用哪個指令", code != 0 and "set-script-limit" in wrong_group, wrong_group.strip()[-200:])
+    code, wrong_group = docker(*flask, "set-script-limit", "coin.free_cap", "5", timeout=120)
+    check("[遊戲幣] set-script-limit 拒絕遊戲幣組的鍵並指出該用哪個指令", code != 0 and "set-wallet-setting" in wrong_group, wrong_group.strip()[-200:])
+    code, restored = docker(*flask, "set-wallet-setting", "coin.checkin_grant", "200", timeout=120)
+    check("[遊戲幣] 還原為預設值", code == 0 and "coin.checkin_grant：150 → 200" in restored, restored.strip()[-160:])
 
 
 # 在容器內放入一個 400 天沒登入的帳號（程式碼必須是 ASCII）

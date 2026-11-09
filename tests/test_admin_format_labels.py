@@ -14,6 +14,7 @@ from app.models.chat import MSG_STATUS_FALLBACK, MSG_STATUS_OK
 from app.models.llm_call_log import CALL_KINDS
 from app.models.lock_strike import STRIKE_KINDS
 from app.models.user import MEMBER_TIERS, USER_STATUSES
+from app.models.wallet import BUCKETS
 
 NODE = shutil.which("node")
 FORMAT_JS = "app/static/js/admin/admin-format.js"
@@ -41,6 +42,7 @@ def labels() -> dict[str, dict[str, str]]:
         ("messageStatus", (MSG_STATUS_OK, MSG_STATUS_FALLBACK)),
         ("role", ("user", "admin")),
         ("messageRole", ("user", "assistant")),
+        ("bucket", BUCKETS),                      # game-wallet：遊戲幣的兩個餘額
     ],
 )
 def test_the_frontend_labels_cover_exactly_the_backend_values(labels, group, expected):

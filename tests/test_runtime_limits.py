@@ -18,12 +18,14 @@ from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.services.runtime_limits import LIMIT_KEYS, LIMIT_SPECS, LimitError, RuntimeLimits
 from tests.support.auth import FakeClock
 
-ALL_KEYS = (
+SCRIPT_KEYS = (
     "script_limit.free", "script_limit.plus", "script_limit.vip",
     "script_submit_daily.free", "script_submit_daily.plus", "script_submit_daily.vip",
     "protagonist_suggest_daily.free", "protagonist_suggest_daily.plus", "protagonist_suggest_daily.vip",
     "script_reject_streak",
 )
+WALLET_KEYS = ("coin.turn_cost.standard", "coin.signup_grant", "coin.checkin_grant", "coin.free_cap", "coin.hold_timeout_seconds")
+ALL_KEYS = SCRIPT_KEYS + WALLET_KEYS
 
 
 def make_limits(session, audit=None, clock=None):
@@ -36,9 +38,12 @@ def put(session, key, value):
 
 
 def migration_initial_limits() -> dict[str, int]:
-    """各遷移寫入的初始限制合計（0013 的七個加上 0014 的三個）。"""
+    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個加上 0015 的五個）。"""
     limits: dict[str, int] = {}
-    for filename, name in (("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014")):
+    for filename, name in (
+        ("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014"),
+        ("20261105_0015_game_wallet.py", "migration_0015"),
+    ):
         spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / "migrations" / "versions" / filename)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -50,8 +55,10 @@ def migration_initial_limits() -> dict[str, int]:
 # ---- 鍵、範圍與初始值 -----------------------------------------------------------------
 
 
-def test_the_ten_keys_are_fixed():
+def test_the_fifteen_keys_are_fixed_in_two_groups():
     assert LIMIT_KEYS == ALL_KEYS and set(LIMIT_SPECS) == set(ALL_KEYS)
+    assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "script"} == set(SCRIPT_KEYS)
+    assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "wallet"} == set(WALLET_KEYS)
 
 
 def test_the_protagonist_suggestion_keys_range_from_0_to_100():
@@ -68,6 +75,8 @@ def test_the_fallback_defaults_equal_the_values_the_migration_writes():
         "script_submit_daily.free": 3, "script_submit_daily.plus": 5, "script_submit_daily.vip": 10,
         "protagonist_suggest_daily.free": 5, "protagonist_suggest_daily.plus": 15, "protagonist_suggest_daily.vip": 40,
         "script_reject_streak": 3,
+        "coin.turn_cost.standard": 30, "coin.signup_grant": 200, "coin.checkin_grant": 200, "coin.free_cap": 1000,
+        "coin.hold_timeout_seconds": 180,
     }
 
 
@@ -157,6 +166,8 @@ def test_rows_reports_every_key_with_its_effective_value_and_where_it_comes_from
     put(member_session, "script_limit.vip", 9999)                                       # 不合法
     rows = {row.key: row for row in make_limits(member_session).rows()}
     assert list(rows) == list(ALL_KEYS)
+    assert list(r.key for r in make_limits(member_session).rows("script")) == list(SCRIPT_KEYS)
+    assert list(r.key for r in make_limits(member_session).rows("wallet")) == list(WALLET_KEYS)
     assert rows["script_limit.plus"].value == 20 and rows["script_limit.plus"].from_database
     assert rows["script_limit.vip"].value == 30 and not rows["script_limit.vip"].from_database
     assert rows["script_limit.free"].value == 3 and not rows["script_limit.free"].from_database
@@ -293,7 +304,7 @@ def test_the_show_command_lists_the_ten_keys_and_marks_the_fallback_defaults(app
     result = runner.invoke(args=["show-script-limits"])
     assert result.exit_code == 0
     lines = [line for line in result.output.splitlines() if line.strip()]
-    assert [line.split()[0] for line in lines] == list(ALL_KEYS)
+    assert [line.split()[0] for line in lines] == list(SCRIPT_KEYS)
     by_key = {line.split()[0]: line for line in lines}
     assert "script_limit.plus = 12" in by_key["script_limit.plus"] and "保底預設" not in by_key["script_limit.plus"]
     assert "script_limit.free = 3" in by_key["script_limit.free"] and "保底預設" in by_key["script_limit.free"]
@@ -319,3 +330,71 @@ def test_no_controller_calls_the_limit_setter():
         text = path.read_text(encoding="utf-8-sig")
         assert not re.search(r"get_runtime_limits\(\)\s*\.\s*set\(", text), f"{path.name} 不得修改營運限制"
         assert "LimitError" not in text and "set_value" not in text, path.name
+
+
+# ---- 遊戲幣組（game-wallet）---------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "key, default, low, high",
+    [
+        ("coin.turn_cost.standard", 30, 1, 10_000), ("coin.signup_grant", 200, 0, 100_000), ("coin.checkin_grant", 200, 0, 100_000),
+        ("coin.free_cap", 1000, 0, 1_000_000), ("coin.hold_timeout_seconds", 180, 60, 1800),
+    ],
+)
+def test_the_wallet_keys_have_their_documented_defaults_and_ranges(key, default, low, high):
+    spec = LIMIT_SPECS[key]
+    assert (spec.default, spec.minimum, spec.maximum) == (default, low, high)
+
+
+def test_the_wallet_accessors_read_the_database_every_time_and_fall_back_to_the_defaults(member_session):
+    limits = make_limits(member_session)
+    assert (limits.coin_turn_cost("standard"), limits.coin_signup_grant(), limits.coin_checkin_grant()) == (30, 200, 200)
+    assert (limits.coin_free_cap(), limits.coin_hold_timeout()) == (1000, 180)
+    put(member_session, "coin.checkin_grant", 300)
+    assert make_limits(member_session).coin_checkin_grant() == 300                       # 下一次讀就是新值
+    RuntimeLimitRepository(member_session).set_value("coin.checkin_grant", 100, FakeClock()())
+    assert limits.coin_checkin_grant() == 100                                            # 同一個 Session 也不快取
+
+
+@pytest.mark.parametrize("key, bad", [("coin.turn_cost.standard", 0), ("coin.free_cap", 1_000_001), ("coin.hold_timeout_seconds", 59)])
+def test_a_corrupt_wallet_value_uses_the_default_and_logs_only_the_key(member_session, log_lines, key, bad):
+    put(member_session, key, bad)
+    limits = make_limits(member_session)
+    assert limits.get(key) == LIMIT_SPECS[key].default
+    assert any(line.get("event") == "limits.invalid" and line["reason"] == key for line in log_lines())
+
+
+def test_an_unknown_model_key_has_no_price(member_session):
+    limits = make_limits(member_session)
+    for bad in ("premium", "", None, 3):
+        with pytest.raises(LimitError):
+            limits.coin_turn_cost(bad)
+
+
+def test_setting_wallet_values_is_validated_and_audited(member_session):
+    calls, audit = recording_audit()
+    limits = make_limits(member_session, audit)
+    assert limits.set("coin.checkin_grant", 100, group="wallet") == (200, 100)
+    assert calls[-1][2] == {"limit_key": "coin.checkin_grant", "old_value": 200, "new_value": 100}
+    with pytest.raises(LimitError):
+        limits.set("coin.free_cap", 1_000_001, group="wallet")
+    with pytest.raises(LimitError):
+        limits.set("coin.turn_cost.standard", 0, group="wallet")
+    assert limits.coin_checkin_grant() == 100 and limits.coin_free_cap() == 1000
+
+
+def test_each_group_refuses_the_other_groups_keys_and_names_the_right_command(member_session):
+    calls, audit = recording_audit()
+    limits = make_limits(member_session, audit)
+    with pytest.raises(LimitError, match="set-wallet-setting"):
+        limits.set("coin.free_cap", 500, group="script")
+    with pytest.raises(LimitError, match="set-script-limit"):
+        limits.set("script_limit.free", 4, group="wallet")
+    assert calls == [] and limits.coin_free_cap() == 1000 and limits.script_limit("free") == 3
+
+
+def test_unknown_keys_list_only_the_keys_of_the_chosen_group(member_session):
+    with pytest.raises(LimitError) as caught:
+        make_limits(member_session, recording_audit()[1]).set("coin.gold", 1, group="wallet")
+    assert "coin.free_cap" in str(caught.value) and "script_limit.free" not in str(caught.value)

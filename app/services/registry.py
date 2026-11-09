@@ -31,6 +31,8 @@ from app.repositories.script_submission_repository import ScriptSubmissionReposi
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
+from app.repositories.wallet_repository import WalletRepository
+from app.observability import wallet_events
 from app.runtime import (
     current_request_id, get_age_policy, get_clock, get_config, get_identity_provider, get_llm_provider, get_mail_sender,
     get_rpg_llm_provider, get_session_factory,
@@ -69,6 +71,7 @@ from app.services.script_seed_service import SEED_DIRECTORY, ScriptSeedService
 from app.services.protagonist_prompt import protagonist_marker
 from app.services.protagonist_review_service import ProtagonistReviewService
 from app.services.protagonist_service import ProtagonistService
+from app.services.wallet_service import WalletService
 from app.services.session_service import SessionService
 from app.services.startable import StartableVersions
 from app.services.summary_service import SummaryService
@@ -101,7 +104,32 @@ def build_auth_service(
             users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
         ),
         lock=build_account_lock_service(session, clock=clock, persist=persist_failures),
+        on_age_verified=_grant_signup_coins_on_age_verified(session, clock),
     )
+
+
+def build_wallet_service(session: Session, *, clock: Callable[[], datetime]) -> WalletService:
+    """遊戲幣錢包（餘額與帳本只由它的 Repository 寫入；數值每次現讀自設定表）。"""
+    return WalletService(wallets=WalletRepository(session), limits=build_runtime_limits(session, clock=clock), clock=clock)
+
+
+def get_wallet_service() -> WalletService:
+    return build_wallet_service(get_session(), clock=get_clock())
+
+
+def _grant_signup_coins_on_age_verified(session: Session, clock: Callable[[], datetime]):
+    """年齡確認成功之後發放首次註冊贈幣的回呼。包在 SAVEPOINT 內：失敗只復原這一筆，年齡確認照常完成；
+    贈幣會在玩家第一次存取錢包時補發（冪等鍵相同，不會重複）。"""
+    wallet = build_wallet_service(session, clock=clock)
+
+    def grant(current) -> None:
+        try:
+            with session.begin_nested():
+                wallet.ensure_signup_grant(current)
+        except Exception:                                                  # noqa: BLE001 — 不影響年齡確認，事件只含內部編號
+            wallet_events.log_grant_deferred(user_id=current.id)
+
+    return grant
 
 
 def build_account_lock_service(
@@ -317,6 +345,7 @@ def get_admin_service() -> AdminService:
         usage=get_usage_service(), age_stats=build_age_stats_service(session, age_policy=get_age_policy()),
         usage_settings=config.usage,
         confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
+        wallet=get_wallet_service(),
     )
 
 
@@ -403,7 +432,7 @@ def get_personal_export_service() -> PersonalExportService:
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
         appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        submissions=ScriptSubmissionRepository(session), clock=get_clock(),
+        submissions=ScriptSubmissionRepository(session), clock=get_clock(), wallets=WalletRepository(session),
     )
 
 

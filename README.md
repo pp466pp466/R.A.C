@@ -459,6 +459,7 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 | `/api/admin/appeals` | GET | **只有目前被鎖定的帳號**送出的申訴（解除之後不再出現；不開放讀取任何對話）。寫稽核（`appeal.read`，只記筆數） | 是（管理員） |
 | `/api/admin/publish-suspended` | GET | 目前被暫停發佈的玩家帳號（作者連續多次送審被自動拒絕時由系統暫停，只停止送審）：只有對外識別碼、顯示名稱與暫停時間，不含 email、暱稱與內部編號 | 是（管理員） |
 | `/api/admin/users/<public_id>/lift-publish-suspension` | POST | 解除玩家的暫停發佈（**高風險：重新輸入密碼**，失敗寫 `reauth.failed`）。條件式更新，兩位管理員同時解除只有一位成功（另一位 409 `not_suspended`）；成功時補一筆 `lifted` 送審紀錄（使連續被拒中斷）、把待處理的申訴標為已處理，目標立刻可以再送審。寫稽核（`publish.lift`） | 是（管理員） |
+| `/api/admin/users/<public_id>/wallet/adjust` | POST | 調整玩家的遊戲幣餘額（**高風險：重新輸入密碼**，失敗寫 `reauth.failed`）：請求 `bucket`（`free` 或 `paid`）、`delta`（不為 0 的整數，可為負）、`reason`（必填，1 至 200 字）、`password`。不受免費幣上限限制；該餘額會因此低於 0 回 409 `insufficient_coins`，餘額與稽核都不變。稽核（`wallet.adjust`）與調整同一個交易，細節只有餘額種類、增減量與調整後的餘額。回傳調整後的使用者檢視（含兩個餘額） | 是（管理員） |
 | `/api/admin/users/<public_id>/unlock` | POST | 解除玩家帳號的鎖定（**高風險：重新輸入密碼**，失敗寫 `reauth.failed`）。條件式更新，兩位管理員同時解除只有一位成功（另一位 409 `not_locked`）；成功時清除該帳號的計次、把待處理的申訴標為已處理，目標的登入狀態立刻恢復。寫稽核（`account.unlock`） | 是（管理員） |
 
 | 頁面 | 說明 |
@@ -470,7 +471,7 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 - **找使用者的方式**：平常只透過警告（總覽的「今日警告」→ 被標記對話 → 看對話、看使用者）；以信箱查詢只在客服反應時使用，介面標明用途，稽核的細節註明是以信箱或識別碼。
 - **危險操作要重新輸入密碼**：停權、解除停權、調整等級、刪除對話。密碼錯誤沿用登入的失敗計數與鎖定（**連續 5 次鎖定 15 分鐘，計數與登入共用**），鎖定中即使密碼正確也拒絕，且訊息與密碼錯誤相同（不洩漏是否被鎖定）；成功**不**重設計數（只有登入成功才重設）。失敗寫 `reauth.failed` 並保存（請求是 400，交易預設會回復，所以明確以 `keep_changes_on_error` 保存）。只靠 Google 登入、沒有設定密碼的管理員不能執行這些操作（`no_password`）。讀取類操作不需要密碼，但每次都有稽核。
 - **只能操作一般使用者**：目標若是管理員（含自己）回 403 `admin_target_forbidden`；`deletion_pending` 回 409 `target_pending_deletion`；狀態與等級以單一條件式 `UPDATE` 改寫，兩位管理員同時操作不會互相覆蓋（409 `already_suspended`、`not_suspended`、`tier_unchanged`、`state_changed`）。
-- **稽核**（`admin_audit_logs`，migration `0007`）：15 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及 Google 登入改版新增的帳號鎖定與申訴 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，與劇本創作新增的 `limit.set`（部署者修改營運限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停）；鎖定、申訴提交、修改限制與暫停發佈由系統、玩家或部署者觸發，管理員欄位為空）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
+- **稽核**（`admin_audit_logs`，migration `0007`）：16 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及 Google 登入改版新增的帳號鎖定與申訴 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，與劇本創作新增的 `limit.set`（部署者修改營運限制；遊戲幣設定也用它）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停），以及遊戲幣新增的 `wallet.adjust`（管理員調整餘額，理由寫在理由欄）；鎖定、申訴提交、修改限制與暫停發佈由系統、玩家或部署者觸發，管理員欄位為空）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
 - **分層由測試守住**（`tests/architecture/test_admin_boundaries.py`，AST）：`AdminService` 的每個公開方法第一個陳述式是 `require_admin`；後台專用的 Repository（`admin_repository.py`、`admin_audit_repository.py`）只被 `admin_service.py` 與 `registry.py` 匯入；測試本身有自我驗證（餵它故意違規的原始碼必須失敗並指出方法或檔案）。一般使用者的 `ChatRepository`「第一個參數必須是 `user_id`」規則完全不變。
 - **日誌**：只有 `admin.access_denied`、`admin.reauth_failed`、`admin.action` 三種事件，欄位是內部編號與固定列舉（動作名稱或 `not_admin`），列舉以外的值立刻出錯；沒有 email、訊息與原因文字（整段流程以日誌掃描驗證）。
 - **前端**：`app/static/js/admin/admin-format.js`（日期以台灣時間、列舉的中文標籤、用量百分比與警示等級；純函式，`tests/js/admin-format.test.js`，`tests/test_admin_format_labels.py` 比對標籤與後端列舉）、`admin.js`（Vue 應用）、`app/static/css/admin.css`。六個分頁：總覽（最上面是可點擊的「今日警告」）、被標記對話、意見回饋、使用者、模型失敗、稽核。Modal 與 Toast 完全由 Vue 狀態接管；所有文字以插值顯示為純文字。確認視窗的密碼欄位在**送出的當下與關閉時立即清空**，不存進任何儲存體。進入分頁時才載入一次（模型失敗每次讀取都寫稽核，所以不因切換分頁而重複讀取），「重新整理」才重新讀取。
@@ -957,6 +958,87 @@ change `rpg-character-creation`（RC-9）。玩家依「劇本角色規格」自
 | **畫面與人工驗收** | 沒有：序章、聯繫、創角屬 RC-3；開場的第 0 幕屬 RC-2 |
 | **欄位與次數的數字** | 暫定值（生成次數 5／15／40、自我介紹 300 字、錨定事實 60 字），之後以實際 token 預算校正 |
 
+## 遊戲幣錢包（game-wallet）
+
+change `game-wallet`（W1）。RPG 劇情對話改為消耗遊戲幣（客服不消耗，仍用每日輪數與每分鐘訊息數），錢包是回合引擎 RC-2 的前置。**這個 change 只有錢包的資料、Service、玩家端 API、管理員調整與指令**：預扣的實際呼叫屬 RC-2，錢包與記錄的畫面屬 `player-hub`。規範在 AGENTS.md 第 7、10、11 節（`51d4330` 修訂），探索結論在 `docs/RPG.md` 7.7；設計見 `openspec/changes/game-wallet/design.md`（D1 至 D10）。
+
+### 端點
+
+全部需要登入，且須先完成年齡確認（未確認回 403 `age_confirmation_required`，也不會發放任何幣）；非 GET 須通過 CSRF；回應 `Cache-Control: no-store`。回應沒有內部編號。**玩家無法經由任何 HTTP 端點花費或增加餘額（簽到除外）**，預扣、結算與退回只由伺服器端的回合流程呼叫。管理員調整見「管理員後台（C-4b）」的 `/api/admin/users/<public_id>/wallet/adjust`。
+
+| 端點 | 方法 | 說明 |
+|---|---|---|
+| `/api/wallet` | GET | 免費與付費餘額、合計、免費幣上限、每輪幣價（現在只有 `standard`）與簽到狀態（今日是否可簽到、會入帳與會作廢多少、下次可簽到的台北時間下一個 0 點）。查詢會先退回該玩家逾時的預扣，並為既有玩家補發贈幣 |
+| `/api/wallet/checkin` | POST | 每日簽到（台灣時間 0 點刷新）。入帳量等於簽到數時直接成功；會使一部分幣作廢時須帶 `confirm_overflow: true`，沒帶回 409 `checkin_overflow` 並附預覽（`checkin.would_gain`、`checkin.would_lose`），**不寫入任何東西、不消耗當日簽到**；今日已簽到回 409 `already_checked_in`；`confirm_overflow` 不是布林回 400 |
+| `/api/wallet/entries` | GET | 遊戲幣記錄，由新到舊。查詢參數 `limit`（預設 20、至多 100）與游標 `before`（這位玩家自己的序號 `seq`，不是內部編號）。每筆含種類、繁體中文說明（註冊贈送、每日簽到、冒險回合、退回、管理員調整；未結算的預扣為「處理中」）、免費與付費各自的增減量與時間；已退回的預扣及其退回列不顯示（淨額為零；個人資料匯出仍包含全部） |
+
+錯誤代碼：`insufficient_coins`（409，附合計餘額 `balance` 與所需 `needed`，只有伺服器端的預扣與管理員扣款會遇到）、`checkin_overflow`、`already_checked_in`、`hold_already_settled`／`hold_already_refunded`（409，只有回合流程遇到）、`wallet_busy`（503，附 `Retry-After`）。
+
+### 規則與數值
+
+| 項目 | 規則 |
+|---|---|
+| 一輪的幣價 | 30 幣（`coin.turn_cost.standard`）；第 0 幕不消耗；沒有成功生成（失敗、中斷、被擋）不扣；消耗不因會員等級而異 |
+| 首次註冊贈幣 | 200 免費幣（`coin.signup_grant`），**於年齡確認通過時發放**（帳號 24 小時內未確認會被刪，不會送出又收不回）。發放失敗不影響年齡確認，由下一次存取錢包補發，冪等鍵相同；既有玩家同樣在第一次存取時補發 |
+| 每日簽到 | 200 免費幣（`coin.checkin_grant`），台灣時間 0 點刷新 |
+| 免費幣上限 | 1000（`coin.free_cap`），**只限制新發放**（簽到、贈幣）；超出的部分作廢，簽到須先確認。退款與管理員調整不受限 |
+| 扣款順序 | 先扣免費幣、再扣付費幣；不得出現負餘額 |
+| 預扣逾時 | 180 秒（`coin.hold_timeout_seconds`，範圍 60 至 1800，須大於 RC-2 的單回合上限）；逾時未結算的預扣在該玩家下一次存取錢包時退回，沒有排程 |
+| 幣不過期 | 免費與付費相同 |
+
+五個數值存在資料庫的 `runtime_limits` 設定表（與劇本限制同一張，初始值由遷移 `0015` 寫入），**每次使用時現讀**、不快取於行程內，調整不必重新部署。
+
+### 指令
+
+| 指令 | 說明 |
+|---|---|
+| `flask --app wsgi show-wallet-settings` | **人工類，不得排程**：列出五個鍵、目前生效的值與範圍；缺值或不合法的鍵標示「保底預設」。輸出只有鍵與數值 |
+| `flask --app wsgi set-wallet-setting KEY VALUE` | **人工類，不得排程**：驗證鍵與範圍後寫入，輸出舊值與新值，寫一筆 `limit.set` 稽核（管理員欄位為空）。立即生效；沒有任何 HTTP 端點可以修改。兩組各自的指令只接受自己那一組的鍵（用錯會指出該用哪個指令） |
+
+### 設計重點
+
+- **兩個餘額（免費、付費）加帳本，不做批次制**：幣不過期，批次只剩 W2「付費幣按購買退款」一個用途，屆時以 expand 加欄位。
+- **以 `version` 做樂觀鎖（CAS），重試 5 次後回 503 `wallet_busy`**：不用 `SELECT … FOR UPDATE` 或原生 SQL（SQLite 沒有、AGENTS.md 第 4 節禁止），雙軌行為才一致。預扣、結算、退回與冪等鍵以存檔、`client_msg_id` 與版本組成。
+- **結算與退回互斥**，由預扣列上「只能從空值改一次」的 `resolution` 欄位裁判（帳本唯一的可改欄位，規格明寫）。
+- **帳本記存檔的對外識別碼（UUID）**，不是內部整數編號：帳本比存檔活得久，SQLite 會重用整數編號而錯指別人的存檔（design D1）。
+- **個資與日誌**：錢包與帳本視為個資，隨帳號保存與刪除，納入個人資料匯出；日誌只記內部編號與整數（事件 `wallet.signup_granted`、`wallet.checkin`、`wallet.checkin_overflow`、`wallet.hold`、`wallet.settle`、`wallet.refund`、`wallet.stale_released`、`wallet.insufficient`、`wallet.adjust`、`wallet.grant_deferred`），函式沒有接收冪等鍵、存檔識別碼、理由或任何玩家文字的參數。
+- **架構測試**（`tests/architecture/test_wallet_writes.py`）：餘額與帳本只由 `WalletRepository` 寫入。
+
+### 部署順序
+
+備份 → `alembic upgrade head`（`0015` 只新增兩張表並補五個設定鍵，已有的鍵不蓋掉、不重複）→ 部署新版程式 → `flask show-wallet-settings` 確認五個值。
+
+### 已知限制
+
+- ①**沒有畫面**：錢包與記錄頁屬 `player-hub`；實際的預扣屬 RC-2。②儲值與訂閱（付費幣的取得）屬 W2，規範待金流探索後另訂。③`/privacy`、`/terms` 尚未補遊戲幣帳本與理由回饋的說明。④贈幣農號只列為監控項目、不設關卡。
+
+### 驗收紀錄（game-wallet，2026-11-09，實作完成，尚未提交、尚未人工驗收）
+
+| 已驗證 | 結果 |
+|---|---|
+| 自動化測試 | pytest **8009 項通過、0 項失敗**（含真實 SQL Server `project_test`，SQLite 與 SQL Server 在同一個行程；上次基線 7453，新增 556 項；另有 1 則既有的警告，`test_assets_manifest` 的子行程輸出解碼，與本 change 無關）；`node --test` **246 項通過**（上次 243，`admin-format.test.js` 新增 3 項）；`openspec validate game-wallet --strict` 通過 |
+| 遷移 `0015_game_wallet` | `tests/test_migrations.py`：**SQLite** 上驗證兩張表的欄位與唯一約束、五個設定鍵只插入缺少的（部署者調整過的值不被蓋掉、重複升級不重複）、降級後兩張表與五個鍵消失；整條升級到最新版再降級的流程與升級後的結構和模型比對，在 SQLite 與真實 SQL Server `project_test` 都通過（`0015` 的細節斷言只在 SQLite 跑） |
+| 錢包核心 | 預扣、結算、退回、冪等（同一個鍵只生效一次）、先扣免費再扣付費、不得出現負餘額、`version` 衝突重試與 `wallet_busy`、結算與退回互斥、逾時預扣在下一次存取時退回（`tests/test_wallet_service_core.py`、`test_wallet_spend.py`、`test_wallet_repository.py`）；SQLite SAVEPOINT 的陷阱有專門的測試 |
+| 簽到與贈幣 | 台灣日界、接近上限的預覽與兩步驟、取消不消耗當日簽到、超出部分作廢、年齡確認通過時發放、回呼失敗不影響年齡確認並於下次存取補發、既有玩家補發（`test_wallet_checkin.py`、`test_wallet_age_grant.py`） |
+| API | 三支玩家端點：未登入 401、未確認年齡 403、被鎖定 403、缺 CSRF 被擋、`no-store`、回應沒有內部編號；記錄頁游標、已退回的預扣不顯示、繁體中文說明（`test_wallet_api.py`、`test_wallet_routes.py`） |
+| 管理員調整 | 重新輸入密碼、失敗寫 `reauth.failed`、稽核 `wallet.adjust` 與調整同一交易、不能使餘額低於 0、目標只能是一般使用者（`test_admin_wallet.py`、`test_wallet_adjust_entries.py`） |
+| 指令與設定 | `set-wallet-setting`、`show-wallet-settings`：範圍驗證、舊值與新值、`limit.set` 稽核、兩組各自的指令拒絕對方的鍵並指出該用哪個（`test_cli_wallet_settings.py`、`test_runtime_limits.py`） |
+| 個資與日誌 | 匯出（JSON `wallet` 區塊、CSV `wallet_entries.csv`，不含冪等鍵與內部編號）、抹除（`CASCADE`，架構測試要求新資料表登記）；`tests/test_wallet_events.py` 與 `test_wallet_flow.py` 的整段流程日誌掃描找不到冪等鍵、存檔識別碼、理由與任何玩家文字 |
+| 架構 | `tests/architecture/test_wallet_writes.py`：餘額與帳本只由 `WalletRepository` 寫入（附反向驗證） |
+| 端對端流程 | `tests/test_wallet_flow.py`（假時鐘、假回合）：年齡確認得 200 → 簽到 → 三個回合預扣與結算 → 一個回合失敗被退回 → 餘額、帳本與記錄頁一致 → 管理員調整 → 匯出 → 抹除；另有接近上限與餘額不足兩條路徑 |
+| 容器驗收（WSL Docker，`scripts/verify_container.py`） | **144 / 144 項通過**（上次 132，新增 12 項：遷移一路升級到 `0015`、`wallets` 與 `wallet_entries` 兩張表存在、`show-wallet-settings` 列出五個鍵且都來自遷移（沒有保底預設）、`set-wallet-setting` 修改後輸出舊值與新值並立即讀回、不合法的值被拒絕、兩組指令各自拒絕對方的鍵並指出該用哪個、還原預設值、三支 `/api/wallet` 端點未登入為 401）；2026-11-09 以目前的程式執行 |
+| 真實伺服器的 HTTP 驗收（獨立的驗收環境，SQLite，`newprojet-acceptance`） | **15 / 15 項通過**（不是瀏覽器操作）：匿名 401；新玩家錢包免費 200；簽到後 400；同日第二次簽到 409 `already_checked_in`；記錄頁依序為「每日簽到」「註冊贈送」；`/admin` 頁面含「調整遊戲幣」；管理員查到玩家且檢視含兩個餘額；密碼錯誤 400 且餘額不變；增減量 0 回 400 指出 `delta`；調整成功（付費 50）；扣到低於 0 回 409 `insufficient_coins`；玩家端看到免費 400、付費 50、合計 450；稽核含 `wallet.adjust`；玩家存取後台 API 為 404 |
+| 設計文件與結構文件 | `tests/test_design_docs.py`、`test_project_db_schema_doc.py`、`test_readme.py`、`test_launch_docs.py` 通過；資料模型、系統架構、帳號與安全、營運與部署、前端結構、路線圖、`docs/RPG.md` 與 `docs/project資料結構文件.md` 已同步 |
+
+| 未驗證 | 說明 |
+|---|---|
+| **開發用 SQL Server `project` 的升級** | 已完成（2026-11-09）：先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0015_20261109.bak`，`RESTORE VERIFYONLY` 通過）；`alembic upgrade head` 由 `0014` 升到 `0015`，`alembic current` 為 `0015_game_wallet (head)`，`alembic check` 沒有差異，`show-wallet-settings` 列出五個鍵；唯讀查詢確認 20 張資料表、227 個欄位、17 個外鍵。升級後發現 CHECK 約束名稱被命名慣例重複展開，已修正遷移並把實際約束改名。已於結構文件第 14 節追加「套用」 |
+| **瀏覽器中的人工驗收與畫面** | 沒有：`/admin` 的「調整遊戲幣」表單（餘額種類與增減量欄位、確認視窗的版面與欄位錯誤顯示）只有單元測試、範本測試與上列的 HTTP 驗收，**沒有人在瀏覽器操作過**；驗收環境可用 `start-acceptance.ps1` 啟動，以管理員身分開 `/admin` → 使用者 → 以 `accept-author@loadtest.invalid` 查詢 → 「調整遊戲幣」。玩家端的錢包與記錄畫面屬 `player-hub` |
+| **預扣的實際呼叫** | 屬 RC-2：目前沒有任何回合流程呼叫預扣、結算、退回；它們只由測試呼叫 |
+| **AGENTS.md 第 11 節的措辭** | 已完成（2026-11-09，使用者核可）：「關聯的存檔內部編號」改為「關聯的存檔識別碼」，技能鏡像與 `tests/test_agents_skill_sync.py` 已同步 |
+| **服務條款與隱私權政策** | 尚未補遊戲幣帳本與重新生成理由的說明（版本進位，仍標草稿） |
+| **多開帳號與簽到農幣** | 只列為監控項目、不設關卡；`WalletRepository.grant_totals` 提供彙總，尚未接到後台 |
+
 ## 撰寫新端點：權限與 IDOR 測試
 
 屬於使用者的資源（對話、訊息……）的每個讀寫端點，都要遵守下列規則，並用 `tests/support/idor.py` 的框架測試：
@@ -1052,6 +1134,9 @@ check_endpoint(app, spec, owner=alice, intruder=bob)
 | `limit` | 全站今日用量上限（整數；只出現在 `usage.global_budget_warning`） |
 | `count` | 期限清除某一類的筆數（整數；`retention.purged`），或營運告警當下的整數數值（比例為百分比、延遲為毫秒、其餘為筆數；`alert.firing`、`alert.resolved`） |
 | `severity` | 營運告警的嚴重度（固定列舉 `warning`、`critical`；只出現在 `alert.firing`） |
+| `coins` | 遊戲幣事件的幣量（整數；`wallet.*`，管理員調整時可為負） |
+| `lost_coins` | 簽到時因超過免費幣上限而作廢的幣量（整數；`wallet.checkin`、`wallet.checkin_overflow`） |
+| `balance` | 遊戲幣餘額（整數；`wallet.insufficient` 為合計餘額，`wallet.adjust` 為該餘額調整後的數量） |
 
 **模型呼叫日誌**（`app/observability/llm_events.py`）每次呼叫一筆，函式沒有接收任何文字內容的參數，所以提示詞、使用者訊息、回覆與金鑰「放不進來」。層級：成功與被安全過濾阻擋為資訊；驗證失敗與暫時性錯誤為警告；供應商回應設定錯誤（請求不合法、無權限）為**錯誤**，需要人工處理（多半是金鑰被撤銷或設定錯誤）。`llm.breaker_opened` 在主要模型因逾時或伺服器錯誤而將被暫時跳過時記一筆警告（只有模型名稱與分類），窗口內被跳過的請求不再記錄。驗證失敗的模型原文**不在日誌**，只存在用量帳本 `llm_call_logs.error_detail`（截斷至 2000 字、保存 14 天、僅管理員可讀）。
 
