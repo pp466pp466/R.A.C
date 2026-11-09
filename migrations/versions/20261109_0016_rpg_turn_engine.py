@@ -21,7 +21,7 @@ expand 階段，只新增、不刪除任何既有欄位或資料表；新欄位�
 
 Revision ID: 0016_rpg_turn_engine
 Revises: 0015_game_wallet
-Create Date: 2026-11-10
+Create Date: 2026-11-09
 """
 from datetime import datetime, timezone
 

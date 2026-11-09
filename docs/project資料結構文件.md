@@ -1,6 +1,6 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-09 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、232 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
@@ -14,13 +14,13 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。目前版本 `0016_rpg_turn_engine`（`alembic_version` 只有一列；`0015_game_wallet` 已於 2026-11-09 套用到實際的 `project`，`0016` 尚未套用，升級後在第 14 節追加「套用」列） |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。目前版本 `0016_rpg_turn_engine`（`alembic_version` 只有一列；已於 2026-11-09 套用，見第 14 節） |
 | 資料表與欄位 | 20 張業務資料表、232 個欄位、50 個索引與唯一約束、17 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
 
-**`0016_rpg_turn_engine`（`memory_logs.attempt`、`sessions` 的第 0 幕三欄、`llm_call_logs.first_chunk_ms`、設定鍵 `rpg.max_months_per_turn`）已寫入 migration 與 ORM，本文已同步，但尚未套用到實際的 `project`**（實際資料庫目前仍是 `0015_game_wallet`；套用後的比對結果與日期會追加在第 14 節）。
+**`0016_rpg_turn_engine`（`memory_logs.attempt`、`sessions` 的第 0 幕三欄、`llm_call_logs.first_chunk_ms`、設定鍵 `rpg.max_months_per_turn`）已於 2026-11-09 套用到實際的 `project`**：`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 回報 `No new upgrade operations detected.`，`flask show-rpg-settings` 列出 `rpg.max_months_per_turn = 24`（來自資料庫，不是保底預設），唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，與本文一致。
 
 **`0015_game_wallet`（`wallets`、`wallet_entries`、五個遊戲幣設定鍵）已於 2026-11-09 套用到實際的 `project`**：`alembic current` 為 `0015_game_wallet (head)`，`alembic check` 回報 `No new upgrade operations detected.`，`flask show-wallet-settings` 列出五個鍵（30、200、200、1000、180），唯讀查詢確認 20 張資料表、227 個欄位、17 個外鍵、`runtime_limits` 15 列，與本文一致。以下的逐項比對紀錄是 `0014` 為止的狀態。
 
@@ -1493,7 +1493,7 @@ flowchart LR
 | `0013_rpg_script_authoring` | 2026-11-04 | 玩家創作劇本：users 新增 nickname、nickname_code、publish_suspended_at；script_versions 新增審查結果四欄；新增 script_submissions、runtime_limits（並寫入七個初始值）；llm_call_logs.kind 由 10 加寬為 20 | 新增欄位與資料表，加寬欄位，寫入初始資料 |
 | `0014_rpg_character_creation` | 2026-11-04 | 玩家主角：sessions 新增 protagonist_json（可為空）；runtime_limits 補三個每日生成次數的鍵（只插入缺少的） | 新增欄位，寫入初始資料 |
 | `0015_game_wallet` | 2026-11-05 | 遊戲幣：新增 wallets、wallet_entries；runtime_limits 補五個遊戲幣設定鍵（只插入缺少的） | 新增資料表，寫入初始資料 |
-| `0016_rpg_turn_engine` | 2026-11-10 | RPG 回合引擎：memory_logs 新增 attempt（NOT NULL、預設 1）；sessions 新增 opening_text、opening_state、opening_started_at（可為空）；llm_call_logs 新增 first_chunk_ms（可為空）；runtime_limits 補 rpg.max_months_per_turn（只插入缺少的） | 新增欄位，寫入初始資料 |
+| `0016_rpg_turn_engine` | 2026-11-09 | RPG 回合引擎：memory_logs 新增 attempt（NOT NULL、預設 1）；sessions 新增 opening_text、opening_state、opening_started_at（可為空）；llm_call_logs 新增 first_chunk_ms（可為空）；runtime_limits 補 rpg.max_months_per_turn（只插入缺少的） | 新增欄位，寫入初始資料 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1586,5 +1586,6 @@ flowchart TD
 | 2026-11-05 | 新增 | `runtime_limits` 的五列初始資料（`coin.turn_cost.standard` 30、`coin.signup_grant` 200、`coin.checkin_grant` 200、`coin.free_cap` 1000、`coin.hold_timeout_seconds` 180） | 遊戲幣的數值設定，每次使用時現讀；只插入資料庫還沒有的鍵 | `0015_game_wallet` |
 | 2026-11-09 | 文件 | 本文件 | 同步 `0015_game_wallet`：新增第 3.6 節、第 5.19／5.20 節與遊戲幣的固定值 | 本文件 |
 | 2026-11-09 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0015_20261109.bak`，`RESTORE VERIFYONLY` 通過）後，由 `0014_rpg_character_creation` 升級到 `0015_game_wallet`；`alembic current` 為 `0015_game_wallet (head)`，`alembic check` 沒有差異，`flask show-wallet-settings` 列出五個鍵；唯讀查詢確認 20 張資料表、227 個欄位、17 個外鍵、`runtime_limits` 15 列。升級後發現 `wallets` 的 CHECK 約束名稱因命名慣例重複展開成 `ck_wallets_ck_wallets_balances_non_negative`，已修正遷移（`name="balances_non_negative"`）並把實際資料庫的約束改名為 `ck_wallets_balances_non_negative`（沒有資料列受影響） | `0015_game_wallet` |
-| 2026-11-10 | 新增 | 欄位 `memory_logs.attempt`（INTEGER，NOT NULL，資料庫預設 1）、`sessions.opening_text`、`sessions.opening_state`、`sessions.opening_started_at`、`llm_call_logs.first_chunk_ms`（皆可為空） | RPG 回合引擎：預扣冪等鍵的嘗試序號、第 0 幕（開場）的文字、狀態與搶佔時間、串流呼叫的首字延遲；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（視同 fallback，不生成） | `0016_rpg_turn_engine` |
-| 2026-11-10 | 新增 | `runtime_limits` 的一列初始資料（`rpg.max_months_per_turn` = 24） | 單一回合最多推進的遊戲內月數；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋 | `0016_rpg_turn_engine` |
+| 2026-11-09 | 新增 | 欄位 `memory_logs.attempt`（INTEGER，NOT NULL，資料庫預設 1）、`sessions.opening_text`、`sessions.opening_state`、`sessions.opening_started_at`、`llm_call_logs.first_chunk_ms`（皆可為空） | RPG 回合引擎：預扣冪等鍵的嘗試序號、第 0 幕（開場）的文字、狀態與搶佔時間、串流呼叫的首字延遲；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（視同 fallback，不生成） | `0016_rpg_turn_engine` |
+| 2026-11-09 | 新增 | `runtime_limits` 的一列初始資料（`rpg.max_months_per_turn` = 24） | 單一回合最多推進的遊戲內月數；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋 | `0016_rpg_turn_engine` |
+| 2026-11-09 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0016_20261109_140913.bak`，`RESTORE VERIFYONLY` 通過，`RESTORE HEADERONLY` 確認為 `project` 的完整備份、未損毀）後，由 `0015_game_wallet` 升級到 `0016_rpg_turn_engine`；`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 沒有差異，`flask show-rpg-settings` 列出一個鍵（24）；唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，五個新欄位的型別與可空和本文一致。由 Claude 依使用者要求執行 | `0016_rpg_turn_engine` |

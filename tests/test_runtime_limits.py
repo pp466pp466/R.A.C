@@ -43,7 +43,7 @@ def migration_initial_limits() -> dict[str, int]:
     limits: dict[str, int] = {}
     for filename, name in (
         ("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014"),
-        ("20261105_0015_game_wallet.py", "migration_0015"), ("20261110_0016_rpg_turn_engine.py", "migration_0016"),
+        ("20261105_0015_game_wallet.py", "migration_0015"), ("20261109_0016_rpg_turn_engine.py", "migration_0016"),
     ):
         spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / "migrations" / "versions" / filename)
         module = importlib.util.module_from_spec(spec)

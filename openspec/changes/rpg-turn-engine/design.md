@@ -225,7 +225,7 @@ goals_add[]: { text, milestone_id? }     goals_done[]: string      ending_propos
 
 ### D14　遷移、設定與部署
 
-遷移 `20261110_0016_rpg_turn_engine.py`（全部 expand）：`memory_logs.attempt`（Integer，NOT NULL，`server_default="1"`）、`sessions.opening_text`／`opening_state`／`opening_started_at`、`llm_call_logs.first_chunk_ms`，並以 ORM 補一列 `rpg.max_months_per_turn=24`（既有值不覆蓋）。`llm_call_logs.kind` 已是 20 字，`rpg_stream` 等都在其內。降級移除新欄位。`runtime_limits` 新增 `GROUP_RPG`、`flask set-rpg-setting`／`show-rpg-settings`（登記為人工類指令，比照 `set-wallet-setting`）。
+遷移 `20261109_0016_rpg_turn_engine.py`（全部 expand）：`memory_logs.attempt`（Integer，NOT NULL，`server_default="1"`）、`sessions.opening_text`／`opening_state`／`opening_started_at`、`llm_call_logs.first_chunk_ms`，並以 ORM 補一列 `rpg.max_months_per_turn=24`（既有值不覆蓋）。`llm_call_logs.kind` 已是 20 字，`rpg_stream` 等都在其內。降級移除新欄位。`runtime_limits` 新增 `GROUP_RPG`、`flask set-rpg-setting`／`show-rpg-settings`（登記為人工類指令，比照 `set-wallet-setting`）。
 
 `gunicorn.rpg.conf.py`：`gthread`、`workers=2`、`threads=16`（初始值，RC-4 校正；可用環境變數覆寫）、`timeout=180`、`graceful_timeout=60`、其餘比照客服池。Dockerfile 預設仍啟動客服池，RPG 池由部署指定設定檔。`OPENROUTER_REASONING` 進 `config.py`、`.env.example` 與 README。
 
