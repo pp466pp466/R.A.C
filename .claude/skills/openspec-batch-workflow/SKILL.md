@@ -56,6 +56,8 @@ apply 之前，先讀 `tasks.md`，**把任務分組並請使用者確認後才�
 
 ## 5. 交接與 commit
 
+**每個階段結束都更新 `HANDOFF.md`**（使用者要求）：explore、propose、apply（每一批）、archive 各自做完都要更新，不是只在 apply 的批次結束時。explore 與 propose 結束時至少寫明：目前階段、已確認的決定（指向記錄的位置）、下一步、待使用者核可的事項。`HANDOFF.md` 不進 commit。
+
 每一批做完（或需要換對話時）：
 
 1. **更新 `HANDOFF.md`**（專案根目錄，不進版本庫的交接文件），至少包含：
