@@ -146,7 +146,7 @@ SYNCED_RULES = [
     (7, "錨定事實每位主角一個，內容為主角與劇本中某個人物、地點或里程碑的關係，必須指向該存檔的劇本內容中存在的項目，由 Service 驗證", "references/business-encoding.md"),
     (7, "模型只提議，玩家接受或自行撰寫後才由 Service 寫入，不由模型直接寫入", "references/business-encoding.md"),
     (7, "自創時預設也須提供一個（選定項目後自行撰寫一句），玩家可略過，略過時開場僅依背景故事與角色卡", "references/business-encoding.md"),
-    (7, "主角與對象之一為未成年時，錨定事實不得為戀愛或性的關係", "references/business-encoding.md"),
+    (7, "錨定事實不得為性的關係，也不得為性奴等禁斷關係；主角與對象一成年、一未成年時（對象不是人物而主角未成年時亦同），不得為戀愛或婚姻關係；兩位都未成年時允許戀愛關係", "references/business-encoding.md"),
     (7, "主角的年齡於開存檔時寫入，之後依 NPC 年齡的相同規則更正", "references/business-encoding.md"),
     (7, "規則層於每次生成與送出時執行，模型層於開存檔時執行，未通過者不得開存檔；拒絕只告知類別", "references/business-encoding.md"),
     (7, "開場：主角建立完成後，由回合引擎依主角角色卡與錨定事實產生「第 0 幕」", "references/business-encoding.md"),
