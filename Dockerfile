@@ -13,14 +13,18 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PORT=8080
 
 # unixODBC 與 Microsoft ODBC Driver 18 for SQL Server（pyodbc 連線 SQL Server 需要；接受 Microsoft 的 EULA）
+# 驅動檔存在但它依賴的共用函式庫被移除時，unixODBC 只會誤報「file not found」，到執行期連資料庫才發現。
+# libgssapi-krb5-2 因此要明確安裝（否則會隨 curl 被 --auto-remove 清掉）；最後再用 ldd 檢查，缺任何依賴就讓建置失敗並列出名稱。
 RUN apt-get update \
- && apt-get install -y --no-install-recommends ca-certificates curl gnupg unixodbc \
+ && apt-get install -y --no-install-recommends ca-certificates curl gnupg unixodbc libgssapi-krb5-2 \
  && curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
  && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list \
  && apt-get update \
  && ACCEPT_EULA=Y apt-get install -y --no-install-recommends msodbcsql18 \
  && apt-get purge -y --auto-remove curl gnupg \
- && rm -rf /var/lib/apt/lists/*
+ && rm -rf /var/lib/apt/lists/* \
+ && missing="$(ldd /opt/microsoft/msodbcsql18/lib64/libmsodbcsql-18.*.so.* | grep 'not found' || true)" \
+ && if [ -n "$missing" ]; then echo "ODBC 驅動缺少共用函式庫：$missing"; exit 1; fi
 
 WORKDIR /app
 
