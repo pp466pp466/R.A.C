@@ -20,7 +20,7 @@
 - **THEN** 稽核紀錄仍在，目標識別碼保留
 
 ### Requirement: 動作是固定的列舉
-稽核的動作 SHALL 只有：`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，帳號鎖定相關的 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，以及劇本創作相關的 `limit.set`（部署者修改限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停）。`account.lock`、`appeal.submit`、`limit.set` 與 `publish.suspend` 由系統、玩家或部署者觸發，其管理員欄位 SHALL 為空；其餘由管理員觸發。寫入列舉以外的動作 SHALL 被拒絕。申訴內容 SHALL NOT 進入稽核紀錄；`limit.set` 的細節 SHALL 只含限制的鍵與新舊數值。
+稽核的動作 SHALL 只有：`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，帳號鎖定相關的 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，劇本創作相關的 `limit.set`（部署者修改限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停），以及遊戲幣相關的 `wallet.adjust`（管理員調整遊戲幣餘額）。`account.lock`、`appeal.submit`、`limit.set` 與 `publish.suspend` 由系統、玩家或部署者觸發，其管理員欄位 SHALL 為空；其餘由管理員觸發。寫入列舉以外的動作 SHALL 被拒絕。申訴內容 SHALL NOT 進入稽核紀錄；`limit.set` 的細節 SHALL 只含限制的鍵與新舊數值；`wallet.adjust` 的細節 SHALL 只含調整的餘額種類、增減量與調整後的餘額。
 
 #### Scenario: 未知的動作
 - **WHEN** 程式嘗試寫入動作 `user.delete_everything`
@@ -41,6 +41,10 @@
 #### Scenario: 修改限制
 - **WHEN** 部署者修改一個限制
 - **THEN** 有一筆 `limit.set` 紀錄，管理員欄位為空，細節只有鍵與新舊數值
+
+#### Scenario: 調整遊戲幣
+- **WHEN** 管理員調整一位玩家的遊戲幣
+- **THEN** 有一筆 `wallet.adjust` 紀錄，管理員欄位是該管理員，目標是玩家的對外識別碼，細節只有餘額種類、增減量與調整後的餘額
 
 ### Requirement: 稽核不記錄敏感內容
 稽核紀錄 SHALL NOT 含 email、顯示名稱、訊息或回覆文字、模型原文、密碼與其雜湊、權杖。管理員填寫的原因是唯一的自由文字，且只在停權與刪除對話時存在。以信箱查詢使用者時，紀錄 SHALL 只含查到的使用者的對外識別碼，不含被查詢的信箱。

@@ -960,7 +960,7 @@ change `rpg-character-creation`（RC-9）。玩家依「劇本角色規格」自
 
 ## 遊戲幣錢包（game-wallet）
 
-change `game-wallet`（W1）。RPG 劇情對話改為消耗遊戲幣（客服不消耗，仍用每日輪數與每分鐘訊息數），錢包是回合引擎 RC-2 的前置。**這個 change 只有錢包的資料、Service、玩家端 API、管理員調整與指令**：預扣的實際呼叫屬 RC-2，錢包與記錄的畫面屬 `player-hub`。規範在 AGENTS.md 第 7、10、11 節（`51d4330` 修訂），探索結論在 `docs/RPG.md` 7.7；設計見 `openspec/changes/game-wallet/design.md`（D1 至 D10）。
+change `game-wallet`（W1）。RPG 劇情對話改為消耗遊戲幣（客服不消耗，仍用每日輪數與每分鐘訊息數），錢包是回合引擎 RC-2 的前置。**這個 change 只有錢包的資料、Service、玩家端 API、管理員調整與指令**：預扣的實際呼叫屬 RC-2，錢包與記錄的畫面屬 `player-hub`。規範在 AGENTS.md 第 7、10、11 節（`51d4330` 修訂），探索結論在 `docs/RPG.md` 7.7；設計見 `openspec/changes/archive/2026-11-09-game-wallet/design.md`（D1 至 D10）。
 
 ### 端點
 

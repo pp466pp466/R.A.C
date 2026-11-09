@@ -957,7 +957,7 @@ flowchart TB
 
 ### 7.7 遊戲幣（W1 `game-wallet`）　**[已確認，已實作 2026-11-09，待驗收與提交]**
 
-> 實作：遷移 `0015`、`WalletService`、`/api/wallet/*`、`POST /api/admin/users/<id>/wallet/adjust`、`flask set-wallet-setting`／`show-wallet-settings`；設計決策 D1 至 D10 見 `openspec/changes/game-wallet/design.md`。與本節的差異：帳本關聯存檔的是對外識別碼（UUID）而不是內部編號；逾時預扣在該玩家下一次存取錢包時退回（預設 180 秒）；預扣、結算與退回的實際呼叫屬 RC-2a。
+> 實作：遷移 `0015`、`WalletService`、`/api/wallet/*`、`POST /api/admin/users/<id>/wallet/adjust`、`flask set-wallet-setting`／`show-wallet-settings`；設計決策 D1 至 D10 見 `openspec/changes/archive/2026-11-09-game-wallet/design.md`。與本節的差異：帳本關聯存檔的是對外識別碼（UUID）而不是內部編號；逾時預扣在該玩家下一次存取錢包時退回（預設 180 秒）；預扣、結算與退回的實際呼叫屬 RC-2a。
 
 | 項目 | 規則 |
 |---|---|
