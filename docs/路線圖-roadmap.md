@@ -111,6 +111,7 @@ flowchart LR
 | 全站每日用量上限的預設值綁定 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、500 RPD） | 換模型或正式環境改用 OpenAI 時須重設 `USAGE_DAILY_TOKEN_LIMIT`、`USAGE_DAILY_CALL_LIMIT`；15 RPM 是全站共用，多人同時使用才需要另加全站每分鐘閘門 | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | 成人模式的成年確認方式（AGENTS.md 第 7 節） | **已決定（2026-11-03）**：切換為成人模式時勾選「我確定已滿 18 歲」與同意安全規範，並記錄確認時間、規範版本與方式（自行聲明）；書面許可（須涵蓋新模型）、法務意見與部署層開關仍須具備，**法務若認為不足，只更換確認方式**。原評估的備選（若法務要求更強的方式）：台灣數位身分（自然人憑證等）依內政部的申請要點對一般民間企業多半不開放；信用卡在台灣有附卡（約 15 歲起）與金融卡（約 7 歲起）的漏洞，強度偏低且專案沒有金流；第三方證件加活體或自拍估齡是唯一現實的選項，但各家對台灣證件的支援須逐家確認（Yoti 列有台灣國民身分證） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | 成人模式的許可涵蓋的供應商、模型與日期 | 使用者表示已取得許可，內容尚未提供；取得後寫入 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 並填入 `ADULT_MODE_MODELS`（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_MODELS`） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| **玩家主動修改 NPC 角色卡**（2026-11-09 使用者提出）：玩家可以自行修改角色卡的錨定事實與特質，模型不能自動覆寫已有的值（RC-2a 已做到後半：已有錨定事實不被模型覆寫） | 尚未立案；實作時走與劇本、主角相同的審查層與 Service 驗證，與 RC-5 的 `user_persona_overrides`（個性的玩家層修正）一併考慮；決定紀錄見 [RPG.md](RPG.md) 7.15.6 | [RPG.md](RPG.md) |
 | 13 至 17 歲可使用 AI 功能與 Gemini 條款不符 | 僅限個人測試；對外開放前須以實際供應商條款重新確認（RPG.md R-15.4） | [帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 
 ## 3. 每次封存後要做的事

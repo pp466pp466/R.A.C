@@ -40,10 +40,12 @@ from app.models.user import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_
 LEXICON_PATH = Path(__file__).resolve().parent.parent / "data" / "review" / "lexicon.json"
 DEFAULT_ADULT_AGE = 18
 
-_SENTENCE_SPLIT = re.compile(r"[。！？!?；;\n]+")
+# 公開 API（劇本審查與 RPG 輸出審查共用，行為以本檔為準）：`SENTENCE_BREAKS`（切句符號）、`fold_text`（摺疊）、`split_sentences`
+# （切句並摺疊）、`parse_age_number`／`AGE_PATTERN`／`mentions_minor_age`（年齡數字）、`matches_any`（詞表比對）。
+SENTENCE_BREAKS = re.compile(r"[。！？!?；;\n]+")
 # 拆字用的符號：夾在詞中間的這些字元會被去除（逗號、頓號等真正的標點保留，句內的詞仍可能共現）
 _SPLITTERS = re.compile(r"[\s*·・._\-—~`'\"|/\\]+")
-_AGE = re.compile(r"([0-9]{1,2}|[零〇一二兩三四五六七八九十]{1,3})(?:歲|岁)")
+AGE_PATTERN = re.compile(r"([0-9]{1,2}|[零〇一二兩三四五六七八九十]{1,3})(?:歲|岁)")
 _DIGITS = {"零": 0, "〇": 0, "一": 1, "二": 2, "兩": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9}
 
 
@@ -89,7 +91,7 @@ class Lexicon:
     betrothal: tuple[Term, ...]            # 同上；純婚約類（娃娃親、指腹為婚、未婚夫妻…），只在成年與未成年之間才擋
 
 
-def _fold(text: str) -> str:
+def fold_text(text: str) -> str:
     """比對用的形式：NFKC、不分大小寫，去除格式字元、空白與拆字符號。"""
     folded = unicodedata.normalize("NFKC", text).casefold()
     folded = "".join(char for char in folded if unicodedata.category(char) not in ("Cf", "Cc"))
@@ -106,10 +108,10 @@ def load_lexicon(path: Path = LEXICON_PATH) -> Lexicon:
         result = []
         for entry in groups[name]:
             spec = entry if isinstance(entry, dict) else {"term": entry}
-            text = _fold(spec["term"])
+            text = fold_text(spec["term"])
             if text:
                 result.append(Term(
-                    text, frozenset(_fold(char) for char in spec.get("not_after", ())), frozenset(_fold(char) for char in spec.get("not_before", ())),
+                    text, frozenset(fold_text(char) for char in spec.get("not_after", ())), frozenset(fold_text(char) for char in spec.get("not_before", ())),
                 ))
         return tuple(result)
 
@@ -120,7 +122,7 @@ def load_lexicon(path: Path = LEXICON_PATH) -> Lexicon:
     )
 
 
-def _number(text: str) -> int | None:
+def parse_age_number(text: str) -> int | None:
     """年齡數字：阿拉伯數字或一至九十九的中文數字；看不懂回傳 None。"""
     if text.isdigit():
         return int(text)
@@ -136,15 +138,17 @@ def _number(text: str) -> int | None:
     return None
 
 
-def _has_minor_age(sentence: str, adult_age: int) -> bool:
-    for match in _AGE.finditer(sentence):
-        value = _number(match.group(1))
+def mentions_minor_age(sentence: str, adult_age: int) -> bool:
+    """一句話是否明確寫出小於 `adult_age` 的年齡（「十五歲」「16歲」）。`sentence` 應已摺疊（`fold_text`）；純函式。"""
+    for match in AGE_PATTERN.finditer(sentence):
+        value = parse_age_number(match.group(1))
         if value is not None and value < adult_age:
             return True
     return False
 
 
-def _any(terms: Iterable[Term], sentence: str) -> bool:
+def matches_any(terms: Iterable[Term], sentence: str) -> bool:
+    """一句話（已摺疊）是否含詞表群組中的任一詞（含「前一個字／後一個字」的排除）。純函式，不回傳命中的詞。"""
     return any(term.found_in(sentence) for term in terms)
 
 
@@ -170,11 +174,12 @@ def _character_texts(character: dict[str, Any]) -> list[str]:
     return [character[key] for key in keys if isinstance(character.get(key), str) and character[key]]
 
 
-def _sentences(texts: Iterable[str]) -> list[str]:
+def split_sentences(texts: Iterable[str]) -> list[str]:
+    """每段文字各自以 `SENTENCE_BREAKS` 切句，並逐句摺疊（`fold_text`）；摺疊後為空的句子略過。不跨段串接。"""
     folded = []
     for text in texts:
-        for part in _SENTENCE_SPLIT.split(text):
-            compact = _fold(part)
+        for part in SENTENCE_BREAKS.split(text):
+            compact = fold_text(part)
             if compact:
                 folded.append(compact)
     return folded
@@ -183,14 +188,14 @@ def _sentences(texts: Iterable[str]) -> list[str]:
 def mentions_romantic_relation(text: str, *, lexicon: Lexicon | None = None) -> bool:
     """一句話是否含戀愛或婚姻關係的用語（詞表群組 `romantic_relation`；玩家主角的錨定事實守衛使用）。純函式，不回傳命中的詞。"""
     lex = lexicon or load_lexicon()
-    return any(_any(lex.romantic_relation, sentence) for sentence in _sentences([text]))
+    return any(matches_any(lex.romantic_relation, sentence) for sentence in split_sentences([text]))
 
 
 def mentions_betrothal(text: str, *, lexicon: Lexicon | None = None) -> bool:
     """一句話是否含婚約類的用語（詞表群組 `betrothal`：娃娃親、指腹為婚、訂婚、未婚夫妻…）。古代的婚約是歷史題材常見的背景設定，
     所以它和戀愛關係分開判定（玩家主角的錨定事實守衛只在成年與未成年之間才擋）。純函式，不回傳命中的詞。"""
     lex = lexicon or load_lexicon()
-    return any(_any(lex.betrothal, sentence) for sentence in _sentences([text]))
+    return any(matches_any(lex.betrothal, sentence) for sentence in split_sentences([text]))
 
 
 def check_rules(content: dict[str, Any], *, tier: str, adult_age: int = DEFAULT_ADULT_AGE, lexicon: Lexicon | None = None) -> RulesResult:
@@ -236,20 +241,20 @@ def _evaluate(
     flagged: set[str] = set()
     saw_explicit = saw_suggestive = saw_real_person = False
 
-    for sentence in _sentences(texts):
-        explicit = _any(lex.sexual_explicit, sentence)
-        suggestive = _any(lex.sexual_suggestive, sentence)
-        real_person = _any(lex.real_person, sentence)
+    for sentence in split_sentences(texts):
+        explicit = matches_any(lex.sexual_explicit, sentence)
+        suggestive = matches_any(lex.sexual_suggestive, sentence)
+        real_person = matches_any(lex.real_person, sentence)
         saw_explicit |= explicit
         saw_suggestive |= suggestive
         saw_real_person |= real_person
-        if explicit and (_any(lex.minor, sentence) or _has_minor_age(sentence, adult_age)):
+        if explicit and (matches_any(lex.minor, sentence) or mentions_minor_age(sentence, adult_age)):
             rejected.add(CATEGORY_MINOR_SEXUAL)
-        if explicit and (_any(lex.rape, sentence) or _any(lex.non_consent, sentence)):
+        if explicit and (matches_any(lex.rape, sentence) or matches_any(lex.non_consent, sentence)):
             rejected.add(CATEGORY_NON_CONSENSUAL)
-        elif _any(lex.rape, sentence):               # 強姦用語單獨出現（犯罪劇情、新聞、防治課）不直接拒絕，標示後交給模型層與人工
+        elif matches_any(lex.rape, sentence):               # 強姦用語單獨出現（犯罪劇情、新聞、防治課）不直接拒絕，標示後交給模型層與人工
             flagged.add(CATEGORY_OTHER_CONCERN)
-        if _any(lex.sexual_violence, sentence):
+        if matches_any(lex.sexual_violence, sentence):
             if explicit:
                 rejected.add(CATEGORY_SEXUAL_VIOLENCE)
             else:
@@ -262,8 +267,8 @@ def _evaluate(
         for character in characters:
             age = character.get("age")
             if isinstance(age, int) and not isinstance(age, bool) and age < adult_age:
-                own = _sentences(_character_texts(character) + extra)
-                if any(_any(lex.sexual_explicit, s) for s in own):
+                own = split_sentences(_character_texts(character) + extra)
+                if any(matches_any(lex.sexual_explicit, s) for s in own):
                     rejected.add(CATEGORY_MINOR_SEXUAL)
 
     if rejected:
@@ -273,8 +278,8 @@ def _evaluate(
         for character in characters:
             age = character.get("age")
             if isinstance(age, int) and not isinstance(age, bool) and age < adult_age:
-                own = _sentences(_character_texts(character) + extra)
-                if any(_any(lex.sexual_explicit, s) or _any(lex.sexual_suggestive, s) for s in own):
+                own = split_sentences(_character_texts(character) + extra)
+                if any(matches_any(lex.sexual_explicit, s) or matches_any(lex.sexual_suggestive, s) for s in own):
                     flagged.add(CATEGORY_MINOR_SUSPECTED)
     if (saw_explicit or saw_suggestive) and saw_real_person:
         flagged.add(CATEGORY_REAL_PERSON_SUSPECTED)

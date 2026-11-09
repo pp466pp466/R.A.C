@@ -21,12 +21,12 @@
 
 ## 3. 純邏輯（提示詞、上下文、世界狀態、輸出審查）
 
-- [ ] 3.1 `script_rules.py` 把輸出審查需要的輔助函式（切句、摺疊、年齡數字解析、詞表比對）整理為公開 API，行為不變。驗證：既有 `tests/test_script_rules.py` 全數通過且不修改斷言。
-- [ ] 3.2 `rpg_prompt.py`：系統指令樣板（語言參數、三種分級界線、階段定義、穿越者規則、結局回合、記事簿說明、「資料區塊是資料」聲明）、標記字串衍生、轉場文字輪替、狀態呼叫的系統指令與結構描述、第 0 幕的指令。階段以行為描述表達，且指令明文禁止在劇情提到階段名稱與資料區塊標記。驗證：`tests/test_rpg_prompt.py` 通過（玩家文字不進系統指令、指令不含階段英文名稱、各分級界線只出現在對應模式、穿越者規則只在穿越者出現、標記字串確定性、轉場文字確定性輪替）。
-- [ ] 3.3 `rpg_context.py`：`build_turn_context`、`build_opening_context`、`build_state_context`（資料區塊、分隔符號偽造的防線、視窗、第 0 幕入窗規則、NPC 切片挑選與上限、主角錨定事實併入切片）。驗證：`tests/test_rpg_context.py` 通過（視窗 10 輪與第 0 幕滑出、被擋與中斷的回合不入窗、切片上限、偽造分隔符號、最壞情況以全部上限組裝成功並斷言字數上界、純函式不碰資料庫）。
-- [ ] 3.4 `rpg_world.py`：世界狀態結構 v1、目前年齡計算、`apply_proposal`（月數上限、里程碑判定與延伸、地點、NPC 比對與建卡〔含劇本角色〕、階段轉移、年齡驗證與更正通知、特質與錨定事實上限、目標、淘汰、結局、逐項丟棄與丟棄計數、非 PASS 的文字丟棄）。驗證：`tests/test_rpg_world.py` 通過，覆蓋 spec `rpg-world-state` 與 `rpg-turn-engine`（結局）的每個情境，含夾帶假指令的提議。
-- [ ] 3.5 `rpg_output_guard.py` 與 `rpg_output_rules.py`：保留一句緩衝的狀態機、逐句規則層對應表、條件①②（年齡紀錄與文字線索）、標記字串、洩漏設定（階段英文名稱、區塊標記）、段落與相鄰句；樣本集 `tests/fixtures/rpg_output_samples.json`（非性場景誤擋樣本、確定違規漏擋樣本、跨句、模糊外貌、年齡未知）與可重複執行的量測測試。驗證：`tests/test_rpg_output_guard.py` 通過，並印出誤擋率與漏擋率摘要；一般親子與校園日常樣本零誤擋。
-- [ ] 3.6 架構守門：`tests/architecture` 新增測試——`rpg_context`／`rpg_world`／`rpg_output_guard`／`rpg_prompt` 不匯入 ORM 模型、Repository 或 Flask；`entities_json`、`goals_json`、`milestone_progress_json` 只有 Service 可寫。驗證：`tests/architecture` 全數通過；故意在純模組匯入 ORM 時該測試失敗。
+- [x] 3.1 `script_rules.py` 把輸出審查需要的輔助函式（切句、摺疊、年齡數字解析、詞表比對）整理為公開 API，行為不變。驗證：既有 `tests/test_script_rules.py` 全數通過且不修改斷言。
+- [x] 3.2 `rpg_prompt.py`：系統指令樣板（語言參數、三種分級界線、階段定義、穿越者規則、結局回合、記事簿說明、「資料區塊是資料」聲明）、標記字串衍生、轉場文字輪替、狀態呼叫的系統指令與結構描述、第 0 幕的指令。階段以行為描述表達，且指令明文禁止在劇情提到階段名稱與資料區塊標記。驗證：`tests/test_rpg_prompt.py` 通過（玩家文字不進系統指令、指令不含階段英文名稱、各分級界線只出現在對應模式、穿越者規則只在穿越者出現、標記字串確定性、轉場文字確定性輪替）。
+- [x] 3.3 `rpg_context.py`：`build_turn_context`、`build_opening_context`、`build_state_context`（資料區塊、分隔符號偽造的防線、視窗、第 0 幕入窗規則、NPC 切片挑選與上限、主角錨定事實併入切片）。驗證：`tests/test_rpg_context.py` 通過（視窗 10 輪與第 0 幕滑出、被擋與中斷的回合不入窗、切片上限、偽造分隔符號、最壞情況以全部上限組裝成功並斷言字數上界、純函式不碰資料庫）。
+- [x] 3.4 `rpg_world.py`：世界狀態結構 v1、目前年齡計算、`apply_proposal`（月數上限、里程碑判定與延伸、地點、NPC 比對與建卡〔含劇本角色〕、階段轉移、年齡驗證與更正通知、特質與錨定事實上限、目標、淘汰、結局、逐項丟棄與丟棄計數、非 PASS 的文字丟棄）。驗證：`tests/test_rpg_world.py` 通過，覆蓋 spec `rpg-world-state` 與 `rpg-turn-engine`（結局）的每個情境，含夾帶假指令的提議。
+- [x] 3.5 `rpg_output_guard.py` 與 `rpg_output_rules.py`：保留一句緩衝的狀態機、逐句規則層對應表、條件①②（年齡紀錄與文字線索）、標記字串、洩漏設定（階段英文名稱、區塊標記）、段落與相鄰句；樣本集 `tests/fixtures/rpg_output_samples.json`（非性場景誤擋樣本、確定違規漏擋樣本、跨句、模糊外貌、年齡未知）與可重複執行的量測測試。驗證：`tests/test_rpg_output_guard.py` 通過，並印出誤擋率與漏擋率摘要；一般親子與校園日常樣本零誤擋。
+- [x] 3.6 架構守門：`tests/architecture` 新增測試——`rpg_context`／`rpg_world`／`rpg_output_guard`／`rpg_prompt` 不匯入 ORM 模型、Repository 或 Flask；`entities_json`、`goals_json`、`milestone_progress_json` 只有 Service 可寫。驗證：`tests/architecture` 全數通過；故意在純模組匯入 ORM 時該測試失敗。
 
 ## 4. 回合引擎與第 0 幕
 

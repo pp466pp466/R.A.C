@@ -320,9 +320,9 @@ def test_the_romantic_relation_group_is_loaded_and_the_lexicon_version_moved_on(
     ("愛慕虛榮的商人", False), ("男友人送來的信", False), ("結拜的兄妹", False),
 ])
 def test_romantic_relation_terms_hit_relationships_and_skip_common_false_positives(sentence, hit):
-    from app.services.script_rules import _any, _fold
+    from app.services.script_rules import fold_text, matches_any
 
-    assert _any(load_lexicon().romantic_relation, _fold(sentence)) is hit
+    assert matches_any(load_lexicon().romantic_relation, fold_text(sentence)) is hit
 
 
 @pytest.mark.parametrize(("sentence", "hit"), [
@@ -330,9 +330,9 @@ def test_romantic_relation_terms_hit_relationships_and_skip_common_false_positiv
     ("舊日的戀人", False), ("他的同門師弟", False), ("兩人已經成親", False),
 ])
 def test_betrothal_terms_hit_only_the_betrothal_group(sentence, hit):
-    from app.services.script_rules import _any, _fold
+    from app.services.script_rules import fold_text, matches_any
 
-    assert _any(load_lexicon().betrothal, _fold(sentence)) is hit
+    assert matches_any(load_lexicon().betrothal, fold_text(sentence)) is hit
 
 
 def test_the_mention_helpers_are_pure_and_do_not_echo_the_match():
