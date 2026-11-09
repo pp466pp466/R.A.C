@@ -25,7 +25,8 @@ SCRIPT_KEYS = (
     "script_reject_streak",
 )
 WALLET_KEYS = ("coin.turn_cost.standard", "coin.signup_grant", "coin.checkin_grant", "coin.free_cap", "coin.hold_timeout_seconds")
-ALL_KEYS = SCRIPT_KEYS + WALLET_KEYS
+RPG_KEYS = ("rpg.max_months_per_turn",)
+ALL_KEYS = SCRIPT_KEYS + WALLET_KEYS + RPG_KEYS
 
 
 def make_limits(session, audit=None, clock=None):
@@ -38,11 +39,11 @@ def put(session, key, value):
 
 
 def migration_initial_limits() -> dict[str, int]:
-    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個加上 0015 的五個）。"""
+    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個、0015 的五個加上 0016 的一個）。"""
     limits: dict[str, int] = {}
     for filename, name in (
         ("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014"),
-        ("20261105_0015_game_wallet.py", "migration_0015"),
+        ("20261105_0015_game_wallet.py", "migration_0015"), ("20261110_0016_rpg_turn_engine.py", "migration_0016"),
     ):
         spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / "migrations" / "versions" / filename)
         module = importlib.util.module_from_spec(spec)
@@ -55,10 +56,30 @@ def migration_initial_limits() -> dict[str, int]:
 # ---- 鍵、範圍與初始值 -----------------------------------------------------------------
 
 
-def test_the_fifteen_keys_are_fixed_in_two_groups():
+def test_the_sixteen_keys_are_fixed_in_three_groups():
     assert LIMIT_KEYS == ALL_KEYS and set(LIMIT_SPECS) == set(ALL_KEYS)
     assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "script"} == set(SCRIPT_KEYS)
     assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "wallet"} == set(WALLET_KEYS)
+    assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "rpg"} == set(RPG_KEYS)
+
+
+def test_the_rpg_max_months_setting_ranges_from_0_to_240_with_a_default_of_24():
+    spec = LIMIT_SPECS["rpg.max_months_per_turn"]
+    assert (spec.default, spec.minimum, spec.maximum) == (24, 0, 240)
+
+
+def test_the_rpg_max_months_is_read_each_time_and_falls_back_to_the_default(member_session, log_lines):
+    limits = make_limits(member_session)
+    assert limits.rpg_max_months_per_turn() == 24                                       # 缺值：保底預設
+    put(member_session, "rpg.max_months_per_turn", 6)
+    assert make_limits(member_session).rpg_max_months_per_turn() == 6                   # 下一次使用就是新值
+    member_session.query(RuntimeLimit).filter_by(key="rpg.max_months_per_turn").one().int_value = 241
+    member_session.flush()
+    assert make_limits(member_session).rpg_max_months_per_turn() == 24                  # 範圍外：保底預設，不是無上限
+    member_session.query(RuntimeLimit).filter_by(key="rpg.max_months_per_turn").one().int_value = 0
+    member_session.flush()
+    assert make_limits(member_session).rpg_max_months_per_turn() == 0                   # 0 合法
+    assert any(line.get("event") == "limits.invalid" and line["reason"] == "rpg.max_months_per_turn" for line in log_lines())
 
 
 def test_the_protagonist_suggestion_keys_range_from_0_to_100():
@@ -77,6 +98,7 @@ def test_the_fallback_defaults_equal_the_values_the_migration_writes():
         "script_reject_streak": 3,
         "coin.turn_cost.standard": 30, "coin.signup_grant": 200, "coin.checkin_grant": 200, "coin.free_cap": 1000,
         "coin.hold_timeout_seconds": 180,
+        "rpg.max_months_per_turn": 24,
     }
 
 
@@ -168,6 +190,7 @@ def test_rows_reports_every_key_with_its_effective_value_and_where_it_comes_from
     assert list(rows) == list(ALL_KEYS)
     assert list(r.key for r in make_limits(member_session).rows("script")) == list(SCRIPT_KEYS)
     assert list(r.key for r in make_limits(member_session).rows("wallet")) == list(WALLET_KEYS)
+    assert list(r.key for r in make_limits(member_session).rows("rpg")) == list(RPG_KEYS)
     assert rows["script_limit.plus"].value == 20 and rows["script_limit.plus"].from_database
     assert rows["script_limit.vip"].value == 30 and not rows["script_limit.vip"].from_database
     assert rows["script_limit.free"].value == 3 and not rows["script_limit.free"].from_database

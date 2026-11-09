@@ -44,7 +44,7 @@ def test_a_complete_rpg_setting_is_parsed_and_shares_the_timeouts_but_not_the_ge
     assert (rpg.llm.primary_model, rpg.llm.fallback_model, rpg.llm.summary_model) == (FREE_MODEL,) * 3    # 沒設備援 = 主要模型
     assert rpg.llm.call_timeout_seconds == 15 and rpg.llm.request_budget_seconds == 30                    # 沿用 LLM_*
     assert rpg.llm.thinking_budget is None and config.llm.thinking_budget == 128                          # 思考預算是 Gemini 專屬
-    assert (rpg.base_url, rpg.zero_retention, rpg.supports_json_schema) == (None, False, False)
+    assert (rpg.base_url, rpg.zero_retention, rpg.supports_json_schema, rpg.reasoning) == (None, False, False, False)
     assert config.llm.api_key.reveal() == FAKE_GEMINI_KEY                                                 # 兩把金鑰互不混用
 
 
@@ -98,13 +98,16 @@ def test_the_gemini_model_name_rule_is_unchanged_and_still_rejects_slashes(tmp_p
 
 # ---- 兩個布林設定 --------------------------------------------------------------------------------------
 
-@pytest.mark.parametrize("variable, field", [("OPENROUTER_ZDR", "zero_retention"), ("OPENROUTER_JSON_SCHEMA", "supports_json_schema")])
+@pytest.mark.parametrize(
+    "variable, field",
+    [("OPENROUTER_ZDR", "zero_retention"), ("OPENROUTER_JSON_SCHEMA", "supports_json_schema"), ("OPENROUTER_REASONING", "reasoning")],
+)
 @pytest.mark.parametrize("value, expected", [("true", True), ("TRUE", True), (" false ", False), ("", False)])
-def test_the_two_boolean_rpg_settings_accept_only_true_and_false(tmp_path, variable, field, value, expected):
+def test_the_boolean_rpg_settings_accept_only_true_and_false(tmp_path, variable, field, value, expected):
     assert getattr(load_dev(tmp_path, **RPG_ENV, **{variable: value}).rpg_llm, field) is expected
 
 
-@pytest.mark.parametrize("variable", ["OPENROUTER_ZDR", "OPENROUTER_JSON_SCHEMA"])
+@pytest.mark.parametrize("variable", ["OPENROUTER_ZDR", "OPENROUTER_JSON_SCHEMA", "OPENROUTER_REASONING"])
 def test_an_invalid_boolean_fails_naming_the_variable_but_not_the_value(tmp_path, variable):
     with pytest.raises(ConfigError) as caught:
         load_dev(tmp_path, **RPG_ENV, **{variable: "maybe-so"})
@@ -297,3 +300,11 @@ def test_without_the_old_variables_there_is_no_obsolete_warning(tmp_path, caplog
     with caplog.at_level("WARNING", logger="app.config"):
         load_dev(tmp_path, **RPG_ENV, **ADULT_ON)
     assert not [record for record in caplog.records if "SEXUAL_CONTENT" in record.getMessage()]
+
+
+def test_reasoning_is_off_by_default_and_the_flag_is_independent_of_the_other_two(tmp_path):
+    """OPENROUTER_REASONING 預設關閉；開啟它不影響零保存與結構描述兩個旗標。"""
+    default = load_dev(tmp_path, **RPG_ENV).rpg_llm
+    assert default.reasoning is False
+    on = load_dev(tmp_path, OPENROUTER_REASONING="true", **RPG_ENV).rpg_llm
+    assert (on.reasoning, on.zero_retention, on.supports_json_schema) == (True, False, False)

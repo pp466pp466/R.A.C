@@ -667,3 +667,10 @@ def test_protagonist_errors_do_not_echo_the_input_and_forbidden_markers_are_refu
 def test_a_protagonist_may_share_a_name_with_a_script_character_because_uniqueness_belongs_to_the_script():
     character, errors = script_spec.validate_character(char(name="花小蝶"), path="protagonist")
     assert errors == {} and character["name"] == "花小蝶"
+
+
+def test_a_script_character_may_not_have_an_origin():
+    """來歷只屬於玩家主角；劇本角色帶這個欄位會被當成不認得的欄位拒絕。"""
+    assert "characters[0].origin" in errors_of(valid(characters=[char(origin="native")]))
+    assert "characters[0].origin" in errors_of(valid(characters=[char(origin="transmigrator")]))
+    assert "origin" not in check(valid(characters=[char()]))["characters"][0]

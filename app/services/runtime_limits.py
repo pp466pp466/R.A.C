@@ -1,9 +1,10 @@
 """存放在資料庫的營運限制（見 runtime-limits 規格與 rpg-script-authoring 的 design D10）。
 
-兩組共十五個限制。**劇本與主角組**（十個）：每位作者可擁有的劇本數（依會員等級）、每個台灣日的送審次數（依會員等級）、
+三組共十六個限制。**劇本與主角組**（十個）：每位作者可擁有的劇本數（依會員等級）、每個台灣日的送審次數（依會員等級）、
 每個台灣日的主角生成與重新生成次數（依會員等級，rpg-character-creation）、連續被自動拒絕幾次就暫停發佈。
 **遊戲幣組**（五個，game-wallet）：每輪幣價（以模型鍵區分）、首次註冊贈幣、每日簽到、免費幣上限、預扣逾時秒數。
-兩組由各自的指令修改（`set-script-limit`／`set-wallet-setting`），指令只接受自己那一組的鍵。
+**RPG 組**（一個，rpg-turn-engine）：單一回合最多推進幾個遊戲內月份。
+三組由各自的指令修改（`set-script-limit`／`set-wallet-setting`／`set-rpg-setting`），指令只接受自己那一組的鍵。
 - **每次使用時現讀**，沒有模組層快取、也不放進行程內變數（AGENTS.md 第 9 節）：改了資料庫，下一個請求就用新值，多個 worker 一致。
 - 缺值、不是整數或在合法範圍外時使用內建的保底預設（與遷移 `0013` 寫入的初始值相同，由測試比對），並記一筆只含鍵名的警告
   事件；不會因此放行無上限，也不會讓創作與送審全部失敗。不認得的會員等級套用最保守的 free（同 `quota_policy`）。
@@ -28,14 +29,16 @@ REJECT_STREAK_KEY = "script_reject_streak"           # 連續被自動拒絕幾�
 
 GROUP_SCRIPT = "script"                              # 劇本與主角組：set-script-limit／show-script-limits
 GROUP_WALLET = "wallet"                              # 遊戲幣組：set-wallet-setting／show-wallet-settings
-GROUPS = (GROUP_SCRIPT, GROUP_WALLET)
-GROUP_COMMANDS = {GROUP_SCRIPT: "flask set-script-limit", GROUP_WALLET: "flask set-wallet-setting"}
+GROUP_RPG = "rpg"                                    # RPG 回合引擎組：set-rpg-setting／show-rpg-settings
+GROUPS = (GROUP_SCRIPT, GROUP_WALLET, GROUP_RPG)
+GROUP_COMMANDS = {GROUP_SCRIPT: "flask set-script-limit", GROUP_WALLET: "flask set-wallet-setting", GROUP_RPG: "flask set-rpg-setting"}
 
 COIN_TURN_COST_PREFIX = "coin.turn_cost"             # 每輪幣價，後面接模型鍵
 COIN_SIGNUP_GRANT_KEY = "coin.signup_grant"          # 首次註冊贈幣（免費幣）
 COIN_CHECKIN_GRANT_KEY = "coin.checkin_grant"        # 每日簽到（免費幣）
 COIN_FREE_CAP_KEY = "coin.free_cap"                  # 免費幣上限（只限制新發放）
 COIN_HOLD_TIMEOUT_KEY = "coin.hold_timeout_seconds"  # 預扣逾時秒數：超過仍未結算者在下次存取錢包時退回
+RPG_MAX_MONTHS_KEY = "rpg.max_months_per_turn"       # 單一回合最多推進幾個遊戲內月份（模型提議的 elapsed_months 超過時以此為上限）
 # 可以計價的模型鍵（常數，不是設定：新增模型是程式與設定表一起新增的事件，見 W3）
 WALLET_MODEL_KEYS = ("standard",)
 
@@ -66,10 +69,12 @@ LIMIT_SPECS: dict[str, LimitSpec] = {
     COIN_CHECKIN_GRANT_KEY: LimitSpec(COIN_CHECKIN_GRANT_KEY, 200, 0, 100_000, GROUP_WALLET),
     COIN_FREE_CAP_KEY: LimitSpec(COIN_FREE_CAP_KEY, 1000, 0, 1_000_000, GROUP_WALLET),
     COIN_HOLD_TIMEOUT_KEY: LimitSpec(COIN_HOLD_TIMEOUT_KEY, 180, 60, 1800, GROUP_WALLET),
+    RPG_MAX_MONTHS_KEY: LimitSpec(RPG_MAX_MONTHS_KEY, 24, 0, 240, GROUP_RPG),
 }
 LIMIT_KEYS = tuple(LIMIT_SPECS)
 SCRIPT_LIMIT_KEYS = tuple(key for key, spec in LIMIT_SPECS.items() if spec.group == GROUP_SCRIPT)
 WALLET_LIMIT_KEYS = tuple(key for key, spec in LIMIT_SPECS.items() if spec.group == GROUP_WALLET)
+RPG_LIMIT_KEYS = tuple(key for key, spec in LIMIT_SPECS.items() if spec.group == GROUP_RPG)
 
 # 寫稽核的函式：(動作, 目標使用者的對外識別碼或 None, 細節)。由 registry 提供，讓這個 Service 不直接依賴後台專用的 Repository
 AuditSink = Callable[[str, "str | None", Mapping[str, Any]], None]
@@ -140,8 +145,14 @@ class RuntimeLimits:
     def coin_hold_timeout(self) -> int:
         return self.get(COIN_HOLD_TIMEOUT_KEY)
 
+    # ---- RPG 回合引擎（rpg-turn-engine）：每次都現讀 ---------------------------------------
+
+    def rpg_max_months_per_turn(self) -> int:
+        """單一回合最多推進幾個遊戲內月份；模型提議的月數超過時以此為上限（0 表示不允許時間流逝）。"""
+        return self.get(RPG_MAX_MONTHS_KEY)
+
     def rows(self, group: str | None = None) -> list[LimitRow]:
-        """目前的限制狀態（一次查詢）；`group` 為 None 列全部，否則只列該組（`show-script-limits`、`show-wallet-settings` 使用）。"""
+        """目前的限制狀態（一次查詢）；`group` 為 None 列全部，否則只列該組（`show-script-limits`、`show-wallet-settings`、`show-rpg-settings` 使用）。"""
         stored = self._limits.all_values()
         rows = []
         for spec in LIMIT_SPECS.values():

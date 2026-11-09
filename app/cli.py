@@ -31,6 +31,10 @@
   免費幣上限、預扣逾時秒數）與劇本限制存在同一張資料庫設定表，程式每次使用時現讀，調整不必重新部署。`set-wallet-setting KEY VALUE`
   驗證鍵與範圍後寫入、輸出舊值與新值，並寫一筆 `limit.set` 稽核（管理員欄位為空）；`show-wallet-settings` 列出五個鍵、目前生效的值與是否為
   保底預設。兩組各自的指令只接受自己那一組的鍵（用錯會指出該用哪個指令）。輸出只有鍵與數值。沒有任何 HTTP 端點可以修改設定。
+- `set-rpg-setting`、`show-rpg-settings`：**人工類，不得排程**（rpg-turn-engine）。RPG 回合引擎的設定（目前只有單一回合最多推進幾個遊戲內月份
+  `rpg.max_months_per_turn`）同樣存在資料庫設定表、每次使用時現讀。`set-rpg-setting KEY VALUE` 驗證鍵與範圍後寫入、輸出舊值與新值，並寫一筆
+  `limit.set` 稽核（管理員欄位為空）；`show-rpg-settings` 列出該組的鍵與目前生效的值。只接受自己那一組的鍵（用錯會指出該用哪個指令）。
+  輸出只有鍵與數值。沒有任何 HTTP 端點可以修改設定。
 - `replay-deletions`：**備份還原後、對外開放流量之前**手動執行（不得排程），依 `deletion_tombstones`（以及由日誌取出的
   `使用者編號,刪除時間` 檔案，`--ids-file`）重新抹除復活的帳號；只抹除建立時間不晚於刪除時間且不是管理員的帳號，
   `--dry-run` 只列筆數。檔案先整體驗證，格式錯誤時在抹除任何帳號之前失敗，只指出行號；輸出只有筆數，不含檔案路徑與內容。
@@ -54,7 +58,7 @@ from app.services.registry import (
     build_alert_service, build_data_retention_service, build_deletion_replay_service, build_runtime_limits,
     build_script_seed_service,
 )
-from app.services.runtime_limits import GROUP_SCRIPT, GROUP_WALLET, LimitError
+from app.services.runtime_limits import GROUP_RPG, GROUP_SCRIPT, GROUP_WALLET, LimitError
 from app.services.cs_prompt import leak_marker
 from app.services.deletion_replay_service import ReplayFileError, parse_replay_file
 from app.services.script_seed_service import SEED_CREATED, SEED_UNCHANGED, SEED_UPDATED, SeedDataError
@@ -73,7 +77,7 @@ SCHEDULED_COMMANDS: dict[str, str] = {
 # 人工操作的指令：開發用、一次性或還原時才執行，不得排程。
 MANUAL_COMMANDS: tuple[str, ...] = (
     "llm-probe", "create-admin", "age-stats", "replay-deletions", "seed-scripts", "set-script-limit", "show-script-limits",
-    "set-wallet-setting", "show-wallet-settings",
+    "set-wallet-setting", "show-wallet-settings", "set-rpg-setting", "show-rpg-settings",
 )
 
 # ---- llm-probe：固定的無害文字與結構描述（繁體中文），不含任何個資 ----
@@ -384,6 +388,31 @@ def register_cli(app: Flask) -> None:
         factory = current_app.extensions["db_session_factory"]
         with factory() as session:
             rows = build_runtime_limits(session, clock=get_clock()).rows(GROUP_WALLET)
+        for row in rows:
+            note = "" if row.from_database else "（保底預設：資料庫缺值或不合法）"
+            click.echo(f"  {row.key} = {row.value}（範圍 {row.minimum} 至 {row.maximum}）{note}")
+
+    @app.cli.command("set-rpg-setting")
+    @click.argument("key")
+    @click.argument("value", type=int)
+    def set_rpg_setting(key: str, value: int) -> None:
+        """修改一個 RPG 回合引擎設定（見 `show-rpg-settings` 的鍵）。立即生效，不必重新部署；每次修改寫一筆稽核。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            try:
+                previous, current = build_runtime_limits(session, clock=get_clock()).set(key, value, group=GROUP_RPG)
+            except LimitError as error:
+                session.rollback()
+                raise click.ClickException(str(error)) from None
+            session.commit()
+        click.echo(f"{key}：{previous} → {current}")
+
+    @app.cli.command("show-rpg-settings")
+    def show_rpg_settings() -> None:
+        """列出 RPG 回合引擎設定的目前值（只有鍵與數值）。「保底預設」表示資料庫缺值或值不合法。"""
+        factory = current_app.extensions["db_session_factory"]
+        with factory() as session:
+            rows = build_runtime_limits(session, clock=get_clock()).rows(GROUP_RPG)
         for row in rows:
             note = "" if row.from_database else "（保底預設：資料庫缺值或不合法）"
             click.echo(f"  {row.key} = {row.value}（範圍 {row.minimum} 至 {row.maximum}）{note}")

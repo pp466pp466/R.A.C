@@ -16,13 +16,16 @@ from sqlalchemy.orm import Session
 from app.models import MemoryLog, RpgSession, User
 from app.models.base import utcnow
 from app.models.rpg_session import (
-    SESSION_ACTIVE, SESSION_ENDED, TURN_BLOCKED, TURN_COMPLETE, TURN_INTERRUPTED, TURN_STREAMING,
+    OPENING_FALLBACK, OPENING_GENERATING, OPENING_PENDING, OPENING_READY, SESSION_ACTIVE, SESSION_ENDED, TURN_BLOCKED,
+    TURN_COMPLETE, TURN_INTERRUPTED, TURN_STREAMING,
 )
 from app.repositories import session_repository
 from app.repositories.errors import (
     InvalidTurnTransitionError, SessionEndedError, StaleSessionVersionError, TurnInProgressError,
 )
-from app.repositories.session_repository import TURN_CREATED, TURN_REPLAYED, TURN_RESTARTED, SessionRepository
+from app.repositories.session_repository import (
+    OPENING_BUSY, OPENING_CLAIMED, OPENING_DONE, OPENING_TAKEN_OVER, TURN_CREATED, TURN_REPLAYED, TURN_RESTARTED, SessionRepository,
+)
 from tests.support.script_data import validated
 from tests.support.protagonist import protagonist
 
@@ -245,18 +248,6 @@ def test_two_requests_with_the_same_client_message_id_produce_exactly_one_turn(c
     assert sorted(outcomes) == ["conflict", "created"], outcomes
     with Session(concurrent_engine) as s:
         assert s.scalar(select(func.count()).select_from(MemoryLog)) == 1
-
-
-def test_parallel_turns_with_different_ids_get_distinct_sequence_numbers(concurrent_engine):
-    user_id, public_id = seed_save(concurrent_engine)
-
-    def worker(s: Session, index: int) -> int:
-        return SessionRepository(s).start_turn(user_id, public_id, client_msg_id=f"m-{index}", user_action="行動", now=NOW).turn.seq
-
-    seqs = run_in_threads(concurrent_engine, worker, 4)
-    assert sorted(seqs) == [1, 2, 3, 4]
-    with Session(concurrent_engine) as s:
-        assert sorted(s.scalars(select(MemoryLog.seq))) == [1, 2, 3, 4]
 
 
 # ---- 中斷的回合不計輪 -------------------------------------------------------------------------
@@ -508,3 +499,312 @@ def test_a_save_created_before_the_column_existed_reads_normally(repo, member_se
     member_session.expire_all()
     stored = repo.get_owned(alice.id, legacy.public_id)
     assert stored.protagonist_json is None and (stored.player_name, stored.character_age) == ("舊存檔", 30)
+
+
+# ---- rpg-turn-engine：嘗試序號、逾時接手、同一存檔只有一個進行中的回合 ------------------------------------
+
+def test_a_new_save_starts_with_the_opening_pending_and_empty(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    assert (save.opening_state, save.opening_text, save.opening_started_at) == (OPENING_PENDING, None, None)
+    assert member_session.scalar(select(func.count()).select_from(MemoryLog)) == 0                     # 第 0 幕不是回合
+
+
+def test_the_attempt_starts_at_one_and_each_reset_adds_one_but_a_replay_changes_nothing(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    assert start(repo, alice, save).turn.attempt == 1
+    repo.interrupt_turn(alice.id, save.public_id, "m-1", partial_response="片段")
+    assert start(repo, alice, save).turn.attempt == 2                                                   # 中斷後重送
+    repo.block_turn(alice.id, save.public_id, "m-1")
+    assert start(repo, alice, save).turn.attempt == 3                                                   # 被擋後重送
+    finish(repo, alice, save)
+    replayed = start(repo, alice, save)
+    assert replayed.outcome == TURN_REPLAYED and replayed.turn.attempt == 3                             # 已完成的重送：不變
+
+
+def test_a_streaming_turn_that_is_not_stale_conflicts_but_a_stale_one_is_taken_over_with_a_new_attempt(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, now=NOW)
+    with pytest.raises(TurnInProgressError):
+        start(repo, alice, save, now=NOW + timedelta(seconds=179))                                      # 剛好未逾時（預設 180 秒）
+    taken = start(repo, alice, save, action="接手後的行動", now=NOW + timedelta(seconds=181))
+    assert taken.outcome == TURN_RESTARTED
+    assert (taken.turn.attempt, taken.turn.turn_status, taken.turn.user_action, taken.turn.seq) == (2, TURN_STREAMING, "接手後的行動", 1)
+    assert member_session.scalar(select(func.count()).select_from(MemoryLog)) == 1
+
+
+def test_the_stale_threshold_is_the_one_the_caller_passes(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, now=NOW)
+    with pytest.raises(TurnInProgressError):
+        repo.start_turn(alice.id, save.public_id, client_msg_id="m-1", user_action="a", now=NOW + timedelta(seconds=100), stale_after_seconds=120)
+    taken = repo.start_turn(alice.id, save.public_id, client_msg_id="m-1", user_action="a", now=NOW + timedelta(seconds=100), stale_after_seconds=60)
+    assert taken.outcome == TURN_RESTARTED and taken.turn.attempt == 2
+
+
+def test_another_message_id_conflicts_while_a_turn_is_streaming_and_adds_nothing(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, "m-1", now=NOW)
+    with pytest.raises(TurnInProgressError):
+        start(repo, alice, save, "m-2", now=NOW + timedelta(seconds=10))
+    assert member_session.scalar(select(func.count()).select_from(MemoryLog)) == 1
+    finish(repo, alice, save, "m-1")
+    assert start(repo, alice, save, "m-2", now=NOW + timedelta(seconds=20)).outcome == TURN_CREATED         # 上一個離開生成中之後就可以
+
+
+def test_resending_an_interrupted_turn_conflicts_while_another_turn_is_streaming(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, "m-1", now=NOW)
+    repo.interrupt_turn(alice.id, save.public_id, "m-1", partial_response="片段")
+    start(repo, alice, save, "m-2", now=NOW + timedelta(seconds=5))
+    with pytest.raises(TurnInProgressError):
+        start(repo, alice, save, "m-1", now=NOW + timedelta(seconds=10))
+    assert repo.get_turn(alice.id, save.public_id, "m-1").turn_status == TURN_INTERRUPTED
+
+
+def test_a_stale_streaming_turn_with_another_id_is_marked_interrupted_when_a_new_turn_starts(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, "m-1", now=NOW)
+    started = start(repo, alice, save, "m-2", now=NOW + timedelta(seconds=181))
+    assert started.outcome == TURN_CREATED and started.turn.seq == 2
+    old = repo.get_turn(alice.id, save.public_id, "m-1")
+    assert (old.turn_status, old.turn_number, old.attempt) == (TURN_INTERRUPTED, None, 1)
+    assert repo.count_complete_turns(alice.id, save.public_id) == 0
+
+
+def test_parallel_turns_with_different_ids_let_exactly_one_start_and_the_rest_conflict(concurrent_engine):
+    user_id, public_id = seed_save(concurrent_engine)
+
+    def worker(s: Session, index: int) -> str:
+        try:
+            return SessionRepository(s).start_turn(user_id, public_id, client_msg_id=f"m-{index}", user_action="行動", now=NOW).outcome
+        except TurnInProgressError:
+            return "conflict"
+
+    outcomes = run_in_threads(concurrent_engine, worker, 4)
+    assert sorted(outcomes) == ["conflict", "conflict", "conflict", "created"], outcomes
+    with Session(concurrent_engine) as s:
+        assert list(s.scalars(select(MemoryLog.seq))) == [1]
+
+
+def test_parallel_takeovers_of_a_stale_turn_let_exactly_one_win_and_add_one_attempt(concurrent_engine):
+    user_id, public_id = seed_save(concurrent_engine)
+    with Session(concurrent_engine) as s:
+        SessionRepository(s).start_turn(user_id, public_id, client_msg_id="same", user_action="行動", now=NOW)
+        s.commit()
+    later = NOW + timedelta(seconds=300)
+
+    def worker(s: Session, _index: int) -> str:
+        try:
+            return SessionRepository(s).start_turn(user_id, public_id, client_msg_id="same", user_action="行動", now=later).outcome
+        except TurnInProgressError:
+            return "conflict"
+
+    outcomes = run_in_threads(concurrent_engine, worker, 3)
+    assert sorted(outcomes) == ["conflict", "conflict", "restarted"], outcomes
+    with Session(concurrent_engine) as s:
+        assert s.scalar(select(MemoryLog.attempt)) == 2
+
+
+# ---- 收尾與帶 attempt 的轉移 ---------------------------------------------------------------------------
+
+def test_finish_turn_completes_the_turn_writes_the_world_state_and_can_end_the_story_in_one_call(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save)
+    done = repo.finish_turn(
+        alice.id, save.public_id, "m-1", llm_raw_response="劇情", structured_result={"state": "ok"}, now=NOW,
+        world_changes={"current_location": "山門", "elapsed_months": 3}, expected_version=1, end_story=True,
+    )
+    assert (done.world_updated, done.ended) == (True, True)
+    assert (done.turn.turn_status, done.turn.turn_number, done.turn.llm_raw_response) == (TURN_COMPLETE, 1, "劇情")
+    member_session.refresh(save)
+    assert (save.current_location, save.elapsed_months, save.version, save.status) == ("山門", 3, 2, SESSION_ENDED)
+
+
+def test_finish_turn_without_world_changes_only_completes_the_turn(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save)
+    done = repo.finish_turn(alice.id, save.public_id, "m-1", llm_raw_response="劇情", structured_result=None, now=NOW)
+    assert (done.world_updated, done.ended, done.turn.turn_number) == (False, False, 1)
+    member_session.refresh(save)
+    assert (save.version, save.status) == (1, SESSION_ACTIVE)
+
+
+def test_finish_turn_with_a_stale_version_still_completes_the_turn_but_leaves_the_world_state_alone(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save)
+    repo.update_world_state(alice.id, save.public_id, expected_version=1, current_location="別處")          # 版本變成 2
+    done = repo.finish_turn(
+        alice.id, save.public_id, "m-1", llm_raw_response="劇情", structured_result=None, now=NOW,
+        world_changes={"current_location": "山門"}, expected_version=1,
+    )
+    assert done.world_updated is False and done.turn.turn_status == TURN_COMPLETE
+    member_session.refresh(save)
+    assert (save.current_location, save.version) == ("別處", 2)
+
+
+def test_finish_turn_with_a_wrong_attempt_changes_nothing_at_all(repo, member_session):
+    """被接手而過時的產生器（attempt 1）不能完成新的嘗試（attempt 2）：回合、世界狀態、存檔狀態都不動。"""
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, now=NOW)
+    start(repo, alice, save, now=NOW + timedelta(seconds=300))                                          # 接手：attempt 2
+    member_session.commit()
+    with pytest.raises(InvalidTurnTransitionError):
+        repo.finish_turn(
+            alice.id, save.public_id, "m-1", llm_raw_response="過時的劇情", structured_result=None, now=NOW, attempt=1,
+            world_changes={"current_location": "不該寫入"}, expected_version=1, end_story=True,
+        )
+    member_session.rollback()                                       # 呼叫端遇到例外會回復交易：這裡也確認沒有半套寫入
+    turn = repo.get_turn(alice.id, save.public_id, "m-1")
+    assert (turn.turn_status, turn.llm_raw_response, turn.attempt) == (TURN_STREAMING, "", 2)
+    member_session.refresh(save)
+    assert (save.current_location, save.version, save.status) == ("", 1, SESSION_ACTIVE)
+    done = repo.finish_turn(alice.id, save.public_id, "m-1", llm_raw_response="新的劇情", structured_result=None, now=NOW, attempt=2)
+    assert done.turn.turn_status == TURN_COMPLETE
+
+
+def test_a_stale_producer_cannot_interrupt_or_block_the_new_attempt(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save, now=NOW)
+    start(repo, alice, save, now=NOW + timedelta(seconds=300))
+    with pytest.raises(InvalidTurnTransitionError):
+        repo.interrupt_turn(alice.id, save.public_id, "m-1", partial_response="舊的片段", attempt=1)
+    with pytest.raises(InvalidTurnTransitionError):
+        repo.block_turn(alice.id, save.public_id, "m-1", attempt=1)
+    assert repo.get_turn(alice.id, save.public_id, "m-1").turn_status == TURN_STREAMING
+    assert repo.interrupt_turn(alice.id, save.public_id, "m-1", partial_response="新的片段", attempt=2).turn_status == TURN_INTERRUPTED
+
+
+def test_blocked_text_is_kept_on_the_streaming_turn_and_the_final_block_records_the_categories(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    start(repo, alice, save)
+    first = repo.save_blocked_text(
+        alice.id, save.public_id, "m-1", text="被擋的第一段", structured_result={"blocked": {"categories": ["tier_mismatch"], "auto_retry": True}},
+    )
+    assert (first.turn_status, first.llm_raw_response) == (TURN_STREAMING, "被擋的第一段")              # 自動重生期間仍在生成中
+    blocked = repo.block_turn(
+        alice.id, save.public_id, "m-1", partial_response="被擋的第二段",
+        structured_result={"blocked": {"categories": ["minor_sexual"], "auto_retry": True}},
+    )
+    assert (blocked.turn_status, blocked.turn_number, blocked.llm_raw_response) == (TURN_BLOCKED, None, "被擋的第二段")
+    assert blocked.structured_result == {"blocked": {"categories": ["minor_sexual"], "auto_retry": True}}
+    with pytest.raises(InvalidTurnTransitionError):
+        repo.save_blocked_text(alice.id, save.public_id, "m-1", text="x", structured_result={"blocked": {}})      # 已不在生成中
+
+
+def test_the_new_turn_methods_return_nothing_for_a_non_owner(repo, member_session):
+    alice, bob = make_user(member_session, 1), make_user(member_session, 2)
+    save = open_save(repo, alice)
+    start(repo, alice, save)
+    assert repo.finish_turn(bob.id, save.public_id, "m-1", llm_raw_response="r", structured_result=None, now=NOW) is None
+    assert repo.save_blocked_text(bob.id, save.public_id, "m-1", text="x", structured_result={}) is None
+    assert repo.claim_opening(bob.id, save.public_id, now=NOW) is None
+    assert repo.finish_opening(bob.id, save.public_id, claimed_at=NOW, state=OPENING_READY, text="x") is None
+    assert repo.reset_opening(bob.id, save.public_id, claimed_at=NOW) is None
+    member_session.expire_all()
+    assert (save.opening_state, repo.get_turn(alice.id, save.public_id, "m-1").turn_status) == (OPENING_PENDING, TURN_STREAMING)
+
+
+# ---- 第 0 幕：搶佔、接手、完成、退回 -----------------------------------------------------------------------
+
+def test_claiming_the_opening_moves_pending_to_generating_and_records_the_start_time(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    outcome, claimed = repo.claim_opening(alice.id, save.public_id, now=NOW)
+    assert outcome == OPENING_CLAIMED and claimed.opening_state == OPENING_GENERATING and claimed.opening_started_at == NOW
+
+
+def test_a_second_claim_is_busy_until_the_first_is_stale_and_then_takes_over(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    repo.claim_opening(alice.id, save.public_id, now=NOW)
+    assert repo.claim_opening(alice.id, save.public_id, now=NOW + timedelta(seconds=89))[0] == OPENING_BUSY
+    outcome, taken = repo.claim_opening(alice.id, save.public_id, now=NOW + timedelta(seconds=91))
+    assert outcome == OPENING_TAKEN_OVER and taken.opening_started_at == NOW + timedelta(seconds=91)
+
+
+def test_a_producer_that_was_taken_over_cannot_overwrite_the_new_result(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    repo.claim_opening(alice.id, save.public_id, now=NOW)
+    second_start = NOW + timedelta(seconds=120)
+    repo.claim_opening(alice.id, save.public_id, now=second_start)                                      # 接手
+    assert repo.finish_opening(alice.id, save.public_id, claimed_at=NOW, state=OPENING_READY, text="過時的開場") is False
+    assert repo.reset_opening(alice.id, save.public_id, claimed_at=NOW) is False
+    member_session.refresh(save)
+    assert (save.opening_state, save.opening_text) == (OPENING_GENERATING, None)
+    assert repo.finish_opening(alice.id, save.public_id, claimed_at=second_start, state=OPENING_READY, text="新的開場") is True
+    member_session.refresh(save)
+    assert (save.opening_state, save.opening_text) == (OPENING_READY, "新的開場")
+
+
+@pytest.mark.parametrize("state, text", [(OPENING_READY, "生成的開場"), (OPENING_FALLBACK, "劇本的初始對話"), (OPENING_FALLBACK, "")])
+def test_a_finished_opening_is_never_claimed_again(repo, member_session, state, text):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    repo.claim_opening(alice.id, save.public_id, now=NOW)
+    assert repo.finish_opening(alice.id, save.public_id, claimed_at=NOW, state=state, text=text) is True
+    for later in (NOW + timedelta(seconds=1), NOW + timedelta(days=1)):
+        outcome, again = repo.claim_opening(alice.id, save.public_id, now=later)
+        assert outcome == OPENING_DONE and (again.opening_state, again.opening_text) == (state, text)
+    assert repo.finish_opening(alice.id, save.public_id, claimed_at=NOW, state=OPENING_READY, text="不該覆蓋") is False
+
+
+def test_finishing_the_opening_only_accepts_ready_or_fallback(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    repo.claim_opening(alice.id, save.public_id, now=NOW)
+    for state in (OPENING_PENDING, OPENING_GENERATING, "bogus"):
+        with pytest.raises(ValueError):
+            repo.finish_opening(alice.id, save.public_id, claimed_at=NOW, state=state, text="x")
+
+
+def test_resetting_the_opening_returns_to_pending_and_discards_the_partial_text(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    repo.claim_opening(alice.id, save.public_id, now=NOW)
+    assert repo.reset_opening(alice.id, save.public_id, claimed_at=NOW) is True
+    member_session.refresh(save)
+    assert (save.opening_state, save.opening_text, save.opening_started_at) == (OPENING_PENDING, None, None)
+    assert repo.claim_opening(alice.id, save.public_id, now=NOW + timedelta(seconds=5))[0] == OPENING_CLAIMED       # 下次進入再生成
+
+
+def test_a_save_from_before_the_columns_existed_is_treated_as_done_and_never_generated(repo, member_session):
+    alice = make_user(member_session)
+    legacy = RpgSession(user_id=alice.id, script_snapshot_json={"title": "舊"}, player_name="舊存檔", character_age=30)
+    member_session.add(legacy)
+    member_session.commit()
+    outcome, found = repo.claim_opening(alice.id, legacy.public_id, now=NOW)
+    assert outcome == OPENING_DONE and (found.opening_state, found.opening_text) == (None, None)
+
+
+def test_two_claims_at_once_let_exactly_one_generate(concurrent_engine):
+    user_id, public_id = seed_save(concurrent_engine)
+
+    def worker(s: Session, _index: int) -> str:
+        return SessionRepository(s).claim_opening(user_id, public_id, now=NOW)[0]
+
+    outcomes = run_in_threads(concurrent_engine, worker, 4)
+    assert sorted(outcomes) == [OPENING_BUSY, OPENING_BUSY, OPENING_BUSY, OPENING_CLAIMED], outcomes
+
+
+def test_the_export_carries_the_opening_state_and_text_but_not_the_start_time(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    repo.claim_opening(alice.id, save.public_id, now=NOW)
+    repo.finish_opening(alice.id, save.public_id, claimed_at=NOW, state=OPENING_READY, text="霧中的山門")
+    (exported,) = list(repo.export_sessions(alice.id))
+    assert (exported["opening_state"], exported["opening_text"]) == (OPENING_READY, "霧中的山門")
+    assert "opening_started_at" not in exported

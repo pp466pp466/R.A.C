@@ -9,8 +9,14 @@
 - `(session_id, client_msg_id)` 與 `(session_id, seq)` 由資料庫唯一約束保證。開始回合先對存檔那一列做條件式 UPDATE
   （同時確認存檔未完結、更新 `last_active_at`）：這個 UPDATE 取得該列的鎖並持有到交易結束，所以同一存檔的並行請求被串行化，
   之後「讀既有回合、`seq` 取目前最大值加 1、寫入」不會互相搶；仍保留撞到唯一約束時重試一次的保險。
-- 重送：`complete` 直接回傳既有回合；`interrupted`／`blocked` 重設為 `streaming` 並覆蓋該筆；`streaming` 拋出 `TurnInProgressError`。
+- 重送：`complete` 直接回傳既有回合；`interrupted`／`blocked` 重設為 `streaming` 並覆蓋該筆（`attempt` 加 1）；`streaming` 未逾時拋出
+  `TurnInProgressError`，逾時（`updated_at` 早於傳入的逾時秒數）視同中斷而接手（`attempt` 同樣加 1）。
+- 同一存檔同時只能有一個未逾時的 `streaming` 回合：其他編號的回合開始時拋出 `TurnInProgressError`；其他編號且已逾時的 `streaming` 回合被標為 `interrupted`。
+- `attempt`（嘗試序號，從 1 起）是遊戲幣預扣冪等鍵的一部分；完成、中斷與被擋可帶 `attempt`，使被接手而過時的產生器無法改寫新的嘗試。
 - 輪數（`turn_number`）只在回合完成時指派（已完成的回合數加 1），所以中斷與被擋的回合不計輪、不佔輪數。
+
+**第 0 幕**（`opening_state`）：搶佔、接手、完成與退回都是帶 `user_id` 與狀態條件的單一 UPDATE；搶佔時的 `opening_started_at` 就是該次生成的憑證，
+寫回時必須相同，所以被接手而過時的產生器不會覆蓋新的結果。空值（遷移之前的存檔）視同 `fallback`，永遠不生成。
 
 **已完結的存檔**：`end_session` 之後不得再開始回合或改動世界狀態；沒有任何方法把狀態改回進行中（不可恢復）。
 玩家自行封存（`is_archived`）與劇情完結是兩件事，`set_archived` 對已完結的存檔也有效。
@@ -21,7 +27,7 @@ from __future__ import annotations
 
 import copy
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Iterator, Mapping
 
 import sqlalchemy as sa
@@ -29,7 +35,8 @@ from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from app.models.rpg_session import (
-    SESSION_ACTIVE, SESSION_ENDED, TURN_BLOCKED, TURN_COMPLETE, TURN_INTERRUPTED, TURN_STREAMING, MemoryLog, RpgSession,
+    OPENING_FALLBACK, OPENING_GENERATING, OPENING_PENDING, OPENING_READY, SESSION_ACTIVE, SESSION_ENDED, TURN_BLOCKED,
+    TURN_COMPLETE, TURN_INTERRUPTED, TURN_STREAMING, MemoryLog, RpgSession,
 )
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
@@ -41,6 +48,16 @@ TURN_CREATED = "created"          # 新增了一個回合
 TURN_RESTARTED = "restarted"      # 重送了中斷或被擋的回合：該筆被重設為生成中
 TURN_REPLAYED = "replayed"        # 重送了已完成的回合：回傳既有的回合，沒有新增或改動
 
+# `claim_opening` 的結果
+OPENING_CLAIMED = "claimed"            # 取得生成權（pending → generating）
+OPENING_TAKEN_OVER = "taken_over"      # 接手了停在 generating 太久的生成
+OPENING_BUSY = "busy"                  # 另一個請求正在生成且未逾時
+OPENING_DONE = "done"                  # 已經是 ready 或 fallback（或遷移之前的舊存檔）：不再生成
+
+# 預設的逾時秒數：與 `coin.hold_timeout_seconds` 的保底預設相同；呼叫端（GameService）每次現讀設定後傳入
+DEFAULT_TURN_STALE_SECONDS = 180
+OPENING_STALE_SECONDS = 90             # `generating` 超過這麼久未完成，視同生成者已不在
+
 # `update_world_state` 可以寫入的欄位（對應存檔的欄位名稱）
 WORLD_STATE_FIELDS = (
     "current_location", "status_summary", "entities_json", "goals_json", "milestone_progress_json", "elapsed_months",
@@ -51,6 +68,15 @@ WORLD_STATE_FIELDS = (
 class TurnStart:
     turn: MemoryLog
     outcome: str
+
+
+@dataclass(frozen=True)
+class TurnFinish:
+    """`finish_turn` 的結果：完成的回合、世界狀態是否寫入（版本不一致或存檔已完結時為 False）、存檔是否在這次轉為已完結。"""
+
+    turn: MemoryLog
+    world_updated: bool
+    ended: bool
 
 
 def _exported_protagonist(stored: Any) -> dict[str, Any] | None:
@@ -82,6 +108,7 @@ class SessionRepository(BaseRepository[RpgSession]):
             protagonist_json=copy.deepcopy(dict(protagonist)),
             content_tier=content_tier, last_active_at=now,
             entities_json={}, goals_json={"active": [], "archived": []}, milestone_progress_json={},
+            opening_state=OPENING_PENDING,
         )
         self._session.add(save)
         self._session.flush()
@@ -170,24 +197,37 @@ class SessionRepository(BaseRepository[RpgSession]):
             return None
         return self._complete_count(save.id)
 
-    def start_turn(self, user_id: int, public_id: str, *, client_msg_id: str, user_action: str, now: datetime) -> TurnStart | None:
-        """開始一個回合（冪等）。不是自己的存檔回傳 `None`；存檔已完結拋出 `SessionEndedError`；
-        同一個編號的回合仍在串流中拋出 `TurnInProgressError`。"""
+    def start_turn(
+        self, user_id: int, public_id: str, *, client_msg_id: str, user_action: str, now: datetime,
+        stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS,
+    ) -> TurnStart | None:
+        """開始一個回合（冪等）。不是自己的存檔回傳 `None`；存檔已完結拋出 `SessionEndedError`。
+
+        - 同一個編號：`complete` 回傳既有回合（`replayed`）；`interrupted`／`blocked` 重設並把 `attempt` 加 1；`streaming` 未逾時拋出
+          `TurnInProgressError`，逾時（`updated_at` 早於 `now` 減 `stale_after_seconds`）視同中斷而接手（`attempt` 加 1）。
+        - 同一存檔已有「其他編號且未逾時」的 `streaming` 回合：拋出 `TurnInProgressError`（同時只能有一個）；其他編號而逾時者標為 `interrupted`。
+        `stale_after_seconds` 由呼叫端每次現讀（遊戲幣的預扣逾時秒數），這樣預扣與回合同時到期。"""
         save = self.get_owned(user_id, public_id)
         if save is None:
             return None
         # 取得存檔那一列的鎖（持有到交易結束）並確認未完結：同一存檔的並行請求從這裡開始被串行化
         if self._update_owned(save, RpgSession.status == SESSION_ACTIVE, last_active_at=now) != 1:
             raise SessionEndedError
+        cutoff = now - timedelta(seconds=stale_after_seconds)
         for attempt in (1, 2):
             existing = self._turn_by_client_id(save.id, client_msg_id)
             if existing is not None:
-                return self._resend(existing, user_action)
+                if existing.turn_status == TURN_COMPLETE:
+                    return TurnStart(existing, TURN_REPLAYED)
+                self._ensure_no_other_streaming(save.id, except_turn_id=existing.id, cutoff=cutoff, now=now)
+                return self._resend(existing, user_action, cutoff=cutoff, now=now)
+            self._ensure_no_other_streaming(save.id, except_turn_id=None, cutoff=cutoff, now=now)
             try:
                 with self._session.begin_nested():
                     turn = MemoryLog(
                         session_id=save.id, client_msg_id=client_msg_id, seq=self._next_seq(save.id),
-                        turn_status=TURN_STREAMING, user_action=user_action, llm_raw_response="",
+                        turn_status=TURN_STREAMING, user_action=user_action, llm_raw_response="", attempt=1,
+                        created_at=now, updated_at=now,
                     )
                     self._session.add(turn)
                     self._session.flush()
@@ -199,9 +239,9 @@ class SessionRepository(BaseRepository[RpgSession]):
 
     def complete_turn(
         self, user_id: int, public_id: str, client_msg_id: str, *, llm_raw_response: str, structured_result: Mapping[str, Any] | None,
-        now: datetime,
+        now: datetime, attempt: int | None = None,
     ) -> MemoryLog | None:
-        """回合完成：指派輪數（已完成的回合數加 1）。不是自己的回傳 `None`；不是生成中拋出 `InvalidTurnTransitionError`。"""
+        """回合完成：指派輪數（已完成的回合數加 1）。不是自己的回傳 `None`；不是生成中（或 `attempt` 不符）拋出 `InvalidTurnTransitionError`。"""
         save = self.get_owned(user_id, public_id)
         if save is None:
             return None
@@ -210,26 +250,131 @@ class SessionRepository(BaseRepository[RpgSession]):
         if turn is None:
             return None
         self._finish_turn(
-            turn, TURN_COMPLETE, turn_number=self._complete_count(save.id) + 1, llm_raw_response=llm_raw_response,
+            turn, TURN_COMPLETE, attempt=attempt, turn_number=self._complete_count(save.id) + 1, llm_raw_response=llm_raw_response,
             structured_result=dict(structured_result) if structured_result is not None else None,
         )
         return turn
 
-    def interrupt_turn(self, user_id: int, public_id: str, client_msg_id: str, *, partial_response: str) -> MemoryLog | None:
-        """串流中斷：保留已收到的片段，不計輪。"""
-        return self._end_unfinished(user_id, public_id, client_msg_id, TURN_INTERRUPTED, partial_response)
+    def finish_turn(
+        self, user_id: int, public_id: str, client_msg_id: str, *, llm_raw_response: str, structured_result: Mapping[str, Any] | None,
+        now: datetime, attempt: int | None = None, world_changes: Mapping[str, Any] | None = None, expected_version: int | None = None,
+        end_story: bool = False,
+    ) -> TurnFinish | None:
+        """回合的收尾：完成回合（指派輪數）、寫入世界狀態、必要時轉為已完結——全部在呼叫端的同一個交易內。
 
-    def block_turn(self, user_id: int, public_id: str, client_msg_id: str, *, partial_response: str = "") -> MemoryLog | None:
-        """被審查擋下：不計輪，也不進上下文。"""
-        return self._end_unfinished(user_id, public_id, client_msg_id, TURN_BLOCKED, partial_response)
+        回合一定完成；世界狀態只在 `world_changes` 不是 `None` 且 `expected_version` 與後端一致時寫入，版本不一致（或存檔已被完結）時
+        不寫入、回合仍完成（`world_updated=False`，以後端為準）。`end_story` 為真時在回合完成後把存檔轉為已完結。
+        不是自己的回傳 `None`；回合不是生成中（或 `attempt` 不符）拋出 `InvalidTurnTransitionError`（整個收尾沒有任何改動）。"""
+        turn = self.complete_turn(
+            user_id, public_id, client_msg_id, llm_raw_response=llm_raw_response, structured_result=structured_result, now=now,
+            attempt=attempt,
+        )
+        if turn is None:
+            return None
+        world_updated = False
+        if world_changes is not None:
+            if expected_version is None:
+                raise ValueError("寫入世界狀態必須帶預期的版本號。")
+            try:
+                world_updated = self.update_world_state(user_id, public_id, expected_version=expected_version, **dict(world_changes)) is not None
+            except (StaleSessionVersionError, SessionEndedError):
+                world_updated = False
+        ended = bool(end_story) and self.end_session(user_id, public_id, now=now) is True
+        return TurnFinish(turn, world_updated, ended)
+
+    def interrupt_turn(
+        self, user_id: int, public_id: str, client_msg_id: str, *, partial_response: str, attempt: int | None = None
+    ) -> MemoryLog | None:
+        """串流中斷：保留已收到的片段，不計輪。"""
+        return self._end_unfinished(user_id, public_id, client_msg_id, TURN_INTERRUPTED, partial_response, attempt=attempt)
+
+    def block_turn(
+        self, user_id: int, public_id: str, client_msg_id: str, *, partial_response: str = "", attempt: int | None = None,
+        structured_result: Mapping[str, Any] | None = None,
+    ) -> MemoryLog | None:
+        """被審查擋下：不計輪，也不進上下文。`structured_result` 通常是 `{"blocked": {"categories": [...], "auto_retry": ...}}`。"""
+        return self._end_unfinished(
+            user_id, public_id, client_msg_id, TURN_BLOCKED, partial_response, attempt=attempt, structured_result=structured_result
+        )
+
+    def save_blocked_text(
+        self, user_id: int, public_id: str, client_msg_id: str, *, text: str, structured_result: Mapping[str, Any], attempt: int | None = None,
+    ) -> MemoryLog | None:
+        """第一次被擋時先把被擋的文字與類別記在仍為 `streaming` 的回合上（自動重生期間；之後的結局由 `block_turn`／`finish_turn` 覆蓋）。
+        不改變回合狀態；回合不是生成中（或 `attempt` 不符）拋出 `InvalidTurnTransitionError`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        turn = self._turn_by_client_id(save.id, client_msg_id)
+        if turn is None:
+            return None
+        conditions = [MemoryLog.id == turn.id, MemoryLog.turn_status == TURN_STREAMING]
+        if attempt is not None:
+            conditions.append(MemoryLog.attempt == attempt)
+        result = self._session.execute(
+            update(MemoryLog).where(*conditions).values(llm_raw_response=text, structured_result=dict(structured_result))
+            .execution_options(synchronize_session=False)
+        )
+        self._session.expire(turn)
+        if result.rowcount != 1:
+            raise InvalidTurnTransitionError
+        return turn
+
+    # ---- 第 0 幕（條件式 UPDATE：搶佔、接手、完成、退回）-----------------------------------------
+
+    def claim_opening(
+        self, user_id: int, public_id: str, *, now: datetime, stale_after_seconds: int = OPENING_STALE_SECONDS
+    ) -> tuple[str, RpgSession] | None:
+        """嘗試取得第 0 幕的生成權。不是自己的存檔回傳 `None`；否則回傳（結果, 存檔）：
+        `claimed`（pending → generating）、`taken_over`（generating 超過 `stale_after_seconds`）、`busy`（另一個請求正在生成且未逾時）、
+        `done`（已經是 ready／fallback，或遷移之前的存檔為空值）。只有 `claimed` 與 `taken_over` 的呼叫者可以生成；
+        存檔的 `opening_started_at` 就是這次生成的憑證，寫回時必須帶同一個值。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        if self._update_owned(
+            save, RpgSession.opening_state == OPENING_PENDING, opening_state=OPENING_GENERATING, opening_started_at=now, opening_text=None,
+        ) == 1:
+            return OPENING_CLAIMED, save
+        cutoff = now - timedelta(seconds=stale_after_seconds)
+        if self._update_owned(
+            save, RpgSession.opening_state == OPENING_GENERATING, RpgSession.opening_started_at < cutoff, opening_started_at=now,
+        ) == 1:
+            return OPENING_TAKEN_OVER, save
+        return (OPENING_BUSY if save.opening_state == OPENING_GENERATING else OPENING_DONE), save
+
+    def finish_opening(
+        self, user_id: int, public_id: str, *, claimed_at: datetime, state: str, text: str,
+    ) -> bool | None:
+        """第 0 幕生成完成：`state` 為 `ready`（文字是生成的開場）或 `fallback`（文字是劇本的初始對話，可為空字串）。
+        只有「仍是 generating 且憑證（開始時間）相同」才寫入；已被接手或已完成則不改動並回傳 `False`。不是自己的存檔回傳 `None`。"""
+        if state not in (OPENING_READY, OPENING_FALLBACK):
+            raise ValueError("完成的第 0 幕必須是 ready 或 fallback。")
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        return self._update_owned(
+            save, RpgSession.opening_state == OPENING_GENERATING, RpgSession.opening_started_at == claimed_at,
+            opening_state=state, opening_text=text,
+        ) == 1
+
+    def reset_opening(self, user_id: int, public_id: str, *, claimed_at: datetime) -> bool | None:
+        """客戶端斷線：退回 pending、丟棄部分文字與開始時間，下次進入再生成。條件同 `finish_opening`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        return self._update_owned(
+            save, RpgSession.opening_state == OPENING_GENERATING, RpgSession.opening_started_at == claimed_at,
+            opening_state=OPENING_PENDING, opening_text=None, opening_started_at=None,
+        ) == 1
 
     # ---- 匯出（個人資料匯出用）-------------------------------------------------------------
 
     def export_sessions(self, user_id: int, *, page_size: int = 50) -> Iterator[dict[str, Any]]:
         """這位使用者的全部存檔（含已完結與已封存的），由舊到新逐筆產生（以存檔編號為游標分頁）。回合另以 `export_turns` 分頁讀取。
 
-        含劇本標題（取自存檔自己的複本）、狀態、內容模式、主角姓名與角色年齡、主角的角色卡與錨定事實（`protagonist`；遷移之前建立的存檔為空）、所在地點、狀態摘要、各時間、記事簿全文與世界狀態
-        （`world_state`，只給 JSON 匯出使用）。**不含**劇本複本本身（那是來源劇本作者的內容）、來源版本編號、版本號與其他內部編號。
+        含劇本標題（取自存檔自己的複本）、狀態、內容模式、主角姓名與角色年齡、主角的角色卡與錨定事實（`protagonist`；遷移之前建立的存檔為空）、所在地點、狀態摘要、各時間、記事簿全文、第 0 幕的狀態與文字（遷移之前的存檔為空）與世界狀態
+        （`world_state`，只給 JSON 匯出使用）。**不含**劇本複本本身（那是來源劇本作者的內容）、來源版本編號、版本號、第 0 幕的開始時間與其他內部編號。
         """
         after = 0
         while True:
@@ -246,6 +391,7 @@ class SessionRepository(BaseRepository[RpgSession]):
                     "status_summary": save.status_summary, "elapsed_months": save.elapsed_months, "is_archived": save.is_archived,
                     "created_at": save.created_at, "last_active_at": save.last_active_at, "ended_at": save.ended_at,
                     "notebook_text": save.notebook_text, "protagonist": _exported_protagonist(save.protagonist_json),
+                    "opening_state": save.opening_state, "opening_text": save.opening_text,
                     "world_state": {
                         "entities": save.entities_json, "goals": save.goals_json, "milestone_progress": save.milestone_progress_json,
                     },
@@ -287,37 +433,61 @@ class SessionRepository(BaseRepository[RpgSession]):
             select(func.count()).select_from(MemoryLog).where(MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_COMPLETE)
         ) or 0
 
-    def _resend(self, existing: MemoryLog, user_action: str) -> TurnStart:
-        if existing.turn_status == TURN_COMPLETE:
-            return TurnStart(existing, TURN_REPLAYED)
-        if existing.turn_status == TURN_STREAMING:
+    def _ensure_no_other_streaming(self, session_id: int, *, except_turn_id: int | None, cutoff: datetime, now: datetime) -> None:
+        """同一存檔同時只能有一個未逾時的 `streaming` 回合。其他編號未逾時者拋出 `TurnInProgressError`；已逾時者標為 `interrupted`。"""
+        others = [MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_STREAMING]
+        if except_turn_id is not None:
+            others.append(MemoryLog.id != except_turn_id)
+        if self._session.scalar(select(func.count()).select_from(MemoryLog).where(*others, MemoryLog.updated_at >= cutoff)):
             raise TurnInProgressError
-        # interrupted、blocked：重新生成並覆蓋該筆（序號與編號不變，輪數仍是空的）
         self._session.execute(
-            update(MemoryLog)
-            .where(MemoryLog.id == existing.id, MemoryLog.turn_status.in_((TURN_INTERRUPTED, TURN_BLOCKED)))
-            .values(turn_status=TURN_STREAMING, user_action=user_action, llm_raw_response="", structured_result=None, turn_number=None)
+            update(MemoryLog).where(*others, MemoryLog.updated_at < cutoff)
+            .values(turn_status=TURN_INTERRUPTED, turn_number=None, updated_at=now).execution_options(synchronize_session=False)
+        )
+
+    def _resend(self, existing: MemoryLog, user_action: str, *, cutoff: datetime, now: datetime) -> TurnStart:
+        # interrupted、blocked，或逾時的 streaming：重新生成並覆蓋該筆（序號與編號不變，輪數仍是空的，嘗試序號加 1）
+        reusable = (
+            MemoryLog.turn_status.in_((TURN_INTERRUPTED, TURN_BLOCKED))
+            | ((MemoryLog.turn_status == TURN_STREAMING) & (MemoryLog.updated_at < cutoff))
+        )
+        result = self._session.execute(
+            update(MemoryLog).where(MemoryLog.id == existing.id, reusable)
+            .values(
+                turn_status=TURN_STREAMING, user_action=user_action, llm_raw_response="", structured_result=None, turn_number=None,
+                attempt=MemoryLog.attempt + 1, updated_at=now,
+            )
             .execution_options(synchronize_session=False)
         )
         self._session.expire(existing)
+        if result.rowcount != 1:
+            raise TurnInProgressError                       # 仍在串流且未逾時（或剛被別人接手）
         return TurnStart(existing, TURN_RESTARTED)
 
-    def _finish_turn(self, turn: MemoryLog, to_status: str, **values: Any) -> None:
-        """回合離開生成中：單一條件式 UPDATE，只有 `streaming` 的回合成立。"""
+    def _finish_turn(self, turn: MemoryLog, to_status: str, *, attempt: int | None = None, **values: Any) -> None:
+        """回合離開生成中：單一條件式 UPDATE，只有 `streaming`（且 `attempt` 相符，若有帶）的回合成立。"""
+        conditions = [MemoryLog.id == turn.id, MemoryLog.turn_status == TURN_STREAMING]
+        if attempt is not None:
+            conditions.append(MemoryLog.attempt == attempt)
         result = self._session.execute(
-            update(MemoryLog).where(MemoryLog.id == turn.id, MemoryLog.turn_status == TURN_STREAMING)
-            .values(turn_status=to_status, **values).execution_options(synchronize_session=False)
+            update(MemoryLog).where(*conditions).values(turn_status=to_status, **values).execution_options(synchronize_session=False)
         )
         self._session.expire(turn)
         if result.rowcount != 1:
             raise InvalidTurnTransitionError
 
-    def _end_unfinished(self, user_id: int, public_id: str, client_msg_id: str, to_status: str, partial: str) -> MemoryLog | None:
+    def _end_unfinished(
+        self, user_id: int, public_id: str, client_msg_id: str, to_status: str, partial: str, *, attempt: int | None = None,
+        structured_result: Mapping[str, Any] | None = None,
+    ) -> MemoryLog | None:
         save = self.get_owned(user_id, public_id)
         if save is None:
             return None
         turn = self._turn_by_client_id(save.id, client_msg_id)
         if turn is None:
             return None
-        self._finish_turn(turn, to_status, turn_number=None, llm_raw_response=partial)
+        values: dict[str, Any] = {"turn_number": None, "llm_raw_response": partial}
+        if structured_result is not None:
+            values["structured_result"] = dict(structured_result)
+        self._finish_turn(turn, to_status, attempt=attempt, **values)
         return turn

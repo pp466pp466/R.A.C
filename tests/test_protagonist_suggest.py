@@ -372,3 +372,31 @@ def test_setup_has_the_same_visibility_and_tier_rules_as_starting(member_session
     with pytest.raises(ContentTierRestricted):
         service.setup(teen, script_version(member_session, title="一般", content_tier="standard").public_id)
     assert service.setup(owner, draft.public_id)["title"]
+
+
+# ---- 來歷（rpg-turn-engine）：生成預覽不決定來歷 ---------------------------------------------------------------
+
+
+def test_setup_lists_the_two_origin_options(member_session):
+    user, version = player(member_session), script_version(member_session)
+    assert make_service(member_session, FakeLLMProvider()).setup(user, version.public_id)["origin_options"] == ["native", "transmigrator"]
+
+
+def test_the_preview_has_no_origin_and_the_prompt_never_asks_for_one(member_session):
+    user, version = player(member_session), script_version(member_session)
+    provider = FakeLLMProvider().script(output())
+    result = make_service(member_session, provider).suggest(user, version.public_id, None)
+    assert "origin" not in result["protagonist"]
+    request = provider.calls[0]
+    assert "origin" not in request.system_instruction.lower() and "穿越" not in request.system_instruction
+
+
+def test_an_origin_in_the_model_output_never_reaches_the_preview(member_session):
+    """模型多給了來歷：結構描述不允許額外欄位 → 驗證失敗並重試一次；重試的輸出沒有來歷，預覽也不含。"""
+    user, version = player(member_session), script_version(member_session)
+    with_origin = json.dumps(
+        {"character": {**json.loads(output())["character"], "origin": "transmigrator"}, "anchor": json.loads(output())["anchor"]}, ensure_ascii=False
+    )
+    provider = FakeLLMProvider().script(with_origin).script(output())
+    result = make_service(member_session, provider).suggest(user, version.public_id, None)
+    assert "origin" not in result["protagonist"] and len(provider.calls) == 2

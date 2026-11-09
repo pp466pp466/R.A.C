@@ -85,6 +85,7 @@ node --test "tests/js/**/*.test.js"
 | `OPENROUTER_BASE_URL` | 否 | OpenAI 相容端點的基底網址，預設為 OpenRouter 官方網址；必須是 `https`（development 與 testing 另允許回送位址的 `http`，供本機模型使用），不得含帳號、密碼或查詢字串 |
 | `OPENROUTER_ZDR` | 否 | `true` 或 `false`，預設 `false`。要求只路由到不保存提示的端點；免費端點通常沒有，要求了卻沒有符合的端點時呼叫失敗，不會改成不帶偏好重送 |
 | `OPENROUTER_JSON_SCHEMA` | 否 | `true` 或 `false`，預設 `false`。該模型支援結構描述輸出參數時才開啟；預設改在系統指令附結構描述 |
+| `OPENROUTER_REASONING` | 否 | `true` 或 `false`，預設 `false`。是否讓推理型模型先思考；關閉時每個請求都帶「不推理」的參數，首字延遲才會在 1 秒內（實測見 `docs/RPG.md` 7.2），開啟時推理型模型首字前可能要等 5 至 35 秒 |
 | `ADULT_MODE_ENABLED` | 否 | `true` 或 `false`，預設 `false`。成人模式的部署開關（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_ENABLED`）；各環境規則相同，staging 與 production 須明確設為 `true` 才生效。這只是玩家能使用成人模式的條件之一：玩家仍須已滿 18 歲並在切換時完成成年確認 |
 | `ADULT_MODE_MODELS` | 開啟成人模式時 | 取得書面許可所涵蓋的模型識別碼（以逗號分隔；取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_MODELS`）；開啟時 RPG 用途的主要與備援模型都必須在清單內，否則啟動失敗。關閉時完全不影響行為 |
 
@@ -993,7 +994,9 @@ change `game-wallet`（W1）。RPG 劇情對話改為消耗遊戲幣（客服不
 | 指令 | 說明 |
 |---|---|
 | `flask --app wsgi show-wallet-settings` | **人工類，不得排程**：列出五個鍵、目前生效的值與範圍；缺值或不合法的鍵標示「保底預設」。輸出只有鍵與數值 |
-| `flask --app wsgi set-wallet-setting KEY VALUE` | **人工類，不得排程**：驗證鍵與範圍後寫入，輸出舊值與新值，寫一筆 `limit.set` 稽核（管理員欄位為空）。立即生效；沒有任何 HTTP 端點可以修改。兩組各自的指令只接受自己那一組的鍵（用錯會指出該用哪個指令） |
+| `flask --app wsgi set-wallet-setting KEY VALUE` | **人工類，不得排程**：驗證鍵與範圍後寫入，輸出舊值與新值，寫一筆 `limit.set` 稽核（管理員欄位為空）。立即生效；沒有任何 HTTP 端點可以修改。各組的指令只接受自己那一組的鍵（用錯會指出該用哪個指令） |
+| `flask --app wsgi show-rpg-settings` | **人工類，不得排程**（rpg-turn-engine）：列出 RPG 回合引擎設定的鍵（目前只有 `rpg.max_months_per_turn`：單一回合最多推進幾個遊戲內月份，預設 24，範圍 0 至 240）、目前生效的值與範圍；缺值或不合法的鍵標示「保底預設」。輸出只有鍵與數值 |
+| `flask --app wsgi set-rpg-setting KEY VALUE` | **人工類，不得排程**：同 `set-wallet-setting`，只接受 RPG 組的鍵；每次使用時現讀，立即生效，寫 `limit.set` 稽核；沒有任何 HTTP 端點可以修改 |
 
 ### 設計重點
 

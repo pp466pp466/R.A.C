@@ -7,7 +7,7 @@
 1. 帳號與年齡閘門（`require_chat_access`）；2. 取得可見的版本與內容模式（404、403）；3. 自我介紹的標準化與長度；
 4. 自我介紹的規則層（`reject` -> 422，**不呼叫模型、不計次**）；5. 今日次數（用盡 -> 429，不呼叫模型）；
 6. RPG 模型沒有設定或全站用量已到上限 -> 503（**不計次**）；7. 呼叫模型（結構化輸出，驗證失敗同模型重試一次，暫時性錯誤切備援）；
-8. 對輸出再做一次標準化。呼叫了模型的請求才計次（以帳本中第一次嘗試的筆數計）。
+8. 對輸出再做一次標準化（預覽不含來歷：來歷由玩家選擇）。呼叫了模型的請求才計次（以帳本中第一次嘗試的筆數計）。
 """
 from __future__ import annotations
 
@@ -79,6 +79,7 @@ class ProtagonistService:
                 "speech_style": CHARACTER_SPEECH_STYLE_MAX, "hidden_trait": CHARACTER_HIDDEN_TRAIT_MAX,
                 "intro": pro.INTRO_MAX, "anchor_text": pro.ANCHOR_TEXT_MAX,
             },
+            "origin_options": pro.origin_options(),
             "suggestions_remaining": max(0, limit - used),
             "suggestions_available": self._llm is not None,
         }
@@ -125,6 +126,7 @@ class ProtagonistService:
         )
         if character is None or anchor is None or card_errors or anchor_errors:         # 語意規則已驗證過；防禦：不給玩家看不合格的候選
             raise self._unavailable(current.id, REASON_DEGRADED)
+        character.pop("origin", None)               # 預覽不決定來歷（驗證補上的預設值也不給）：由玩家在創角時選擇，隨角色卡送出
         remaining = max(0, limit - used - 1)
         protagonist_events.log_suggested(user_id=current.id, model=outcome.model, attempt=outcome.attempts, remaining=remaining)
         return {"protagonist": character, "anchor": anchor, "remaining": remaining}

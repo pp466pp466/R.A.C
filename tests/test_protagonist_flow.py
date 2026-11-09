@@ -109,3 +109,27 @@ def test_a_minor_cannot_get_a_romantic_link_by_any_route(app, provider):
     assert client.post("/api/sessions/protagonist/suggest", json={"version_id": version}).status_code == 503
     direct = client.post("/api/sessions", json=start_body(version, protagonist={**CARD, "age": 30}, anchor=romantic))
     assert direct.status_code == 400 and "anchor.text" in direct.get_json()["error"]["fields"] and saves(app) == 0
+
+
+def test_the_origin_the_player_chooses_is_stored_and_a_missing_one_means_a_native(app, provider):
+    client, version = signed_in(app), builtin(app)
+    provider.script(verdict(), verdict())
+    transmigrator = client.post("/api/sessions", json=start_body(version, protagonist={**CARD, "origin": "transmigrator"}))
+    plain = client.post("/api/sessions", json=start_body(version, protagonist={**CARD, "name": "本地人"}))
+    assert (transmigrator.status_code, plain.status_code) == (201, 201)
+    with db(app) as s:
+        saves_by_name = {save.player_name: save.protagonist_json["character"] for save in s.scalars(select(RpgSession))}
+    assert saves_by_name[CARD["name"]]["origin"] == "transmigrator" and saves_by_name["本地人"]["origin"] == "native"
+    assert transmigrator.get_json()["session"]["protagonist"]["character"]["origin"] == "transmigrator"
+
+
+def test_an_invalid_origin_is_a_400_on_protagonist_origin_and_opens_no_save(app, provider):
+    client, version = signed_in(app), builtin(app)
+    refused = client.post("/api/sessions", json=start_body(version, protagonist={**CARD, "origin": "ghost"}))
+    assert refused.status_code == 400 and "protagonist.origin" in refused.get_json()["error"]["fields"]
+    assert saves(app) == 0 and provider.calls == []                          # 在驗證階段就停下：不呼叫模型、不開存檔
+
+
+def test_the_setup_api_lists_the_origin_options(app):
+    client, version = signed_in(app), builtin(app)
+    assert client.get(f"/api/sessions/setup/{version}").get_json()["origin_options"] == ["native", "transmigrator"]

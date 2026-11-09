@@ -3,6 +3,8 @@
 **純運算**：沒有資料庫、網路與時間的依賴，相同輸入得到相同輸出。
 
 - 角色卡：與劇本角色**同一套**欄位、上限與標準化（`script_spec.validate_character`），錯誤欄位路徑以 `protagonist.` 開頭。
+  主角另有「來歷」（`origin`：`native` 本地人或 `transmigrator` 穿越者；劇本角色沒有這個欄位）：它是列舉不是自由文字，不經過文字審查，
+  缺值補 `native`，不合法的值是 `protagonist.origin` 的欄位錯誤；遷移之前建立的存檔沒有這個欄位，讀取時以 `origin_of` 視為本地人。
 - 錨定事實：每位主角至多一個，結構 `{kind, ref, text}`：`ref` 必須指向該劇本內容中存在的人物（姓名）、地點（名稱）或里程碑（編號）；
   `text` 是單行文字，1 至 60 字。主角或對象（指向人物時）未成年時，`text` 不得含戀愛或婚姻關係的用語（童養媳與已成婚類也在內）；**婚約類**（娃娃親、指腹為婚、訂婚、未婚夫妻）是歷史題材常見的背景設定，只在主角與對象一成年、一未成年時才擋——這是**欄位錯誤**，
   不是審查的 `reject`：它是結構規則，不帶審查類別，也不進任何拒絕計次。
@@ -19,6 +21,10 @@ from app.services.script_spec import fold, normalize_multi_line, normalize_singl
 
 INTRO_MAX = 300
 ANCHOR_TEXT_MAX = 60
+
+ORIGIN_NATIVE = "native"                  # 本地人
+ORIGIN_TRANSMIGRATOR = "transmigrator"   # 穿越者（由固定的 system_instruction 加入平台規則，規則文字不來自玩家）
+ORIGINS = (ORIGIN_NATIVE, ORIGIN_TRANSMIGRATOR)
 
 ANCHOR_CHARACTER = "character"
 ANCHOR_LOCATION = "location"
@@ -47,8 +53,31 @@ def clean_intro(raw: Any, *, forbidden_markers: Iterable[str] = ()) -> tuple[str
 
 
 def validate_protagonist(raw: Any, *, forbidden_markers: Iterable[str] = ()) -> tuple[dict[str, Any] | None, dict[str, str]]:
-    """驗證並標準化主角角色卡，回傳 `(角色或 None, 逐欄位錯誤)`；欄位路徑以 `protagonist.` 開頭。"""
-    return validate_character(raw, path=_PROTAGONIST_PATH, forbidden_markers=forbidden_markers)
+    """驗證並標準化主角角色卡，回傳 `(角色或 None, 逐欄位錯誤)`；欄位路徑以 `protagonist.` 開頭。
+
+    共用角色卡的驗證之後，再處理主角專有的來歷：缺值（沒有這個鍵或為 `None`）補 `native`，其他不在列舉內的值是 `protagonist.origin` 的錯誤。
+    回傳的角色卡一定有 `origin`。"""
+    given = raw.get("origin") if isinstance(raw, dict) else None
+    shared = {key: value for key, value in raw.items() if key != "origin"} if isinstance(raw, dict) else raw
+    character, errors = validate_character(shared, path=_PROTAGONIST_PATH, forbidden_markers=forbidden_markers)
+    origin = ORIGIN_NATIVE if given is None else given
+    if not isinstance(origin, str) or origin not in ORIGINS:
+        errors["protagonist.origin"] = "來歷只能是本地人或穿越者。"
+    if errors or character is None:
+        return None, errors
+    character["origin"] = origin
+    return character, {}
+
+
+def origin_of(character: Mapping[str, Any] | None) -> str:
+    """角色卡的來歷；遷移之前建立的存檔沒有這個欄位（或值不認得），一律視為本地人。"""
+    value = character.get("origin") if isinstance(character, Mapping) else None
+    return value if value in ORIGINS else ORIGIN_NATIVE
+
+
+def origin_options() -> list[str]:
+    """創角畫面可以選的來歷（列舉值；顯示用的繁體中文由前端對照）。"""
+    return list(ORIGINS)
 
 
 def _target_of(kind: str, ref: str, script_content: Mapping[str, Any]) -> tuple[str | None, int | None]:

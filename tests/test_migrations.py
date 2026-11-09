@@ -1,4 +1,5 @@
 """database-access 規格：資料表只能透過版本化 migration 變更。"""
+import json
 import re
 
 import pytest
@@ -44,7 +45,9 @@ WALLET_LIMITS = (
     ("coin.turn_cost.standard", 30), ("coin.signup_grant", 200), ("coin.checkin_grant", 200), ("coin.free_cap", 1000),
     ("coin.hold_timeout_seconds", 180),
 )
-HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS
+RPG_LIMITS = (("rpg.max_months_per_turn", 24),)
+HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS
+WALLET_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS       # 0015 當時的十五個
 CHARACTER_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS       # 0014 當時的十個
 
 
@@ -698,7 +701,7 @@ def test_0015_adds_the_wallet_tables_and_only_the_missing_coin_settings_and_keep
     command.upgrade(cfg, "0015_game_wallet")
     inspector = inspect(engine)
     assert set(inspector.get_table_names()) - before_tables == set(WALLET_TABLES)
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9, "coin.free_cap": 500}      # 新增四個，調整過與先寫入的不被蓋掉
+    assert limits_now() == {**dict(WALLET_HEAD_LIMITS), "script_limit.free": 9, "coin.free_cap": 500}      # 新增四個，調整過與先寫入的不被蓋掉
 
     wallet_columns = {c["name"]: c for c in inspector.get_columns("wallets")}
     assert set(wallet_columns) == {"id", "user_id", "free_balance", "paid_balance", "version", "created_at", "updated_at"}
@@ -719,12 +722,123 @@ def test_0015_adds_the_wallet_tables_and_only_the_missing_coin_settings_and_keep
         assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 1
 
     command.upgrade(cfg, "0015_game_wallet")                                                        # 再升級一次，不重複
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    assert limits_now() == {**dict(WALLET_HEAD_LIMITS), "script_limit.free": 9}
     engine.dispose()
 
 
+def _insert_old_save_and_turn(conn) -> None:
+    """0016 之前的結構上的一個存檔、一個已完成的回合與一筆用量帳本（欄位只含當時存在的）。"""
+    now = utcnow().replace(tzinfo=None)
+    _insert_user(conn, Table("users", MetaData(), autoload_with=conn), 1)
+    user_id = conn.execute(select(Table("users", MetaData(), autoload_with=conn).c.id)).scalar_one()
+    sessions = Table("sessions", MetaData(), autoload_with=conn)
+    # SQL Server 反射出來的 JSON 欄位是 NVARCHAR，pyodbc 不收 dict；SQLite 的 JSON 型別則自己序列化（傳字串會變成雙重編碼）
+    as_json = (lambda value: json.dumps(value, ensure_ascii=False)) if conn.dialect.name == "mssql" else (lambda value: value)
+    conn.execute(sessions.insert().values(
+        user_id=user_id, public_id="00000000-0000-4000-8000-0000000000c1", script_snapshot_json=as_json({"title": "舊"}), snapshot_spec_version=1,
+        player_name="舊存檔", character_age=30, current_location="", status_summary="", version=1, notebook_text="", notebook_version=1,
+        notebook_upto_turn=0, content_tier="safe", status="active", is_archived=False, elapsed_months=0, last_active_at=now,
+        entities_json=as_json({}), goals_json=as_json({"active": [], "archived": []}), milestone_progress_json=as_json({}),
+        created_at=now, updated_at=now,
+    ))
+    session_id = conn.execute(select(sessions.c.id)).scalar_one()
+    conn.execute(Table("memory_logs", MetaData(), autoload_with=conn).insert().values(
+        session_id=session_id, client_msg_id="old-1", seq=1, turn_number=1, turn_status="complete", user_action="舊行動",
+        llm_raw_response="舊劇情", created_at=now, updated_at=now,
+    ))
+    conn.execute(Table("llm_call_logs", MetaData(), autoload_with=conn).insert().values(
+        user_id=user_id, kind="chat", provider="gemini", model="m", attempt=1, status="ok", counted=True, latency_ms=10, created_at=now,
+    ))
+
+
+def test_0016_adds_the_turn_engine_columns_and_the_month_limit_and_keeps_every_row(tmp_path):
+    """rpg-turn-engine：memory_logs.attempt（既有回合為 1）、sessions 的第 0 幕三欄（既有存檔為空）、llm_call_logs.first_chunk_ms
+    （可為空），與 runtime_limits 的 rpg.max_months_per_turn（只插入缺少的，不蓋掉部署者調整過的值）；既有資料一列不少；
+    回復只移除新增的東西；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'turn_engine.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0016_rpg_turn_engine")
+    assert revision.down_revision == "0015_game_wallet" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0015_game_wallet")
+    with engine.begin() as conn:
+        _insert_old_save_and_turn(conn)
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.update().where(limits.c.key == "script_limit.free").values(int_value=9))     # 部署者調整過
+    before_tables = set(inspect(engine).get_table_names())
+    before = {table: {c["name"] for c in inspect(engine).get_columns(table)} for table in ("sessions", "memory_logs", "llm_call_logs")}
+
+    def limits_now() -> dict[str, int]:
+        with engine.connect() as conn:
+            table = Table("runtime_limits", MetaData(), autoload_with=conn)
+            return {row["key"]: row["int_value"] for row in conn.execute(select(table)).mappings()}
+
+    command.upgrade(cfg, "0016_rpg_turn_engine")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    added = {table: {c["name"]: c for c in inspector.get_columns(table) if c["name"] not in before[table]} for table in before}
+    assert set(added["sessions"]) == {"opening_text", "opening_state", "opening_started_at"}
+    assert all(c["nullable"] for c in added["sessions"].values())
+    assert set(added["memory_logs"]) == {"attempt"} and not added["memory_logs"]["attempt"]["nullable"]
+    assert set(added["llm_call_logs"]) == {"first_chunk_ms"} and added["llm_call_logs"]["first_chunk_ms"]["nullable"]
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}                    # 新增一個，調整過的值沒被蓋掉
+    with engine.connect() as conn:                                                           # 既有資料不變，新欄位的預設值正確
+        save = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().one()
+        assert (save["player_name"], save["opening_text"], save["opening_state"], save["opening_started_at"]) == ("舊存檔", None, None, None)
+        turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
+        assert (turn["user_action"], turn["llm_raw_response"], turn["turn_number"], turn["attempt"]) == ("舊行動", "舊劇情", 1, 1)
+        call = conn.execute(select(Table("llm_call_logs", MetaData(), autoload_with=conn))).mappings().one()
+        assert (call["kind"], call["first_chunk_ms"]) == ("chat", None)
+
+    command.downgrade(cfg, "0015_game_wallet")
+    after = {table: {c["name"] for c in inspect(engine).get_columns(table)} for table in before}
+    assert after == before
+    assert limits_now() == {**dict(WALLET_HEAD_LIMITS), "script_limit.free": 9}
+    with engine.connect() as conn:                                                           # 回復後既有的存檔與回合仍在，沒有被串聯刪除
+        for name in ("users", "sessions", "memory_logs", "llm_call_logs"):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 1, name
+
+    command.upgrade(cfg, "0016_rpg_turn_engine")                                            # 再升級一次，不重複
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    with engine.connect() as conn:
+        assert conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn).c.attempt)).scalar_one() == 1
+    engine.dispose()
+
+
+def test_0016_does_not_overwrite_a_month_limit_that_already_exists(tmp_path):
+    """資料庫在升級前已經有新鍵（例如先手動寫入）：保留原值，不產生重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'turn_engine_existing.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    command.upgrade(cfg, "0015_game_wallet")
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.insert().values(key="rpg.max_months_per_turn", int_value=6, updated_at=utcnow().replace(tzinfo=None)))
+    command.upgrade(cfg, "0016_rpg_turn_engine")
+    with engine.connect() as conn:
+        table = Table("runtime_limits", MetaData(), autoload_with=conn)
+        assert conn.execute(select(table.c.key, table.c.int_value).where(table.c.key.like("rpg.%"))).all() == [("rpg.max_months_per_turn", 6)]
+    engine.dispose()
+
+
+def test_migrated_turn_engine_columns_have_the_right_defaults_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：升級後有十六個設定（鍵唯一）；沒有指定嘗試序號的回合為 1，第 0 幕欄位預設為空，首字延遲可為空。"""
+    engine = migrated_database
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(HEAD_LIMITS)
+        _insert_old_save_and_turn(conn)
+    with engine.connect() as conn:
+        turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
+        save = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().one()
+        call = conn.execute(select(Table("llm_call_logs", MetaData(), autoload_with=conn))).mappings().one()
+    assert turn["attempt"] == 1
+    assert (save["opening_text"], save["opening_state"], save["opening_started_at"], call["first_chunk_ms"]) == (None, None, None, None)
+
+
 def test_migrated_wallet_tables_enforce_their_constraints_and_cascade_with_the_user(migrated_database):
-    """SQLite 與 SQL Server 兩軌：升級後有十五個設定（鍵唯一）；餘額不得為負、冪等鍵唯一、刪除使用者串聯刪除錢包與帳本。"""
+    """SQLite 與 SQL Server 兩軌：升級後有十六個設定（鍵唯一）；餘額不得為負、冪等鍵唯一、刪除使用者串聯刪除錢包與帳本。"""
     engine = migrated_database
     metadata = MetaData()
     now = utcnow().replace(tzinfo=None)

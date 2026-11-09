@@ -166,6 +166,7 @@ class OpenAICompatibleSettings:
     base_url: str | None = None
     zero_retention: bool = False            # 要求只路由到不保存提示的端點（付費模型才有；免費端點通常沒有）
     supports_json_schema: bool = False      # 該模型支援結構描述輸出參數時才開啟；預設以系統指令附結構描述
+    reasoning: bool = False                 # 是否讓推理型模型先思考（OPENROUTER_REASONING）。預設關閉：關閉時每個請求都明確要求不推理，首字才快
 
 
 @dataclass(frozen=True)
@@ -599,6 +600,7 @@ def _resolve_rpg_llm(env: str, values: Mapping[str, str], base: LlmSettings) -> 
         base_url=_resolve_openai_base_url(env, values),
         zero_retention=_bool_setting(values, "OPENROUTER_ZDR"),
         supports_json_schema=_bool_setting(values, "OPENROUTER_JSON_SCHEMA"),
+        reasoning=_bool_setting(values, "OPENROUTER_REASONING"),
     )
 
 

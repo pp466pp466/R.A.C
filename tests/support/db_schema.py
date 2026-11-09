@@ -198,6 +198,7 @@ def enumerations() -> dict[str, tuple[str, ...]]:
         "script_submissions.categories_json": script.REVIEW_CATEGORIES,
         "sessions.content_tier": user.CONTENT_TIERS,
         "sessions.status": rpg_session.SESSION_STATUSES,
+        "sessions.opening_state": rpg_session.OPENING_STATES,
         "memory_logs.turn_status": rpg_session.TURN_STATUSES,
         "wallet_entries.kind": wallet.ENTRY_KINDS,
         "wallet_entries.resolution": wallet.RESOLUTIONS,

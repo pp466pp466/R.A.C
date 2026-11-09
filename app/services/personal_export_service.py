@@ -41,6 +41,7 @@ from app.repositories.wallet_repository import WalletRepository
 from app.services.age_policy import taipei_today
 from app.services.current_user import CurrentUser, iso_utc
 from app.services.errors import Unauthenticated, ValidationError
+from app.services.protagonist import origin_of
 
 FORMAT_JSON = "json"
 FORMAT_CSV = "csv"
@@ -62,11 +63,11 @@ SCRIPT_COLUMNS = (
     "milestones", "author_name", "author_code", "created_at", "published_at",
 )
 SESSION_COLUMNS = (
-    "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "personality", "appearance", "occupation",
-    "speech_style", "hidden_trait", "anchor_kind", "anchor_ref", "anchor_text", "current_location", "status_summary",
-    "elapsed_months", "created_at", "last_active_at", "ended_at", "notebook_text",
+    "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "origin", "personality", "appearance",
+    "occupation", "speech_style", "hidden_trait", "anchor_kind", "anchor_ref", "anchor_text", "current_location", "status_summary",
+    "elapsed_months", "created_at", "last_active_at", "ended_at", "notebook_text", "opening_state", "opening_text",
 )
-# sessions.csv 的主角欄位：由 `protagonist` 攤平（舊存檔沒有主角資料，這些欄位為空）
+# sessions.csv 的主角欄位：由 `protagonist` 攤平（舊存檔沒有主角資料，這些欄位為空；來歷另外處理）
 PROTAGONIST_CARD_COLUMNS = ("personality", "appearance", "occupation", "speech_style", "hidden_trait")
 PROTAGONIST_ANCHOR_COLUMNS = {"anchor_kind": "kind", "anchor_ref": "ref", "anchor_text": "text"}
 TURN_COLUMNS = ("session_id", "script_title", "seq", "turn_number", "status", "user_action", "story", "created_at")
@@ -221,6 +222,7 @@ class PersonalExportService:
             card = (protagonist or {}).get("character") or {}
             anchor = (protagonist or {}).get("anchor") or {}
             head.update({name: card.get(name) for name in PROTAGONIST_CARD_COLUMNS})
+            head["origin"] = origin_of(card) if card else None             # 來歷：有角色卡才有；角色卡沒有這個欄位的存檔視為本地人
             head.update({column: anchor.get(key) for column, key in PROTAGONIST_ANCHOR_COLUMNS.items()})
         return head
 

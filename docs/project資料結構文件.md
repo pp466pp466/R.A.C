@@ -1,8 +1,8 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-09 ｜ 對應 change：game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0015_game_wallet` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
-本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、227 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、232 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
 與其他文件的分工：本文件回答「資料庫裡**有什麼**」（結構、型別、鍵、固定值、保存期限的對照）；為什麼這樣設計、跨資料庫（SQLite 與 SQL Server）的取捨與決策理由，在 [資料模型-data-model.md](資料模型-data-model.md)；各資料的保存與刪除指令在 [營運與部署-operations.md](營運與部署-operations.md)；程式分層與依賴方向在 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -14,11 +14,13 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。目前版本 `0015_game_wallet`（`alembic_version` 只有一列；已於 2026-11-09 套用，見第 14 節） |
-| 資料表與欄位 | 20 張業務資料表、227 個欄位、50 個索引與唯一約束、17 個外鍵 |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。目前版本 `0016_rpg_turn_engine`（`alembic_version` 只有一列；`0015_game_wallet` 已於 2026-11-09 套用到實際的 `project`，`0016` 尚未套用，升級後在第 14 節追加「套用」列） |
+| 資料表與欄位 | 20 張業務資料表、232 個欄位、50 個索引與唯一約束、17 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
+
+**`0016_rpg_turn_engine`（`memory_logs.attempt`、`sessions` 的第 0 幕三欄、`llm_call_logs.first_chunk_ms`、設定鍵 `rpg.max_months_per_turn`）已寫入 migration 與 ORM，本文已同步，但尚未套用到實際的 `project`**（實際資料庫目前仍是 `0015_game_wallet`；套用後的比對結果與日期會追加在第 14 節）。
 
 **`0015_game_wallet`（`wallets`、`wallet_entries`、五個遊戲幣設定鍵）已於 2026-11-09 套用到實際的 `project`**：`alembic current` 為 `0015_game_wallet (head)`，`alembic check` 回報 `No new upgrade operations detected.`，`flask show-wallet-settings` 列出五個鍵（30、200、200、1000、180），唯讀查詢確認 20 張資料表、227 個欄位、17 個外鍵、`runtime_limits` 15 列，與本文一致。以下的逐項比對紀錄是 `0014` 為止的狀態。
 
@@ -57,16 +59,16 @@ flowchart LR
 | `lock_appeals` | 申訴 | 鎖定與申訴 | 被鎖定或被暫停發佈的玩家向管理員提出的申訴；內容由玩家撰寫，視為個資。 | LockAppealRepository；管理員檢視走 AdminRepository | 保存期限與所屬帳號相同，隨帳號刪除（CASCADE）；不由期限清除 | 6 |
 | `chat_conversations` | 客服對話 | 客服對話 | 客服對話的標頭：標題、累積摘要、當前狀態與處理標記。 | ChatRepository | 最後活動後 365 天由 purge-expired-data 刪除；使用者可主動刪除；隨帳號刪除（CASCADE） | 12 |
 | `chat_messages` | 客服訊息 | 客服對話 | 對話中的每一則訊息（使用者與助理），以單調遞增的 seq 排序。 | ChatRepository | 隨對話刪除（CASCADE） | 12 |
-| `llm_call_logs` | 模型呼叫用量帳本 | 模型用量與營運 | 每次模型呼叫一筆（含重試與備援）：用量、額度、斷路與全站每日 token 的唯一來源；不含對話全文。 | LlmCallLogRepository（與回覆同一交易） | 建立後 365 天刪除；失敗原文（error_detail）14 天清為空值；帳號刪除時 user_id 變空值（匿名化） | 16 |
+| `llm_call_logs` | 模型呼叫用量帳本 | 模型用量與營運 | 每次模型呼叫一筆（含重試與備援）：用量、額度、斷路與全站每日 token 的唯一來源；不含對話全文。 | LlmCallLogRepository（與回覆同一交易） | 建立後 365 天刪除；失敗原文（error_detail）14 天清為空值；帳號刪除時 user_id 變空值（匿名化） | 17 |
 | `admin_audit_logs` | 管理稽核紀錄 | 模型用量與營運 | 管理員操作與系統自動動作（鎖定、暫停發佈、修改營運限制）的稽核；只新增、不可修改。 | AdminAuditRepository（只有新增與讀取） | 建立後 730 天由 purge-expired-data 刪除（唯一的清除途徑在 RetentionRepository） | 8 |
 | `alert_states` | 營運告警狀態 | 模型用量與營運 | 五項營運告警各一列（至多 5 列）：目前是否告警中、嚴重度與最近一次通知。 | AlertStateRepository（條件式更新搶佔通知） | 不設期限；不指向使用者，不含個資 | 8 |
-| `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻，以及遊戲幣的五個設定）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入 | 4 |
+| `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻、遊戲幣的五個設定，以及 RPG 回合引擎的每回合月數上限）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入 | 4 |
 | `scripts` | 劇本 | RPG 劇本 | 劇本的身分：作者、內建劇本的種子鍵、筆名與短代號的快照；內容與狀態在 script_versions。 | ScriptRepository | 隨作者的帳號抹除（CASCADE）；內建劇本沒有作者，不隨帳號刪除 | 9 |
 | `script_versions` | 劇本版本 | RPG 劇本 | 劇本的每個版本：固定規格的全部欄位、狀態、內容雜湊與審查結果。已發佈的版本不可變，修改一律新增版本。 | ScriptRepository（狀態只在此寫入，有架構測試擋住別處） | 隨劇本刪除（CASCADE）；刪除草稿時直接刪除 | 32 |
 | `script_version_tags` | 劇本版本標籤 | RPG 劇本 | 版本的標籤（以顯示形式儲存，查詢以小寫比對），讓目錄日後可以篩選。 | ScriptRepository | 隨版本刪除（CASCADE） | 3 |
 | `script_submissions` | 劇本送審紀錄 | RPG 劇本 | 每次成功送審、被自動拒絕與管理員解除暫停各一筆，用來算每日送審次數與連續被拒；不含任何劇本文字。 | ScriptSubmissionRepository | 建立後 365 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 5 |
-| `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 26 |
-| `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串 | 11 |
+| `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 29 |
+| `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串 | 12 |
 | `wallets` | 遊戲幣錢包 | 遊戲幣 | 每位玩家至多一個：免費與付費兩個餘額（不得為負）與每次異動加 1 的版本號（樂觀鎖）。 | WalletRepository（餘額只由它寫入，架構測試守住） | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 7 |
 | `wallet_entries` | 遊戲幣帳本 | 遊戲幣 | 只增不改的帳本：每次餘額異動一筆（註冊贈送、每日簽到、冒險回合預扣與退回、管理員調整）；只放固定列舉與整數，不放玩家文字。 | WalletRepository | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 13 |
 
@@ -315,6 +317,7 @@ erDiagram
         int completion_tokens "輸出 token 數"
         int thinking_tokens "思考 token 數"
         int latency_ms "這次呼叫的延遲"
+        int first_chunk_ms "串流呼叫的首字延遲 可為空"
         string finish_reason "供應商回報的結束原因"
         text error_detail "驗證失敗的模型原文"
         datetime created_at "呼叫時間"
@@ -412,6 +415,9 @@ erDiagram
         text notebook_text "記事簿"
         int notebook_version "記事簿的版本號"
         int notebook_upto_turn "記事簿已處理到第幾輪"
+        text opening_text "第 0 幕的文字 可為空"
+        string opening_state "第 0 幕的狀態 可為空"
+        datetime opening_started_at "第 0 幕開始生成的時間 可為空"
         string content_tier "開存檔當下的生效內容模式"
         string status "存檔狀態"
         datetime ended_at "完結時間"
@@ -428,6 +434,7 @@ erDiagram
         int seq "存檔內單調遞增的序號，由後端指派"
         int turn_number "輪數"
         string turn_status "回合狀態"
+        int attempt "嘗試序號 預扣冪等鍵的一部分"
         text user_action "玩家的行動"
         text llm_raw_response "劇情原文"
         json structured_result "模型的結構化輸出"
@@ -822,7 +829,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 1 | `id` | INTEGER IDENTITY(1,1) | 否 | — | PK | 內部主鍵（自動遞增）；不對外暴露。 |
 | 2 | `user_id` | INTEGER | 是 | — | FK→users.id | 呼叫的使用者；帳號刪除時變空值（匿名化），帳本那一筆保留。 |
 | 3 | `conversation_id` | INTEGER | 是 | — | — | 對應的客服對話內部編號；沒有外鍵（SQL Server 的多重串聯路徑限制），刪除對話時由 Repository 先清為空值。 |
-| 4 | `kind` | NVARCHAR(20) | 否 | — | — | 呼叫用途：chat｜summary｜script_review｜protagonist_gen｜protagonist_review。 |
+| 4 | `kind` | NVARCHAR(20) | 否 | — | — | 呼叫用途：chat｜summary｜script_review｜protagonist_gen｜protagonist_review｜rpg_stream｜rpg_state｜rpg_opening。 |
 | 5 | `provider` | NVARCHAR(20) | 否 | — | — | 供應商：gemini｜openai-compatible。 |
 | 6 | `model` | NVARCHAR(64) | 否 | — | — | 實際使用的模型名稱（備援時為備援模型）。 |
 | 7 | `attempt` | INTEGER | 否 | — | — | 這次請求的第幾次呼叫（含重試與備援）。 |
@@ -832,9 +839,10 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 11 | `completion_tokens` | INTEGER | 是 | — | — | 輸出 token 數；供應商沒回報時為空。 |
 | 12 | `thinking_tokens` | INTEGER | 是 | — | — | 思考 token 數；供應商沒回報時為空。 |
 | 13 | `latency_ms` | INTEGER | 否 | — | — | 這次呼叫的延遲（毫秒）。 |
-| 14 | `finish_reason` | NVARCHAR(20) | 是 | — | — | 供應商回報的結束原因。 |
-| 15 | `error_detail` | NVARCHAR(max) | 是 | — | — | 驗證失敗的模型原文（截斷至 2000 字）；僅管理員可讀，14 天後清為空值。 |
-| 16 | `created_at` | DATETIME2(6) | 否 | — | — | 呼叫時間（UTC）；每日額度與全站用量以台灣日（Asia/Taipei）彙總。 |
+| 14 | `first_chunk_ms` | INTEGER | 是 | — | — | 串流呼叫（rpg_stream、rpg_opening）從送出到收到第一個正文片段的毫秒數（首字延遲）；非串流呼叫與沒有收到正文的呼叫為空。0016 新增。 |
+| 15 | `finish_reason` | NVARCHAR(20) | 是 | — | — | 供應商回報的結束原因。 |
+| 16 | `error_detail` | NVARCHAR(max) | 是 | — | — | 驗證失敗的模型原文（截斷至 2000 字）；僅管理員可讀，14 天後清為空值。串流呼叫被中斷或被審查擋下時只記列舉（disconnected、output_blocked 加類別），不含任何文字。 |
+| 17 | `created_at` | DATETIME2(6) | 否 | — | — | 呼叫時間（UTC）；每日額度與全站用量以台灣日（Asia/Taipei）彙總。 |
 
 索引與約束：
 
@@ -895,12 +903,12 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 
 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻，以及遊戲幣的五個設定）；程式每次使用時現讀。
 
-- 領域：模型用量與營運　｜　主要寫入者：RuntimeLimitRepository；只能以 flask set-script-limit（劇本與主角組）或 set-wallet-setting（遊戲幣組）修改　｜　保存與刪除：不設期限；不指向使用者，不含個資；初始十五列由遷移 0013（七列）、0014（三列）與 0015（五列）寫入
+- 領域：模型用量與營運　｜　主要寫入者：RuntimeLimitRepository；只能以 flask set-script-limit（劇本與主角組）、set-wallet-setting（遊戲幣組）或 set-rpg-setting（RPG 組）修改　｜　保存與刪除：不設期限；不指向使用者，不含個資；初始十五列由遷移 0013（七列）、0014（三列）與 0015（五列）寫入
 
 | # | 欄位 | 型別 | 可空 | 資料庫預設 | 鍵 | 說明 |
 |---|---|---|---|---|---|---|
 | 1 | `id` | INTEGER IDENTITY(1,1) | 否 | — | PK | 內部主鍵（自動遞增）；不對外暴露。 |
-| 2 | `key` | NVARCHAR(60) | 否 | — | UK | 限制的鍵（15 個固定值，見第 6 節）；唯一。 |
+| 2 | `key` | NVARCHAR(60) | 否 | — | UK | 限制的鍵（16 個固定值，見第 6 節）；唯一。 |
 | 3 | `int_value` | INTEGER | 否 | — | — | 限制的整數值；合法範圍與缺值時的保底預設在程式（runtime_limits.py），不在資料庫約束。 |
 | 4 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後修改時間（UTC）；只能由 flask set-script-limit 修改。 |
 
@@ -1044,7 +1052,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 8 | `protagonist_json` | NVARCHAR(max)（JSON） | 是 | — | — | 玩家主角：角色卡與錨定事實（結構見第 7 節）。開存檔時由角色卡寫入，`player_name`、`character_age` 與它同步；遷移之前建立的存檔為空。個資：不進日誌、不在管理員預設可檢視的範圍，隨存檔保存、刪除與匯出。 |
 | 9 | `current_location` | NVARCHAR(100) | 否 | — | — | 目前所在地點（世界狀態）。 |
 | 10 | `status_summary` | NVARCHAR(max) | 否 | — | — | 狀態摘要（世界狀態）。 |
-| 11 | `entities_json` | NVARCHAR(max)（JSON） | 否 | — | — | NPC 角色卡與關係狀態（世界狀態）；行為屬回合引擎（RC-2）。 |
+| 11 | `entities_json` | NVARCHAR(max)（JSON） | 否 | — | — | NPC 角色卡、主角的年齡紀錄與新增的地點（世界狀態，結構見第 7 節）；階段由模型提議、Service 驗證轉移。 |
 | 12 | `goals_json` | NVARCHAR(max)（JSON） | 否 | — | — | 目標：{active: [], archived: []}；行為屬回合引擎（RC-2）。 |
 | 13 | `milestone_progress_json` | NVARCHAR(max)（JSON） | 否 | — | — | 里程碑的進度；行為屬回合引擎（RC-2）。 |
 | 14 | `elapsed_months` | INTEGER | 否 | — | — | 故事開始後經過的遊戲內月數。 |
@@ -1052,14 +1060,17 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 16 | `notebook_text` | NVARCHAR(max) | 否 | — | — | 記事簿（長期記憶，個資）；容量依會員等級；行為屬回合引擎（RC-2）。 |
 | 17 | `notebook_version` | INTEGER | 否 | — | — | 記事簿的版本號；偵測與 AI 寫入的衝突。 |
 | 18 | `notebook_upto_turn` | INTEGER | 否 | — | — | 記事簿已處理到第幾輪（每 10 輪抓一次重點）。 |
-| 19 | `content_tier` | NVARCHAR(10) | 否 | — | — | 開存檔當下的生效內容模式；只能往保守方向調整。 |
-| 20 | `status` | NVARCHAR(10) | 否 | — | — | 存檔狀態：active｜ended（已完結，歷史可讀，不得再新增回合，不可恢復）。 |
-| 21 | `ended_at` | DATETIME2(6) | 是 | — | — | 完結時間。 |
-| 22 | `is_archived` | BIT | 否 | — | — | 玩家自行封存；與劇情完結是兩件事。 |
-| 23 | `last_active_at` | DATETIME2(6) | 否 | — | — | 最後活動時間（UTC）；期限清除（365 天）的依據。 |
-| 24 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
-| 25 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 26 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
+| 19 | `opening_text` | NVARCHAR(max) | 是 | — | — | 第 0 幕（開場）的文字：`ready` 為生成的開場，`fallback` 為劇本的初始對話（可能是空字串）；`pending`、`generating` 與遷移之前建立的存檔為空。玩家文字衍生的個資：不進日誌、不在管理員預設可檢視的範圍，隨存檔保存、刪除與匯出。0016 新增。 |
+| 20 | `opening_state` | NVARCHAR(12) | 是 | — | — | 第 0 幕的狀態：pending｜generating｜ready｜fallback（值見第 6 節）。新存檔為 pending；遷移之前建立的存檔為空，視同 fallback，不生成也不阻擋回合。搶佔、接手、完成與退回都是帶狀態條件的單一 UPDATE；ready 與 fallback 之後不再重新生成。0016 新增。 |
+| 21 | `opening_started_at` | DATETIME2(6) | 是 | — | — | 第 0 幕開始生成的時間（UTC），同時是這次生成的憑證：寫回必須帶同一個值，所以被接手而過時的產生器不會覆蓋新的結果；`generating` 超過 90 秒視同生成者已不在，可被接手；退回 pending 時清為空值。不納入匯出。0016 新增。 |
+| 22 | `content_tier` | NVARCHAR(10) | 否 | — | — | 開存檔當下的生效內容模式；只能往保守方向調整。 |
+| 23 | `status` | NVARCHAR(10) | 否 | — | — | 存檔狀態：active｜ended（已完結，歷史可讀，不得再新增回合，不可恢復）。 |
+| 24 | `ended_at` | DATETIME2(6) | 是 | — | — | 完結時間。 |
+| 25 | `is_archived` | BIT | 否 | — | — | 玩家自行封存；與劇情完結是兩件事。 |
+| 26 | `last_active_at` | DATETIME2(6) | 否 | — | — | 最後活動時間（UTC）；期限清除（365 天）的依據。 |
+| 27 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
+| 28 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 29 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
 
 索引與約束：
 
@@ -1083,11 +1094,12 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 4 | `seq` | INTEGER | 否 | — | — | 存檔內單調遞增的序號，由後端指派；與存檔唯一。 |
 | 5 | `turn_number` | INTEGER | 是 | — | — | 輪數：只有 complete 的回合才有；中斷與被擋的回合沒有，不計輪。 |
 | 6 | `turn_status` | NVARCHAR(12) | 否 | — | — | 回合狀態：streaming｜complete｜interrupted｜blocked。 |
-| 7 | `user_action` | NVARCHAR(max) | 否 | — | — | 玩家的行動（個資）。 |
-| 8 | `llm_raw_response` | NVARCHAR(max) | 否 | — | — | 劇情原文；中斷時保留已收到的片段；中斷或被擋的回合超過 14 天清為空字串。 |
-| 9 | `structured_result` | NVARCHAR(max)（JSON） | 是 | — | — | 模型的結構化輸出（世界狀態變更等）；行為屬回合引擎（RC-2）。 |
-| 10 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 11 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；中斷或被擋回合的 14 天清除以它計算。 |
+| 7 | `attempt` | INTEGER | 否 | `'1'` | — | 嘗試序號（從 1 起），是遊戲幣預扣冪等鍵 `turn:{存檔}:{client_msg_id}:{attempt}` 的一部分：中斷、被擋或逾時的重送接手時加 1，已完成回合的重送不變。寫入時帶 attempt 的完成、中斷與被擋，過時的嘗試（已被接手）無法改寫新的嘗試。0016 新增，既有回合為 1。 |
+| 8 | `user_action` | NVARCHAR(max) | 否 | — | — | 玩家的行動（個資）。 |
+| 9 | `llm_raw_response` | NVARCHAR(max) | 否 | — | — | 劇情原文；中斷時保留已收到的片段；被擋的回合存最後一次被擋時已收到的文字（含命中的那句）；中斷或被擋的回合超過 14 天清為空字串。 |
+| 10 | `structured_result` | NVARCHAR(max)（JSON） | 是 | — | — | 回合的結構化結果（結構見第 7 節）；被擋的回合存被擋的類別。 |
+| 11 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 12 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；中斷或被擋回合的 14 天清除以它計算。 |
 
 索引與約束：
 
@@ -1172,14 +1184,14 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `chat_messages.role` | `user`｜`assistant` | user＝使用者；assistant＝客服 AI。 |
 | `chat_messages.msg_status` | `ok`｜`fallback` | ok＝正常回覆；fallback＝降級文案（模型兩次失敗），不計入每日配額。 |
 | `chat_messages.intent` | `greeting`｜`general_qa`｜`membership_info`｜`account_help`｜`complaint_feedback`｜`human_handoff`｜`unknown` | 見下方「客服意圖」。 |
-| `llm_call_logs.kind` | `chat`｜`summary`｜`script_review`｜`protagonist_gen`｜`protagonist_review` | chat＝客服對話；summary＝對話摘要壓縮；script_review＝劇本審查的模型層；protagonist_gen＝AI 生成主角預覽；protagonist_review＝開存檔時主角文字的模型層審查。 |
+| `llm_call_logs.kind` | `chat`｜`summary`｜`script_review`｜`protagonist_gen`｜`protagonist_review`｜`rpg_stream`｜`rpg_state`｜`rpg_opening` | chat＝客服對話；summary＝對話摘要壓縮；script_review＝劇本審查的模型層；protagonist_gen＝AI 生成主角預覽；protagonist_review＝開存檔時主角文字的模型層審查；rpg_stream＝RPG 回合的劇情串流；rpg_state＝回合結束後的狀態呼叫（結構化輸出）；rpg_opening＝第 0 幕的串流。 |
 | `llm_call_logs.provider` | `gemini`｜`openai-compatible` | gemini＝客服；openai-compatible＝RPG 用途（目前為 OpenRouter 的開放模型）。兩者各有自己的金鑰與模型。 |
 | `llm_call_logs.status` | `ok`｜`validation_failed`｜`rate_limited`｜`server_error`｜`timeout`｜`network`｜`blocked`｜`config_error` | 見下方「帳本結果狀態」。 |
 | `admin_audit_logs.action` | `user.lookup`｜`user.suspend`｜`user.unsuspend`｜`user.change_tier`｜`conversation.read`｜`conversation.delete`｜`failures.read`｜`reauth.failed`｜`account.lock`｜`appeal.submit`｜`appeal.read`｜`account.unlock`｜`limit.set`｜`publish.suspend`｜`publish.lift`｜`wallet.adjust` | 見下方「稽核動作」。 |
 | `alert_states.alert_key` | `usage_budget`｜`llm_error_rate`｜`llm_config_error`｜`llm_latency_p95`｜`login_lockouts` | 見下方「營運告警」。 |
 | `alert_states.state` | `ok`｜`firing` | ok＝正常；firing＝告警中。 |
 | `alert_states.severity` | `warning`｜`critical` | warning＝警告；critical＝嚴重；只有告警中才有值。 |
-| `runtime_limits.key` | `script_limit.free`｜`script_limit.plus`｜`script_limit.vip`｜`script_submit_daily.free`｜`script_submit_daily.plus`｜`script_submit_daily.vip`｜`protagonist_suggest_daily.free`｜`protagonist_suggest_daily.plus`｜`protagonist_suggest_daily.vip`｜`script_reject_streak`｜`coin.turn_cost.standard`｜`coin.signup_grant`｜`coin.checkin_grant`｜`coin.free_cap`｜`coin.hold_timeout_seconds` | 見下方「營運限制」。 |
+| `runtime_limits.key` | `script_limit.free`｜`script_limit.plus`｜`script_limit.vip`｜`script_submit_daily.free`｜`script_submit_daily.plus`｜`script_submit_daily.vip`｜`protagonist_suggest_daily.free`｜`protagonist_suggest_daily.plus`｜`protagonist_suggest_daily.vip`｜`script_reject_streak`｜`coin.turn_cost.standard`｜`coin.signup_grant`｜`coin.checkin_grant`｜`coin.free_cap`｜`coin.hold_timeout_seconds`｜`rpg.max_months_per_turn` | 見下方「營運限制」。 |
 | `script_versions.status` | `draft`｜`pending_review`｜`published`｜`rejected`｜`superseded` | 見下方「劇本版本狀態」。 |
 | `script_versions.content_tier` | `safe`｜`standard`｜`adult` | 作者宣告的內容模式；未滿 18 歲的作者只能宣告 safe。玩家只能遊玩不高於自己生效模式的劇本。 |
 | `script_versions.ending_mode` | `none`｜`custom` | none＝無結局的開放世界（預設）；custom＝自訂結局（附結局說明與選填的壽終年齡）。 |
@@ -1191,6 +1203,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `sessions.status` | `active`｜`ended` | active＝進行中；ended＝已完結（歷史可讀，不得再新增回合，不可恢復）。 |
 | `wallet_entries.kind` | `signup_grant`｜`daily_checkin`｜`turn_hold`｜`turn_refund`｜`admin_adjust` | signup_grant＝首次註冊贈幣；daily_checkin＝每日簽到；turn_hold＝冒險回合的預扣（結算後即為消耗）；turn_refund＝預扣的退回；admin_adjust＝管理員調整。 |
 | `wallet_entries.resolution` | `settled`｜`refunded` | 只有預扣列使用，只能從空值設定一次：settled＝已結算；refunded＝已退回。 |
+| `sessions.opening_state` | `pending`｜`generating`｜`ready`｜`fallback` | pending＝尚未生成（或客戶端斷線後退回）；generating＝有一個請求正在生成（超過 90 秒可被接手）；ready＝已生成並保存；fallback＝生成失敗或被擋，改用劇本的初始對話（沒有則只顯示背景故事）。空值（遷移之前建立的存檔）視同 fallback。 |
 | `memory_logs.turn_status` | `streaming`｜`complete`｜`interrupted`｜`blocked` | 見下方「回合狀態」。 |
 
 ### 6.1 客服意圖（`chat_messages.intent`）
@@ -1268,6 +1281,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `coin.checkin_grant` | 每日簽到的免費幣；預設 200，範圍 0 至 100000 |
 | `coin.free_cap` | 免費幣上限（只限制新發放）；預設 1000，範圍 0 至 1000000 |
 | `coin.hold_timeout_seconds` | 預扣逾時秒數（超過仍未結算者在該玩家下一次存取錢包時退回）；預設 180，範圍 60 至 1800 |
+| `rpg.max_months_per_turn` | RPG 回合引擎：單一回合最多推進幾個遊戲內月份（模型提議的月數超過時以此為上限）；預設 24，範圍 0 至 240；以 `flask set-rpg-setting` 修改 |
 
 ### 6.6 刪除原因（`deletion_tombstones.reason`）
 
@@ -1327,11 +1341,11 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 | `script_versions.review_categories_json` | `["類別", …]` | 審查類別的固定列舉（見第 6 節），不含任何內容；`pass` 時為空。 |
 | `script_submissions.categories_json` | `["類別", …]` | 同上；成功送審時帶有疑慮的類別，自動拒絕時帶拒絕的類別，其餘為空。 |
 | `sessions.script_snapshot_json` | 標準化的劇本內容（固定規格的全部欄位）加 `spec_version` | 開存檔當時的完整複本；存檔之後不再讀取劇本。 |
-| `sessions.protagonist_json` | `{"character": {name, personality, age, appearance, occupation, speech_style, hidden_trait, image}, "anchor": {kind, ref, text} 或 null}` | 玩家主角；角色卡沿用劇本角色規格（`image` 恆為 null）。`anchor.kind` 為 `character`｜`location`｜`milestone`，`ref` 指向開存檔當時劇本複本中的人物姓名、地點名稱或里程碑編號，`text` 至多 60 字；主角或對象未成年時不得含戀愛或婚姻的用語（婚約類如娃娃親只在成年與未成年之間才擋）；略過錨定事實時 `anchor` 為 null。個資。 |
-| `sessions.entities_json` | NPC 角色卡與關係狀態 | 特質（表層或隱藏）、弧線階段（surface、cracking、revealed）與錨定事實；階段由模型提議、Service 驗證轉移；行為屬回合引擎（RC-2）。 |
+| `sessions.protagonist_json` | `{"character": {name, personality, age, appearance, occupation, speech_style, hidden_trait, image, origin}, "anchor": {kind, ref, text} 或 null}` | 玩家主角；角色卡沿用劇本角色規格（`image` 恆為 null），另有主角專有的來歷 `origin`（`native` 本地人｜`transmigrator` 穿越者；列舉，不經文字審查；缺值視為 `native`，遷移之前建立的存檔沒有這個鍵，讀取時視為本地人）。`anchor.kind` 為 `character`｜`location`｜`milestone`，`ref` 指向開存檔當時劇本複本中的人物姓名、地點名稱或里程碑編號，`text` 至多 60 字；主角或對象未成年時不得含戀愛或婚姻的用語（婚約類如娃娃親只在成年與未成年之間才擋）；略過錨定事實時 `anchor` 為 null。個資。 |
+| `sessions.entities_json` | `{"v": 1, "npcs": {"<NFC 小寫名>": {name, traits: [{label, layer}], stage, age, age_at_month, anchor_fact, last_seen_turn, origin}}, "protagonist": {age, age_at_month}, "locations": […]}` | 世界狀態 v1。`npcs` 的鍵是 NFC 正規化後的小寫姓名；`traits[].layer` 為 `surface`｜`hidden`；`stage` 為 `surface`｜`cracking`｜`revealed`，由模型提議、Service 驗證轉移；`origin` 為 `script`（劇本角色）｜`story`（故事中新增）。目前年齡 ＝ `age` ＋ (經過月數 − `age_at_month`) ÷ 12（取整）。`protagonist` 在第一次更正主角年齡時才建立，原始角色卡與 `character_age` 不動；`locations` 是故事中新增的地點。個資（玩家文字衍生），不依內容篩選查詢。 |
 | `sessions.goals_json` | `{"active": […], "archived": […]}` | LLM 動態延伸的目標；完成後歸檔；行為屬回合引擎（RC-2）。 |
 | `sessions.milestone_progress_json` | 里程碑的觸發與完成進度 | 由 Service 依玩家年齡或遊戲內年份判斷；行為屬回合引擎（RC-2）。 |
-| `memory_logs.structured_result` | 模型的結構化輸出 | 世界狀態變更等；行為屬回合引擎（RC-2）。 |
+| `memory_logs.structured_result` | 依回合結局而定的小物件 | 完成的回合存狀態呼叫的處理摘要（只有整數與列舉，例如丟棄的項目數）；被擋的回合存 `{"blocked": {"categories": […], "auto_retry": true 或 false}}`（類別為固定列舉）。不放模型原始 JSON。 |
 
 ## 8. 型別、命名與設計慣例
 
@@ -1383,7 +1397,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 | `chat_messages.content`、`chat_conversations.summary` | 客服對話全文與摘要；管理員預設只能看使用者主動提交的意見回饋與被內容安全過濾標記的對話 |
 | `wallets`、`wallet_entries` | 遊戲幣餘額與帳本（每筆的種類、金額與關聯存檔的對外識別碼）；日誌只記內部編號與整數，匯出不含冪等鍵 |
 | `lock_appeals.content` | 申訴內容；只有管理員能在被鎖定或被暫停發佈的帳號下檢視 |
-| `sessions.notebook_text`、`protagonist_json`、`memory_logs.user_action`、`llm_raw_response`、`script_snapshot_json` | RPG 的記事簿、玩家主角（角色卡與錨定事實）、玩家行動、劇情原文與劇本複本；不在管理員預設可檢視的範圍 |
+| `sessions.notebook_text`、`protagonist_json`、`opening_text`、`entities_json`、`memory_logs.user_action`、`llm_raw_response`、`script_snapshot_json` | RPG 的記事簿、玩家主角（角色卡與錨定事實）、第 0 幕的文字、NPC 與地點的世界狀態、玩家行動、劇情原文與劇本複本；不在管理員預設可檢視的範圍 |
 | `script_versions` 的文字欄位與 JSON 欄位 | 玩家創作的劇本設定（含草稿、待審與舊版本）；只有送審公開或被檢舉的劇本例外 |
 | `llm_call_logs.error_detail` | 驗證失敗的模型原文（截斷 2000 字）；僅管理員可讀，14 天後清為空值 |
 
@@ -1454,7 +1468,7 @@ flowchart LR
 | 資料表 | 內容 | 來源 | 重複執行 |
 |---|---|---|---|
 | `alembic_version` | 一列：目前的 migration 版本 | Alembic（`alembic upgrade head`） | 由 Alembic 維護 |
-| `runtime_limits` | 十五列初始限制（鍵見第 6 節） | migration `0013`（七列）、`0014`（三列）與 `0015`（五列；後兩者只插入缺少的鍵），皆以 ORM 的批次寫入，沒有原生 SQL | 遷移只執行一次；之後只能以 `flask set-script-limit` 修改並寫稽核 |
+| `runtime_limits` | 十六列初始限制（鍵見第 6 節） | migration `0013`（七列）、`0014`（三列）、`0015`（五列）與 `0016`（一列；後三者只插入缺少的鍵），皆以 ORM 的批次寫入，沒有原生 SQL | 遷移只執行一次；之後只能以 `flask set-script-limit`、`set-wallet-setting`、`set-rpg-setting`（各管自己那一組）修改並寫稽核 |
 | `scripts`、`script_versions`、`script_version_tags` | 內建首發劇本 `xianxia-qingyun`（沒有作者、筆名「官方」、已發佈的第 1 版） | `flask seed-scripts`（讀取隨映像封裝的 `app/data/scripts/*.json`） | 以種子鍵與內容雜湊冪等：沒變動就略過，內容改變則新增版本並取代舊版 |
 | `users` | 首位管理員 | `flask create-admin`（一次性，密碼只能互動輸入或從標準輸入讀取） | 信箱已存在時拒絕 |
 
@@ -1479,6 +1493,7 @@ flowchart LR
 | `0013_rpg_script_authoring` | 2026-11-04 | 玩家創作劇本：users 新增 nickname、nickname_code、publish_suspended_at；script_versions 新增審查結果四欄；新增 script_submissions、runtime_limits（並寫入七個初始值）；llm_call_logs.kind 由 10 加寬為 20 | 新增欄位與資料表，加寬欄位，寫入初始資料 |
 | `0014_rpg_character_creation` | 2026-11-04 | 玩家主角：sessions 新增 protagonist_json（可為空）；runtime_limits 補三個每日生成次數的鍵（只插入缺少的） | 新增欄位，寫入初始資料 |
 | `0015_game_wallet` | 2026-11-05 | 遊戲幣：新增 wallets、wallet_entries；runtime_limits 補五個遊戲幣設定鍵（只插入缺少的） | 新增資料表，寫入初始資料 |
+| `0016_rpg_turn_engine` | 2026-11-10 | RPG 回合引擎：memory_logs 新增 attempt（NOT NULL、預設 1）；sessions 新增 opening_text、opening_state、opening_started_at（可為空）；llm_call_logs 新增 first_chunk_ms（可為空）；runtime_limits 補 rpg.max_months_per_turn（只插入缺少的） | 新增欄位，寫入初始資料 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1571,3 +1586,5 @@ flowchart TD
 | 2026-11-05 | 新增 | `runtime_limits` 的五列初始資料（`coin.turn_cost.standard` 30、`coin.signup_grant` 200、`coin.checkin_grant` 200、`coin.free_cap` 1000、`coin.hold_timeout_seconds` 180） | 遊戲幣的數值設定，每次使用時現讀；只插入資料庫還沒有的鍵 | `0015_game_wallet` |
 | 2026-11-09 | 文件 | 本文件 | 同步 `0015_game_wallet`：新增第 3.6 節、第 5.19／5.20 節與遊戲幣的固定值 | 本文件 |
 | 2026-11-09 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0015_20261109.bak`，`RESTORE VERIFYONLY` 通過）後，由 `0014_rpg_character_creation` 升級到 `0015_game_wallet`；`alembic current` 為 `0015_game_wallet (head)`，`alembic check` 沒有差異，`flask show-wallet-settings` 列出五個鍵；唯讀查詢確認 20 張資料表、227 個欄位、17 個外鍵、`runtime_limits` 15 列。升級後發現 `wallets` 的 CHECK 約束名稱因命名慣例重複展開成 `ck_wallets_ck_wallets_balances_non_negative`，已修正遷移（`name="balances_non_negative"`）並把實際資料庫的約束改名為 `ck_wallets_balances_non_negative`（沒有資料列受影響） | `0015_game_wallet` |
+| 2026-11-10 | 新增 | 欄位 `memory_logs.attempt`（INTEGER，NOT NULL，資料庫預設 1）、`sessions.opening_text`、`sessions.opening_state`、`sessions.opening_started_at`、`llm_call_logs.first_chunk_ms`（皆可為空） | RPG 回合引擎：預扣冪等鍵的嘗試序號、第 0 幕（開場）的文字、狀態與搶佔時間、串流呼叫的首字延遲；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（視同 fallback，不生成） | `0016_rpg_turn_engine` |
+| 2026-11-10 | 新增 | `runtime_limits` 的一列初始資料（`rpg.max_months_per_turn` = 24） | 單一回合最多推進的遊戲內月數；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋 | `0016_rpg_turn_engine` |

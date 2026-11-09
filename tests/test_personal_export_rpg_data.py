@@ -432,3 +432,52 @@ def test_the_export_has_no_intro_and_no_internal_fields_of_the_protagonist(membe
     raw = json.dumps(export_json(s, me), ensure_ascii=False)
     for forbidden in ("intro", "自我介紹", "protagonist_json", '"image"'):
         assert forbidden not in raw
+
+
+# ---- rpg-turn-engine：第 0 幕與來歷 -----------------------------------------------------------------------------
+
+def _finish_opening(session, owner, save, *, state="ready", text="霧中的山門，鐘聲遠遠傳來。"):
+    saves = SessionRepository(session)
+    saves.claim_opening(owner.id, save.public_id, now=START)
+    saves.finish_opening(owner.id, save.public_id, claimed_at=START, state=state, text=text)
+    session.commit()
+
+
+def test_the_json_has_the_opening_state_and_text_but_not_the_start_time(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    save = make_save(s, me, validated().content)
+    _finish_opening(s, me, save)
+    (entry,) = export_json(s, me)["sessions"]
+    assert (entry["opening_state"], entry["opening_text"]) == ("ready", "霧中的山門，鐘聲遠遠傳來。")
+    assert "opening_started_at" not in json.dumps(export_json(s, me), ensure_ascii=False)
+
+
+def test_a_save_whose_opening_is_not_generated_yet_exports_pending_and_no_text(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_save(s, me, validated().content)
+    (entry,) = export_json(s, me)["sessions"]
+    assert (entry["opening_state"], entry["opening_text"]) == ("pending", None)
+
+
+def test_the_csv_has_the_opening_columns_and_neutralises_formulas_in_the_text(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    save = make_save(s, me, validated().content)
+    _finish_opening(s, me, save, state="fallback", text="=HYPERLINK(\"http://evil\")")
+    (row,) = rows(export_csv(s, me)["sessions.csv"])
+    assert row["opening_state"] == "fallback" and row["opening_text"].startswith("'=")
+    assert {"opening_state", "opening_text", "origin"} <= set(SESSION_COLUMNS)
+    assert "opening_started_at" not in SESSION_COLUMNS
+
+
+def test_the_origin_is_in_the_json_card_and_the_csv_column_and_an_old_card_reads_as_native(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_save(s, me, validated().content, protagonist=protagonist("穿越者", 30, origin="transmigrator"))
+    make_save(s, me, validated().content, protagonist=protagonist("本地人", 30))
+    entries = {e["player_name"]: e for e in export_json(s, me)["sessions"]}
+    assert entries["穿越者"]["protagonist"]["character"]["origin"] == "transmigrator"
+    by_name = {row["player_name"]: row for row in rows(export_csv(s, me)["sessions.csv"])}
+    assert by_name["穿越者"]["origin"] == "transmigrator" and by_name["本地人"]["origin"] == "native"        # 沒有來歷欄位的角色卡視為本地人

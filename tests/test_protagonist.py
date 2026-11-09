@@ -254,3 +254,55 @@ def test_the_module_is_pure_without_database_network_or_model_imports():
     imports = re.findall(r"^\s*(?:from|import)\s+([\w.]+)", source, re.M)
     forbidden = ("sqlalchemy", "flask", "requests", "httpx", "urllib", "socket", "app.repositories", "app.llm", "app.db", "datetime", "time")
     assert not [name for name in imports if name.startswith(forbidden)], imports
+
+
+# ---- 來歷（rpg-turn-engine：主角有來歷）-----------------------------------------------------------
+
+
+def test_a_card_without_an_origin_is_a_native_and_the_origin_is_always_present():
+    character, errors = pro.validate_protagonist(card())
+    assert errors == {} and character["origin"] == "native"
+    again, _ = pro.validate_protagonist(card(origin=None))
+    assert again["origin"] == "native"
+
+
+def test_a_transmigrator_is_kept():
+    character, errors = pro.validate_protagonist(card(origin="transmigrator"))
+    assert errors == {} and character["origin"] == "transmigrator"
+
+
+@pytest.mark.parametrize("bad", ["ghost", "", "Native", "TRANSMIGRATOR", 1, True, ["native"], {"v": "native"}])
+def test_an_origin_outside_the_two_values_is_a_field_error_on_protagonist_origin(bad):
+    character, errors = pro.validate_protagonist(card(origin=bad))
+    assert character is None and list(errors) == ["protagonist.origin"]
+    assert "ghost" not in errors["protagonist.origin"]                        # 錯誤訊息不回顯輸入
+
+
+def test_the_origin_error_is_reported_together_with_the_other_field_errors():
+    character, errors = pro.validate_protagonist(card(origin="ghost", name=""))
+    assert character is None and {"protagonist.origin", "protagonist.name"} <= set(errors)
+
+
+def test_the_origin_does_not_depend_on_the_age_of_the_character():
+    for age in (3, 17, 18, 500):
+        character, errors = pro.validate_protagonist(card(age=age, origin="transmigrator"))
+        assert errors == {} and character["origin"] == "transmigrator"
+
+
+def test_the_origin_is_not_run_through_the_text_checks_or_the_forbidden_markers():
+    """來歷是列舉不是文字：不合法時只回報欄位錯誤；合法值不受標記字串檢查影響。"""
+    character, errors = pro.validate_protagonist(card(origin="transmigrator"), forbidden_markers=["transmigrator"])
+    assert errors == {} and character["origin"] == "transmigrator"
+
+
+def test_the_stored_shape_carries_the_origin_and_an_old_save_reads_as_native():
+    character, _ = pro.validate_protagonist(card(origin="transmigrator"))
+    stored = pro.build_protagonist(character, None)
+    assert stored["character"]["origin"] == "transmigrator" and pro.origin_of(stored["character"]) == "transmigrator"
+    assert pro.origin_of({"name": "舊存檔", "age": 30}) == "native"           # 遷移之前建立的存檔沒有這個欄位
+    assert pro.origin_of({"origin": "unknown"}) == "native"
+    assert pro.origin_of(None) == "native"
+
+
+def test_the_creation_screen_gets_the_two_options_with_native_first():
+    assert pro.origin_options() == ["native", "transmigrator"]

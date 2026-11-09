@@ -30,6 +30,13 @@ TURN_INTERRUPTED = "interrupted"           # 串流中斷，保留已收到的�
 TURN_BLOCKED = "blocked"                   # 被審查擋下，不進上下文
 TURN_STATUSES = (TURN_STREAMING, TURN_COMPLETE, TURN_INTERRUPTED, TURN_BLOCKED)
 
+# 第 0 幕（開場）的狀態（rpg-opening 規格）。空值＝遷移之前建立的存檔＝視同 fallback，且不阻擋回合。
+OPENING_PENDING = "pending"                # 尚未生成（或客戶端斷線後退回）
+OPENING_GENERATING = "generating"          # 有一個請求正在生成（逾時未完成者可被接手）
+OPENING_READY = "ready"                    # 已生成並保存
+OPENING_FALLBACK = "fallback"              # 生成失敗或被擋，改用劇本的初始對話（沒有則只顯示背景故事）
+OPENING_STATES = (OPENING_PENDING, OPENING_GENERATING, OPENING_READY, OPENING_FALLBACK)
+
 
 class RpgSession(Base, PublicIdMixin, TimestampMixin):
     __tablename__ = "sessions"
@@ -71,6 +78,11 @@ class RpgSession(Base, PublicIdMixin, TimestampMixin):
     notebook_version: Mapped[int] = mapped_column(Integer, default=1)
     notebook_upto_turn: Mapped[int] = mapped_column(Integer, default=0)
 
+    # 第 0 幕（rpg-opening）：expand 階段新增，皆可為空（舊存檔為空 → 視同 fallback）。內容是玩家文字衍生的個資：不進日誌。
+    opening_text: Mapped[str | None] = mapped_column(UnicodeText, nullable=True)
+    opening_state: Mapped[str | None] = mapped_column(Unicode(12), nullable=True)
+    opening_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)     # 搶佔時間：逾時者可被接手
+
     content_tier: Mapped[str] = mapped_column(Unicode(10), default=CONTENT_TIER_SAFE)   # 開存檔當下的生效模式，只能往保守方向調整
     status: Mapped[str] = mapped_column(Unicode(10), default=SESSION_ACTIVE)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
@@ -94,6 +106,8 @@ class MemoryLog(Base, TimestampMixin):
     seq: Mapped[int] = mapped_column(Integer)                      # 後端指派、同一存檔內單調遞增
     turn_number: Mapped[int | None] = mapped_column(Integer, nullable=True)     # 輪數：只有 complete 的回合才有
     turn_status: Mapped[str] = mapped_column(Unicode(12), default=TURN_STREAMING)
+    # 嘗試序號（預扣鍵的一部分）：建立時為 1，每次重設（中斷、被擋或逾時接手後重送）加 1，使退回過的預扣不會被同一個鍵撿回
+    attempt: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
     user_action: Mapped[str] = mapped_column(UnicodeText, default="")
     llm_raw_response: Mapped[str] = mapped_column(UnicodeText, default="")      # 中斷時保留已收到的片段；超過 14 天清為空字串
     structured_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

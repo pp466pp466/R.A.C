@@ -24,7 +24,13 @@ KIND_SUMMARY = "summary"
 KIND_SCRIPT_REVIEW = "script_review"       # 劇本審查的模型層（RPG 用途的模型；script-review 規格）
 KIND_PROTAGONIST_GEN = "protagonist_gen"          # AI 生成主角角色卡與錨定事實的預覽（RPG 用途的模型；protagonist-suggestion 規格）
 KIND_PROTAGONIST_REVIEW = "protagonist_review"    # 開存檔時主角文字的模型層審查（RPG 用途的模型；rpg-protagonist 規格）
-CALL_KINDS = (KIND_CHAT, KIND_SUMMARY, KIND_SCRIPT_REVIEW, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW)
+KIND_RPG_STREAM = "rpg_stream"                    # RPG 回合的劇情串流（rpg-turn-stream 規格）
+KIND_RPG_STATE = "rpg_state"                      # RPG 回合結束後的狀態呼叫（結構化輸出；rpg-world-state 規格）
+KIND_RPG_OPENING = "rpg_opening"                  # 第 0 幕的串流（rpg-opening 規格）
+CALL_KINDS = (
+    KIND_CHAT, KIND_SUMMARY, KIND_SCRIPT_REVIEW, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW,
+    KIND_RPG_STREAM, KIND_RPG_STATE, KIND_RPG_OPENING,
+)
 
 STATUS_OK = "ok"
 STATUS_VALIDATION_FAILED = "validation_failed"
@@ -63,6 +69,7 @@ class LlmCallLog(Base):
     completion_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     thinking_tokens: Mapped[int | None] = mapped_column(Integer, nullable=True)
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
+    first_chunk_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)         # 串流呼叫：從送出到第一個正文片段的毫秒數（0016 新增）
     finish_reason: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
     error_detail: Mapped[str | None] = mapped_column(UnicodeText, nullable=True)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime, default=utcnow)

@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-09 ｜ 對應 change：game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0015_game_wallet` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -127,6 +127,9 @@ erDiagram
         json milestone_progress_json
         int version "世界狀態的版本號 條件式更新"
         text notebook_text "記事簿 個資 行為屬 RC-2"
+        text opening_text "第 0 幕的文字 個資 可為空"
+        string opening_state "pending generating ready fallback 可為空 空值視同 fallback"
+        datetime opening_started_at "搶佔時間 也是這次生成的憑證 可為空"
         string content_tier "開存檔當下的生效模式 只能往保守調整"
         string status "active 或 ended 已完結不可恢復"
         datetime last_active_at "期限清除的依據"
@@ -138,6 +141,7 @@ erDiagram
         int seq "與存檔唯一 單調遞增"
         int turn_number "只有 complete 的回合才有 中斷與被擋不計輪 可為空"
         string turn_status "streaming complete interrupted blocked"
+        int attempt "嘗試序號 預扣冪等鍵的一部分 預設 1"
         text user_action "個資"
         text llm_raw_response "劇情原文 中斷或被擋超過 14 天清為空字串"
     }
@@ -217,7 +221,7 @@ erDiagram
         int id PK
         int user_id FK "可為空"
         int conversation_id "不設外鍵"
-        string kind "chat summary 或 script_review 長度 20"
+        string kind "chat summary script_review rpg_stream 等 長度 20"
         string provider
         string model
         int attempt
@@ -227,6 +231,7 @@ erDiagram
         int completion_tokens
         int thinking_tokens
         int latency_ms
+        int first_chunk_ms "串流呼叫的首字延遲 可為空"
         string finish_reason
         text error_detail "驗證失敗的模型原文 截斷 2000 字"
     }
@@ -309,12 +314,16 @@ erDiagram
 | 暱稱與暫停發佈是帳號的屬性（`0013`） | `users.nickname`、`nickname_code`、`publish_suspended_at` 皆可為空，舊版程式的 INSERT 仍有效；暫停時間有索引（後台清單只掃有值的列），只由條件式 UPDATE 寫入（`publish_suspended_at IS NULL` 才寫，並行的拒絕只暫停一次；管理員不會被暫停） | 暫停發佈獨立於 `locked_at`：它只停止送審，其餘功能照常，所以不能共用鎖定欄位；暱稱是公開顯示的個資，與 Google 帶來的 `display_name` 分開存放 |
 | 審查結果掛在版本上（`0013`） | `script_versions.review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at` 皆可為空；只由 `ScriptRepository.record_review` 寫入，條件是 `content_hash` 仍等於審查當時的雜湊（架構測試擋住別處的寫入）；`review_hash` 與目前的 `content_hash` 不同即視為尚未審查 | 審查期間內容被改時舊結果不會蓋在新內容上；結果是系統的判斷，不匯出給使用者，類別只有固定列舉 |
 | 送審紀錄不連到版本（`0013`） | `script_submissions` 只存（使用者、結果、類別、時間），外鍵只有 `users.id`（`CASCADE`），`(user_id, created_at)` 複合索引；`lifted` 是管理員解除暫停時補的一筆，使連續被拒中斷 | 被拒絕的送審只保留類別與時間（AGENTS.md 第 11 節）；不指向版本也就沒有 `users → script_versions → script_submissions` 的第二條串聯路徑（SQL Server 錯誤 1785）；每日次數與連續被拒都從這張表計算，不另設計數器 |
-| 營運限制存在資料庫（`0013`、`0014`） | `runtime_limits.key` 唯一，十個鍵由遷移植入（`0013` 七個、`0014` 三個每日主角生成次數，只插入缺少的）；程式**每次使用時現讀**，不在行程內快取；範圍與缺值時的保底預設在 `app/services/runtime_limits.py`，資料庫不設值域約束；只能由 `flask set-script-limit` 修改並寫 `limit.set` 稽核 | 多 worker 不得依賴行程記憶體（AGENTS.md 第 9 節），所以調整不必重新部署也立即生效；資料被誤改時讀取端仍有保守的後備值並記錄警告（只記鍵名） |
+| 營運限制存在資料庫（`0013`、`0014`、`0015`、`0016`） | `runtime_limits.key` 唯一，十六個鍵由遷移植入（`0013` 七個、`0014` 三個每日主角生成次數、`0015` 五個遊戲幣設定、`0016` 一個 RPG 每回合月數上限，後三者只插入缺少的）；程式**每次使用時現讀**，不在行程內快取；範圍與缺值時的保底預設在 `app/services/runtime_limits.py`，資料庫不設值域約束；只能由 `flask set-script-limit`、`set-wallet-setting`、`set-rpg-setting`（各管自己那一組）修改並寫 `limit.set` 稽核 | 多 worker 不得依賴行程記憶體（AGENTS.md 第 9 節），所以調整不必重新部署也立即生效；資料被誤改時讀取端仍有保守的後備值並記錄警告（只記鍵名） |
 | 主角資料放在存檔的一個 JSON 欄位（`0014`） | `sessions.protagonist_json` 可為空，內容 `{character, anchor}`；`player_name`、`character_age` 保留並由同一個 INSERT 依角色卡寫入，唯一寫入點是 `SessionRepository.create`（架構測試守住，開存檔後沒有任何方法能改年齡） | 角色年齡是錨定事實；expand 階段舊程式、匯出與保存期限照常讀兩個舊欄位，移除它們屬日後的 contract。錨定事實不放進 `entities_json`，因為那個欄位的結構由回合引擎（RC-2）決定 |
 | 帳本的類別欄位加寬（`0013`） | `llm_call_logs.kind` 由 10 加寬為 20，`script_review` 共 13 個字 | SQL Server 會以錯誤拒絕過長的字串，SQLite 不會，只在 SQLite 測試看不出來，所以在真實 SQL Server 的測試中守住；降級前先刪除非客服類別的列，才能安全縮回 |
 | 錢包兩個餘額加只增不改的帳本（`0015`） | `wallets` 一人一列（免費與付費兩個整數，資料庫 `CHECK` 不小於 0 是第二道防線）；`wallet_entries` 每次異動同一個交易寫一筆，`seq` 是這位使用者的第幾筆（等於寫入當下的 `version`），記錄頁以它分頁；帳本只放固定列舉與整數，沒有任何玩家文字 | 不做批次制：幣不過期，批次只剩 W2「付費幣按購買退款」一個用途，屆時以 expand 加欄位。以 `version` 做 CAS 並重試，不用 `SELECT … FOR UPDATE`（SQLite 沒有、AGENTS.md 第 4 節禁止原生 SQL），雙軌行為才一致 |
 | 帳本以存檔的對外識別碼關聯、不設外鍵（`0015`） | `wallet_entries.session_public_id` 存 UUID；兩張表的 `user_id` 都是 `ON DELETE CASCADE`（錢包是個資，隨帳號刪除，不匿名化保留） | 帳本比存檔活得久，SQLite 會重用整數編號而錯指別人的存檔；SQL Server 也不允許 `users` 到帳本有兩條串聯路徑。AGENTS.md 第 11 節已依此改為「存檔識別碼」 |
 | 結算與退回互斥靠 `resolution`（`0015`） | 預扣列的 `resolution` 只能從空值以條件式更新設定一次為 `settled` 或 `refunded`；結算不另寫帳本列 | 避免零增減的雜訊列；代價是帳本有這一個可改欄位的例外，規格明寫。逾時預扣在該玩家下一次存取錢包時退回，不設排程 |
+| 回合的嘗試序號（`0016`） | `memory_logs.attempt` 為 `NOT NULL`、資料庫預設 1；建立時為 1，中斷、被擋或逾時的重送接手時加 1，已完成的重送不變。完成、中斷與被擋可帶 `attempt`，條件式 UPDATE 比對它 | 遊戲幣的預扣冪等鍵必須隨嘗試而變（`hold()` 遇到同一個鍵一律回傳既有預扣，含已退回的）；帶 `attempt` 讓被接手而過時的產生器無法改寫新的嘗試 |
+| 同一存檔同時只有一個進行中的回合（`0016`） | 開始回合時已先對存檔列做條件式 UPDATE 取鎖，再查「其他編號且 `updated_at` 未逾時的 `streaming`」，有則衝突；逾時者標為 `interrupted`。逾時秒數沿用 `coin.hold_timeout_seconds`（呼叫端現讀後傳入） | 預扣與回合同時到期，玩家不會被雙重扣款；不新增設定鍵，也不需要資料庫層的部分唯一索引（`streaming` 不是穩定的唯一狀態，且逾時接手需要時間條件） |
+| 第 0 幕放在存檔上而不是回合表（`0016`） | `sessions.opening_text`／`opening_state`／`opening_started_at` 皆可為空；搶佔、接手、完成與退回都是帶狀態條件的單一 UPDATE，`opening_started_at` 是這次生成的憑證，寫回時必須相同；空值（舊存檔）視同 `fallback` | 第 0 幕不是一輪：不計輪數、不扣幣、不出現在回合同步序列，放進回合表會讓這三件事都要特例處理；憑證讓被接手而過時的產生器無法覆蓋新的結果 |
+| 串流的首字延遲進帳本（`0016`） | `llm_call_logs.first_chunk_ms` 可為空，只有串流呼叫有值 | 串流的體感品質看首字不看整段；沒有新增資料表，也不含任何文字 |
 | 標籤獨立成表 | `script_version_tags` 以顯示形式儲存（保留大小寫，版本內容可由欄位完整還原、雜湊不變），查詢以小寫比對 | 不得依 JSON 內容篩選；同一版本內由驗證器以 NFC 與不分大小寫去除重複，所以兩種資料庫的唯一約束不會誤判 |
 
 ## 3. Migration 歷程
@@ -335,6 +344,7 @@ flowchart LR
     M12 --> M13["0013 rpg_script_authoring<br/>users 的暱稱與暫停發佈三欄、script_versions 的審查四欄、script_submissions、runtime_limits 與七個初始值、llm_call_logs.kind 加寬"]
     M13 --> M14["0014 rpg_character_creation<br/>sessions.protagonist_json、runtime_limits 補三個每日主角生成次數的初始值"]
     M14 --> M15["0015 game_wallet<br/>wallets、wallet_entries、runtime_limits 補五個遊戲幣設定的初始值"]
+    M15 --> M16["0016 rpg_turn_engine<br/>memory_logs.attempt、sessions 的第 0 幕三欄、llm_call_logs.first_chunk_ms、runtime_limits 補每回合月數上限"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -343,6 +353,7 @@ flowchart LR
 - `0013_rpg_script_authoring` 只新增與加寬（七個可為空的新欄位、兩張新表、`kind` 由 10 加寬為 20）；七個限制的初始值以 `op.bulk_insert` 與 ORM 資料表物件寫入，沒有原生 SQL；舊版程式在新結構上可運作。降級先刪除非客服類別的帳本列才縮回 `kind`，所以只在還沒有真實資料時使用。
 - `0014_rpg_character_creation` 只新增一個可為空的欄位並補三個限制鍵（先查再插，已有的鍵不蓋掉、不重複）；舊版程式在新結構上可運作，降級對 `sessions` 同樣用 `recreate="never"`。
 - `0015_game_wallet` 只新增兩張表並補五個設定鍵（先查再插，已有的鍵不蓋掉、不重複）；沒有資料回填，既有玩家的贈幣在第一次存取錢包時補發；降級會刪除兩張表（錢包資料一併消失），只在還沒有真實資料時使用。
+- `0016_rpg_turn_engine` 只新增五個欄位（一個有預設值的 `attempt`、四個可為空）並補一個設定鍵（先查再插）；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（程式視同 fallback，不生成也不阻擋回合），沒有資料回填；舊版程式在新結構上可運作。降級對三張表都用 `recreate="never"`，`attempt` 另需 `mssql_drop_default`（SQL Server 的預設值約束要先移除才能刪欄位）。
 - SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。
