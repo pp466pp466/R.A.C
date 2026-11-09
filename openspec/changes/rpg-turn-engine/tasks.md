@@ -13,11 +13,11 @@
 
 ## 2. 串流轉接器與串流執行期
 
-- [ ] 2.1 `app/llm/types.py` 新增中立串流型別（`StreamText`、`StreamTick`、`StreamEnd`、`StreamHandle` 協定）；`transport.py` 新增 `open_stream`（背景讀取執行緒加佇列、短逾時輪詢、`close()` 能中斷阻塞讀取、非 200 於第一步拋出對應錯誤、不保留回應本文）。驗證：新的 `tests/test_llm_transport_stream.py` 以本機假伺服器或假連線驗證逐行讀取、tick、保活註解、關閉後不再讀取、斷線拋出 `OSError`（不帶原始訊息）。
-- [ ] 2.2 `OpenAICompatibleProvider`：`stream(request)`（`stream_options.include_usage`、`delta.content` 為正文、推理片段不算正文、`[DONE]`、結束原因與用量）、`reasoning` 設定（關閉時所有請求帶 `reasoning: {"enabled": false}`，開啟時不帶）、結束原因為長度且正文為空視為暫時性失敗（串流與非串流）。驗證：`tests/test_openai_compatible_provider.py` 新增案例通過（增量與用量、保活、推理片段、429 於串流前、長度且空、長度且有正文、零保存偏好與推理參數同時存在、金鑰不外洩）。
-- [ ] 2.3 `flask llm-probe`：輸出以替代字元處理無法編碼的字元，並顯示推理設定。驗證：`tests/test_cli_llm_probe.py` 新增「cp950 主控台遇到無法編碼字元」案例通過。
-- [ ] 2.4 測試用假供應商（`tests/support/llm.py`）新增 `stream`（可腳本化的片段、tick、錯誤與斷線），供第 2、4 組使用；`StreamRunner`（`rpg_stream.py`）：首字 20 秒、兩次嘗試共用 60 秒總預算、剩餘不足 2 秒不再嘗試、備援只在第一個正文片段之前切換、被擋與設定錯誤不切換、斷路沿用帳本查詢、用量取得或估算、帳本回呼（含 `first_chunk_ms`、斷線與被擋的 `error_detail` 只含列舉）。驗證：`tests/test_rpg_stream.py` 以假時鐘與假上游覆蓋 spec `llm-streaming` 的每個情境通過，帳本內容不含任何文字。
-- [ ] 2.5 文件：`docs/模型呼叫層-llm-layer.md`（串流路徑、期限與備援時機圖、`OPENROUTER_REASONING`）、`docs/營運與部署-operations.md` 的環境變數表。驗證：`tests/test_design_docs.py` 通過。
+- [x] 2.1 `app/llm/types.py` 新增中立串流型別（`StreamText`、`StreamTick`、`StreamEnd`、`StreamHandle` 協定）；`transport.py` 新增 `open_stream`（背景讀取執行緒加佇列、短逾時輪詢、`close()` 能中斷阻塞讀取、非 200 於第一步拋出對應錯誤、不保留回應本文）。驗證：新的 `tests/test_llm_transport_stream.py` 以本機假伺服器或假連線驗證逐行讀取、tick、保活註解、關閉後不再讀取、斷線拋出 `OSError`（不帶原始訊息）。
+- [x] 2.2 `OpenAICompatibleProvider`：`stream(request)`（`stream_options.include_usage`、`delta.content` 為正文、推理片段不算正文、`[DONE]`、結束原因與用量）、`reasoning` 設定（關閉時所有請求帶 `reasoning: {"enabled": false}`，開啟時不帶）、結束原因為長度且正文為空視為暫時性失敗（串流與非串流）。驗證：`tests/test_openai_compatible_provider.py` 新增案例通過（增量與用量、保活、推理片段、429 於串流前、長度且空、長度且有正文、零保存偏好與推理參數同時存在、金鑰不外洩）。
+- [x] 2.3 `flask llm-probe`：輸出以替代字元處理無法編碼的字元，並顯示推理設定。驗證：`tests/test_cli_llm_probe.py` 新增「cp950 主控台遇到無法編碼字元」案例通過。
+- [x] 2.4 測試用假供應商（`tests/support/llm.py`）新增 `stream`（可腳本化的片段、tick、錯誤與斷線），供第 2、4 組使用；`StreamRunner`（`rpg_stream.py`）：首字 20 秒、兩次嘗試共用 60 秒總預算、剩餘不足 2 秒不再嘗試、備援只在第一個正文片段之前切換、被擋與設定錯誤不切換、斷路沿用帳本查詢、用量取得或估算、帳本回呼（含 `first_chunk_ms`、斷線與被擋的 `error_detail` 只含列舉）。驗證：`tests/test_rpg_stream.py` 以假時鐘與假上游覆蓋 spec `llm-streaming` 的每個情境通過，帳本內容不含任何文字。
+- [x] 2.5 文件：`docs/模型呼叫層-llm-layer.md`（串流路徑、期限與備援時機圖、`OPENROUTER_REASONING`）、`docs/營運與部署-operations.md` 的環境變數表。驗證：`tests/test_design_docs.py` 通過。
 
 ## 3. 純邏輯（提示詞、上下文、世界狀態、輸出審查）
 

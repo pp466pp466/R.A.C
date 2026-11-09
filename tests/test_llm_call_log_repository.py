@@ -47,6 +47,15 @@ def test_error_detail_is_cut_at_2000_characters_when_written(ledger, member_sess
     assert len(member_session.scalars(select(LlmCallLog)).one().error_detail) == kept == min(length, ERROR_DETAIL_LIMIT)
 
 
+def test_the_first_chunk_time_of_a_streaming_call_is_stored_and_is_empty_for_other_calls(ledger, member_session):
+    record(ledger, kind="rpg_stream", first_chunk_ms=640)
+    record(ledger, kind="chat")
+    member_session.commit()
+    member_session.expire_all()
+    rows = member_session.scalars(select(LlmCallLog).order_by(LlmCallLog.id)).all()
+    assert [row.first_chunk_ms for row in rows] == [640, None]
+
+
 def test_a_failure_without_text_stores_no_detail(ledger, member_session):
     record(ledger, status="timeout")
     member_session.commit()

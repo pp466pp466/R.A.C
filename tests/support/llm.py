@@ -17,7 +17,8 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from app.llm.types import (
-    FINISH_STOP, LLMError, LLMRequest, LLMResponse, LLMTransientError, TRANSIENT_TIMEOUT,
+    FINISH_STOP, LLMError, LLMRequest, LLMResponse, LLMTransientError, StreamEnd, StreamText, StreamTick,
+    TRANSIENT_NETWORK, TRANSIENT_TIMEOUT,
 )
 
 
@@ -46,6 +47,85 @@ class Step:
     finish_reason: str = FINISH_STOP
 
 
+@dataclass
+class Chunk:
+    """串流腳本中的一個正文片段：時鐘先前進 `seconds` 再產生。"""
+
+    text: str
+    seconds: float = 0.2
+
+
+@dataclass
+class Idle:
+    """串流腳本中的一次閒置 tick（上游沉默、保活註解或推理片段）：時鐘前進 `seconds` 後產生 `StreamTick`。"""
+
+    seconds: float = 1.0
+
+
+@dataclass
+class Fail:
+    """串流腳本中的失敗：時鐘前進後拋出 `error`（可以是第一個片段之前，也可以是中途）。"""
+
+    error: Exception
+    seconds: float = 0.2
+
+
+@dataclass
+class Finish:
+    """串流腳本中的正常結束事件；用量為 None 表示供應商沒有提供。"""
+
+    finish_reason: str = FINISH_STOP
+    prompt_tokens: int | None = 100
+    completion_tokens: int | None = 50
+    thinking_tokens: int | None = None
+    seconds: float = 0.1
+
+
+StreamItem = Chunk | Idle | Fail | Finish
+
+
+class FakeStreamHandle:
+    """依腳本產生串流事件；每一項先推進假時鐘。`close()` 之後不再產生任何事件。腳本用完還沒有 `Finish` 視為連線中途斷掉。"""
+
+    def __init__(self, clock: FakeMonotonic, items: list[StreamItem], model: str) -> None:
+        self._clock = clock
+        self._items = list(items)
+        self._model = model
+        self.closed = False
+        self.served = 0                                  # 已經交給呼叫端的事件數
+
+    def __iter__(self):
+        return self._events()
+
+    def close(self) -> None:
+        self.closed = True
+
+    def _events(self):
+        for item in self._items:
+            if self.closed:
+                return
+            self._clock.advance(item.seconds)
+            if isinstance(item, Chunk):
+                self.served += 1
+                yield StreamText(item.text)
+            elif isinstance(item, Idle):
+                self.served += 1
+                yield StreamTick()
+            elif isinstance(item, Fail):
+                if isinstance(item.error, LLMError):
+                    item.error.latency_ms = int(item.seconds * 1000)
+                raise item.error
+            else:
+                self.served += 1
+                yield StreamEnd(
+                    finish_reason=item.finish_reason, model=self._model, prompt_tokens=item.prompt_tokens,
+                    completion_tokens=item.completion_tokens, thinking_tokens=item.thinking_tokens,
+                )
+                return
+        if not self.closed:
+            raise LLMTransientError(TRANSIENT_NETWORK)
+
+
 class FakeLLMProvider:
     name = "fake"
 
@@ -55,6 +135,8 @@ class FakeLLMProvider:
         self.hooks: list[Callable[[LLMRequest], None]] = []       # 每次呼叫前執行（例如斷言「此刻沒有開啟的資料庫交易」）
         self._steps: list[Step] = []
         self._default = default
+        self._streams: list[list[StreamItem]] = []
+        self.handles: list[FakeStreamHandle] = []                 # 每次 `stream()` 回傳的串流（檢查 `closed` 與 `served`）
 
     def script(self, *steps: Step | str | Exception) -> "FakeLLMProvider":
         for step in steps:
@@ -64,6 +146,25 @@ class FakeLLMProvider:
     @property
     def remaining(self) -> int:
         return len(self._steps)
+
+    def script_stream(self, *items: StreamItem) -> "FakeLLMProvider":
+        """為下一次 `stream()` 排一個腳本（依 `Chunk`、`Idle`、`Fail`、`Finish` 順序）。每次 `stream()` 取走一個腳本。"""
+        self._streams.append(list(items))
+        return self
+
+    @property
+    def remaining_streams(self) -> int:
+        return len(self._streams)
+
+    def stream(self, request: LLMRequest) -> FakeStreamHandle:
+        self.calls.append(request)
+        for hook in self.hooks:
+            hook(request)
+        if not self._streams:
+            raise AssertionError("假供應商的串流腳本已用完，但程式又開了一次串流（呼叫次數多於預期）")
+        handle = FakeStreamHandle(self.clock, self._streams.pop(0), request.model)
+        self.handles.append(handle)
+        return handle
 
     def generate(self, request: LLMRequest) -> LLMResponse:
         self.calls.append(request)

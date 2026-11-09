@@ -39,11 +39,12 @@ class LlmCallLogRepository:
         thinking_tokens: int | None = None,
         finish_reason: str | None = None,
         error_detail: str | None = None,
+        first_chunk_ms: int | None = None,
     ) -> LlmCallLog:
         row = LlmCallLog(
             user_id=user_id, conversation_id=conversation_id, kind=kind, provider=provider, model=model, attempt=attempt,
             status=status, counted=counted, prompt_tokens=prompt_tokens, completion_tokens=completion_tokens,
-            thinking_tokens=thinking_tokens, latency_ms=latency_ms, finish_reason=finish_reason,
+            thinking_tokens=thinking_tokens, latency_ms=latency_ms, first_chunk_ms=first_chunk_ms, finish_reason=finish_reason,
             error_detail=None if error_detail is None else error_detail[:ERROR_DETAIL_LIMIT], created_at=created_at,
         )
         self._session.add(row)

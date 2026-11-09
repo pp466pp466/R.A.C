@@ -78,6 +78,49 @@ def test_it_uses_the_primary_rpg_model_and_the_shared_limits_from_the_config():
     assert call["body"]["model"] == MODEL and call["body"]["max_tokens"] == 999 and call["timeout"] == 7
 
 
+# ---- 主控台編碼與推理設定（rpg-turn-engine 2.3）------------------------------------------------------------
+
+UNENCODABLE = "😀✨"                                  # cp950（繁體中文 Windows 的主控台編碼）無法表示的字元
+
+
+def test_the_control_case_really_is_unencodable_in_cp950():
+    """對照：確認這個案例真的會讓天真的輸出中斷，下面的測試才有意義。"""
+    with pytest.raises(UnicodeEncodeError):
+        UNENCODABLE.encode("cp950")
+
+
+def test_a_reply_with_characters_the_console_cannot_encode_is_printed_with_replacements_and_exits_zero():
+    transport = FakeTransport(payload=ok_payload(f"清晨的海邊{UNENCODABLE}很安靜。", usage={"prompt_tokens": 5, "completion_tokens": 6}))
+    app = make_app(transport)
+    result = app.test_cli_runner(charset="cp950").invoke(args=["llm-probe"])
+    assert result.exit_code == 0, result.output
+    assert "清晨的海邊" in result.output and "很安靜。" in result.output and "?" in result.output          # 不能編碼的字元變成替代字元
+    for expected in (f"模型：{MODEL}", "毫秒", "輸入 5、輸出 6", "結束原因：stop"):
+        assert expected in result.output, expected
+
+
+def test_a_utf8_console_still_shows_the_reply_unchanged():
+    result = run(make_app(FakeTransport(payload=ok_payload(f"海風{UNENCODABLE}"))))
+    assert result.exit_code == 0 and f"海風{UNENCODABLE}" in result.output
+
+
+def test_the_reasoning_setting_is_shown_and_defaults_to_off():
+    transport = FakeTransport(payload=ok_payload("好。"))
+    result = run(make_app(transport))
+    assert result.exit_code == 0 and "推理：關閉" in result.output
+    assert transport.calls[0]["body"]["reasoning"] == {"enabled": False}
+
+
+def test_with_reasoning_enabled_the_probe_says_so_and_sends_no_reasoning_parameter():
+    transport = FakeTransport(payload=ok_payload("好。"))
+    config = load_config(environ={"APP_ENV": "testing", **RPG, "OPENROUTER_REASONING": "true"})
+    app = create_app(config, rpg_llm_provider=OpenAICompatibleProvider(KEY, transport=transport, reasoning=True))
+    Base.metadata.create_all(app.extensions["db_engine"])
+    result = run(app)
+    assert result.exit_code == 0 and "推理：開啟" in result.output
+    assert "reasoning" not in transport.calls[0]["body"]
+
+
 # ---- 結構化選項 ----------------------------------------------------------------------------------------
 
 def test_the_structured_option_sends_the_fixed_schema_and_reports_a_pass():

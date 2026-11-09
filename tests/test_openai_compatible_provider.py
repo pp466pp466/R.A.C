@@ -9,9 +9,10 @@ import logging
 import pytest
 
 from app.llm.openai_compatible import AUTH_HEADER, DEFAULT_BASE_URL, PROVIDER_NAME, OpenAICompatibleProvider
+from app.llm.transport import STREAM_EOF, StreamHead
 from app.llm.types import (
     BLOCKED_OUTPUT, FINISH_LENGTH, FINISH_OTHER, FINISH_STOP, LLMBlockedError, LLMConfigError, LLMContent, LLMRequest,
-    LLMTransientError,
+    LLMTransientError, StreamEnd, StreamText, StreamTick,
 )
 
 KEY = "sk-or-v1-fake-key-for-tests-0123456789"
@@ -294,3 +295,276 @@ def test_error_handling_does_not_depend_on_the_free_marker_either():
         with pytest.raises(LLMTransientError) as caught:
             provider(FakeTransport(status=429, payload={})).generate(make_request(model=model))
         assert caught.value.kind == "rate_limited"
+
+
+# ---- 2.2 串流 ------------------------------------------------------------------------------
+
+class FakeRaw:
+    """腳本化的上游：項目是 `StreamHead`、bytes 行、None（沉默一個 tick）、`STREAM_EOF` 或要拋出的例外。"""
+
+    def __init__(self, items):
+        self._items = list(items)
+        self.closed = False
+        self.polls = 0
+
+    def poll(self, timeout):
+        if self.closed:
+            return STREAM_EOF
+        self.polls += 1
+        if not self._items:
+            return STREAM_EOF
+        item = self._items.pop(0)
+        if isinstance(item, BaseException):
+            raise item
+        return item
+
+    def close(self):
+        self.closed = True
+
+
+class FakeStreamTransport:
+    def __init__(self, items=(), error: Exception | None = None):
+        self.items, self.error = list(items), error
+        self.calls: list[dict] = []
+        self.raws: list[FakeRaw] = []
+
+    def open_stream(self, url, headers, body, timeout):
+        self.calls.append({"url": url, "headers": dict(headers), "body": copy.deepcopy(body), "timeout": timeout})
+        if self.error:
+            raise self.error
+        raw = FakeRaw(self.items)
+        self.raws.append(raw)
+        return raw
+
+
+def data(obj) -> bytes:
+    return b"data: " + json.dumps(obj, ensure_ascii=False).encode("utf-8")
+
+
+def delta(content=None, *, reasoning=None, finish=None) -> bytes:
+    inner = {}
+    if content is not None:
+        inner["content"] = content
+    if reasoning is not None:
+        inner["reasoning"] = reasoning
+    return data({"choices": [{"delta": inner, "finish_reason": finish}]})
+
+
+USAGE_EVENT = data({"choices": [], "usage": {"prompt_tokens": 120, "completion_tokens": 340, "completion_tokens_details": {"reasoning_tokens": 7}}})
+
+
+def texts(events) -> list[str]:
+    return [event.text for event in events if isinstance(event, StreamText)]
+
+
+def normal_stream(*parts) -> list:
+    return [StreamHead(200), *[delta(part) for part in parts], delta(finish="stop"), USAGE_EVENT, b"data: [DONE]", STREAM_EOF]
+
+
+def test_a_stream_yields_text_events_in_order_then_one_end_event_with_usage_finish_reason_and_model():
+    events = list(provider(FakeStreamTransport(normal_stream("清晨的", "海風。"))).stream(make_request()))
+    assert texts(events) == ["清晨的", "海風。"]
+    assert isinstance(events[-1], StreamEnd) and sum(isinstance(e, StreamEnd) for e in events) == 1
+    end = events[-1]
+    assert (end.finish_reason, end.model) == (FINISH_STOP, "vendor/some-model:free")
+    assert (end.prompt_tokens, end.completion_tokens, end.thinking_tokens) == (120, 340, 7)
+
+
+def test_the_stream_request_asks_for_sse_with_usage_and_keeps_the_key_in_the_header_only():
+    transport = FakeStreamTransport(normal_stream("好"))
+    list(provider(transport).stream(make_request(timeout_seconds=33.0)))
+    call = transport.calls[0]
+    assert call["url"] == f"{DEFAULT_BASE_URL}/chat/completions" and call["timeout"] == 33.0
+    assert call["headers"][AUTH_HEADER] == f"Bearer {KEY}" and call["headers"]["Accept"] == "text/event-stream"
+    assert KEY not in call["url"]
+    body = call["body"]
+    assert body["stream"] is True and body["stream_options"] == {"include_usage": True} and body["max_tokens"] == 2048
+    assert [m["role"] for m in body["messages"]] == ["system", "user", "assistant", "user"]
+
+
+def test_a_keepalive_comment_is_ignored_and_produces_no_text_event():
+    transport = FakeStreamTransport([StreamHead(200), b": OPENROUTER PROCESSING", delta("好"), delta(finish="stop"), b"data: [DONE]", STREAM_EOF])
+    events = list(provider(transport).stream(make_request()))
+    assert texts(events) == ["好"] and StreamTick() in events           # 忽略，但喚醒外層檢查期限
+
+
+def test_reasoning_fragments_and_empty_fragments_are_never_text_only_ticks():
+    transport = FakeStreamTransport([
+        StreamHead(200), delta(reasoning="先想一想……"), delta(None, reasoning="再想"), delta(""), delta("答案"), delta(finish="stop"),
+        b"data: [DONE]", STREAM_EOF,
+    ])
+    events = list(provider(transport).stream(make_request()))
+    assert texts(events) == ["答案"]
+    first_text = next(i for i, e in enumerate(events) if isinstance(e, StreamText))
+    assert first_text >= 3 and all(isinstance(e, StreamTick) for e in events[:first_text])      # 首字之前只有 tick
+
+
+def test_silence_from_the_upstream_becomes_idle_ticks_and_the_connection_stays_open():
+    transport = FakeStreamTransport([StreamHead(200), None, None, delta("好"), delta(finish="stop"), b"data: [DONE]", STREAM_EOF])
+    events = list(provider(transport).stream(make_request()))
+    assert events[:2] == [StreamTick(), StreamTick()] and texts(events) == ["好"]
+
+
+def test_closing_midstream_closes_the_upstream_and_nothing_is_read_afterwards():
+    transport = FakeStreamTransport(normal_stream("一", "二", "三"))
+    handle = provider(transport).stream(make_request())
+    iterator = iter(handle)
+    assert next(iterator) == StreamText("一")
+    raw = transport.raws[0]
+    polls = raw.polls
+    handle.close()
+    handle.close()                                                       # 可重複呼叫
+    assert raw.closed and list(iterator) == [] and raw.polls == polls
+
+
+def test_closing_before_iterating_closes_the_upstream_too():
+    transport = FakeStreamTransport(normal_stream("一"))
+    handle = provider(transport).stream(make_request())
+    handle.close()
+    assert transport.raws[0].closed and list(handle) == []
+
+
+@pytest.mark.parametrize("status, kind", [(429, "rate_limited"), (500, "server_error"), (503, "server_error"), (408, "timeout")])
+def test_an_http_error_before_the_first_event_maps_like_the_non_streaming_call(status, kind):
+    transport = FakeStreamTransport([StreamHead(status), STREAM_EOF])
+    with pytest.raises(LLMTransientError) as caught:
+        list(provider(transport).stream(make_request()))
+    assert (caught.value.kind, caught.value.http_status) == (kind, status) and caught.value.latency_ms >= 0
+
+
+@pytest.mark.parametrize("status", [400, 401, 402, 403, 404])
+def test_account_and_request_problems_are_configuration_errors_in_streaming_too(status):
+    with pytest.raises(LLMConfigError) as caught:
+        list(provider(FakeStreamTransport([StreamHead(status), STREAM_EOF])).stream(make_request()))
+    assert caught.value.http_status == status
+
+
+def test_a_stream_that_stops_for_length_with_no_text_is_a_transient_failure_not_an_empty_success():
+    transport = FakeStreamTransport([StreamHead(200), delta(reasoning="想"), delta(finish="length"), USAGE_EVENT, b"data: [DONE]", STREAM_EOF])
+    with pytest.raises(LLMTransientError) as caught:
+        list(provider(transport).stream(make_request()))
+    assert caught.value.kind == "server_error"
+
+
+def test_a_stream_that_stops_for_length_with_text_ends_normally_with_the_length_reason():
+    transport = FakeStreamTransport([StreamHead(200), delta("被截斷的"), delta(finish="length"), USAGE_EVENT, b"data: [DONE]", STREAM_EOF])
+    events = list(provider(transport).stream(make_request()))
+    assert texts(events) == ["被截斷的"] and events[-1].finish_reason == FINISH_LENGTH
+
+
+def test_a_content_filtered_ending_is_an_output_block_in_streaming_too():
+    transport = FakeStreamTransport([StreamHead(200), delta("部分"), delta(finish="content_filter"), b"data: [DONE]", STREAM_EOF])
+    with pytest.raises(LLMBlockedError) as caught:
+        list(provider(transport).stream(make_request()))
+    assert caught.value.phase == BLOCKED_OUTPUT
+
+
+def test_a_stream_that_ends_without_done_or_a_finish_reason_is_a_dropped_connection():
+    transport = FakeStreamTransport([StreamHead(200), delta("說到一半"), STREAM_EOF])
+    with pytest.raises(LLMTransientError) as caught:
+        list(provider(transport).stream(make_request()))
+    assert caught.value.kind == "network"
+
+
+def test_a_stream_with_a_finish_reason_but_no_done_marker_is_still_complete_and_missing_usage_is_empty_not_zero():
+    transport = FakeStreamTransport([StreamHead(200), delta("好"), delta(finish="stop"), STREAM_EOF])
+    events = list(provider(transport).stream(make_request()))
+    assert texts(events) == ["好"] and isinstance(events[-1], StreamEnd)
+    assert (events[-1].prompt_tokens, events[-1].completion_tokens, events[-1].thinking_tokens) == (None, None, None)
+
+
+@pytest.mark.parametrize(
+    "event, expected",
+    [
+        ({"error": {"code": 502, "message": ECHO}}, LLMTransientError),
+        ({"error": {"code": 429, "message": ECHO}}, LLMTransientError),
+        ({"error": {"code": 402, "message": ECHO}}, LLMConfigError),
+        ({"error": ECHO}, LLMTransientError),                                   # 沒有代碼：無法判斷，當作暫時性
+        ({"choices": [{"delta": {}, "finish_reason": "error"}]}, LLMTransientError),
+    ],
+)
+def test_an_error_event_midstream_is_classified_without_keeping_the_provider_text(event, expected):
+    transport = FakeStreamTransport([StreamHead(200), delta("開頭"), data(event), b"data: [DONE]", STREAM_EOF])
+    with pytest.raises(expected) as caught:
+        list(provider(transport).stream(make_request()))
+    error = caught.value
+    dumped = f"{error!s} {error!r} {vars(error)!r} {error.__cause__!r} {error.__context__!r}"
+    assert "SECRET-ECHO" not in dumped and KEY not in dumped
+
+
+@pytest.mark.parametrize("failure, kind", [(TimeoutError(), "timeout"), (OSError("連線失敗"), "network")])
+def test_a_transport_failure_during_the_stream_is_transient_and_closes_the_upstream(failure, kind):
+    transport = FakeStreamTransport([StreamHead(200), delta("好"), failure])
+    iterator = iter(provider(transport).stream(make_request()))
+    assert next(iterator) == StreamText("好")
+    with pytest.raises(LLMTransientError) as caught:
+        list(iterator)
+    assert caught.value.kind == kind and transport.raws[0].closed
+
+
+@pytest.mark.parametrize("failure, kind", [(TimeoutError(), "timeout"), (OSError("x"), "network")])
+def test_a_failure_to_open_the_stream_is_transient(failure, kind):
+    with pytest.raises(LLMTransientError) as caught:
+        provider(FakeStreamTransport(error=failure)).stream(make_request())
+    assert caught.value.kind == kind
+
+
+def test_malformed_or_unrelated_lines_are_skipped_without_ending_the_stream():
+    transport = FakeStreamTransport([
+        StreamHead(200), b"event: message", b"data: {oops", b"data: [1, 2]", b"", delta("好"), delta(finish="stop"), b"data: [DONE]", STREAM_EOF,
+    ])
+    assert texts(list(provider(transport).stream(make_request()))) == ["好"]
+
+
+def test_stream_failures_carry_no_key_and_no_provider_body(caplog):
+    caplog.set_level(logging.DEBUG)
+    for status in (429, 500, 402):
+        with pytest.raises((LLMTransientError, LLMConfigError)) as caught:
+            list(provider(FakeStreamTransport([StreamHead(status), STREAM_EOF])).stream(make_request()))
+        error = caught.value
+        assert KEY not in f"{error!s} {error!r} {vars(error)!r}"
+    assert KEY not in caplog.text and "SECRET-ECHO" not in caplog.text
+
+
+# ---- 2.2 推理設定 ----------------------------------------------------------------------------
+
+def test_by_default_every_request_asks_for_no_reasoning_for_both_models_streaming_or_not():
+    transport = FakeTransport(payload=ok_payload())
+    adapter = provider(transport)
+    adapter.generate(make_request(model="vendor/primary"))
+    adapter.generate(make_request(model="vendor/fallback"))
+    stream_transport = FakeStreamTransport(normal_stream("好"))
+    list(provider(stream_transport).stream(make_request(model="vendor/primary")))
+    assert [c["body"]["reasoning"] for c in transport.calls] == [{"enabled": False}] * 2
+    assert stream_transport.calls[0]["body"]["reasoning"] == {"enabled": False}
+
+
+def test_when_reasoning_is_enabled_no_reasoning_parameter_is_sent_at_all():
+    transport = FakeTransport(payload=ok_payload())
+    provider(transport, reasoning=True).generate(make_request())
+    stream_transport = FakeStreamTransport(normal_stream("好"))
+    list(provider(stream_transport, reasoning=True).stream(make_request()))
+    assert "reasoning" not in transport.calls[0]["body"] and "reasoning" not in stream_transport.calls[0]["body"]
+
+
+def test_zero_retention_and_the_reasoning_parameter_are_sent_together_and_do_not_disturb_each_other():
+    stream_transport = FakeStreamTransport(normal_stream("好"))
+    list(provider(stream_transport, zero_retention=True).stream(make_request()))
+    body = stream_transport.calls[0]["body"]
+    assert body["provider"] == {"zdr": True, "data_collection": "deny"} and body["reasoning"] == {"enabled": False}
+
+
+# ---- 2.2 長度且正文為空（非串流）---------------------------------------------------------------
+
+def test_a_non_streaming_answer_cut_by_length_with_no_text_is_transient_so_the_fallback_model_can_run():
+    for content in ("", None):
+        payload = ok_payload("", finish="length")
+        payload["choices"][0]["message"]["content"] = content
+        with pytest.raises(LLMTransientError) as caught:
+            provider(FakeTransport(payload=payload)).generate(make_request())
+        assert caught.value.kind == "server_error" and caught.value.latency_ms == 250
+
+
+def test_a_non_streaming_answer_cut_by_length_with_text_is_returned_with_the_length_reason():
+    response = provider(FakeTransport(payload=ok_payload("半截的 JSON {", finish="length"))).generate(make_request())
+    assert response.text == "半截的 JSON {" and response.finish_reason == FINISH_LENGTH

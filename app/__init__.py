@@ -95,6 +95,7 @@ def create_app(
             **({"base_url": cfg.rpg_llm.base_url} if cfg.rpg_llm.base_url else {}),
             supports_json_schema=cfg.rpg_llm.supports_json_schema,
             zero_retention=cfg.rpg_llm.zero_retention,
+            reasoning=cfg.rpg_llm.reasoning,
         )
         if cfg.rpg_llm
         else None

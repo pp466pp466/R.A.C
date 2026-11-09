@@ -146,6 +146,15 @@ def _count(value: int | None) -> str:
     return "未提供" if value is None else str(value)
 
 
+def _printable(text: str) -> str:
+    """模型回覆可能含主控台編碼（例如繁體中文 Windows 的 cp950）無法表示的字元：以替代字元顯示，不讓指令因編碼錯誤中斷。"""
+    encoding = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        return text.encode(encoding, errors="replace").decode(encoding, errors="replace")
+    except LookupError:                                   # 不認得的編碼名稱：退回 ASCII 的保守輸出
+        return text.encode("ascii", errors="replace").decode("ascii")
+
+
 def register_cli(app: Flask) -> None:
     @app.cli.command("llm-probe")
     @click.option("--text", default=None, help=f"送給模型的短文字（最多 {PROBE_MAX_TEXT_CHARS} 字）；省略時使用固定的無害文字。")
@@ -183,13 +192,14 @@ def register_cli(app: Flask) -> None:
             ) from None
 
         click.echo(f"模型：{response.model}")
+        click.echo(f"推理：{'開啟（不帶推理參數，由模型預設行為決定）' if config.rpg_llm and config.rpg_llm.reasoning else '關閉（每個請求明確要求不推理）'}")
         click.echo(f"延遲：{response.latency_ms} 毫秒")
         click.echo(
             f"token：輸入 {_count(response.prompt_tokens)}、輸出 {_count(response.completion_tokens)}、思考 {_count(response.thinking_tokens)}"
         )
         click.echo(f"結束原因：{response.finish_reason}")
         click.echo("--- 回覆 ---")
-        click.echo(response.text)
+        click.echo(_printable(response.text))
         if structured:
             click.echo("--- 結構化驗證 ---")
             try:

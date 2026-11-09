@@ -83,3 +83,49 @@ def test_hooks_run_before_every_call_so_tests_can_assert_the_state_at_call_time(
 def test_finish_reason_and_token_counts_can_be_scripted():
     response = FakeLLMProvider().script(Step("{", finish_reason=FINISH_LENGTH, thinking_tokens=7, completion_tokens=None)).generate(request())
     assert (response.finish_reason, response.thinking_tokens, response.completion_tokens) == ("length", 7, None)
+
+
+# ---- 串流（rpg-turn-engine 2.4）-----------------------------------------------------------------
+
+def test_a_stream_script_is_consumed_in_order_advances_the_clock_and_ends_with_the_requested_model():
+    from app.llm.types import StreamEnd, StreamText, StreamTick, StreamingLLMProvider
+    from tests.support.llm import Chunk, Finish, Idle
+
+    clock = FakeMonotonic()
+    provider: StreamingLLMProvider = FakeLLMProvider(clock).script_stream(Chunk("甲", 0.5), Idle(2.0), Finish(completion_tokens=9, seconds=0.25))
+    events = list(provider.stream(request("gemini-x")))
+    assert events == [
+        StreamText("甲"), StreamTick(), StreamEnd(finish_reason="stop", model="gemini-x", prompt_tokens=100, completion_tokens=9),
+    ]
+    assert clock.now == 1000.0 + 0.5 + 2.0 + 0.25 and provider.remaining_streams == 0
+    assert [c.model for c in provider.calls] == ["gemini-x"]
+
+
+def test_a_scripted_stream_failure_is_raised_in_place_with_its_latency_and_close_stops_the_stream():
+    from app.llm.types import StreamText
+    from tests.support.llm import Chunk, Fail, Finish
+
+    provider = FakeLLMProvider().script_stream(Chunk("甲"), Fail(LLMTransientError("network"), seconds=0.7), Finish())
+    iterator = iter(provider.stream(request()))
+    assert next(iterator) == StreamText("甲")
+    with pytest.raises(LLMTransientError) as caught:
+        next(iterator)
+    assert caught.value.latency_ms == 700
+
+    handle = FakeLLMProvider().script_stream(Chunk("甲"), Chunk("乙"), Finish())
+    handle_stream = handle.stream(request())
+    iterator = iter(handle_stream)
+    next(iterator)
+    handle_stream.close()
+    assert list(iterator) == [] and handle.handles[0].closed and handle.handles[0].served == 1
+
+
+def test_a_stream_script_that_runs_out_without_a_finish_is_a_dropped_connection_and_extra_calls_are_a_test_bug():
+    from tests.support.llm import Chunk
+
+    provider = FakeLLMProvider().script_stream(Chunk("甲"))
+    with pytest.raises(LLMTransientError) as caught:
+        list(provider.stream(request()))
+    assert caught.value.kind == "network"
+    with pytest.raises(AssertionError):
+        provider.stream(request())
