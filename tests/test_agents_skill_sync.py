@@ -185,7 +185,7 @@ SYNCED_RULES = [
     (10, "玩家於重新生成時填寫的回饋（僅分類統計與理由文字，不含帳號資料，每次讀取都寫入稽核紀錄）", "references/auth-security.md"),
     (10, "停權、刪除內容、調整會員等級與調整遊戲幣餘額等高風險操作須重新輸入密碼並寫入稽核", "references/auth-security.md"),
     (10, "RPG 的用量以遊戲幣控制（見第 7 節），不適用每日對話輪數與每分鐘訊息數", "references/auth-security.md"),
-    (11, "遊戲幣與帳本：錢包與帳本（每筆的種類、金額與關聯的存檔內部編號）視為個資", "references/privacy-observability.md"),
+    (11, "遊戲幣與帳本：錢包與帳本（每筆的種類、金額與關聯的存檔識別碼）視為個資", "references/privacy-observability.md"),
     (11, "重新生成回饋：理由由玩家文字構成，視為個資", "references/privacy-observability.md"),
     (11, "玩家於重新生成時填寫的理由會提供營運團隊檢視、玩家的對話人設會經 AI 處理、遊戲幣與帳本會保存", "references/privacy-observability.md"),
     (11, "user_identities、auth_tokens、遊戲幣錢包與帳本與全部對話", "references/privacy-observability.md"),
