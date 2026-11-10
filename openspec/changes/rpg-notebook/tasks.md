@@ -32,7 +32,7 @@
 
 ## 5. 驗收與收尾
 
-- [ ] 5.1 假模型與 HTTP 驗收：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 支援抓取呼叫與動作關鍵字 `測試記事簿超量`／`測試記事簿放棄`／`測試記事簿違規`／`測試記事簿慢速`（約定寫在腳本開頭）；`scripts/acceptance_rpg_turn.py`（或新的 `scripts/acceptance_rpg_notebook.py`）涵蓋：11 輪後記事簿被追加（第 10 輪後仍空）、串流在抓取完成之前就結束（慢速案例）、玩家編輯與版本衝突、已滿與刪到容量以內、規則層命中、日誌沒有記事簿文字、帳本有 `rpg_notebook` 且沒有遊戲幣異動。驗證：`.\start-acceptance.ps1` 之後腳本全部通過；`tests/test_acceptance_rpg_scripts.py` 新增的假模型行為案例通過。
+- [x] 5.1 假模型與 HTTP 驗收：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 支援抓取呼叫與動作關鍵字 `測試記事簿超量`／`測試記事簿放棄`／`測試記事簿違規`／`測試記事簿慢速`（約定寫在腳本開頭）；新的 `scripts/acceptance_rpg_notebook.py`（使用者選定，不加進 `acceptance_rpg_turn.py`）涵蓋：11 輪後記事簿被追加（第 10 輪後仍空）、串流在抓取完成之前就結束（慢速案例）、玩家編輯與版本衝突、已滿與刪到容量以內、規則層命中、日誌沒有記事簿文字、帳本有 `rpg_notebook` 且沒有遊戲幣異動。驗證：`.\start-acceptance.ps1` 之後腳本全部通過；`tests/test_acceptance_rpg_scripts.py` 新增的假模型行為案例通過。實作：小幫手 `GET /fresh/rpg?coins=N` 補給付費幣（記事簿案例要走 11 至 31 輪）；四個案例（`basic`／`full`／`abandon`／`rules`）各用一位全新玩家，可用 `--only` 單獨重跑；「帳本有 `rpg_notebook`」以日誌的模型呼叫用途（`llm.call` 的 `kind`）驗證，資料庫帳本列由 `tests/test_rpg_notebook_capture.py` 與 `test_rpg_notebook_flow.py` 驗證（HTTP 腳本只講 HTTP，不讀資料庫）。結果：98 項通過、既有 68 項重跑通過。
 - [ ] 5.2 容器驗收：`scripts/verify_container.py` 的 RPG 檢查加入記事簿——以 `gunicorn.rpg.conf.py` 在容器內確認 **gthread 先送出結束 chunk、再執行關閉回呼**（慢速抓取時 `done` 之後很快看到連線結束，記事簿稍後才更新）與**客戶端在 `done` 之後立即斷線時抓取仍然完成**。驗證：容器驗收全部通過（含新增項目）；若前提不成立，依 design D1 的退路改為在產生器內執行並重跑。
 - [ ] 5.3 真實模型驗證（人工執行，只當驗證、不算測試）：`scripts/acceptance_rpg_real_model.py` 增加記事簿步驟，以真實 OpenRouter 模型走 11 輪並觀察抓取的條數與字數（對照提示詞要求的 5 條與 50 字）、耗時與品質、規則層是否誤擋。結果寫入 `docs/RPG.md` 7.16 與 README 的驗收紀錄。驗證：紀錄已寫入，並列出對提示詞的調整建議（若有）。
 - [ ] 5.4 破壞驗證：故意弄壞再確認新增測試會失敗——抓取不在鎖內檢查標記（重複追加）、第 10 輪就觸發（邊界算錯）、已滿仍呼叫模型、暫時性失敗仍推進標記、玩家儲存不比對版本、條目不經規則層、條目數超過 5 就丟棄（違反決定 3）。每項驗證後 `git checkout` 還原。驗證：每項至少有一個測試失敗，結果記入 README 的驗收紀錄。
