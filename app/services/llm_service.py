@@ -2,7 +2,7 @@
 
 `LlmService.run_structured` 是所有需要 JSON 輸出的模型呼叫的唯一入口（客服對話、對話摘要，日後的 RPG）。流程：
 
-    預算 30 秒；第 1 次呼叫用主要模型（近 60 秒主要模型曾逾時或伺服器錯誤則直接用備援）
+    預算 30 秒（`budget_seconds` 可傳入較小的值）；第 1 次呼叫用主要模型（近 60 秒主要模型曾逾時或伺服器錯誤則直接用備援）
       成功且驗證通過 ─────────────────────► 成功（對話呼叫計入額度）
       成功但驗證失敗 ─► 第 2 次：同一模型 ─► 通過則成功，否則降級
       暫時性錯誤 ─────► 第 2 次：備援模型（逾時 = 剩餘預算；第 1 次本來就是備援則降級）
@@ -96,10 +96,15 @@ class LlmService:
         schema: dict[str, Any],
         rules: Sequence[SemanticRule] = (),
         model: str | None = None,
+        budget_seconds: float | None = None,
     ) -> StructuredOutcome:
-        """依流程呼叫模型並驗證輸出。`model` 指定這個用途的「首選模型」（預設為主要模型；摘要傳入摘要模型）。"""
+        """依流程呼叫模型並驗證輸出。`model` 指定這個用途的「首選模型」（預設為主要模型；摘要傳入摘要模型）。
+
+        `budget_seconds` 是這一次呼叫的總預算（含重試與切換備援）：沒有傳入時用 `settings.request_budget_seconds`；傳入較小的值時以它為準
+        （例如多步驟流程的剩餘時間，使整體不超過自己的上限）；傳入較大的值**不會**放寬設定的預算。不到 `MIN_CALL_SECONDS` 就不發出任何呼叫。"""
         started = self._monotonic()
         settings = self._settings
+        budget = settings.request_budget_seconds if budget_seconds is None else min(budget_seconds, settings.request_budget_seconds)
         fallback = settings.fallback_model
         current = model or settings.primary_model
         if current != fallback and self._breaker_open(current):
@@ -109,7 +114,7 @@ class LlmService:
         attempts = 0
 
         while attempts < MAX_CALLS:
-            remaining = settings.request_budget_seconds - (self._monotonic() - started)
+            remaining = budget - (self._monotonic() - started)
             if remaining < MIN_CALL_SECONDS:
                 return StructuredOutcome(None, DEGRADED_BUDGET, used, attempts)
             # 備援模型使用剩餘的全部預算；其餘模型受單次呼叫逾時限制

@@ -58,6 +58,11 @@ class StaleSessionVersionError(Exception):
     """存檔世界狀態的版本號與後端不一致（以後端為準）。Service 轉成既有的版本衝突並附上最新的狀態。"""
 
 
+class StaleNotebookVersionError(Exception):
+    """記事簿的版本號與後端不一致（玩家儲存時，AI 已追加或另一個裝置已儲存；資料不變，以後端為準）。
+    Service 轉成 `NotebookConflict`（409，`notebook_conflict`）並附上後端最新的文字與版本。"""
+
+
 class TurnInProgressError(Exception):
     """同一個 `client_msg_id` 的回合仍在串流中：不可重複開始（衝突）。"""
 

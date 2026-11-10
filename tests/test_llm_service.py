@@ -261,6 +261,50 @@ def test_exactly_two_seconds_of_budget_is_still_enough_for_a_call(member_session
     assert outcome.ok and provider.calls[1].timeout_seconds == 2.0
 
 
+def test_a_smaller_budget_limits_the_first_call_and_the_second_one_gets_only_what_is_left(member_session, provider):
+    """多步驟流程（記事簿抓取）把剩餘時間當預算傳入：第一次呼叫受它限制，切換備援的那次只拿到剩下的。"""
+    provider.script(Step(LLMTransientError("rate_limited"), seconds=4), GOOD)
+    assert run(build(member_session, provider), budget_seconds=12).ok
+    assert provider.calls[0].timeout_seconds == 12.0 and provider.calls[1].timeout_seconds == 8.0
+    assert provider.calls[1].model == FALLBACK
+
+
+def test_a_smaller_budget_also_bounds_a_same_model_retry(member_session, provider):
+    provider.script(Step("壞輸出", seconds=5), GOOD)
+    assert run(build(member_session, provider), budget_seconds=9).ok
+    assert provider.calls[1].model == PRIMARY and provider.calls[1].timeout_seconds == 4.0
+
+
+def test_a_budget_larger_than_the_setting_does_not_widen_it(member_session, provider):
+    provider.script(Step(LLMTransientError("rate_limited"), seconds=1), GOOD)
+    assert run(build(member_session, provider), budget_seconds=120).ok
+    assert provider.calls[0].timeout_seconds == 20.0 and provider.calls[1].timeout_seconds == 29.0      # 仍是設定的 30 秒
+
+
+def test_no_budget_given_behaves_exactly_as_before(member_session, provider):
+    provider.script(Step(LLMTransientError("rate_limited"), seconds=1), GOOD)
+    assert run(build(member_session, provider), budget_seconds=None).ok
+    assert [call.timeout_seconds for call in provider.calls] == [20.0, 29.0]
+
+
+@pytest.mark.parametrize("budget", [0, 1.9, -5])
+def test_a_budget_below_two_seconds_makes_no_call_at_all(member_session, provider, budget):
+    outcome = run(build(member_session, provider), budget_seconds=budget)
+    assert (outcome.degraded, outcome.attempts, outcome.model) == (DEGRADED_BUDGET, 0, None) and provider.calls == []
+    assert rows(member_session) == []
+
+
+def test_exactly_two_seconds_given_is_still_enough_for_one_call(member_session, provider):
+    provider.script(GOOD)
+    assert run(build(member_session, provider), budget_seconds=2.0).ok and provider.calls[0].timeout_seconds == 2.0
+
+
+def test_the_budget_runs_out_for_the_second_call_when_the_first_used_it_up(member_session, provider):
+    provider.script(Step("壞輸出", seconds=9), GOOD)
+    outcome = run(build(member_session, provider), budget_seconds=10)
+    assert (outcome.degraded, outcome.attempts) == (DEGRADED_BUDGET, 1) and len(provider.calls) == 1
+
+
 def test_the_first_call_is_limited_by_the_single_call_timeout_not_the_whole_budget(member_session, provider):
     provider.script(GOOD)
     run(build(member_session, provider))

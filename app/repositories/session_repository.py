@@ -18,6 +18,13 @@
 **第 0 幕**（`opening_state`）：搶佔、接手、完成與退回都是帶 `user_id` 與狀態條件的單一 UPDATE；搶佔時的 `opening_started_at` 就是該次生成的憑證，
 寫回時必須相同，所以被接手而過時的產生器不會覆蓋新的結果。空值（遷移之前的存檔）視同 `fallback`，永遠不生成。
 
+**記事簿**（rpg-notebook）：寫入只有四個方法，全部是帶 `user_id` 與狀態條件的單一 UPDATE，且**只有進行中的存檔會被改動**（已完結的存檔
+記事簿不可變）。`lock_notebook_for_capture` 對自己的存檔做一次「條件成立才生效」的 UPDATE 來取得該列的鎖（持有到交易結束，與 `start_turn`
+相同的做法），鎖內讀到的文字與版本才是追加的依據；`append_notebook` 在同一個交易內以這份最新文字算出的完整新文字寫入（版本加 1、
+已處理到的輪次設為邊界），標記條件使並行的重複抓取只有一次生效；`advance_notebook_marker` 只推進標記（已滿、放棄與空結果），不改文字、不加版本、
+只往前；`save_notebook` 是玩家的儲存，以 `notebook_version` 條件式寫入，不碰標記。AI 追加與玩家儲存都使版本加 1，所以任一方都能偵測到對方。
+`turns_in_range` 取抓取視窗的完成回合。記事簿是玩家文字衍生的個資：這裡不記錄任何日誌。
+
 **已完結的存檔**：`end_session` 之後不得再開始回合或改動世界狀態；沒有任何方法把狀態改回進行中（不可恢復）。
 玩家自行封存（`is_archived`）與劇情完結是兩件事，`set_archived` 對已完結的存檔也有效。
 
@@ -41,7 +48,7 @@ from app.models.rpg_session import (
 )
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
-    InvalidTurnTransitionError, SessionEndedError, StaleSessionVersionError, TurnInProgressError,
+    InvalidTurnTransitionError, SessionEndedError, StaleNotebookVersionError, StaleSessionVersionError, TurnInProgressError,
 )
 
 # `start_turn` 的結果
@@ -78,6 +85,16 @@ class TurnFinish:
     turn: MemoryLog
     world_updated: bool
     ended: bool
+
+
+@dataclass(frozen=True)
+class NotebookLock:
+    """`lock_notebook_for_capture` 取得列鎖之後，在鎖內讀到的記事簿狀態：文字、版本與已處理到的輪次。
+    鎖持有到呼叫端的交易結束；之後的追加必須以這份文字為基礎重新計算。"""
+
+    text: str
+    version: int
+    upto_turn: int
 
 
 def _exported_protagonist(stored: Any) -> dict[str, Any] | None:
@@ -389,6 +406,75 @@ class SessionRepository(BaseRepository[RpgSession]):
             save, RpgSession.opening_state == OPENING_GENERATING, RpgSession.opening_started_at == claimed_at,
             opening_state=OPENING_PENDING, opening_text=None, opening_started_at=None,
         ) == 1
+
+    # ---- 記事簿（抓取的視窗與鎖、AI 追加、玩家儲存；皆為條件式 UPDATE，只改動進行中的存檔）------------------
+
+    def turns_in_range(self, user_id: int, public_id: str, first: int, last: int) -> list[MemoryLog] | None:
+        """輪數在 `first` 到 `last`（含）之間的「完成」回合，依輪數由小到大（記事簿抓取的視窗）。中斷、被擋與生成中的回合沒有輪數，
+        不在其中。不是自己的存檔回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        statement = (
+            select(MemoryLog).where(
+                MemoryLog.session_id == save.id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.turn_number.is_not(None),
+                MemoryLog.turn_number >= first, MemoryLog.turn_number <= last,
+            ).order_by(MemoryLog.turn_number)
+        )
+        return list(self._session.scalars(statement))
+
+    def lock_notebook_for_capture(self, user_id: int, public_id: str, boundary: int) -> NotebookLock | None:
+        """取得抓取的寫入鎖：對自己的存檔做一次條件式 UPDATE（存檔進行中，且已處理到的輪次小於 `boundary`），成立就持有該列的鎖到交易結束，
+        並回傳鎖內讀到的最新文字、版本與標記。其他請求（重複的抓取、玩家的儲存）在鎖釋放之前不會改動這一列，所以追加是對最新文字做的。
+        不成立（不是自己的存檔、已完結、或標記已被推進到 `boundary` 以上）回傳 `None`，什麼都沒有改動。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        if self._update_owned(
+            save, RpgSession.status == SESSION_ACTIVE, RpgSession.notebook_upto_turn < boundary,
+            notebook_upto_turn=RpgSession.notebook_upto_turn,                       # 不改任何值：只為了取得列鎖
+        ) != 1:
+            return None
+        return NotebookLock(text=save.notebook_text or "", version=save.notebook_version, upto_turn=save.notebook_upto_turn)
+
+    def append_notebook(self, user_id: int, public_id: str, *, text: str, boundary: int) -> bool | None:
+        """AI 追加：寫入完整的新文字，版本加 1，已處理到的輪次設為 `boundary`。條件同 `lock_notebook_for_capture`（進行中且標記小於
+        `boundary`），所以並行的重複抓取只有一次生效。**`text` 必須是以同一個交易內 `lock_notebook_for_capture` 回傳的最新文字算出的**，
+        否則會覆蓋玩家剛做的編輯。成功回傳 `True`；條件不成立回傳 `False`（沒有改動）；不是自己的存檔回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        return self._update_owned(
+            save, RpgSession.status == SESSION_ACTIVE, RpgSession.notebook_upto_turn < boundary,
+            notebook_text=text, notebook_version=RpgSession.notebook_version + 1, notebook_upto_turn=boundary,
+        ) == 1
+
+    def advance_notebook_marker(self, user_id: int, public_id: str, boundary: int) -> bool | None:
+        """只推進已處理到的輪次（記事簿已滿、放棄與沒有重點時）：不改文字、不加版本。只往前（標記小於 `boundary` 才生效）、只改動進行中的存檔。
+        成功回傳 `True`；條件不成立回傳 `False`；不是自己的存檔回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        return self._update_owned(
+            save, RpgSession.status == SESSION_ACTIVE, RpgSession.notebook_upto_turn < boundary, notebook_upto_turn=boundary,
+        ) == 1
+
+    def save_notebook(self, user_id: int, public_id: str, *, text: str, expected_version: int) -> RpgSession | None:
+        """玩家儲存編輯後的記事簿：存檔進行中且 `notebook_version` 等於 `expected_version` 才寫入（版本加 1）；不改已處理到的輪次。
+        不是自己的存檔回傳 `None`；已完結拋出 `SessionEndedError`；版本不一致拋出 `StaleNotebookVersionError`（資料都不變）。
+        容量與規則層的檢查是 Service 的責任，這裡只保證條件式寫入。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        changed = self._update_owned(
+            save, RpgSession.status == SESSION_ACTIVE, RpgSession.notebook_version == expected_version,
+            notebook_text=text, notebook_version=RpgSession.notebook_version + 1,
+        )
+        if changed != 1:
+            if save.status == SESSION_ENDED:
+                raise SessionEndedError                      # 已完結優先於版本衝突：已完結的記事簿沒有「重新載入再編輯」可言
+            raise StaleNotebookVersionError
+        return save
 
     # ---- 匯出（個人資料匯出用）-------------------------------------------------------------
 

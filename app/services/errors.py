@@ -259,6 +259,38 @@ class InputBlocked(Unprocessable):
     default_message = "這個行動的內容違反平台的內容規範，無法送出。請換個行動再試。"
 
 
+class NotebookTooLong(Unprocessable):
+    """玩家儲存的記事簿超過容量（422，rpg-notebook）：玩家編輯沒有預備空間。`length` 是 NFC 正規化後的字數，`capacity` 是目前等級的容量；
+    已滿的記事簿須一次刪到容量以內才能儲存。不是審查類別，所以沒有 `categories`。"""
+
+    code = "notebook_too_long"
+    default_message = "記事簿的內容超過容量，請刪減到容量以內再儲存。"
+
+    def __init__(self, length: int, capacity: int, message: str | None = None) -> None:
+        super().__init__((), message)
+        self.length = int(length)
+        self.capacity = int(capacity)
+
+
+class NotebookBlocked(Unprocessable):
+    """玩家儲存的記事簿命中規則層必須拒絕的類別（422，rpg-notebook）。回應只帶類別，不回顯內容。"""
+
+    code = "notebook_blocked"
+    default_message = "記事簿的內容違反平台的內容規範，無法儲存。請修改後再試。"
+
+
+class NotebookConflict(Conflict):
+    """儲存時帶的記事簿版本與後端不一致（409，rpg-notebook）：AI 已追加內容，或另一個裝置已儲存；資料不變，以後端為準。
+    `notebook` 是後端目前的記事簿（與檢視端點相同的內容：文字、版本、字數、容量…），讓前端通知玩家並重新載入，比照 `VersionConflict`。"""
+
+    code = "notebook_conflict"
+    default_message = "記事簿已經有了新的內容，已為您更新到最新的版本，請確認後再儲存。"
+
+    def __init__(self, notebook: dict, message: str | None = None) -> None:
+        super().__init__(message)
+        self.notebook = notebook
+
+
 class OpeningPending(Conflict):
     """第 0 幕（開場）尚未完成（409）：存檔的開場還在等待生成或正在生成，不能開始回合；先完成開場。"""
 
