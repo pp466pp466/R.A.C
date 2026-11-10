@@ -1,0 +1,45 @@
+# Tasks
+
+> 批次建議（apply 前依 `openspec-batch-workflow` 確認）：① 第 1 組 ② 第 2 組 ③ 第 3 組 ④ 第 4 組 ⑤ 第 5 組；第 1、2 組可併成一批。每批只跑相關測試，全套測試留到 5.2。
+> 測試約定：Repository 與 Service 的測試依專案慣例同時跑 SQLite 與真實 SQL Server（`project_test`）；同時只能有一個 pytest 行程。
+
+## 1. 資料模型、遷移與純函式
+
+- [ ] 1.1 在 `app/models/user.py` 新增 `AUDIENCE_ALL／MALE／FEMALE` 與 `AUDIENCES`，`User.story_preference`（`Unicode(10)`、NOT NULL、`default` 與 `server_default` 皆 `all`）；在 `app/models/script.py` 的 `ScriptVersion` 新增 `audience`（`Unicode(10)`、可為空，註解說明空值視同全讀者、不回填）。驗證：`python -c "import app.models"` 成功，`tests/architecture` 的分層與外鍵守門通過。
+- [ ] 1.2 新增 `app/services/story_preference.py`（純函式：`parse_audience`、`normalize_audience`、`rank`，值域自模型匯入），加入 `tests/architecture/test_rpg_pure_modules.py` 的 `PURE_MODULES`；新增 `tests/test_story_preference.py`，驗證：三個偏好 × 四種頻道（含空值）的 `rank` 全表、偏好 `all` 一律同層、非列舉值（大小寫不同、數字、`None`）的 `parse_audience` 回 `None`、`normalize_audience` 預設 `all`。
+- [ ] 1.3 新增遷移 `migrations/versions/20261110_0017_story_preference.py`（`down_revision = "0016_rpg_turn_engine"`）：`users.story_preference` NOT NULL `server_default='all'`、`script_versions.audience` 可為空；`downgrade` 用 `recreate="never"` 並對 `story_preference` 使用 `mssql_drop_default`；不含原生 SQL、不匯入應用程式程式碼，docstring 說明 expand 與部署順序。驗證：`tests/test_migrations.py` 加案例並通過（升級後欄位型別、可空與預設值正確；既有使用者列取得 `all`、既有版本的 `audience` 為空；downgrade 後欄位消失；`alembic check` 無差異），SQLite 與真實 SQL Server 皆跑。
+- [ ] 1.4 同步 `docs/project資料結構文件.md`：第 5 節 `users`（欄位數與 `story_preference` 說明）與 `script_versions`（欄位數與 `audience` 說明，含空值視同全讀者）、第 6 節新增固定值字典（`users.story_preference`、`script_versions.audience`）、第 12 節遷移歷程、第 14 節異動紀錄追加一列（新增兩個欄位、遷移 `0017`）。驗證：`tests/test_project_db_schema_doc.py` 通過。
+
+## 2. 劇本規格、儲存與排序
+
+- [ ] 2.1 `app/services/script_spec.py`：`_TOP_LEVEL_FIELDS` 加 `audience`；驗證選填的 `audience`（只接受三個列舉值，其餘回報 `audience` 錯誤且不回顯輸入）；標準化內容只在 `male`／`female` 時帶有該鍵；不計入文字總量；規格版本維持 1。驗證：`tests/test_script_spec.py` 新增案例通過——缺值、空值、`all` 的輸出與雜湊和不帶該欄位完全相同；`male`／`female` 的雜湊與全讀者不同；不合法值（`Male`、`1`、`boys`）；標準化輸出再驗證冪等；總量不變；**用一份固定的既有內容斷言其 `content_hash` 與升級前的值逐位元相同**（把升級前算出的雜湊寫成測試常數）。
+- [ ] 2.2 `app/repositories/script_repository.py`：`_content_columns` 寫入 `audience`（內容有 `male`／`female` 寫入該值，否則寫 `all`）；`content_of` 只在欄位為 `male`／`female` 時還原 `audience` 鍵；`export_scripts` 的版本字典加 `audience`（空值轉 `all`）。驗證：`tests/test_script_repository.py` 新增案例通過——建立、`update_draft` 改頻道、已發佈版本不可變、由既有版本建立新草稿並改頻道後核可取代舊版（舊版內容不變）、舊版本（欄位為空）還原的內容沒有 `audience` 且重新驗證的雜湊與儲存的相同。
+- [ ] 2.3 `ScriptRepository.list_published` 與 `list_published_by_tag` 新增選填的 `preference`：用 ORM `case` 依 `story_preference.rank` 排序於 `published_at desc, id desc` 之前；`None` 或 `all` 時不加排序鍵。驗證：Repository 測試通過——三種偏好的順序、空值視同全讀者、同層維持新到舊、分兩頁串起來等於一次取得、不同偏好的集合相同、依標籤查詢同樣排序、不帶偏好的查詢結果與先前逐項相同；`tests/architecture/test_no_raw_sql.py` 通過。
+- [ ] 2.4 確認內建種子與審查不受影響：新增測試——用升級前的狀態（版本的 `audience` 為空）重跑 `ScriptSeedService`／`flask seed-scripts` 判定為未變更、沒有新增版本；資料檔加 `"audience": "male"` 才新增版本；`script_review_prompt._script_data` 與 `script_rules.check_rules` 的輸入／輸出不因 `audience` 而變（帶 `audience` 的內容送審查所得的提示詞與不帶時逐字相同）。驗證：這些測試通過；`tests/test_seed_scripts.py` 與 `tests/test_script_review.py` 既有測試無須修改即通過。
+
+## 3. 偏好的 Service、API 與匯出
+
+- [ ] 3.1 `UserRepository.set_story_preference(user, value)`（條件式 UPDATE、非列舉值拋 `ValueError`、刷新已載入物件）；`CurrentUser` 新增 `story_preference`（`from_model` 帶入、預設 `all`），`public_dict` 回傳它。驗證：`tests/test_user_repositories.py` 與 `tests/test_current_user.py`（`/api/auth/me` 的鍵集合測試在 `tests/test_auth_api.py`） 新增案例通過（含：預設值、寫入後讀回、`public_dict` 有此鍵且仍沒有生日與年齡區間）；既有的 `/api/auth/me` 鍵集合測試刻意更新為多一個鍵。
+- [ ] 3.2 新增 `StoryPreferenceService`（`get`、`set`，輸入必須是完全等於列舉值的字串，否則 `ValidationError` 帶 `story_preference` 欄位）與 `registry.get_story_preference_service()`；在 `account_api_controller.py` 加 `GET`／`PUT /api/account/story-preference`（`require_login()`，回應 `{ok, story_preference}`，更新成功記事件 `account.story_preference_changed`，只含事件名稱與使用者編號）。驗證：新增 `tests/test_story_preference_api.py` 通過——更新與讀回、冪等、不合法值（`Male`、`1`、缺欄位、`null`）得 400 與欄位錯誤且偏好不變、未登入 401、缺 CSRF 被拒、受限登入狀態（鎖定、等待刪除、待確認年齡）得 403 與對應代碼、玩家 A 的更新不影響玩家 B、回應不含生日與年齡區間、回應 `no-store`；`tests/test_restricted_session.py` 的全路由掃描、`security_events` 守門與 `test_log_scan_full_flow` 通過（事件名稱加入白名單，日誌中找不到偏好值以外的資料）。
+- [ ] 3.3 驗證偏好與內容分級互不影響：新增測試——改變故事偏好前後，同一位玩家的生效內容模式、`get_startable` 可開存檔的劇本集合與 `/api/account/content-mode` 的回應逐項相同；年齡確認與切換內容模式不改變偏好。驗證：測試通過。
+- [ ] 3.4 `PersonalExportService`：帳號資料與 `ACCOUNT_COLUMNS` 加 `story_preference`，劇本版本與 `SCRIPT_COLUMNS` 加 `audience`（JSON 與 CSV）。驗證：`tests/test_personal_export_service.py` 與 `tests/test_account_export_api.py` 新增案例通過——偏好 `female`、預設 `all`、男頻版本與舊版本（空值）分別匯出為 `male` 與 `all`、CSV 欄位標頭與資料列對齊、既有的「不含內部欄位」斷言仍成立。
+- [ ] 3.5 同步文件：`docs/帳號與安全-auth-security.md`（新端點列與受限登入矩陣）、`docs/系統架構-architecture.md`（`StoryPreferenceService`、`story_preference` 純函式模組、控制器列、對照表）、`docs/資料模型-data-model.md`（兩個新欄位、`audience` 的內容形狀與雜湊相容說明）。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`（路由數與端點表）通過。
+
+## 4. 前端
+
+- [ ] 4.1 `app/static/js/scripts/script-draft.js`：`toDraft` 讀 `audience`（只認 `male`／`female`，其餘 `all`）、`toContent` 永遠送出 `audience`、`blankDraft` 預設 `all`、`FIELD_LABELS` 加 `audience: '讀者頻道'`；`workshop.html` 在「結局」區塊之後新增「讀者頻道」單選區塊（男頻、女頻、全讀者，`:disabled="!canEdit"`，一句說明只影響清單排序、不限制誰能玩，錯誤以 `err('audience')` 顯示）。驗證：`node --test` 新增 `tests/js` 案例通過（缺值、`male`、`female`、不合法值轉 `all`、`toContent` 往返、錄製空白草稿預設值、帶入範例後為 `all`）；`tests/test_script_page.py` 與 `tests/architecture/test_frontend_rules.py`（無 CDN、無 `v-html`、無 Bootstrap JS）通過。
+- [ ] 4.2 `app/templates/auth/account.html` 與 `app/static/js/auth/account.js`：新增「故事偏好」區塊（`v-if="ageConfirmed"`，三個單選、說明一句、儲存按鈕；用 `Auth.useForm` 的忙碌與 `finally` 恢復，`axios.put('/api/account/story-preference', …)`，成功 Toast、失敗 Toast 且保留選取），初始值取自 `user.story_preference`。驗證：`tests/test_account_page.py` 新增案例通過（偏好 `female` 時「女頻」被選取、等待刪除的樣板沒有此區塊、初始狀態沒有生日與年齡區間）；`node --test` 與 `tests/architecture/test_frontend_rules.py` 通過。
+- [ ] 4.3 在瀏覽器實際操作一次（`.\start-acceptance.ps1` 的驗收環境，埠避開 5000）：`/account` 切換三種偏好並重新整理、`/scripts` 的編輯器儲存男頻草稿後重新載入仍為男頻、唯讀版本的單選為禁用、手機寬度下版面不溢出。驗證：把觀察結果（含截圖路徑或文字描述）記入 README 的驗收紀錄；做不到的項目明講「未驗證」。
+- [ ] 4.4 同步文件：README（`/account` 與 `/scripts` 功能說明、端點表、驗收紀錄）。驗證：`tests/test_readme.py` 通過。
+
+## 5. 整合與收尾
+
+- [ ] 5.1 破壞驗證（每項驗證後還原，用 `git checkout`／備份）：①讓 `validate_script` 對 `all` 也寫入 `audience` → 雜湊相容測試與種子「未變更」測試失敗；②`list_published` 改成不套用 `preference` → 排序測試失敗；③`set_story_preference` 不驗證值域 → API 與 Repository 測試失敗；④`content_of` 對 `all` 也還原 `audience` → 重新驗證雜湊測試失敗；⑤匯出漏掉 `audience` → 匯出測試失敗。驗證：五項都至少有一個測試失敗，結果記入 README 驗收紀錄。
+- [ ] 5.2 全套驗證：`pytest -q`（SQL Server 服務 `MSSQLSERVER` 執行中、同時只能一個 pytest 行程）、`node --test`、`openspec validate story-preference --strict`。驗證：全部通過，筆數記入 README 驗收紀錄；有失敗先修再重跑。
+- [ ] 5.3 更新 `docs/RPG.md` 7.17（`story-preference` 已立案／已實作，並記實作時決定的取捨：雜湊相容、`audience` 為全讀者不進標準化內容）、`docs/路線圖-roadmap.md`（`story-preference` 節點與狀態表、日期）、`docs/README.md` 對照表如有需要，並讓 `tests/test_design_docs.py` 通過。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py`、`tests/architecture` 通過。
+
+## Workflow follow-up
+
+- 使用者驗收後，新對話 `/openspec-archive-change story-preference`（封存前先同步 5 份 delta 到主規格；封存後更新路線圖的狀態與日期，並複查各設計文件標頭的「對應 change」）。
+- **部署前必做（由使用者執行，不屬於任何任務）**：本機 SQL Server `project` 與 Azure 都在 0016；新程式上線前先備份，再 `alembic upgrade head` 到 `0017_story_preference`，並在 `docs/project資料結構文件.md` 第 14 節追加「套用」紀錄。
+- 之後是 `rpg-entry-ui`（RC-3a）：可玩劇本清單端點呼叫 `list_published(..., preference=current.story_preference)`。
