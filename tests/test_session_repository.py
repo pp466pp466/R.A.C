@@ -140,6 +140,7 @@ def test_an_admin_account_has_no_special_path_to_other_players_saves(repo, membe
     assert repo.get_owned(admin.id, save.public_id) is None and repo.list_owned(admin.id) == []
     public_methods = [name for name, _ in inspect.getmembers(SessionRepository, inspect.isfunction) if not name.startswith("_")]
     inherited = {"add", "get", "get_by_public_id", "list", "delete"}                # 基底類別的通用方法不在 API 路徑使用
+    inherited |= {"savepoint"}                                                      # 只開 SAVEPOINT，不讀寫任何使用者的資料
     for name in set(public_methods) - inherited:
         parameters = list(inspect.signature(getattr(SessionRepository, name)).parameters)
         assert parameters[1] == "user_id", f"{name} 的第一個參數必須是 user_id"
@@ -808,3 +809,53 @@ def test_the_export_carries_the_opening_state_and_text_but_not_the_start_time(re
     (exported,) = list(repo.export_sessions(alice.id))
     assert (exported["opening_state"], exported["opening_text"]) == (OPENING_READY, "霧中的山門")
     assert "opening_started_at" not in exported
+
+
+# ---- 回合引擎的視窗與 SAVEPOINT（rpg-turn-engine 4.1）-----------------------------------------------
+
+def finish_n(repo, user, save, count):
+    for index in range(1, count + 1):
+        start(repo, user, save, client_msg_id=f"w-{index}", action=f"行動{index}")
+        repo.complete_turn(user.id, save.public_id, f"w-{index}", llm_raw_response=f"劇情{index}", structured_result=None, now=NOW)
+
+
+def test_recent_complete_turns_returns_the_latest_ten_oldest_first(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    finish_n(repo, alice, save, 12)
+    start(repo, alice, save, client_msg_id="w-live", action="進行中")                    # 生成中的回合不在其中
+    turns = repo.recent_complete_turns(alice.id, save.public_id)
+    assert [turn.turn_number for turn in turns] == list(range(3, 13))
+    assert [turn.turn_number for turn in repo.recent_complete_turns(alice.id, save.public_id, limit=2)] == [11, 12]
+
+
+def test_recent_complete_turns_skips_interrupted_and_blocked_turns(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    finish_n(repo, alice, save, 1)
+    start(repo, alice, save, client_msg_id="w-int", action="a")
+    repo.interrupt_turn(alice.id, save.public_id, "w-int", partial_response="半截")
+    start(repo, alice, save, client_msg_id="w-blk", action="b")
+    repo.block_turn(alice.id, save.public_id, "w-blk")
+    assert [turn.user_action for turn in repo.recent_complete_turns(alice.id, save.public_id)] == ["行動1"]
+
+
+def test_recent_complete_turns_is_owner_scoped(repo, member_session):
+    alice, bob = make_user(member_session, 1), make_user(member_session, 2)
+    save = open_save(repo, alice)
+    finish_n(repo, alice, save, 1)
+    assert repo.recent_complete_turns(bob.id, save.public_id) is None
+
+
+def test_the_savepoint_undoes_a_new_turn_row_when_the_block_raises(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    with pytest.raises(RuntimeError):
+        with repo.savepoint():
+            start(repo, alice, save)
+            raise RuntimeError("餘額不足")
+    member_session.expire_all()
+    assert repo.list_turns(alice.id, save.public_id) == []
+    with repo.savepoint():
+        start(repo, alice, save)
+    assert len(repo.list_turns(alice.id, save.public_id)) == 1

@@ -326,6 +326,36 @@ erDiagram
 | 串流的首字延遲進帳本（`0016`） | `llm_call_logs.first_chunk_ms` 可為空，只有串流呼叫有值 | 串流的體感品質看首字不看整段；沒有新增資料表，也不含任何文字 |
 | 標籤獨立成表 | `script_version_tags` 以顯示形式儲存（保留大小寫，版本內容可由欄位完整還原、雜湊不變），查詢以小寫比對 | 不得依 JSON 內容篩選；同一版本內由驗證器以 NFC 與不分大小寫去除重複，所以兩種資料庫的唯一約束不會誤判 |
 
+### `sessions.entities_json` 的結構（v1，rpg-turn-engine）
+
+世界狀態的 NPC 角色卡、新增地點與主角年齡更正，由 `rpg_world.WorldState` 讀寫、`SessionRepository.update_world_state` 序列化；**只有 Service 能寫**（模型只提議，`apply_proposal` 逐項驗證後才產生新值），且不依內容篩選查詢。
+
+```json
+{ "v": 1,
+  "npcs": { "<NFC 小寫名>": { "name": "林曉",
+                              "traits": [{"label": "開朗", "layer": "surface"}],
+                              "stage": "surface",
+                              "age": 16, "age_at_month": 0,
+                              "anchor_fact": "與主角是舊識",
+                              "last_seen_turn": 7, "origin": "script" } },
+  "protagonist": { "age": 30, "age_at_month": 120 },
+  "locations": ["遊戲中新增的地點"] }
+```
+
+| 欄位 | 說明 |
+|---|---|
+| `v` | 結構版本，目前為 1 |
+| `npcs` | 以名稱的 NFC 小寫形式為鍵；最多 30 位。`origin` 是 `script`（劇本角色，第一次在行動或敘事文字中出現時以劇本的年齡與特質建卡）或 `story`（對話中產生） |
+| `traits` | 每項 `label`（至多 8 字）與 `layer`（`surface` 表層、`hidden` 隱藏）；至多 6 項 |
+| `stage` | 弧線階段 `surface`、`cracking`、`revealed`，由模型提議、Service 驗證轉移（只能前進一階；`cracking` 可退回 `surface`；`revealed` 是終點，不得跳級） |
+| `age`、`age_at_month` | 年齡紀錄與紀錄當下的遊戲內月數；**目前年齡** = `age + (elapsed_months − age_at_month) // 12`。更正可往任何方向，每次更正產生通知（附更正前的年齡） |
+| `anchor_fact` | NPC 的錨定事實（至多 100 字）；一旦有值就不被模型覆寫 |
+| `last_seen_turn` | 最後一次出現的輪數，由 Service 依「名稱出現在行動或敘事文字」更新（不依模型回報）；用來挑選下一回合在場的 NPC 切片 |
+| `protagonist` | 主角年齡的更正紀錄，**第一次更正才建立**；缺值時年齡取角色卡的 `character_age`、`age_at_month` 為 0。原始角色卡與 `character_age` 欄位不變 |
+| `locations` | 遊戲中新增的地點（至多 30 個），劇本原有的地點在劇本複本中 |
+
+相關欄位：`goals_json` 為 `{"active": [{text, milestone_id, turn}], "archived": [{text, milestone_id, turn, done_turn}]}`（進行中至多 5 個，已歸檔只留最近 50 筆）；`milestone_progress_json` 為 `{"<里程碑編號>": {"triggered_turn": n, "extended": bool}}`（劇本複本唯讀，進度另存）。主角的錨定事實不放在這裡，仍在 `protagonist_json`。
+
 ## 3. Migration 歷程
 
 ```mermaid

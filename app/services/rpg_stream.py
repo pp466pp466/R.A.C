@@ -397,17 +397,22 @@ class StreamRun:
 # ---- 與帳本 Repository 的接線（外層在自己的短交易內使用）-----------------------------------------------------
 
 
+def write_ledger_entry(ledger: LlmCallLogRepository, entry: StreamLedgerEntry, created_at: datetime) -> None:
+    """把一筆串流帳本內容寫進 `llm_call_logs`（`counted` 一律為假：RPG 以遊戲幣計費，不使用每日對話輪數）。只 flush，由呼叫端提交。"""
+    ledger.add(
+        user_id=entry.user_id, conversation_id=entry.conversation_id, kind=entry.kind, provider=entry.provider,
+        model=entry.model, attempt=entry.attempt, status=entry.status, counted=False, latency_ms=entry.latency_ms,
+        created_at=created_at, prompt_tokens=entry.prompt_tokens, completion_tokens=entry.completion_tokens,
+        thinking_tokens=entry.thinking_tokens, finish_reason=entry.finish_reason, error_detail=entry.error_detail,
+        first_chunk_ms=entry.first_chunk_ms,
+    )
+
+
 def ledger_recorder(ledger: LlmCallLogRepository, clock: Callable[[], datetime]) -> Callable[[StreamLedgerEntry], None]:
-    """把串流的帳本內容寫進 `llm_call_logs`（`counted` 一律為假：RPG 以遊戲幣計費，不使用每日對話輪數）。只 flush，由外層提交。"""
+    """立刻把串流的帳本內容寫進 `llm_call_logs`（呼叫端提供的 Repository 所屬的工作階段由呼叫端提交）。"""
 
     def record(entry: StreamLedgerEntry) -> None:
-        ledger.add(
-            user_id=entry.user_id, conversation_id=entry.conversation_id, kind=entry.kind, provider=entry.provider,
-            model=entry.model, attempt=entry.attempt, status=entry.status, counted=False, latency_ms=entry.latency_ms,
-            created_at=clock(), prompt_tokens=entry.prompt_tokens, completion_tokens=entry.completion_tokens,
-            thinking_tokens=entry.thinking_tokens, finish_reason=entry.finish_reason, error_detail=entry.error_detail,
-            first_chunk_ms=entry.first_chunk_ms,
-        )
+        write_ledger_entry(ledger, entry, clock())
 
     return record
 

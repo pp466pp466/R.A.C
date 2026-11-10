@@ -30,12 +30,12 @@
 
 ## 4. 回合引擎與第 0 幕
 
-- [ ] 4.1 `GameService.begin_turn`：閘門、行動清理與規則層、第 0 幕閘門、全站預算、`start_turn`、`hold`（鍵含 `attempt`）、凍結 `TurnPlan`（含最近 10 輪、世界狀態、模型名稱、版本、結局判定、在場角色與年齡）；已完成回合的重送回傳 `replayed`。驗證：`tests/test_game_service_begin.py` 通過（spec `rpg-turn-engine` 的開始、預扣、接手、單一進行中、餘額不足不留回合列、`input_blocked` 不預扣、鍵長度上限）。
-- [ ] 4.2 `TurnRunner` 串流階段：事件產生（`meta`、`token`、`ping` 每 15 秒、`transition`）、`OutputGuard` 串接、被擋後的自動重生（同一預扣、第二次仍被擋 → `blocked`）、`GeneratorExit` 與逾時的中斷處理、收尾函式不 `yield`。驗證：`tests/test_turn_runner_stream.py` 以假 `StreamRunner` 覆蓋每個出口（成功、模型失敗、首字逾時、被擋一次、被擋兩次、文字中斷線、`close()` 呼叫），並斷言每個出口的回合狀態、預扣結算或退回、帳本與輪數。
-- [ ] 4.3 `TurnRunner` 狀態階段：狀態呼叫（`LlmService.run_structured`，`kind=rpg_state`）、`apply_proposal`、短交易寫回（完成回合、世界狀態、`last_seen_turn`、結算預扣、必要時 `end_session`）、狀態呼叫失敗仍完成並結算、版本衝突、狀態呼叫期間斷線仍完成。驗證：`tests/test_turn_runner_state.py` 通過（成功、兩次失敗、版本衝突、結局三種、斷線於狀態呼叫、年齡更正通知進 `state` 事件、事件不含模型原始 JSON）。
-- [ ] 4.4 第 0 幕：`GameService.begin_opening`／`OpeningRunner`（搶佔與接手、生成、`ready`／`fallback`／斷線退回 `pending`、條件式寫回避免被接手後覆蓋、已完成直接重送文字、不碰錢包、不寫回合表）。驗證：`tests/test_opening.py` 通過（spec `rpg-opening` 全部情境，含兩個請求並行只一個生成、被擋兩次退回初始對話、劇本無初始對話）。
-- [ ] 4.5 `observability/rpg_events.py` 與接線；`registry.py` 的 `get_game_service`。驗證：`tests/test_rpg_events.py` 通過（欄位白名單、完整流程日誌掃描找不到行動、劇情、NPC 名稱、地點、第 0 幕、被擋文字、冪等鍵與標記字串）。
-- [ ] 4.6 文件：`docs/系統架構-architecture.md`（回合管線與交易邊界圖、模組分工）、`docs/資料模型-data-model.md`（`entities_json` v1 結構）。驗證：`tests/test_design_docs.py` 通過。
+- [x] 4.1 `GameService.begin_turn`：閘門、行動清理與規則層、第 0 幕閘門、全站預算、`start_turn`、`hold`（鍵含 `attempt`）、凍結 `TurnPlan`（含最近 10 輪、世界狀態、模型名稱、版本、結局判定、在場角色與年齡）；已完成回合的重送回傳 `replayed`。驗證：`tests/test_game_service_begin.py` 通過（spec `rpg-turn-engine` 的開始、預扣、接手、單一進行中、餘額不足不留回合列、`input_blocked` 不預扣、鍵長度上限）。
+- [x] 4.2 `TurnRunner` 串流階段：事件產生（`meta`、`token`、`ping` 每 15 秒、`transition`）、`OutputGuard` 串接、被擋後的自動重生（同一預扣、第二次仍被擋 → `blocked`）、`GeneratorExit` 與逾時的中斷處理、收尾函式不 `yield`。驗證：`tests/test_turn_runner_stream.py` 以假 `StreamRunner` 覆蓋每個出口（成功、模型失敗、首字逾時、被擋一次、被擋兩次、文字中斷線、`close()` 呼叫），並斷言每個出口的回合狀態、預扣結算或退回、帳本與輪數。
+- [x] 4.3 `TurnRunner` 狀態階段：狀態呼叫（`LlmService.run_structured`，`kind=rpg_state`）、`apply_proposal`、短交易寫回（完成回合、世界狀態、`last_seen_turn`、結算預扣、必要時 `end_session`）、狀態呼叫失敗仍完成並結算、版本衝突、狀態呼叫期間斷線仍完成。驗證：`tests/test_turn_runner_state.py` 通過（成功、兩次失敗、版本衝突、結局三種、斷線於狀態呼叫、年齡更正通知進 `state` 事件、事件不含模型原始 JSON）。
+- [x] 4.4 第 0 幕：`GameService.begin_opening`／`OpeningRunner`（搶佔與接手、生成、`ready`／`fallback`／斷線退回 `pending`、條件式寫回避免被接手後覆蓋、已完成直接重送文字、不碰錢包、不寫回合表）。驗證：`tests/test_opening.py` 通過（spec `rpg-opening` 全部情境，含兩個請求並行只一個生成、被擋兩次退回初始對話、劇本無初始對話）。
+- [x] 4.5 `observability/rpg_events.py` 與接線；`registry.py` 的 `get_game_service`。驗證：`tests/test_rpg_events.py` 通過（欄位白名單、完整流程日誌掃描找不到行動、劇情、NPC 名稱、地點、第 0 幕、被擋文字、冪等鍵與標記字串）。
+- [x] 4.6 文件：`docs/系統架構-architecture.md`（回合管線與交易邊界圖、模組分工）、`docs/資料模型-data-model.md`（`entities_json` v1 結構）。驗證：`tests/test_design_docs.py` 通過。
 
 ## 5. 端點與部署設定
 

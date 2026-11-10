@@ -26,6 +26,7 @@
 from __future__ import annotations
 
 import copy
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Any, Iterator, Mapping
@@ -190,6 +191,27 @@ class SessionRepository(BaseRepository[RpgSession]):
             return None
         statement = select(MemoryLog).where(MemoryLog.session_id == save.id, MemoryLog.seq > since_seq).order_by(MemoryLog.seq).limit(limit)
         return list(self._session.scalars(statement))
+
+    def recent_complete_turns(self, user_id: int, public_id: str, *, limit: int = 10) -> list[MemoryLog] | None:
+        """最近 `limit` 個「完成」的回合，依輪數由舊到新（回合引擎的視窗用；中斷、被擋與生成中的回合不在其中）。不是自己的存檔回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        statement = (
+            select(MemoryLog).where(MemoryLog.session_id == save.id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.turn_number.is_not(None))
+            .order_by(MemoryLog.turn_number.desc()).limit(limit)
+        )
+        return list(reversed(list(self._session.scalars(statement))))
+
+    @contextmanager
+    def savepoint(self) -> Iterator[Any]:
+        """一個 SAVEPOINT 的情境管理員：區塊內拋出例外時，區塊內的所有寫入（回合列、預扣）一併復原，請求仍可回傳 4xx。
+        先讓交易開始（一個不影響任何列的 UPDATE）再進入 SAVEPOINT，與錢包的做法相同（SQLite 的驅動在第一個寫入之前不會開始交易）。"""
+        self._session.execute(
+            update(RpgSession).where(RpgSession.id == -1).values(version=RpgSession.version).execution_options(synchronize_session=False)
+        )
+        with self._session.begin_nested() as nested:
+            yield nested
 
     def count_complete_turns(self, user_id: int, public_id: str) -> int | None:
         save = self.get_owned(user_id, public_id)

@@ -55,6 +55,13 @@ ALLOWED_FIELDS = (
     "coins",
     "lost_coins",
     "balance",
+    # RPG 回合與第 0 幕事件（rpg_events.py）：存檔的內部整數編號、整數與固定列舉（被擋類別），函式沒有接收任何玩家文字的參數
+    "session_id",
+    "turn_number",
+    "chars",
+    "first_chunk_ms",
+    "dropped",
+    "categories",
 )
 
 MAX_TEXT_LENGTH = 300

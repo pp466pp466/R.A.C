@@ -164,6 +164,8 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "PublishSuspended": 403, "SubmissionLimit": 429, "ReviewUnavailable": 503,
         # rpg-character-creation
         "ProtagonistRejected": 422, "SuggestionLimit": 429, "SuggestionUnavailable": 503,
+        # rpg-turn-engine
+        "InputBlocked": 422, "OpeningPending": 409,
         # game-wallet
         "InsufficientCoins": 409, "CheckinOverflow": 409, "AlreadyCheckedIn": 409, "HoldAlreadySettled": 409,
         "HoldAlreadyRefunded": 409, "WalletBusy": 503,

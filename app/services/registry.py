@@ -72,6 +72,11 @@ from app.services.protagonist_prompt import protagonist_marker
 from app.services.protagonist_review_service import ProtagonistReviewService
 from app.services.protagonist_service import ProtagonistService
 from app.services.wallet_service import WalletService
+from app.services.game_service import GameService
+from app.services.rpg_prompt import rpg_marker
+from app.services.rpg_runner_base import RunnerDeps
+from app.services.rpg_opening_runner import OpeningRunner
+from app.services.rpg_turn_runner import TurnRunner
 from app.services.session_service import SessionService
 from app.services.startable import StartableVersions
 from app.services.summary_service import SummaryService
@@ -264,9 +269,7 @@ def get_rpg_llm_service() -> LlmService | None:
     provider = get_rpg_llm_provider()
     if provider is None:
         return None
-    config = get_config()
-    settings = config.rpg_llm.llm if config.rpg_llm else config.llm        # 沒有設定卻注入了假供應商（測試）時沿用客服的設定
-    return build_llm_service(get_session(), provider=provider, settings=settings, clock=get_clock())
+    return build_llm_service(get_session(), provider=provider, settings=_rpg_llm_settings(), clock=get_clock())
 
 
 def build_usage_service(
@@ -412,6 +415,52 @@ def get_session_service() -> SessionService:
         reviews=get_script_review_service(), protagonist_reviews=get_protagonist_review_service(),
         protagonist_marker=protagonist_marker(config.secret_key.reveal()), clock=get_clock(),
     )
+
+
+def _rpg_llm_settings() -> LlmSettings:
+    config = get_config()
+    return config.rpg_llm.llm if config.rpg_llm else config.llm        # 沒有設定卻注入了假供應商（測試）時沿用客服的設定
+
+
+def get_game_service() -> GameService:
+    """目前請求的 RPG 回合開始階段（閘門、輸入檢查、預扣、第 0 幕的搶佔）。模型名稱取 RPG 用途的首選模型（`OPENROUTER_MODEL`）。
+
+    沒有 RPG 供應商時仍可組裝（讀取與已完成的重送照常）；要生成的端點由 Controller 先確認 `has_rpg_provider()`，沒有就回 503。"""
+    session, config, clock = get_session(), get_config(), get_clock()
+    usage = build_usage_service(session, settings=config.usage, clock=clock)
+    return GameService(
+        sessions=SessionRepository(session), wallet=get_wallet_service(), policy=get_access_policy(), limits=get_runtime_limits(),
+        budget_exhausted=usage.global_budget_exhausted, marker=rpg_marker(config.secret_key.reveal()), model=_rpg_llm_settings().primary_model,
+        clock=clock,
+    )
+
+
+def has_rpg_provider() -> bool:
+    return get_rpg_llm_provider() is not None
+
+
+def build_runner_deps() -> RunnerDeps:
+    """產生器需要的一切。**必須在 Controller 建立 Response 之前呼叫**（此時還在請求內）：產生器在 `after_request` 之後才執行，
+    不能使用請求的工作階段、`g` 或 `current_app`，所以這裡把工廠、供應商、設定與時鐘都先取出來。沒有 RPG 供應商時拋出 `RuntimeError`。"""
+    provider = get_rpg_llm_provider()
+    if provider is None:
+        raise RuntimeError("沒有設定 RPG 用途的模型供應商。")
+    factory, settings, clock = get_session_factory(), _rpg_llm_settings(), get_clock()
+    return RunnerDeps(
+        session_factory=factory, wallet_factory=lambda session: build_wallet_service(session, clock=clock),
+        llm_factory=lambda session: build_llm_service(session, provider=provider, settings=settings, clock=clock),
+        provider=provider, settings=settings, clock=clock,
+    )
+
+
+def build_turn_runner(plan, current) -> TurnRunner:
+    """回合的串流執行者（在請求內建立，產生器稍後才執行）。"""
+    return TurnRunner(plan=plan, current=current, deps=build_runner_deps(), marker=rpg_marker(get_config().secret_key.reveal()))
+
+
+def build_opening_runner(plan) -> OpeningRunner:
+    """第 0 幕的串流執行者（在請求內建立，產生器稍後才執行）。"""
+    return OpeningRunner(plan=plan, deps=build_runner_deps(), marker=rpg_marker(get_config().secret_key.reveal()))
 
 
 def get_protagonist_service() -> ProtagonistService:

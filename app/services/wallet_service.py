@@ -153,6 +153,11 @@ class WalletService:
         wallet_events.log_checkin(user_id=current.id, coins=entry.free_delta, lost_coins=grant - entry.free_delta)
         return self._view(current, self._wallets.state(current.id))
 
+    def balance(self, user_id: int) -> int:
+        """目前的合計餘額（免費加付費）。純讀取：不建立錢包、不補發贈幣、不退回逾時的預扣（回合引擎在 `done` 事件回報剩餘遊戲幣用）。"""
+        state = self._wallets.state(user_id)
+        return 0 if state is None else state.free_balance + state.paid_balance
+
     def entries(self, current: CurrentUser, *, before_seq: int | None = None, limit: int = ENTRIES_DEFAULT_LIMIT) -> EntryPage:
         """記錄頁：由新到舊的帳本，游標是該使用者自己的序號。已退回的預扣與退回列不出現。"""
         self._prepare(current)

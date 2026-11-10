@@ -252,6 +252,20 @@ class ScriptRejected(Unprocessable):
     default_message = "這份劇本的內容違反平台的內容規範，無法用來開始遊戲。請修改後再試。"
 
 
+class InputBlocked(Unprocessable):
+    """玩家的 RPG 行動文字命中必須拒絕的類別（422，rpg-turn-engine）：不預扣遊戲幣、不呼叫模型。回應只帶類別，不回顯內容。"""
+
+    code = "input_blocked"
+    default_message = "這個行動的內容違反平台的內容規範，無法送出。請換個行動再試。"
+
+
+class OpeningPending(Conflict):
+    """第 0 幕（開場）尚未完成（409）：存檔的開場還在等待生成或正在生成，不能開始回合；先完成開場。"""
+
+    code = "opening_pending"
+    default_message = "故事的開場還沒有準備好，請稍候再開始。"
+
+
 class ProtagonistRejected(Unprocessable):
     """玩家主角（角色卡、錨定事實或自我介紹）被審查層（規則層或模型層）明確拒絕（422）。回應只帶類別列舉，不指出內容。"""
 

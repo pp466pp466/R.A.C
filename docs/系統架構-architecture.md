@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-09 ｜ 對應 change：game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -209,7 +209,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     Ctl["wallet_api_controller<br/>/api/wallet/*"] --> WSvc["WalletService<br/>view checkin entries"]
-    Turn["RC-2 回合引擎（規劃中）"] -.->|"hold settle refund 只由伺服器端呼叫"| WSvc
+    Turn["GameService 與 TurnRunner（RC-2a）"] -.->|"hold settle refund 只由伺服器端呼叫"| WSvc
     Adm["AdminService.adjust_wallet<br/>重新輸入密碼 稽核 wallet.adjust"] --> WSvc
     Auth["AuthService<br/>年齡確認通過後的回呼"] -->|"ensure_signup_grant 失敗不影響年齡確認"| WSvc
     WSvc --> Tx["_transact<br/>讀錢包 算新餘額與帳本列 以 version 條件式更新 重試至多 5 次"]
@@ -229,6 +229,54 @@ flowchart TD
 - **依賴方向**：`AdminService` 與 `AuthService` 依賴錢包（以回呼或元件注入），錢包不依賴它們；`WalletService` 不匯入 `AdminService` 或回合引擎。回呼在 `registry.py` 的 `_grant_signup_coins_on_age_verified` 組裝，包在 SAVEPOINT 內。
 - **逾時預扣沒有排程**：`coin.hold_timeout_seconds`（預設 180，須大於 RC-2 的單回合上限）之後，在該玩家下一次存取錢包時退回；後台檢視餘額不觸發清理。
 - 組裝在 `registry.py`（`build_wallet_service()`、`get_wallet_service()`）。
+
+### RPG 回合引擎（rpg-turn-engine）
+
+回合分成兩個階段：**請求階段**（`GameService`，在請求的資料庫工作階段內）與**產生器階段**（`TurnRunner`／`OpeningRunner`，在 `after_request` 之後才執行，自己管理短交易）。串流與狀態呼叫期間沒有任何資料庫交易。
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant C as 瀏覽器
+    participant Ctl as game_api_controller（RC-2a 後續任務）
+    participant G as GameService（請求工作階段）
+    participant R as TurnRunner（產生器）
+    participant S as StreamRunner 與 OutputGuard
+    participant DB as 資料庫
+    C->>Ctl: POST turns/stream
+    Ctl->>G: begin_turn
+    Note over G,DB: 交易 1（請求）：閘門 輸入檢查 規則層 全站預算<br/>SAVEPOINT 內 start_turn 與 hold（餘額不足整段復原）
+    G-->>Ctl: TurnPlan 凍結的上下文 鍵 模型 版本
+    Ctl-->>C: 200 text/event-stream（after_request 提交交易 1）
+    R-->>C: event meta
+    loop 每個片段
+        S->>R: StreamText 或 StreamTick
+        R-->>C: event token（保留一句緩衝 通過才釋放）或 ping（每 15 秒）
+    end
+    alt 審查命中
+        Note over R,DB: 短交易：save_blocked_text（第一次）或 block_turn 加 refund（第二次）
+        R-->>C: event transition
+    else 文字完整
+        R-->>C: event ping
+        Note over R,DB: 狀態呼叫：LlmService.run_structured（自己 release 無交易）
+        Note over R,DB: 短交易：finish_turn 完成回合與世界狀態（版本比對）加 settle
+        R-->>C: event state 與 done
+    end
+```
+
+| 元件 | 責任 |
+|---|---|
+| `GameService`（`game_service.py`） | `begin_turn`：閘門 → `client_msg_id` 與行動驗證 → 擁有者 → 已完成的重送（`TurnReplay`，不碰錢包）→ 完結與第 0 幕閘門 → 行動的規則層（只擋確定違規，422 `input_blocked`）→ 全站預算 → SAVEPOINT 內 `start_turn` 與 `hold`（鍵含 `attempt`）→ 凍結 `TurnPlan`（最近 10 輪、世界狀態、在場角色與年齡、結局判定、首選模型、版本、上下文）。`begin_opening`：已完成的直接回傳既有文字，否則條件式搶佔生成權（`OpeningPlan`），同時只有一個請求能生成 |
+| `RunnerBase`（`rpg_runner_base.py`） | 兩種 Runner 共用：`SseEvent`、`RunnerDeps`（工作階段工廠、錢包與模型服務工廠、供應商、設定、時鐘，**在建立 Response 之前取出**）、心跳、串流帳本的緩衝與短交易（`_tx`）、一次串流嘗試（`StreamRun` 加 `OutputGuard`，回傳成功、被擋或失敗） |
+| `TurnRunner`（`rpg_turn_runner.py`） | 事件產生器：被擋後同一筆預扣自動重生一次、第二次仍被擋則 `blocked` 並退回；失敗與中斷 `interrupted` 並退回；文字完整後的收尾（狀態呼叫、`apply_proposal`、`finish_turn`、`settle`）不 `yield`，正常路徑與 `GeneratorExit` 路徑共用；版本衝突、狀態呼叫失敗都不影響文字與結算 |
+| `OpeningRunner`（`rpg_opening_runner.py`） | 第 0 幕：不碰錢包、不寫回合表；寫回都是帶憑證（`opening_started_at`）的條件式 UPDATE；失敗或兩次被擋 → `fallback`（劇本的初始對話），斷線 → 退回 `pending` |
+| 純運算模組 | `rpg_prompt`、`rpg_context`、`rpg_world`、`rpg_output_guard`、`rpg_output_rules`（不匯入資料模型、Repository 或 Flask，`tests/architecture/test_rpg_pure_modules.py` 守住） |
+| `rpg_events.py` | 十二個日誌事件，只有內部編號、整數與固定列舉；函式沒有接收文字的參數，所以玩家文字放不進日誌 |
+
+- **交易邊界**：交易 1 由請求提交；之後每個寫入階段各開新工作階段並提交（被擋記錄、中斷或被擋結束、完成回合）。**完成回合、寫入世界狀態與結算預扣在同一個短交易**，不會出現「回合完成但沒結算」。串流的帳本緩衝在下一個短交易寫入，狀態呼叫之前一定先寫入，使帳本順序與實際一致。
+- **斷線**：Controller 逐個送出事件，客戶端斷線時 WSGI 伺服器 `close()` 產生器（`GeneratorExit`）。文字尚未完成 → 上游關閉、回合 `interrupted`、退回預扣；文字已完整且通過審查 → 收尾照常完成並結算，玩家以相同 `client_msg_id` 重送即取得既有結果。
+- **卡住的回合**：產生器所在的 worker 重啟時，回合停在 `streaming`；超過 `coin.hold_timeout_seconds` 後，重送相同編號會接手（`attempt` 加 1、新的預扣鍵），舊預扣已被錢包的逾時規則退回，玩家只被扣一輪。過時的產生器寫回時因 `attempt` 不符而失敗，只送出 `turn_superseded` 錯誤，不影響新的嘗試。
+- 組裝在 `registry.py`（`get_game_service()`、`build_runner_deps()`、`build_turn_runner()`、`build_opening_runner()`）；標記字串由 `SECRET_KEY` 導出（`rpg_marker`），模型名稱取 RPG 用途的首選模型。
 
 ## 3. 一個請求的生命週期
 
