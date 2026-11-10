@@ -87,6 +87,55 @@ def test_gunicorn_configuration():
     assert config["bind"].startswith("0.0.0.0:")
 
 
+RPG_CONFIG = PROJECT_ROOT / "gunicorn.rpg.conf.py"
+
+
+def test_both_gunicorn_configurations_exist_and_the_image_contains_them():
+    """container-runtime 規格「RPG 串流使用獨立的 gunicorn 設定」：兩份設定都在映像裡，預設啟動客服池。"""
+    assert (PROJECT_ROOT / "gunicorn.conf.py").is_file() and RPG_CONFIG.is_file()
+    copies = " ".join(i for i in instructions() if i.upper().startswith("COPY "))
+    assert "gunicorn.conf.py" in copies and "gunicorn.rpg.conf.py" in copies
+    cmd = next(i for i in instructions() if i.upper().startswith("CMD "))
+    assert "gunicorn.conf.py" in cmd and "gunicorn.rpg" not in cmd, "預設仍啟動客服池，RPG 池由部署指定設定檔"
+    assert "gunicorn.rpg.conf.py" not in DOCKERIGNORE
+
+
+def test_the_rpg_gunicorn_configuration_outlasts_the_generation_limit_and_is_a_real_server_config():
+    config = runpy.run_path(str(RPG_CONFIG))
+    assert config["worker_class"] == "gthread" and config["workers"] >= 1
+    assert config["threads"] > runpy.run_path(str(PROJECT_ROOT / "gunicorn.conf.py"))["threads"], "每個串流多佔一條讀取執行緒，執行緒數要比客服池多"
+    assert config["timeout"] > 60 + 15, "worker 逾時必須大於單次生成上限 60 秒與心跳間隔 15 秒"
+    assert config["timeout"] >= 150, "一個回合最壞約 150 秒（被擋兩次加狀態呼叫）"
+    assert config["graceful_timeout"] >= 30, "進行中的回合要有時間寫回（完成、結算或退款）"
+    assert config["preload_app"] is True and config["accesslog"] is None and config["control_socket_disable"] is True
+    assert config["bind"].startswith("0.0.0.0:")
+
+
+def test_the_rpg_gunicorn_configuration_only_sets_options_the_customer_service_pool_already_uses():
+    """gunicorn 在 Windows 上無法匯入（`grp`），所以本機以名稱檢查：RPG 設定的每個選項都已在客服池的設定出現過（那份在 staging 實跑驗證過），
+    拼錯的選項名稱 gunicorn 會悄悄忽略。"""
+    base = {key for key in runpy.run_path(str(PROJECT_ROOT / "gunicorn.conf.py")) if not key.startswith("_")}
+    rpg = {key for key in runpy.run_path(str(RPG_CONFIG)) if not key.startswith("_")}
+    assert rpg - {"os"} <= base | {"os"}, sorted(rpg - base)
+
+
+def test_the_rpg_gunicorn_configuration_is_accepted_by_gunicorn_itself():
+    """用 gunicorn 自己的設定載入器讀取（Linux 與容器內；Windows 沒有 `grp` 時略過）：值有誤時在這裡失敗，而不是到部署才發現。"""
+    pytest.importorskip("grp")
+    from gunicorn.config import Config
+
+    cfg = Config()
+    for key, value in runpy.run_path(str(RPG_CONFIG)).items():
+        if key in cfg.settings:
+            cfg.set(key, value)
+    assert cfg.worker_class_str == "gthread" and cfg.timeout == 180
+
+
+def test_the_rpg_configuration_never_uses_the_development_server():
+    text = RPG_CONFIG.read_text(encoding="utf-8-sig").lower()
+    assert "app.run" not in text and "flask run" not in text and "debug" not in text.replace("loglevel", "")
+
+
 def test_gunicorn_does_not_open_its_control_socket_which_cannot_be_created_for_the_homeless_non_root_user():
     """staging-deployment 的本機容器預演發現：gunicorn 26 的控制通道預設路徑在家目錄，非 root 使用者的家目錄是 /nonexistent，
     啟動時會寫出 `ERROR Control server error: Permission denied`。服務不受影響，但不該有看起來像異常的錯誤行。"""

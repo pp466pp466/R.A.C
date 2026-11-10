@@ -238,7 +238,7 @@ flowchart TD
 sequenceDiagram
     autonumber
     participant C as 瀏覽器
-    participant Ctl as game_api_controller（RC-2a 後續任務）
+    participant Ctl as game_api_controller
     participant G as GameService（請求工作階段）
     participant R as TurnRunner（產生器）
     participant S as StreamRunner 與 OutputGuard
@@ -266,6 +266,7 @@ sequenceDiagram
 
 | 元件 | 責任 |
 |---|---|
+| `game_api_controller.py` | `POST /api/game/sessions/<id>/turns/stream`、`POST …/opening/stream`、`GET …/<id>`、`GET …/turns`；只讀請求、呼叫 `GameService`、回應。串流端點先確認有 RPG 供應商（沒有就在預扣之前回 503），再呼叫開始階段；開始前的失敗全是 JSON；已完成的重送由 `rpg_replay.py` 轉成 `meta`（`replayed: true`）、一個含全文的 `token`、`done`；要生成時在建立 Response 之前呼叫 `build_turn_runner`／`build_opening_runner`，Response 的本文把「關閉」傳給事件產生器（斷線收尾）。標頭 `text/event-stream; charset=utf-8`、`no-cache, no-transform`、`X-Accel-Buffering: no`；沒有權限判斷，也不匯入資料層 |
 | `GameService`（`game_service.py`） | `begin_turn`：閘門 → `client_msg_id` 與行動驗證 → 擁有者 → 已完成的重送（`TurnReplay`，不碰錢包）→ 完結與第 0 幕閘門 → 行動的規則層（只擋確定違規，422 `input_blocked`）→ 全站預算 → SAVEPOINT 內 `start_turn` 與 `hold`（鍵含 `attempt`）→ 凍結 `TurnPlan`（最近 10 輪、世界狀態、在場角色與年齡、結局判定、首選模型、版本、上下文）。`begin_opening`：已完成的直接回傳既有文字，否則條件式搶佔生成權（`OpeningPlan`），同時只有一個請求能生成 |
 | `RunnerBase`（`rpg_runner_base.py`） | 兩種 Runner 共用：`SseEvent`、`RunnerDeps`（工作階段工廠、錢包與模型服務工廠、供應商、設定、時鐘，**在建立 Response 之前取出**）、心跳、串流帳本的緩衝與短交易（`_tx`）、一次串流嘗試（`StreamRun` 加 `OutputGuard`，回傳成功、被擋或失敗） |
 | `TurnRunner`（`rpg_turn_runner.py`） | 事件產生器：被擋後同一筆預扣自動重生一次、第二次仍被擋則 `blocked` 並退回；失敗與中斷 `interrupted` 並退回；文字完整後的收尾（狀態呼叫、`apply_proposal`、`finish_turn`、`settle`）不 `yield`，正常路徑與 `GeneratorExit` 路徑共用；版本衝突、狀態呼叫失敗都不影響文字與結算 |
@@ -349,7 +350,7 @@ flowchart LR
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |
-| service-observability、container-runtime                                                                                                             | `app/observability/`、`Dockerfile`、`gunicorn.conf.py`                                                       | [營運與部署-operations.md](營運與部署-operations.md)                                                        |
+| service-observability、container-runtime                                                                                                             | `app/observability/`、`Dockerfile`、`gunicorn.conf.py`、`gunicorn.rpg.conf.py`                                                       | [營運與部署-operations.md](營運與部署-operations.md)                                                        |
 
 ## 6. 關鍵技術決策
 

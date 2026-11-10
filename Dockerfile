@@ -31,7 +31,7 @@ WORKDIR /app
 COPY requirements.txt ./
 RUN pip install -r requirements.txt
 
-COPY gunicorn.conf.py wsgi.py alembic.ini ./
+COPY gunicorn.conf.py gunicorn.rpg.conf.py wsgi.py alembic.ini ./
 COPY app ./app
 COPY migrations ./migrations
 
@@ -44,5 +44,6 @@ EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD ["python", "-c", "import os, urllib.request; urllib.request.urlopen('http://127.0.0.1:%s/healthz' % os.environ.get('PORT', '8080'), timeout=3)"]
 
+# 預設啟動客服池（gunicorn.conf.py）；RPG 串流池由部署改用 gunicorn.rpg.conf.py 啟動（映像兩份都有）
 # 設定寫在 gunicorn.conf.py；--preload 讓設定錯誤（例如缺少必要機密）在主程序就失敗並以非零碼結束
 CMD ["gunicorn", "--config", "gunicorn.conf.py", "wsgi:app"]

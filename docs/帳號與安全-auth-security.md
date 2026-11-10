@@ -192,6 +192,10 @@ flowchart TD
 | `/api/sessions/setup/<version_id>` | GET | 是 | 序章與創角所需的資料（背景故事、可聯繫的人物／地點／里程碑、欄位上限、今日剩餘的生成次數）；可見性與內容模式與開存檔相同 |
 | `/api/sessions/protagonist/suggest` | POST | 是 | AI 生成主角的預覽（無狀態；自我介紹不保存）；每日次數有上限，失敗回 503 讓前端改走自創 |
 | `/api/sessions` | POST | 是 | 開存檔：主角與錨定事實的驗證、規則層與模型層審查通過才寫入；管理員與各會員等級不豁免年齡閘門 |
+| `/api/game/sessions/<id>/turns/stream` | POST | 是 | RPG 回合的事件串流；先完成年齡確認並通過閘門，非擁有者與不存在同為 404，開始前的失敗（含餘額不足 409）一律是 JSON；預扣在回合開始時（rpg-turn-stream） |
+| `/api/game/sessions/<id>/opening/stream` | POST | 是 | 第 0 幕的事件串流；不扣遊戲幣，已完成者回傳既有文字 |
+| `/api/game/sessions/<id>` | GET | 是 | 存檔狀態與世界狀態的玩家視圖（不含 NPC 角色卡）；已完結仍可讀 |
+| `/api/game/sessions/<id>/turns` | GET | 是 | 回合清單（`since_seq` 增量）；被擋與中斷的回合不含文字 |
 
 頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/scripts`（劇本創作，第 7d 節）、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
 

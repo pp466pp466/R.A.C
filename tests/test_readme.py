@@ -227,6 +227,37 @@ def test_readme_wallet_table_lists_exactly_the_registered_routes_and_both_wallet
         assert code in section, code
 
 
+def test_readme_rpg_turn_engine_section_lists_exactly_the_registered_game_routes_and_documents_the_protocol():
+    """RPG 回合引擎的端點表必須與實際註冊的 `/api/game` 路由完全一致；七種事件、結束標記、開始前的錯誤代碼、前端逾時建議與兩份 gunicorn 設定都要記載。"""
+    from app import create_app
+    from app.config import load_config
+    from app.controllers.game_api_controller import SSE_CACHE_CONTROL, SSE_CONTENT_TYPE
+    from app.services.rpg_runner_base import ERROR_MESSAGES
+
+    section = readme_section("RPG 回合引擎（rpg-turn-engine）")
+    documented: set[tuple[str, str]] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/api/game[^`]*`", cells[0]):
+            documented.add((cells[0].strip("`").replace("<session_id>", "<id>"), cells[1]))
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual = {
+        (rule.rule.replace("<session_id>", "<id>"), method) for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/game")
+        for method in rule.methods - {"HEAD", "OPTIONS"}
+    }
+    assert len(actual) == 4, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+    for event in ("meta", "token", "ping", "transition", "state", "done", "error"):
+        assert f"| `{event}` |" in section, event
+    for code in ERROR_MESSAGES:
+        assert f"`{code}`" in section, code
+    for code in ("insufficient_coins", "session_ended", "opening_pending", "opening_in_progress", "input_blocked", "system_busy", "service_unavailable"):
+        assert code in section, code
+    assert SSE_CONTENT_TYPE in section and SSE_CACHE_CONTROL in section and "X-Accel-Buffering: no" in section
+    assert "180 秒" in section and "gunicorn.rpg.conf.py" in section and "0016_rpg_turn_engine" in section
+
+
 def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():
     """客服的端點與頁面表格必須與實際註冊的路由完全一致；同一路徑的不同方法各佔一列。"""
     from app import create_app

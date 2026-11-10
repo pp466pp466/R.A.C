@@ -48,6 +48,7 @@ CLIENT_MSG_ID_MAX = 64            # 與 memory_logs.client_msg_id 的欄位長�
 ACTION_MAX = 1000                 # 與客服的單則訊息上限一致（假設；RPG 沒有明文上限，見 design Open Questions）
 TURN_IN_PROGRESS_MESSAGE = "這個回合仍在處理中，請稍候。"
 HOLD_KEY_PREFIX = "turn"
+TURNS_PAGE_MAX = 200              # `GET …/turns` 每次最多回傳的筆數（客服的訊息分頁相同）
 
 
 def hold_key(session_public_id: str, client_msg_id: str, attempt: int) -> str:
@@ -164,6 +165,41 @@ def clean_client_msg_id(value: object) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= CLIENT_MSG_ID_MAX:
         raise ValidationError(fields={"client_msg_id": f"必須是 1 至 {CLIENT_MSG_ID_MAX} 字的文字。"})
     return value
+
+
+def opening_view(save: RpgSession, script: Mapping[str, Any]) -> dict[str, Any]:
+    """第 0 幕的玩家視圖：狀態與文字（尚未完成時沒有文字）。遷移之前建立、狀態為空值的舊存檔視同 `fallback`（劇本的初始對話）。"""
+    if save.opening_state is None:
+        fallback = script.get("opening") if isinstance(script.get("opening"), str) else ""
+        return {"state": OPENING_FALLBACK, "text": save.opening_text or fallback}
+    if save.opening_state in (OPENING_READY, OPENING_FALLBACK):
+        return {"state": save.opening_state, "text": save.opening_text or ""}
+    return {"state": save.opening_state, "text": None}
+
+
+def world_view(save: RpgSession) -> dict[str, Any]:
+    """世界狀態的玩家視圖：經過月數、地點、摘要、進行中的目標、去過的地點與主角目前的年齡。
+    NPC 的角色卡（特質、隱藏的歸屬、弧線階段）與錨定事實是模型的上下文，不在這裡。"""
+    world = rpg_world.WorldState.from_fields(
+        entities=save.entities_json, goals=save.goals_json, milestone_progress=save.milestone_progress_json,
+        elapsed_months=save.elapsed_months, current_location=save.current_location, status_summary=save.status_summary,
+    )
+    protagonist = rpg_world.protagonist_from_session(save.protagonist_json, save.player_name, save.character_age)
+    return {
+        "elapsed_months": world.elapsed_months, "location": world.current_location, "summary": world.status_summary,
+        "goals": [goal["text"] for goal in world.goals.get("active", []) if isinstance(goal.get("text"), str)],
+        "places": list(world.entities.get("locations", [])),
+        "protagonist_age": rpg_world.protagonist_age(world.entities, protagonist, world.elapsed_months),
+    }
+
+
+def turn_view(turn: MemoryLog) -> dict[str, Any]:
+    """一個回合的玩家視圖。只有 `complete` 才含劇情；被擋與中斷的回合不含部分內容（被擋的文字永遠不離開伺服器）。"""
+    complete = turn.turn_status == TURN_COMPLETE
+    return {
+        "seq": turn.seq, "client_msg_id": turn.client_msg_id, "turn_number": turn.turn_number, "status": turn.turn_status,
+        "action": turn.user_action, "story": turn.llm_raw_response if complete else None,
+    }
 
 
 def history_of(turns: list[MemoryLog]) -> tuple[rpg_context.HistoryTurn, ...]:
@@ -308,6 +344,43 @@ class GameService:
             characters=tuple(rpg_world.known_characters(world, script, protagonist)), fallback_text=fallback_text,
             system_instruction=system, contents=tuple(contents),
         ))
+
+    # ---- 唯讀 -----------------------------------------------------------------------------------
+
+    def balance(self, current: CurrentUser) -> int:
+        """目前的遊戲幣合計（純讀取；重送事件的 `done.coins` 用）。"""
+        return self._wallet.balance(current.id)
+
+    def session_snapshot(self, current: CurrentUser, session_public_id: str) -> dict[str, Any]:
+        """存檔狀態視圖：對外識別碼、狀態、第 0 幕、世界狀態的玩家視圖與已完成輪數。已完結的存檔也可以讀。
+
+        沒有內部編號、來源版本與劇本複本全文（只有標題）；世界狀態只含玩家可以知道的欄位（NPC 的特質與隱藏的歸屬不在其中）。"""
+        self._policy.require_chat_access(current)
+        save = self._sessions.get_owned(current.id, session_public_id)
+        if save is None:
+            raise NotFound()
+        script = save.script_snapshot_json if isinstance(save.script_snapshot_json, dict) else {}
+        return {
+            "id": save.public_id, "title": script.get("title"), "content_tier": save.content_tier, "status": save.status,
+            "ended": save.status == SESSION_ENDED, "protagonist": save.protagonist_json, "version": save.version,
+            "completed_turns": self._sessions.count_complete_turns(current.id, session_public_id) or 0,
+            "opening": opening_view(save, script), "world": world_view(save),
+        }
+
+    def turn_views(
+        self, current: CurrentUser, session_public_id: str, *, since_seq: object = 0, limit: object = TURNS_PAGE_MAX,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """序號大於 `since_seq` 的回合（遞增），以及是否還有更多。只有 `complete` 的回合含劇情；被擋、中斷與生成中的回合
+        只標示狀態，不含任何部分內容。已完結的存檔也可以讀。"""
+        self._policy.require_chat_access(current)
+        if isinstance(since_seq, bool) or not isinstance(since_seq, int) or since_seq < 0:
+            raise ValidationError(fields={"since_seq": "必須是不小於 0 的整數。"})
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= TURNS_PAGE_MAX:
+            raise ValidationError(fields={"limit": f"每次筆數須為 1 至 {TURNS_PAGE_MAX}。"})
+        turns = self._sessions.list_turns(current.id, session_public_id, since_seq=since_seq, limit=limit + 1)
+        if turns is None:
+            raise NotFound()
+        return [turn_view(turn) for turn in turns[:limit]], len(turns) > limit
 
     # ---- 內部 -----------------------------------------------------------------------------------
 

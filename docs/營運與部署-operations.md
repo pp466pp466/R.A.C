@@ -72,7 +72,8 @@ flowchart LR
 |---|---|
 | 執行 | `gunicorn --config gunicorn.conf.py wsgi:app`；`gthread`、`WEB_CONCURRENCY`（預設 2）個 worker、`GUNICORN_THREADS`（預設 8）、`timeout` 60 秒、`graceful_timeout` 30 秒 |
 | 連接埠 | 取自 `PORT`（預設 8080）；映像有 `HEALTHCHECK`（`/healthz`） |
-| 禁止 | 不得用 `app.run()`（開發伺服器）執行正式環境；客服與 RPG 串流日後使用獨立的 worker 池 |
+| RPG 串流池 | `gunicorn --config gunicorn.rpg.conf.py wsgi:app`（映像兩份設定都有，預設啟動客服池）：`gthread`、`WEB_CONCURRENCY`（預設 2）、`GUNICORN_THREADS`（預設 16：每個進行中的串流佔一條請求執行緒，外加一條上游讀取執行緒）、`timeout` 180 秒（大於單次串流生成上限 60 秒與心跳間隔 15 秒，也涵蓋一個回合最壞約 150 秒）、`graceful_timeout` 60 秒（讓進行中的回合寫回：完成、結算或退款）。初始值，RC-4 壓測校正。**`/api/game/` 分流到這個池屬後續的部署工作**，在那之前與客服共用同一個池 |
+| 禁止 | 不得用 `app.run()`（開發伺服器）執行正式環境；客服與 RPG 串流使用獨立的 worker 池（設定檔已分開，路徑分流待部署） |
 | 驗收 | `scripts/verify_container.py`（經 WSL 的 Docker）：建置、非 root、無 `.env`、各環境啟動與健康檢查、缺少機密時只列變數名稱、會員與客服的 HTTP 流程、保存期限指令 |
 
 ### 傳輸安全與安全標頭（C-5a）
@@ -93,6 +94,7 @@ flowchart LR
 - 驗證：`tests/test_security_headers.py`（五種路徑、錯誤回應、四個環境、自訂標頭不被覆蓋、沒有 CSP）。
 
 > 注意（2026-11-04）：本文件已納入 change `rpg-script-authoring`（RC-7）：遷移 `0013`（部署順序不變：備份 → 遷移 → 部署 → `flask seed-scripts`；七個營運限制的初始值由遷移寫入，不必另外執行指令）、兩個人工類指令 `set-script-limit` 與 `show-script-limits`（限制存在資料庫、立即生效、每次修改寫 `limit.set` 稽核）、`purge-expired-data` 新增劇本送審紀錄一類（365 天）、劇本事件的日誌白名單，以及容器驗收新增的七項檢查。
+> 注意（2026-11-10）：本文件已納入 change `rpg-turn-engine`（RC-2a）：遷移 `0016`（部署順序不變：備份 → 遷移 → 部署；只新增欄位並補一列 `rpg.max_months_per_turn`）、RPG 串流池的獨立 gunicorn 設定 `gunicorn.rpg.conf.py`（映像兩份設定都有，路徑分流待部署）、人工類指令 `set-rpg-setting`、`show-rpg-settings`，以及 `rpg.*` 日誌事件與六個新的日誌欄位。
 > 注意（2026-11-09）：本文件已納入 change `game-wallet`（W1）：遷移 `0015`（部署順序不變：備份 → 遷移 → 部署；只新增 `wallets`、`wallet_entries` 兩張表並補五個遊戲幣設定鍵，已有的鍵不蓋掉）、兩個人工類指令 `set-wallet-setting`、`show-wallet-settings`（部署後以 `show-wallet-settings` 確認五個值）、遊戲幣事件 `wallet.*` 與三個新的日誌欄位 `coins`、`lost_coins`、`balance`。
 > 注意（2026-11-04）：本文件已納入 change `rpg-character-creation`（RC-9）：遷移 `0014`（部署順序不變：備份 → 遷移 → 部署；只新增 `sessions.protagonist_json` 並補三個每日主角生成次數的限制鍵，已有的鍵不蓋掉）、`show-script-limits` 與 `set-script-limit` 現在涵蓋十個鍵、主角事件的日誌白名單，以及開存檔最壞約 60 秒（劇本尚未審查過時再加一次審查；前端 axios 逾時請設 65 秒）。
 
@@ -190,6 +192,7 @@ flowchart LR
     Scr["劇本事件<br/>account.nickname_set、script.*、limits.*"] --> Fmt
     Pro["主角事件<br/>protagonist.*、session.started"] --> Fmt
     Wal["遊戲幣事件<br/>wallet.*"] --> Fmt
+    Rpg["RPG 回合事件<br/>rpg.*"] --> Fmt
     Alr["告警事件<br/>alert.firing、alert.resolved、alert.delivery_failed、alert.check_failed、alert.check_completed"] --> Fmt
     Fmt["JsonFormatter<br/>白名單欄位 + 訊息遮罩 + 例外只留類型與位置"] --> Out["標準輸出（單行 JSON）"]
 ```
@@ -203,6 +206,7 @@ flowchart LR
 - 劇本事件（`app/observability/script_events.py`）：暱稱設定（`account.nickname_set`）、劇本建立／更新／新版本／刪除／撤回／重新取用筆名、送審（`script.submitted`）、自動拒絕（`script.auto_rejected`）、模型層審查（`script.review`）、審查不可用（`script.review_unavailable`）、暫停與解除暫停發佈（`script.publish_suspended`、`script.publish_lifted`），以及營運限制缺值或不合法與被修改（`limits.invalid`、`limits.changed`）。欄位只有內部編號、固定列舉（階段 `kind`、層級 `outcome`、類別 `reason`）與整數（字數 `count`、嘗試次數 `attempt`）、模型名稱；函式簽名沒有任何文字參數，類別與原因傳入列舉以外的值立刻出錯。絕不出現暱稱、短代號、筆名、劇本的任何文字、標題、標籤、申訴內容與模型原文；`tests/test_script_events.py` 守住簽名與列舉，`tests/test_log_scan_script_authoring.py` 走完整個創作與送審流程後掃描日誌。
 - 主角事件（`app/observability/protagonist_events.py`）：生成預覽（`protagonist.suggested`，帶今日剩餘次數 `count`）、生成不可用（`protagonist.suggest_unavailable`）、生成次數用盡（`protagonist.suggest_limited`，帶 `used`／`limit`）、被自動拒絕（`protagonist.rejected`，階段 `kind` 為 `suggest`／`start`、層級 `outcome` 為 `rules`／`model`、類別 `reason`）、模型層審查（`protagonist.review`）與不可用（`protagonist.review_unavailable`），以及開出存檔（`session.started`，內容模式 `kind`、是否帶錨定事實 `outcome`）。欄位只有內部編號、固定列舉與整數、模型名稱；函式簽名沒有任何文字參數，列舉以外的值立刻出錯。絕不出現自我介紹、角色卡、錨定事實與模型原文；`tests/test_protagonist_events.py` 守住簽名與列舉，`tests/test_log_scan_protagonist.py` 走完整個主角流程後掃描日誌。
 - 遊戲幣事件（`app/observability/wallet_events.py`）：`wallet.signup_granted`、`wallet.checkin`、`wallet.checkin_overflow`、`wallet.hold`、`wallet.settle`、`wallet.refund`、`wallet.stale_released`、`wallet.insufficient`、`wallet.adjust`、`wallet.grant_deferred`；欄位只有內部使用者編號、整數的幣量 `coins`、作廢量 `lost_coins`、餘額 `balance`，以及固定列舉的餘額種類（`kind`：`free`、`paid`）與模型鍵（`model`）。函式沒有接收冪等鍵（帶有存檔識別碼與前端產生的訊息編號）、存檔識別碼、管理員理由或任何玩家文字的參數，傳入列舉以外的值或不是整數的幣量立刻出錯（`tests/test_wallet_events.py` 與 `tests/test_wallet_flow.py` 的日誌掃描守住）。
+- RPG 回合事件（`app/observability/rpg_events.py`）：`rpg.turn_started`（`start` 為 `new` 或 `restarted`）、`rpg.turn_completed`（字數、延遲、首字毫秒、模型、結束原因、狀態呼叫丟棄的項目數）、`rpg.turn_blocked`（被擋的類別列舉與是否為第二次）、`rpg.turn_interrupted`（原因：`disconnected`、`timeout`、`model_failed`）、`rpg.turn_failed`、`rpg.state_failed`、`rpg.session_ended`（原因 `age` 或 `proposed`）、`rpg.opening_started`／`ready`／`fallback`／`reset`／`taken_over`。函式沒有接收文字的參數，列舉外的值立刻 `ValueError`；欄位只有內部編號（`user_id`、`session_id`）、整數（`turn_number`、`attempt`、`chars`、`first_chunk_ms`、`dropped`）與列舉（`categories`）；`tests/test_rpg_flow.py` 走完整段旅程後掃描日誌，找不到劇情、行動、NPC 名稱、被擋文字或標記字串。告警：被擋比率與串流失敗率尚未列入告警規則（RC-4 量測後決定）。
 - 告警事件（`app/observability/alert_events.py`）：`alert.firing`（進入、升級或提醒；`reason` 為告警代碼、`severity` 為 `warning` 或 `critical`、`count` 為整數數值）、`alert.resolved`、`alert.delivery_failed`（這一次通知沒有寄出，只有告警代碼）、`alert.check_failed`（這一項評估失敗，只有告警代碼）、`alert.check_completed`（**心跳**：`check-alerts` 完整跑完一次，只有事件名稱；預覽、唯讀與有評估失敗的執行不記。寄信失敗那次仍記，因為檢查本身跑完了；平台用它偵測「告警檢查停擺」，見「平台告警」）。欄位只有固定列舉與整數，**沒有收件人地址、信件內容、使用者資料與例外訊息**；列舉以外的值立刻出錯；預覽不記事件。`tests/test_alerting_flow.py` 以真正的客服對話與登入走完整條生命週期後掃描日誌、指令輸出與信件。
 - 層級：設定錯誤（400、403）為錯誤層級；驗證失敗與暫時性錯誤為警告；主要模型因逾時或伺服器錯誤將被暫時跳過時，在導致斷路的那次失敗記一筆 `llm.breaker_opened`。
 - 健康檢查：`/healthz`（存活，不碰資料庫）與 `/readyz`（確認資料庫），回應不含內部細節且 `no-store`。
@@ -429,7 +433,7 @@ flowchart BT
 |---|---|---|---|---|
 | **入口層 IP 限流** | AGENTS.md 第 9 節「限流第一道使用入口層」 | 使用者決定先不做（Cloud Run 沒有內建；Nginx 旁車或 Cloud Armor 加外部負載平衡器各有複雜度與費用） | 入口沒有第一道防線：只有帳號層級的登入鎖定與每分鐘訊息數，擋不住來自單一 IP 的註冊洪水、請求洪水與對不存在帳號的暴力嘗試 | 上線前關卡「入口層 IP 限流的決定」；C-5b 之前 |
 | **內容安全政策（CSP）** | 未明文要求，屬安全加固；列在此以免遺忘 | 前端使用 Vue 全域建置，模板在瀏覽器編譯，政策必須允許 `unsafe-eval`，幾乎沒有保護力（見「傳輸安全與安全標頭」） | 若出現 XSS，沒有第二道防線；目前靠純文字渲染（嚴禁 `v-html`）與輸入驗證 | 前端改為預先編譯模板時 |
-| **RPG 專用的獨立 worker 池** | AGENTS.md 第 9 節「客服與 RPG 串流使用獨立的 worker 池」 | RPG 尚未實作，沒有串流端點 | RPG 上線後，長連線的串流會佔用客服的執行緒 | RC-2（串流端點）與 RC-4（壓測） |
+| **RPG 專用的獨立 worker 池** | AGENTS.md 第 9 節「客服與 RPG 串流使用獨立的 worker 池」 | `gunicorn.rpg.conf.py` 與串流端點（`/api/game/`）已完成（rpg-turn-engine），但還沒有把該前綴分流到獨立的服務；執行緒數與 worker 數是初始值 | 在分流之前，長連線的串流會佔用客服的執行緒 | 部署分流（Cloud Run 第二個服務或入口層路徑規則）與 RC-4（壓測） |
 | **平台告警尚未在雲端建立** | AGENTS.md 第 11 節（五項告警之外的三項由平台負責） | 定義已寫成腳本（預設只預覽），沒有雲端專案可建立 | 上線後沒有人會被通知 5xx、存活與寄信失敗 | C-5b 建立預備環境時 |
 
 ---

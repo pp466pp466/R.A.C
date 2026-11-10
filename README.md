@@ -1042,6 +1042,59 @@ change `game-wallet`（W1）。RPG 劇情對話改為消耗遊戲幣（客服不
 | **服務條款與隱私權政策** | 尚未補遊戲幣帳本與重新生成理由的說明（版本進位，仍標草稿） |
 | **多開帳號與簽到農幣** | 只列為監控項目、不設關卡；`WalletRepository.grant_totals` 提供彙總，尚未接到後台 |
 
+## RPG 回合引擎（rpg-turn-engine）
+
+change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來：回合與第 0 幕的 Server-Sent Events 串流、逐句輸出審查、世界狀態驗證與寫回、遊戲幣的預扣結算與退款、被擋與中斷的處理。**這個 change 只有後端**：畫面（打字機、轉場文字、逾時處理）屬 RC-3。規範在 AGENTS.md 第 5、6、7、10 節；設計見 `openspec/changes/rpg-turn-engine/design.md`（D1 至 D16），流程圖與模組分工見 [docs/系統架構-architecture.md](docs/系統架構-architecture.md) 的「RPG 回合引擎」。
+
+### 端點
+
+全部需要登入並通過年齡閘門（受限登入狀態回 403）；非 GET 須通過 CSRF 與 Origin 檢查；`<id>` 是存檔的對外識別碼，**非擁有者與不存在同為 404**。JSON 回應 `Cache-Control: no-store`；事件串流自帶 `Cache-Control: no-cache, no-transform`。**開始前的失敗（驗證、閘門、餘額、衝突、404、沒有供應商）一律是一般的 JSON 錯誤，不開啟事件串流**；串流開始之後的失敗是 `error` 事件。
+
+| 端點 | 方法 | 說明 |
+|---|---|---|
+| `/api/game/sessions/<session_id>/turns/stream` | POST | 一個回合。本文 `{"client_msg_id": "1 至 64 字", "action": "1 至 1000 字"}`，回應 `text/event-stream`。已 `complete` 的 `client_msg_id` 重送回傳既有劇情（不呼叫模型、不碰錢包）；`interrupted`／`blocked` 的編號可重送（嘗試序號加 1，預扣用新的鍵） |
+| `/api/game/sessions/<session_id>/opening/stream` | POST | 第 0 幕（開場），沒有本文欄位。已 `ready`／`fallback` 回傳既有文字、不重新生成；`pending` 取得生成權；他人正在生成回 409 `opening_in_progress`。不扣遊戲幣、不寫回合 |
+| `/api/game/sessions/<session_id>` | GET | 存檔狀態：狀態與是否已完結、第 0 幕（狀態與文字）、世界狀態的玩家視圖（經過月數、地點、摘要、進行中目標、去過的地點、主角年齡；**不含 NPC 角色卡與隱藏特質**）、已完成輪數、版本。已完結的存檔仍可讀 |
+| `/api/game/sessions/<session_id>/turns` | GET | 回合清單，依 `seq` 遞增。查詢參數 `since_seq`（預設 0，增量同步）與 `limit`（預設與上限 200）；回應 `{turns, has_more}`。只有 `complete` 的回合含劇情；被擋、中斷與生成中的回合只有狀態（`story: null`），被擋的文字永遠不離開伺服器 |
+
+開始前的錯誤代碼：`insufficient_coins`（409，附 `balance`、`needed`）、`session_ended`（409）、`opening_pending`（409，第 0 幕尚未完成）、`opening_in_progress`（409）、`turn_in_progress`（409，同一編號仍在處理）、`input_blocked`（422，行動命中必須拒絕的類別，只附類別）、`system_busy`（503，全站今日用量用盡，附 `Retry-After`）、`service_unavailable`（503，沒有設定 RPG 模型供應商：在預扣之前就回應，不扣幣、不搶佔）、`age_confirmation_required`／`account_locked`（403）。
+
+### 事件協定
+
+每個事件是 `event: 名稱` 一行、單行 JSON 的 `data:` 一行與一個空行；回應標頭 `Content-Type: text/event-stream; charset=utf-8`、`Cache-Control: no-cache, no-transform`、`X-Accel-Buffering: no`。事件只有七種，**模型的結構化輸出（JSON 原文）永遠不會送給前端**：
+
+| 事件 | 內容 |
+|---|---|
+| `meta` | 回合：`turn_id`（回合的 `seq`）、`client_msg_id`、`attempt`、`replayed`；第 0 幕：`kind: "opening"`、`replayed` |
+| `token` | `text`：通過審查、已釋放的劇情片段（審查保留一句緩衝，所以片段是整句） |
+| `ping` | 沒有其他輸出時每 15 秒一個；另在開始狀態呼叫之前送一個。前端以**任何收到的位元組**重設閒置計時器 |
+| `transition` | `text`（伺服器產生的一行劇情轉場）、`will_retry`：輸出被擋時，前端丟棄未完成的內容並以此取代；`will_retry: true` 表示正在自動重生 |
+| `state` | 世界狀態驗證後的摘要（`updated`、`elapsed_months`、`location`、`summary`、`goals`）與通知（`notices`，例如年齡更正，附更正前的年齡） |
+| `done` | **明確的結束標記**：`status`（`complete`、`blocked`、`ended`）、`turn_number`（被擋為 `null`）、`coins`（剩餘遊戲幣）；第 0 幕另有 `opening_state`（`ready`／`fallback`） |
+| `error` | `code`（`generation_timeout`、`generation_failed`、`turn_superseded`、`opening_superseded`、`internal_error`）與繁體中文 `message`；沒有 `done`，預扣已退回 |
+
+正常回合的順序：`meta` → `token`… → `ping` → `state` → `done`。被擋一次：`…token` → `transition(will_retry=true)` → 重新串流；被擋兩次：`transition(will_retry=false)` → `done(blocked)`（退款、回合標為被擋、不進上下文）。
+
+### 規則與數值
+
+- **時間**：首個非空片段 20 秒內、單次串流生成 60 秒內（逾時換備援模型，已開始輸出的串流不中途切換）；狀態呼叫另計。**最壞情況**：被擋兩次（各最多 60 秒）加狀態呼叫約 150 秒，超過 `docs/RPG.md` 原先的前端總逾時 90 秒，所以 **RC-3 的前端總逾時請設 180 秒**（閒置逾時 45 秒不變）；開存檔最壞約 60 秒、逾時請設 65 秒（見上節）。gunicorn 的 RPG 設定逾時 180 秒承接。
+- **交易邊界**：開始階段（閘門、驗證、預扣、`start_turn`）在請求的交易內，預扣失敗（餘額不足）時連同新的回合列整段復原；串流與狀態呼叫期間**沒有資料庫交易**；完成回合、寫入世界狀態與結算預扣在同一個短交易，所以不會出現「回合完成但沒結算」。
+- **遊戲幣**：預扣鍵 `turn:{存檔}:{client_msg_id}:{attempt}`；成功結算，失敗、中斷、被擋兩次退回；被擋後的自動重生與同一則訊息的重送不再次扣。客戶端在文字完整之後才斷線，收尾照常完成並結算；之前斷線則回合中斷、退回預扣。卡在生成中的預扣由逾時規則退回（`coin_hold_timeout`）。
+- **狀態呼叫失敗不影響文字**：回合照常完成並結算，世界狀態不變（`state.updated: false`）。壽終年齡由 Service 判定，狀態呼叫失敗也照樣完結；模型提議的結局只有自訂結局的劇本才生效。
+- **供應商自己的安全過濾擋下**視為失敗（`error` 事件、退款），不走轉場重生；轉場重生只給伺服器自己的審查層命中。
+- **日誌**：只有內部編號、列舉與整數（`rpg.turn_started`、`rpg.turn_completed`、`rpg.turn_blocked`、`rpg.turn_interrupted`、`rpg.turn_failed`、`rpg.state_failed`、`rpg.session_ended`、`rpg.opening_started`／`ready`／`fallback`／`reset`／`taken_over`）；行動、劇情、世界狀態、NPC 名稱、被擋文字與標記字串都不進日誌（`tests/test_rpg_flow.py` 掃描整段旅程的日誌）。
+- **設定**：`rpg.max_months_per_turn` 存於資料庫，`flask --app wsgi set-rpg-setting`／`show-rpg-settings`（人工類指令，見上節）；`OPENROUTER_REASONING` 控制推理（預設 `false`）。
+
+### 部署順序
+
+1. 備份資料庫，執行 `alembic upgrade head`（遷移 `0016_rpg_turn_engine`，全部是 expand：新增欄位與一列設定）。
+2. 部署新版程式。**映像包含兩份 gunicorn 設定**：預設啟動客服池（`gunicorn.conf.py`）；RPG 串流池指定 `gunicorn --config gunicorn.rpg.conf.py wsgi:app`（`gthread`、`WEB_CONCURRENCY` 預設 2、`GUNICORN_THREADS` 預設 16、逾時 180 秒、優雅結束 60 秒）。**把 `/api/game/` 分流到 RPG 池屬後續的部署工作**，在那之前兩者共用同一個池。
+3. 沒有設定 `OPENROUTER_*` 時，兩個串流端點回 503、讀取端點照常。
+
+### 已知限制
+
+- ①**沒有畫面**：打字機、轉場、逾時與重送的處理屬 RC-3。②**沒有對真實的 RPG 模型驗證過**：串流路徑只以假供應商與本機假 SSE 伺服器驗證，提示詞與階段節奏要在最終選定的模型上驗收（任務 6.2）。③**每個進行中的串流多佔一條上游讀取執行緒**，容量要在 RC-4 壓測校正；**Linux 上客戶端斷線時讀取執行緒是否立刻結束尚未實測**（容器驗收，任務 6.3）。④產生器若在送出第一個事件之前就被關閉（連線在回應標頭之後、第一個事件之前斷掉），收尾不會執行，預扣由逾時規則退回。⑤`SessionService.begin_turn`（簡單版，無錢包）仍在程式中，只供舊測試使用，`GameService.begin_turn` 取代它。⑥輸出審查的同段／相鄰線索判定屬法務覆核（RA-21），驗收時要用真實模型輸出量測誤擋與漏擋。
+
 ## 撰寫新端點：權限與 IDOR 測試
 
 屬於使用者的資源（對話、訊息……）的每個讀寫端點，都要遵守下列規則，並用 `tests/support/idor.py` 的框架測試：

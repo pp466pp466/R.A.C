@@ -39,10 +39,10 @@
 
 ## 5. 端點與部署設定
 
-- [ ] 5.1 `game_api_controller.py`：`POST …/turns/stream`、`POST …/opening/stream`（SSE 回應、標頭、重送路徑、開始前的錯誤以 JSON）、`GET …/<id>`、`GET …/turns`；`cache_headers.py` 加入 `/api/game/`；`error` 事件的繁體中文訊息；Blueprint 註冊與受限登入狀態預設拒絕。驗證：`tests/test_game_api.py` 以 Flask 測試客戶端讀取事件串流（事件順序與格式、標頭、404 一致、CSRF、餘額不足為 JSON 409、重送、增量同步、已完結仍可讀、被擋回合不含文字）全數通過。
-- [ ] 5.2 `gunicorn.rpg.conf.py` 與容器檢查：RPG 設定的逾時大於生成上限，映像包含兩份設定。驗證：`tests/test_container_files.py` 新增案例通過。
-- [ ] 5.3 端對端整合測試（假模型供應商，不連網）：註冊→開存檔→第 0 幕→三個回合（含一次被擋重生、一次中斷重送、一次餘額不足、結局）→匯出與抹除，檢查錢包、帳本、日誌與資料一致。驗證：`tests/test_rpg_flow.py` 通過；`project_test`（SQL Server）上同一組也通過。
-- [ ] 5.4 文件：README 的端點表、環境變數、指令與已知限制（最壞時間與前端逾時）；`docs/營運與部署-operations.md`（RPG 池設定、事件）。驗證：`tests/test_design_docs.py` 與 README 同步測試通過。
+- [x] 5.1 `game_api_controller.py`：`POST …/turns/stream`、`POST …/opening/stream`（SSE 回應、標頭、重送路徑、開始前的錯誤以 JSON）、`GET …/<id>`、`GET …/turns`；`cache_headers.py` 加入 `/api/game/`；`error` 事件的繁體中文訊息；Blueprint 註冊與受限登入狀態預設拒絕。驗證：`tests/test_game_api.py` 以 Flask 測試客戶端讀取事件串流（事件順序與格式、標頭、404 一致、CSRF、餘額不足為 JSON 409、重送、增量同步、已完結仍可讀、被擋回合不含文字）全數通過。
+- [x] 5.2 `gunicorn.rpg.conf.py` 與容器檢查：RPG 設定的逾時大於生成上限，映像包含兩份設定。驗證：`tests/test_container_files.py` 新增案例通過。
+- [x] 5.3 端對端整合測試（假模型供應商，不連網）：註冊→開存檔→第 0 幕→三個回合（含一次被擋重生、一次中斷重送、一次餘額不足、結局）→匯出與抹除，檢查錢包、帳本、日誌與資料一致。驗證：`tests/test_rpg_flow.py` 通過；`project_test`（SQL Server）上同一組也通過。
+- [x] 5.4 文件：README 的端點表、環境變數、指令與已知限制（最壞時間與前端逾時）；`docs/營運與部署-operations.md`（RPG 池設定、事件）。驗證：`tests/test_design_docs.py` 與 README 同步測試通過。
 
 ## 6. 驗收與收尾
 
