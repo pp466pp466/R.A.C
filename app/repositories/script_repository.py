@@ -29,7 +29,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterator, Mapping, Sequence
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import util as orm_util
 
@@ -38,7 +38,7 @@ from app.models.script import (
     ENDING_NONE, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING,
     VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
 )
-from app.models.user import CONTENT_TIER_SAFE, CONTENT_TIERS
+from app.models.user import AUDIENCE_ALL, AUDIENCE_FEMALE, AUDIENCE_MALE, CONTENT_TIER_SAFE, CONTENT_TIERS
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
     AuthorNameLockedError, DraftChangedError, DuplicateSeedKeyError, InvalidVersionTransitionError, OpenVersionExistsError,
@@ -74,6 +74,7 @@ def _content_columns(content: Mapping[str, Any], content_hash: str, total_chars:
         "summary": content["summary"],
         "world_name": content["world_name"],
         "content_tier": content["content_tier"],
+        "audience": _audience_of(content),
         "background": content["background"],
         "opening": content.get("opening"),
         "rules": content.get("rules"),
@@ -86,6 +87,27 @@ def _content_columns(content: Mapping[str, Any], content_hash: str, total_chars:
         "locations_json": list(content.get("locations") or []),
         "milestones_json": list(content.get("milestones") or []),
     }
+
+
+def _audience_of(content: Mapping[str, Any]) -> str:
+    """版本要寫入的讀者頻道：標準化內容只在男頻或女頻時帶有 `audience` 鍵，沒有就是全讀者（新版本寫明確的 `all`，不寫空值）。"""
+    value = content.get("audience")
+    return value if value in (AUDIENCE_MALE, AUDIENCE_FEMALE) else AUDIENCE_ALL
+
+
+def _audience_order(preference: str | None) -> list[Any]:
+    """依故事偏好排序的鍵（空串列＝不加排序鍵）。與 `story_preference.rank` 同一規則：同頻 0、全讀者（含空值）1、另一頻 2。
+
+    偏好為空、`all` 或無法辨識時不重排。`case` 是 ORM 表達式，空值被明確映射（不依賴 NULL 排序方向的方言差異）。
+    Repository 不得匯入 Service，所以這裡只用模型的常數；兩處規則的一致由測試守住。
+    """
+    if preference not in (AUDIENCE_MALE, AUDIENCE_FEMALE):
+        return []
+    return [case(
+        (ScriptVersion.audience == preference, 0),
+        (or_(ScriptVersion.audience.is_(None), ScriptVersion.audience == AUDIENCE_ALL), 1),
+        else_=2,
+    )]
 
 
 def _tiers_up_to(max_tier: str) -> tuple[str, ...]:
@@ -415,19 +437,27 @@ class ScriptRepository(BaseRepository[Script]):
             .where(Script.public_id == script_public_id, ScriptVersion.status == VERSION_PUBLISHED)
         )
 
-    def list_published(self, max_tier: str, *, limit: int = 20, offset: int = 0) -> list[ScriptVersion]:
-        """上架中的版本，宣告的內容模式不高於 `max_tier`（由新到舊）。"""
+    def list_published(
+        self, max_tier: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,
+    ) -> list[ScriptVersion]:
+        """上架中的版本，宣告的內容模式不高於 `max_tier`（由新到舊）。
+
+        `preference`（故事偏好：`male`／`female`）只影響順序：符合偏好的頻道排最前，其次全讀者，其餘仍在清單內；同一層維持由新到舊。
+        排序在 LIMIT／OFFSET 之前完成，所以分頁之間的順序一致。空值、`all` 或無法辨識時與不帶偏好的查詢完全相同。
+        """
         statement = (
             select(ScriptVersion)
             .where(ScriptVersion.status == VERSION_PUBLISHED, ScriptVersion.content_tier.in_(_tiers_up_to(max_tier)))
-            .order_by(ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
+            .order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
             .limit(limit)
             .offset(offset)
         )
         return list(self._session.scalars(statement))
 
-    def list_published_by_tag(self, tag: str, max_tier: str, *, limit: int = 20, offset: int = 0) -> list[ScriptVersion]:
-        """依標籤查詢上架中的版本（不分大小寫）。"""
+    def list_published_by_tag(
+        self, tag: str, max_tier: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,
+    ) -> list[ScriptVersion]:
+        """依標籤查詢上架中的版本（不分大小寫）；`preference` 的意義同 `list_published`。"""
         statement = (
             select(ScriptVersion)
             .join(ScriptVersionTag, ScriptVersionTag.version_id == ScriptVersion.id)
@@ -436,7 +466,7 @@ class ScriptRepository(BaseRepository[Script]):
                 ScriptVersion.content_tier.in_(_tiers_up_to(max_tier)),
                 func.lower(ScriptVersionTag.tag) == tag.casefold(),
             )
-            .order_by(ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
+            .order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
             .limit(limit)
             .offset(offset)
         )
@@ -505,6 +535,7 @@ class ScriptRepository(BaseRepository[Script]):
                         {
                             "version_no": v.version_no, "status": v.status, "spec_version": v.spec_version, "title": v.title,
                             "summary": v.summary, "world_name": v.world_name, "content_tier": v.content_tier,
+                            "audience": v.audience or AUDIENCE_ALL,
                             "background": v.background, "opening": v.opening, "rules": v.rules, "tags": tags.get(v.id, []),
                             "calendar": {"name": v.calendar_name, "start_year": v.calendar_start_year} if v.calendar_name is not None else None,
                             "ending_mode": v.ending_mode, "ending_text": v.ending_text, "ending_age": v.ending_age,
@@ -526,10 +557,13 @@ class ScriptRepository(BaseRepository[Script]):
         calendar = (
             {"name": version.calendar_name, "start_year": version.calendar_start_year} if version.calendar_name is not None else None
         )
-        return {
+        content = {
             "spec_version": version.spec_version, "title": version.title, "summary": version.summary, "world_name": version.world_name,
             "content_tier": version.content_tier, "background": version.background, "opening": version.opening, "rules": version.rules,
             "tags": self.tags_of(version), "calendar": calendar, "ending_mode": version.ending_mode, "ending_text": version.ending_text,
             "ending_age": version.ending_age, "characters": list(version.characters_json or []), "locations": list(version.locations_json or []),
             "milestones": list(version.milestones_json or []), "cover_image": None,
         }
+        if version.audience in (AUDIENCE_MALE, AUDIENCE_FEMALE):      # 全讀者與空值（舊版本）不帶這個鍵，雜湊才與標準化內容相同
+            content["audience"] = version.audience
+        return content

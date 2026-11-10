@@ -589,3 +589,164 @@ def test_deleting_a_draft_keeps_other_players_saves_and_clears_their_reference(r
     member_session.expire_all()
     kept = member_session.get(RpgSession, save.id)
     assert kept is not None and kept.source_version_id is None and kept.script_snapshot_json == {"title": "複本"}
+
+
+# ---- 讀者頻道 audience 與依故事偏好排序（story-preference 任務 2.2、2.3）---------------------------------
+
+def audience_of(version) -> str | None:
+    return version.audience
+
+
+def test_a_new_version_stores_its_audience_and_a_missing_or_all_channel_is_stored_as_all(repo, member_session):
+    alice = make_user(member_session)
+    stored = {
+        channel: audience_of(new_script(repo, alice, **({} if channel is None else {"audience": channel})))
+        for channel in (None, "all", "male", "female")
+    }
+    assert stored == {None: "all", "all": "all", "male": "male", "female": "female"}
+
+
+@pytest.mark.parametrize("channel", [None, "all", "male", "female"])
+def test_the_content_comes_back_with_the_audience_key_only_for_male_or_female_and_keeps_its_hash(repo, member_session, channel):
+    from app.services.script_spec import hash_content, validate_script
+
+    alice = make_user(member_session)
+    result = validated(**({} if channel is None else {"audience": channel}))
+    version = repo.create_script(alice.id, author_name="甲", author_code="aaaaaa", content=result.content, content_hash=result.content_hash, total_chars=result.total_chars)
+    member_session.commit()
+    member_session.expire_all()
+    rebuilt = repo.content_of(member_session.get(ScriptVersion, version.id))
+    assert ("audience" in rebuilt) is (channel in ("male", "female"))
+    assert rebuilt == result.content
+    assert hash_content(rebuilt) == result.content_hash == validate_script(rebuilt, max_tier="adult").content_hash
+
+
+def test_a_version_from_before_the_migration_has_no_audience_and_reads_back_with_the_same_hash(repo, member_session):
+    from app.services.script_spec import validate_script
+
+    alice = make_user(member_session)
+    version = new_script(repo, alice)
+    version.audience = None                                              # 遷移之前建立的版本：欄位為空，不回填
+    member_session.commit()
+    member_session.expire_all()
+    legacy = member_session.get(ScriptVersion, version.id)
+    content = repo.content_of(legacy)
+    assert legacy.audience is None and "audience" not in content
+    assert validate_script(content, max_tier="adult").content_hash == legacy.content_hash
+
+
+def test_the_owner_can_change_the_channel_of_a_draft(repo, member_session):
+    alice = make_user(member_session)
+    version = new_script(repo, alice)
+    changed = validated(audience="female")
+    edited = repo.update_draft(alice.id, version.public_id, content=changed.content, content_hash=changed.content_hash, total_chars=changed.total_chars)
+    assert edited.audience == "female" and edited.content_hash == changed.content_hash
+    back = validated()
+    edited = repo.update_draft(alice.id, version.public_id, content=back.content, content_hash=back.content_hash, total_chars=back.total_chars)
+    assert edited.audience == "all"
+
+
+@pytest.mark.parametrize("status", [VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED])
+def test_the_channel_of_a_version_outside_the_draft_state_is_immutable(member_session, status):
+    repo = ScriptRepository(member_session)
+    alice = make_user(member_session)
+    version = put_in_status(repo, member_session, alice, status)
+    before = version.audience
+    changed = validated(audience="male")
+    with pytest.raises(VersionNotDraftError):
+        repo.update_draft(alice.id, version.public_id, content=changed.content, content_hash=changed.content_hash, total_chars=changed.total_chars)
+    member_session.expire_all()
+    assert member_session.get(ScriptVersion, version.id).audience == before == "all"
+
+
+def test_a_new_version_can_change_the_channel_and_the_superseded_one_keeps_its_own(repo, member_session):
+    alice = make_user(member_session)
+    first = new_script(repo, alice, audience="male")
+    publish(repo, alice, first)
+    second = new_draft(repo, alice, script_public_id(repo, first), audience="female")
+    publish(repo, alice, second, now=NOW + timedelta(days=1))
+    member_session.commit()
+    member_session.expire_all()
+    assert (status_of(member_session, first), audience_of(first), audience_of(second)) == (VERSION_SUPERSEDED, "male", "female")
+    assert repo.content_of(first)["audience"] == "male" and repo.content_of(second)["audience"] == "female"
+
+
+def test_the_export_lists_the_channel_of_every_version_and_shows_an_empty_one_as_all(repo, member_session):
+    alice = make_user(member_session)
+    new_script(repo, alice, title="男頻劇本", audience="male")
+    legacy = new_script(repo, alice, title="舊劇本")
+    legacy.audience = None
+    member_session.commit()
+    exported = {s["versions"][0]["title"]: s["versions"][0]["audience"] for s in repo.export_scripts(alice.id)}
+    assert exported == {"男頻劇本": "male", "舊劇本": "all"}
+
+
+def published_catalog(repo, member_session):
+    """六個上架版本，由舊到新：男、全、女、空值（舊版本）、男、女；回傳 {標記: 版本} 與由新到舊的標記順序。"""
+    alice = make_user(member_session)
+    made = {}
+    plan = [("m1", "male"), ("a1", "all"), ("f1", "female"), ("n1", None), ("m2", "male"), ("f2", "female")]
+    for index, (label, channel) in enumerate(plan):
+        version = new_script(repo, alice, title=f"劇本{label}", **({"audience": channel} if channel in ("male", "female") else {}))
+        publish(repo, alice, version, now=NOW + timedelta(seconds=index))
+        if channel is None:
+            version.audience = None
+        made[label] = version
+    member_session.commit()
+    return made, ["f2", "m2", "n1", "f1", "a1", "m1"]
+
+
+def labels(made, versions) -> list[str]:
+    by_id = {v.id: label for label, v in made.items()}
+    return [by_id[v.id] for v in versions]
+
+
+@pytest.mark.parametrize("preference, expected", [
+    ("male", ["m2", "m1", "n1", "a1", "f2", "f1"]),
+    ("female", ["f2", "f1", "n1", "a1", "m2", "m1"]),
+    ("all", ["f2", "m2", "n1", "f1", "a1", "m1"]),
+    (None, ["f2", "m2", "n1", "f1", "a1", "m1"]),
+])
+def test_the_listing_puts_the_preferred_channel_first_then_everyone_then_the_other_channel(repo, member_session, preference, expected):
+    made, _ = published_catalog(repo, member_session)
+    assert labels(made, repo.list_published("adult", preference=preference)) == expected
+
+
+def test_the_listing_never_hides_a_script_whatever_the_preference(repo, member_session):
+    made, newest_first = published_catalog(repo, member_session)
+    for preference in (None, "all", "male", "female"):
+        assert sorted(labels(made, repo.list_published("adult", preference=preference))) == sorted(newest_first)
+
+
+def test_the_listing_order_follows_the_pure_rank_function_then_newest_first(repo, member_session):
+    from app.services.story_preference import rank
+
+    made, newest_first = published_catalog(repo, member_session)
+    for preference in ("male", "female", "all"):
+        expected = sorted(newest_first, key=lambda label: (rank(preference, made[label].audience), newest_first.index(label)))
+        assert labels(made, repo.list_published("adult", preference=preference)) == expected
+
+
+@pytest.mark.parametrize("preference", [None, "all", "male", "female"])
+def test_two_pages_chained_together_equal_one_full_listing(repo, member_session, preference):
+    published_catalog(repo, member_session)
+    whole = repo.list_published("adult", preference=preference)
+    paged = [
+        *repo.list_published("adult", limit=2, offset=0, preference=preference),
+        *repo.list_published("adult", limit=2, offset=2, preference=preference),
+        *repo.list_published("adult", limit=2, offset=4, preference=preference),
+    ]
+    assert [v.id for v in paged] == [v.id for v in whole] and len(whole) == 6
+
+
+def test_the_listing_by_tag_is_sorted_by_the_preference_too(repo, member_session):
+    made, _ = published_catalog(repo, member_session)
+    assert labels(made, repo.list_published_by_tag("仙俠", "adult", preference="female")) == ["f2", "f1", "n1", "a1", "m2", "m1"]
+    assert labels(made, repo.list_published_by_tag("仙俠", "adult", preference="male")) == ["m2", "m1", "n1", "a1", "f2", "f1"]
+    assert labels(made, repo.list_published_by_tag("仙俠", "adult")) == ["f2", "m2", "n1", "f1", "a1", "m1"]
+
+
+def test_a_listing_without_a_usable_preference_is_identical_to_the_previous_behaviour(repo, member_session):
+    made, newest_first = published_catalog(repo, member_session)
+    assert labels(made, repo.list_published("adult")) == newest_first
+    assert labels(made, repo.list_published("adult", preference="boys")) == newest_first      # 無法辨識的偏好不重排

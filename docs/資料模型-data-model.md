@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0017_story_preference` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -66,6 +66,7 @@ erDiagram
         string adult_confirm_method "確認方式 目前只有 self_declared 可為空"
         string nickname "公開暱稱 2 至 20 字 個資 與 display_name 分開 可為空 創作劇本前必填"
         string nickname_code "系統產生的穩定短代號 與暱稱一起顯示 可為空"
+        string story_preference "故事偏好 all male female 預設 all 只影響劇本清單排序"
         datetime publish_suspended_at "連續被自動拒絕而暫停發佈的時間 獨立於 locked_at 只停止送審 可為空 有索引"
     }
     scripts {
@@ -87,6 +88,7 @@ erDiagram
         string summary
         string world_name
         string content_tier "作者宣告的內容模式"
+        string audience "讀者頻道 all male female 可為空 空值視同全讀者"
         text background
         text opening
         text rules
@@ -323,6 +325,7 @@ erDiagram
 | 回合的嘗試序號（`0016`） | `memory_logs.attempt` 為 `NOT NULL`、資料庫預設 1；建立時為 1，中斷、被擋或逾時的重送接手時加 1，已完成的重送不變。完成、中斷與被擋可帶 `attempt`，條件式 UPDATE 比對它 | 遊戲幣的預扣冪等鍵必須隨嘗試而變（`hold()` 遇到同一個鍵一律回傳既有預扣，含已退回的）；帶 `attempt` 讓被接手而過時的產生器無法改寫新的嘗試 |
 | 同一存檔同時只有一個進行中的回合（`0016`） | 開始回合時已先對存檔列做條件式 UPDATE 取鎖，再查「其他編號且 `updated_at` 未逾時的 `streaming`」，有則衝突；逾時者標為 `interrupted`。逾時秒數沿用 `coin.hold_timeout_seconds`（呼叫端現讀後傳入） | 預扣與回合同時到期，玩家不會被雙重扣款；不新增設定鍵，也不需要資料庫層的部分唯一索引（`streaming` 不是穩定的唯一狀態，且逾時接手需要時間條件） |
 | 第 0 幕放在存檔上而不是回合表（`0016`） | `sessions.opening_text`／`opening_state`／`opening_started_at` 皆可為空；搶佔、接手、完成與退回都是帶狀態條件的單一 UPDATE，`opening_started_at` 是這次生成的憑證，寫回時必須相同；空值（舊存檔）視同 `fallback` | 第 0 幕不是一輪：不計輪數、不扣幣、不出現在回合同步序列，放進回合表會讓這三件事都要特例處理；憑證讓被接手而過時的產生器無法覆蓋新的結果 |
+| 故事偏好與讀者頻道（`0017`） | `users.story_preference` 為 `NOT NULL`、資料庫預設 `all`（舊版程式的 INSERT 在新結構上仍有效）；`script_versions.audience` 可為空且**不回填**（已發佈的版本不可變，空值與 `all` 行為相同）。標準化內容只在 `male`／`female` 時帶 `audience` 鍵，全讀者不進內容 | 讓既有內容的 `content_hash` 逐位元不變：待審版本的審查結果不失效、內建劇本種子重跑仍是「未變更」；偏好只影響清單排序，所以不加索引，也不加 CHECK 約束（值域由 Service 驗證） |
 | 串流的首字延遲進帳本（`0016`） | `llm_call_logs.first_chunk_ms` 可為空，只有串流呼叫有值 | 串流的體感品質看首字不看整段；沒有新增資料表，也不含任何文字 |
 | 標籤獨立成表 | `script_version_tags` 以顯示形式儲存（保留大小寫，版本內容可由欄位完整還原、雜湊不變），查詢以小寫比對 | 不得依 JSON 內容篩選；同一版本內由驗證器以 NFC 與不分大小寫去除重複，所以兩種資料庫的唯一約束不會誤判 |
 
@@ -375,6 +378,7 @@ flowchart LR
     M13 --> M14["0014 rpg_character_creation<br/>sessions.protagonist_json、runtime_limits 補三個每日主角生成次數的初始值"]
     M14 --> M15["0015 game_wallet<br/>wallets、wallet_entries、runtime_limits 補五個遊戲幣設定的初始值"]
     M15 --> M16["0016 rpg_turn_engine<br/>memory_logs.attempt、sessions 的第 0 幕三欄、llm_call_logs.first_chunk_ms、runtime_limits 補每回合月數上限"]
+    M16 --> M17["0017 story_preference<br/>users.story_preference、script_versions.audience"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -384,6 +388,7 @@ flowchart LR
 - `0014_rpg_character_creation` 只新增一個可為空的欄位並補三個限制鍵（先查再插，已有的鍵不蓋掉、不重複）；舊版程式在新結構上可運作，降級對 `sessions` 同樣用 `recreate="never"`。
 - `0015_game_wallet` 只新增兩張表並補五個設定鍵（先查再插，已有的鍵不蓋掉、不重複）；沒有資料回填，既有玩家的贈幣在第一次存取錢包時補發；降級會刪除兩張表（錢包資料一併消失），只在還沒有真實資料時使用。
 - `0016_rpg_turn_engine` 只新增五個欄位（一個有預設值的 `attempt`、四個可為空）並補一個設定鍵（先查再插）；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（程式視同 fallback，不生成也不阻擋回合），沒有資料回填；舊版程式在新結構上可運作。降級對三張表都用 `recreate="never"`，`attempt` 另需 `mssql_drop_default`（SQL Server 的預設值約束要先移除才能刪欄位）。
+- `0017_story_preference` 只新增兩個欄位（`users.story_preference` 有預設值 `all`、`script_versions.audience` 可為空且不回填）；沒有新資料表與資料回填，降級用 `recreate="never"` 並移除 SQL Server 的預設值約束；實際資料庫尚在 `0016`，新程式上線前要先備份再升級。
 - SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。

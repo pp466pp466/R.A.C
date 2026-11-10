@@ -357,3 +357,50 @@ def test_the_command_runs_from_a_changed_directory_and_updates_when_the_content_
     result = runner.invoke(args=["seed-scripts"])
     assert "建立 0、更新 1、沒有變動 0" in result.output and "alpha：更新（新增版本）" in result.output
     assert counts(app) == (1, 2)
+
+
+# ---- 讀者頻道 audience 不影響種子（story-preference 任務 2.4）-----------------------------------------
+
+def test_a_live_version_from_before_the_migration_with_an_empty_audience_is_reported_as_unchanged(member_session, seeds):
+    write_seed(seeds, "alpha")
+    service, _ = make_service(member_session, seeds)
+    service.run()
+    live = member_session.scalar(select(ScriptVersion))
+    live.audience = None                                         # 升級前的狀態：版本的 audience 欄位為空
+    member_session.commit()
+    before = snapshot_of(member_session)
+    report = service.run()
+    assert (report.created, report.updated, report.unchanged) == (0, 0, 1)
+    assert snapshot_of(member_session) == before
+    assert member_session.scalar(select(func.count()).select_from(ScriptVersion)) == 1
+
+
+@pytest.mark.parametrize("given", ["all", ""])
+def test_a_data_file_that_names_the_all_audience_is_still_unchanged(member_session, seeds, given):
+    write_seed(seeds, "alpha")
+    service, _ = make_service(member_session, seeds)
+    service.run()
+    write_seed(seeds, "alpha", audience=given)
+    report = service.run()
+    assert (report.created, report.updated, report.unchanged) == (0, 0, 1)
+
+
+@pytest.mark.parametrize("channel", ["male", "female"])
+def test_adding_a_male_or_female_audience_to_the_data_file_adds_a_new_version(member_session, seeds, channel):
+    write_seed(seeds, "alpha")
+    service, _ = make_service(member_session, seeds)
+    service.run()
+    write_seed(seeds, "alpha", audience=channel)
+    report = service.run()
+    assert (report.created, report.updated, report.unchanged) == (0, 1, 0)
+    versions = list(member_session.scalars(select(ScriptVersion).order_by(ScriptVersion.version_no)))
+    assert [(v.version_no, v.status, v.audience) for v in versions] == [(1, VERSION_SUPERSEDED, "all"), (2, VERSION_PUBLISHED, channel)]
+    assert service.run().unchanged == 1                           # 之後重跑仍是未變更
+
+
+def test_the_shipped_seed_files_hash_is_unaffected_by_the_audience_field():
+    for path in sorted(SEED_DIRECTORY.glob("*.json")):
+        content = json.loads(path.read_text(encoding="utf-8-sig"))["content"]
+        assert "audience" not in content                          # 首發劇本沒有宣告頻道，視同全讀者
+        as_all = validate_script({**content, "audience": "all"}, max_tier=BUILTIN_MAX_TIER)
+        assert as_all.content_hash == validate_script(content, max_tier=BUILTIN_MAX_TIER).content_hash

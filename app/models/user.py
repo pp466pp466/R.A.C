@@ -53,6 +53,13 @@ CONTENT_TIER_STANDARD = "standard"
 CONTENT_TIER_ADULT = "adult"
 CONTENT_TIERS = (CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIER_ADULT)
 
+# 讀者頻道與故事偏好（story-preference 規格）：同一組值域。劇本版本的 `audience` 與使用者的 `story_preference` 都只能是這三個值；
+# 常數放在這裡的原因同上（資料模型不得匯入 Service）。排序與預設的邏輯在 `app/services/story_preference.py`。
+AUDIENCE_ALL = "all"          # 全讀者（預設；劇本版本的空值視同全讀者）
+AUDIENCE_MALE = "male"        # 男頻
+AUDIENCE_FEMALE = "female"    # 女頻
+AUDIENCES = (AUDIENCE_ALL, AUDIENCE_MALE, AUDIENCE_FEMALE)
+
 # 成年確認的方式（目前只有自行聲明：勾選「我確定已滿 18 歲」與同意安全規範，不蒐集證件）
 ADULT_CONFIRM_SELF_DECLARED = "self_declared"
 
@@ -118,6 +125,9 @@ class User(Base, PublicIdMixin, TimestampMixin):
     nickname: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
     nickname_code: Mapped[str | None] = mapped_column(Unicode(8), nullable=True)
     publish_suspended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
+    # 故事偏好（story-preference）：全讀者、男頻、女頻，**只影響劇本清單的排序**，不影響內容分級、敘事與權限。
+    # 模型 `default` 加資料庫 `server_default`：舊版程式的 INSERT（不含此欄）在新結構上取得 `all`。系統從不自動改變它。
+    story_preference: Mapped[str] = mapped_column(Unicode(10), default=AUDIENCE_ALL, server_default=AUDIENCE_ALL)
 
 
 class UserIdentity(Base):

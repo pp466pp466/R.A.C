@@ -7,6 +7,8 @@
 - 標準化：NFC、去除控制字元與格式字元（含零寬度字元）；單行欄位把任何空白收斂為單一空白並去除前後空白，多行欄位保留換行。
   長度一律以標準化之後的 Unicode 字元數計。
 - 內容含規格沒有的欄位會被拒絕，而不是被忽略；圖片欄位只接受空值（v1 預留）。
+- 讀者頻道 `audience`（選填，`all`／`male`／`female`）：**只有 `male`／`female` 才進標準化內容**；缺值、空值與 `all` 的標準化輸出
+  與沒有這個欄位時逐位元相同，所以既有內容的 `content_hash` 不變（待審版本的審查結果不失效、內建劇本種子重跑仍是「未變更」）。
 - 錯誤訊息只描述規則，**不回顯使用者輸入**（也不顯示不公開的標記字串），可直接對應到表單欄位。
 - 所有文字都是使用者文字：只以純文字處理，這裡不解讀任何標記語法。
 """
@@ -21,6 +23,7 @@ from typing import Any, Iterable
 from app.models.user import CONTENT_TIERS
 from app.services.content_tier import tier_rank
 from app.services.errors import ValidationError
+from app.services.story_preference import AUDIENCE_ALL, parse_audience
 
 SPEC_VERSION = 1
 
@@ -65,7 +68,7 @@ _RAW_LIST_FACTOR = 4
 
 _TOP_LEVEL_FIELDS = frozenset({
     "spec_version", "title", "summary", "world_name", "content_tier", "background", "opening", "rules", "tags", "calendar", "ending_mode",
-    "ending_text", "ending_age", "characters", "locations", "milestones", "cover_image",
+    "ending_text", "ending_age", "characters", "locations", "milestones", "cover_image", "audience",
 })
 _CHARACTER_FIELDS = frozenset({"name", "personality", "age", "appearance", "occupation", "speech_style", "hidden_trait", "image"})
 _MILESTONE_FIELDS = frozenset({"id", "title", "trigger", "note"})
@@ -389,6 +392,12 @@ def validate_script(raw: Any, *, max_tier: str, forbidden_markers: Iterable[str]
             if raw.get(field) not in (None, ""):
                 c.fail(field, "選擇無結局時不能填寫結局說明或壽終年齡。")
 
+    audience = raw.get("audience")
+    if audience is None or audience == "":
+        audience = AUDIENCE_ALL
+    elif parse_audience(audience) is None:
+        c.fail("audience", "讀者頻道只能是男頻、女頻或全讀者。")
+
     characters = _validate_characters(c, raw.get("characters"))
     locations = _list_of_text(c, raw.get("locations"), "locations", maximum_count=LOCATION_MAX_COUNT, maximum=LOCATION_MAX)
     milestones = _validate_milestones(c, raw.get("milestones"), calendar)
@@ -406,6 +415,8 @@ def validate_script(raw: Any, *, max_tier: str, forbidden_markers: Iterable[str]
         "ending_mode": ending_mode, "ending_text": ending_text, "ending_age": ending_age, "characters": characters,
         "locations": locations, "milestones": milestones, "cover_image": None,
     }
+    if audience != AUDIENCE_ALL:                         # 全讀者不進標準化內容：既有內容的雜湊逐位元不變
+        content["audience"] = audience
     return ValidatedScript(content=content, content_hash=hash_content(content), total_chars=c.total)
 
 

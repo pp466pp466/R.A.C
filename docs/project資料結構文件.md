@@ -1,8 +1,8 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0017_story_preference`（實際的 `project` 尚在 `0016_rpg_turn_engine`，升級見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
-本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、232 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、234 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
 與其他文件的分工：本文件回答「資料庫裡**有什麼**」（結構、型別、鍵、固定值、保存期限的對照）；為什麼這樣設計、跨資料庫（SQLite 與 SQL Server）的取捨與決策理由，在 [資料模型-data-model.md](資料模型-data-model.md)；各資料的保存與刪除指令在 [營運與部署-operations.md](營運與部署-operations.md)；程式分層與依賴方向在 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -14,8 +14,8 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。目前版本 `0016_rpg_turn_engine`（`alembic_version` 只有一列；已於 2026-11-09 套用，見第 14 節） |
-| 資料表與欄位 | 20 張業務資料表、232 個欄位、50 個索引與唯一約束、17 個外鍵 |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0017_story_preference`；實際的 `project` 目前為 `0016_rpg_turn_engine`（`alembic_version` 只有一列；0016 已於 2026-11-09 套用，0017 尚未套用，見第 14 節） |
+| 資料表與欄位 | 20 張業務資料表、234 個欄位、50 個索引與唯一約束、17 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
@@ -51,7 +51,7 @@ flowchart LR
 
 | 資料表 | 中文名稱 | 領域 | 用途 | 主要寫入者 | 保存與刪除 | 欄位 |
 |---|---|---|---|---|---|---|
-| `users` | 會員 | 帳號與身分 | 玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱。 | UserRepository（條件式更新）；後台操作走 AdminRepository | 連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口 | 35 |
+| `users` | 會員 | 帳號與身分 | 玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱、故事偏好。 | UserRepository（條件式更新）；後台操作走 AdminRepository | 連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口 | 36 |
 | `user_identities` | 第三方登入身分 | 帳號與身分 | Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分，一個 Google 身分只屬於一個帳號。 | UserIdentityRepository | 隨帳號刪除（CASCADE） | 5 |
 | `auth_tokens` | 管理員重設密碼權杖 | 帳號與身分 | 管理員「忘記密碼」寄出的一次性權杖；只存 SHA-256 雜湊，原值只出現在信件中。 | AuthTokenRepository | 到期後 7 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 7 |
 | `deletion_tombstones` | 帳號刪除紀錄 | 帳號與身分 | 記錄「哪個內部編號在何時、因何原因被抹除」，備份還原後據此重新執行刪除；不含任何個資。 | DeletionTombstoneRepository（隨抹除流程同一交易寫入） | 不設期限、不納入期限清除（還原後要靠它重播刪除） | 4 |
@@ -64,7 +64,7 @@ flowchart LR
 | `alert_states` | 營運告警狀態 | 模型用量與營運 | 五項營運告警各一列（至多 5 列）：目前是否告警中、嚴重度與最近一次通知。 | AlertStateRepository（條件式更新搶佔通知） | 不設期限；不指向使用者，不含個資 | 8 |
 | `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻、遊戲幣的五個設定，以及 RPG 回合引擎的每回合月數上限）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入 | 4 |
 | `scripts` | 劇本 | RPG 劇本 | 劇本的身分：作者、內建劇本的種子鍵、筆名與短代號的快照；內容與狀態在 script_versions。 | ScriptRepository | 隨作者的帳號抹除（CASCADE）；內建劇本沒有作者，不隨帳號刪除 | 9 |
-| `script_versions` | 劇本版本 | RPG 劇本 | 劇本的每個版本：固定規格的全部欄位、狀態、內容雜湊與審查結果。已發佈的版本不可變，修改一律新增版本。 | ScriptRepository（狀態只在此寫入，有架構測試擋住別處） | 隨劇本刪除（CASCADE）；刪除草稿時直接刪除 | 32 |
+| `script_versions` | 劇本版本 | RPG 劇本 | 劇本的每個版本：固定規格的全部欄位、狀態、內容雜湊與審查結果。已發佈的版本不可變，修改一律新增版本。 | ScriptRepository（狀態只在此寫入，有架構測試擋住別處） | 隨劇本刪除（CASCADE）；刪除草稿時直接刪除 | 33 |
 | `script_version_tags` | 劇本版本標籤 | RPG 劇本 | 版本的標籤（以顯示形式儲存，查詢以小寫比對），讓目錄日後可以篩選。 | ScriptRepository | 隨版本刪除（CASCADE） | 3 |
 | `script_submissions` | 劇本送審紀錄 | RPG 劇本 | 每次成功送審、被自動拒絕與管理員解除暫停各一筆，用來算每日送審次數與連續被拒；不含任何劇本文字。 | ScriptSubmissionRepository | 建立後 365 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 5 |
 | `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 29 |
@@ -224,6 +224,7 @@ erDiagram
         string nickname "公開暱稱"
         string nickname_code "系統產生的穩定短代號"
         datetime publish_suspended_at "連續被自動拒絕而被暫停發佈的時間"
+        string story_preference "故事偏好"
         string public_id UK "對外識別碼"
         datetime created_at "建立時間"
         datetime updated_at "最後更新時間"
@@ -362,6 +363,7 @@ erDiagram
         string summary "簡介"
         string world_name "世界觀名稱"
         string content_tier "作者宣告的內容模式"
+        string audience "讀者頻道"
         text background "背景與體系"
         text opening "初始對話"
         text rules "世界規則"
@@ -596,13 +598,13 @@ flowchart TD
 |---|---|
 | 型別 | SQL Server 的實際型別。`INTEGER IDENTITY(1,1)` 是自動遞增的主鍵；`（JSON）` 表示由 SQLAlchemy 序列化存成 `NVARCHAR(max)`，**不得依內容篩選查詢**（兩種資料庫的 JSON 語法不同） |
 | 可空 | 是＝允許空值（NULL） |
-| 資料庫預設 | 資料表上實際的 DEFAULT 約束。整個資料庫只有 `users.content_tier_preference` 有；其他欄位的預設值由 ORM 或 Service 在寫入時指定（寫在說明裡） |
+| 資料庫預設 | 資料表上實際的 DEFAULT 約束。整個資料庫只有 `users.content_tier_preference` 與 `users.story_preference` 有；其他欄位的預設值由 ORM 或 Service 在寫入時指定（寫在說明裡） |
 | 鍵 | `PK`＝主鍵；`FK→父表.欄位`＝外鍵；`UK`＝單一欄位的唯一約束（多欄位的唯一約束列在各表的「索引與約束」） |
 | 說明 | 欄位的意義、單位與限制；固定值見第 6 節、JSON 結構見第 7 節；標示「個資」的欄位受 AGENTS.md 第 11 節的保存與日誌規範 |
 
 ### 5.1 `users`（會員）
 
-玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱。
+玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱、故事偏好。
 
 - 領域：帳號與身分　｜　主要寫入者：UserRepository（條件式更新）；後台操作走 AdminRepository　｜　保存與刪除：連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口
 
@@ -640,9 +642,10 @@ flowchart TD
 | 30 | `nickname` | NVARCHAR(20) | 是 | — | — | 公開暱稱（2 至 20 字）；與 display_name 分開；既有帳號可為空，第一次創作劇本前必須設定。 |
 | 31 | `nickname_code` | NVARCHAR(8) | 是 | — | — | 系統產生的穩定短代號（4 碼）；第一次設定暱稱時產生，之後更改暱稱也不變；不要求唯一。 |
 | 32 | `publish_suspended_at` | DATETIME2(6) | 是 | — | — | 連續被自動拒絕而被暫停發佈的時間；獨立於 locked_at，只停止送審；只由條件式更新寫入。 |
-| 33 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
-| 34 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 35 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
+| 33 | `story_preference` | NVARCHAR(10) | 否 | `'all'` | — | 故事偏好：all（全讀者，預設）｜male（男頻）｜female（女頻）；**只影響劇本清單的排序**，不影響內容分級、敘事與權限；系統從不自動改變它。資料庫預設 'all'，讓舊版程式的 INSERT 在新結構上仍有效；既有帳號全部為 all。0017 新增。 |
+| 34 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
+| 35 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 36 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
 
 索引與約束：
 
@@ -963,27 +966,28 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 9 | `summary` | NVARCHAR(150) | 否 | — | — | 簡介（至多 150 字）。 |
 | 10 | `world_name` | NVARCHAR(50) | 否 | — | — | 世界觀名稱（至多 50 字）。 |
 | 11 | `content_tier` | NVARCHAR(10) | 否 | — | — | 作者宣告的內容模式：safe｜standard｜adult。 |
-| 12 | `background` | NVARCHAR(max) | 否 | — | — | 背景與體系（至多 1500 字）；世界特有的系統以自由文字寫在這裡。 |
-| 13 | `opening` | NVARCHAR(max) | 是 | — | — | 初始對話（至多 500 字，選填）。 |
-| 14 | `rules` | NVARCHAR(max) | 是 | — | — | 世界規則（狀態轉移規則，至多 800 字，選填）：寫給 AI 的行事準則。 |
-| 15 | `ending_mode` | NVARCHAR(10) | 否 | — | — | 結局模式：none（預設，開放世界）｜custom。 |
-| 16 | `ending_text` | NVARCHAR(max) | 是 | — | — | 結局說明（自訂結局時，至多 300 字）；寫給 AI 看的結局描述。 |
-| 17 | `ending_age` | INTEGER | 是 | — | — | 壽終年齡（選填）；由 Service 判定。 |
-| 18 | `calendar_name` | NVARCHAR(12) | 是 | — | — | 曆法名稱（用年份觸發里程碑時才需要）。 |
-| 19 | `calendar_start_year` | INTEGER | 是 | — | — | 曆法的起始年。 |
-| 20 | `characters_json` | NVARCHAR(max)（JSON） | 否 | — | — | 角色清單（至多 10 位）；不依內容篩選；結構見第 7 節。 |
-| 21 | `locations_json` | NVARCHAR(max)（JSON） | 否 | — | — | 地點清單（至多 15 個）；結構見第 7 節。 |
-| 22 | `milestones_json` | NVARCHAR(max)（JSON） | 否 | — | — | 里程碑清單（至多 8 個）；原始劇本唯讀；結構見第 7 節。 |
-| 23 | `live_script_id` | INTEGER | 是 | — | — | 輔助欄位：狀態為 published 時等於 script_id，其餘為空；篩選式唯一索引保證每個劇本至多一個上架版本。只由 ScriptRepository 寫入。 |
-| 24 | `open_script_id` | INTEGER | 是 | — | — | 輔助欄位：狀態為 draft 或 pending_review 時等於 script_id，其餘為空；保證每個劇本至多一個進行中的版本。只由 ScriptRepository 寫入。 |
-| 25 | `published_at` | DATETIME2(6) | 是 | — | — | 上架時間。 |
-| 26 | `review_hash` | NVARCHAR(64) | 是 | — | — | 審查當時的 content_hash；與目前的 content_hash 相同才算數，內容有變動即自動失效。 |
-| 27 | `review_verdict` | NVARCHAR(8) | 是 | — | — | 審查結果：pass｜flag｜reject（系統的判斷）。 |
-| 28 | `review_categories_json` | NVARCHAR(max)（JSON） | 是 | — | — | 審查的類別（固定列舉，不含任何內容）。 |
-| 29 | `reviewed_at` | DATETIME2(6) | 是 | — | — | 審查時間。 |
-| 30 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
-| 31 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 32 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
+| 12 | `audience` | NVARCHAR(10) | 是 | — | — | 讀者頻道：all（全讀者）｜male（男頻）｜female（女頻）；屬版本內容，與版本一起不可變，修改須產生新版本。**空值視同全讀者**：0017 之前建立的版本為空，不回填；新版本寫入明確的值。0017 新增。 |
+| 13 | `background` | NVARCHAR(max) | 否 | — | — | 背景與體系（至多 1500 字）；世界特有的系統以自由文字寫在這裡。 |
+| 14 | `opening` | NVARCHAR(max) | 是 | — | — | 初始對話（至多 500 字，選填）。 |
+| 15 | `rules` | NVARCHAR(max) | 是 | — | — | 世界規則（狀態轉移規則，至多 800 字，選填）：寫給 AI 的行事準則。 |
+| 16 | `ending_mode` | NVARCHAR(10) | 否 | — | — | 結局模式：none（預設，開放世界）｜custom。 |
+| 17 | `ending_text` | NVARCHAR(max) | 是 | — | — | 結局說明（自訂結局時，至多 300 字）；寫給 AI 看的結局描述。 |
+| 18 | `ending_age` | INTEGER | 是 | — | — | 壽終年齡（選填）；由 Service 判定。 |
+| 19 | `calendar_name` | NVARCHAR(12) | 是 | — | — | 曆法名稱（用年份觸發里程碑時才需要）。 |
+| 20 | `calendar_start_year` | INTEGER | 是 | — | — | 曆法的起始年。 |
+| 21 | `characters_json` | NVARCHAR(max)（JSON） | 否 | — | — | 角色清單（至多 10 位）；不依內容篩選；結構見第 7 節。 |
+| 22 | `locations_json` | NVARCHAR(max)（JSON） | 否 | — | — | 地點清單（至多 15 個）；結構見第 7 節。 |
+| 23 | `milestones_json` | NVARCHAR(max)（JSON） | 否 | — | — | 里程碑清單（至多 8 個）；原始劇本唯讀；結構見第 7 節。 |
+| 24 | `live_script_id` | INTEGER | 是 | — | — | 輔助欄位：狀態為 published 時等於 script_id，其餘為空；篩選式唯一索引保證每個劇本至多一個上架版本。只由 ScriptRepository 寫入。 |
+| 25 | `open_script_id` | INTEGER | 是 | — | — | 輔助欄位：狀態為 draft 或 pending_review 時等於 script_id，其餘為空；保證每個劇本至多一個進行中的版本。只由 ScriptRepository 寫入。 |
+| 26 | `published_at` | DATETIME2(6) | 是 | — | — | 上架時間。 |
+| 27 | `review_hash` | NVARCHAR(64) | 是 | — | — | 審查當時的 content_hash；與目前的 content_hash 相同才算數，內容有變動即自動失效。 |
+| 28 | `review_verdict` | NVARCHAR(8) | 是 | — | — | 審查結果：pass｜flag｜reject（系統的判斷）。 |
+| 29 | `review_categories_json` | NVARCHAR(max)（JSON） | 是 | — | — | 審查的類別（固定列舉，不含任何內容）。 |
+| 30 | `reviewed_at` | DATETIME2(6) | 是 | — | — | 審查時間。 |
+| 31 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
+| 32 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 33 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
 
 索引與約束：
 
@@ -1175,6 +1179,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `users.status` | `active`｜`suspended`｜`deletion_pending` | active＝正常；suspended＝被管理員停權；deletion_pending＝申請刪除，7 天寬限期內可撤銷。 |
 | `users.lock_reason` | `identity_rejected`｜`rate_limited` | 與 lock_strikes.kind 相同：identity_rejected＝已辨識身分卻被拒的登入、年齡確認不一致；rate_limited＝被每分鐘訊息數上限擋下。 |
 | `users.content_tier_preference` | `safe`｜`standard`｜`adult` | safe＝安全模式（未滿 18 歲固定）；standard＝一般模式（浪漫、曖昧與感官，不露骨）；adult＝成人模式（成年角色間合意的露骨內容，須同時滿足部署開關、供應商許可與成年確認）。 |
+| `users.story_preference` | `all`｜`male`｜`female` | all＝全讀者（預設）；male＝男頻；female＝女頻。只影響劇本清單的排序（符合偏好者排最前，其次全讀者，其餘仍可瀏覽），不影響內容分級、敘事與權限。 |
 | `users.age_range` | `under_13`｜`13_17`｜`18_24`｜`25_34`｜`35_44`｜`45_54`｜`55_plus` | 玩家自行選擇的年齡區間，須與生日對照一致才寫入；未滿 13 歲者不得使用，發現時立即抹除帳號。 |
 | `users.adult_confirm_method` | `self_declared` | 目前只有 self_declared（自行聲明）；日後法務要求更強的方式時只更換確認方式。 |
 | `user_identities.provider` | `google` | 目前只有 google。 |
@@ -1194,6 +1199,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `runtime_limits.key` | `script_limit.free`｜`script_limit.plus`｜`script_limit.vip`｜`script_submit_daily.free`｜`script_submit_daily.plus`｜`script_submit_daily.vip`｜`protagonist_suggest_daily.free`｜`protagonist_suggest_daily.plus`｜`protagonist_suggest_daily.vip`｜`script_reject_streak`｜`coin.turn_cost.standard`｜`coin.signup_grant`｜`coin.checkin_grant`｜`coin.free_cap`｜`coin.hold_timeout_seconds`｜`rpg.max_months_per_turn` | 見下方「營運限制」。 |
 | `script_versions.status` | `draft`｜`pending_review`｜`published`｜`rejected`｜`superseded` | 見下方「劇本版本狀態」。 |
 | `script_versions.content_tier` | `safe`｜`standard`｜`adult` | 作者宣告的內容模式；未滿 18 歲的作者只能宣告 safe。玩家只能遊玩不高於自己生效模式的劇本。 |
+| `script_versions.audience` | `all`｜`male`｜`female` | 讀者頻道；空值（0017 之前的版本）視同 all。標準化內容只在 male 或 female 時帶 audience 鍵，all 不進內容雜湊，所以既有內容的雜湊不變。 |
 | `script_versions.ending_mode` | `none`｜`custom` | none＝無結局的開放世界（預設）；custom＝自訂結局（附結局說明與選填的壽終年齡）。 |
 | `script_versions.review_verdict` | `pass`｜`flag`｜`reject` | pass＝通過；flag＝有疑慮（仍可送審，進人工並標示類別）；reject＝明確違反（直接拒絕）。 |
 | `script_versions.review_categories_json` | `minor_sexual`｜`sexual_violence`｜`non_consensual`｜`real_person_sexual`｜`minor_suspected`｜`real_person_suspected`｜`tier_mismatch`｜`other_concern` | 見下方「審查類別」。 |
@@ -1383,7 +1389,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 - **對外識別碼與授權分開**：`public_id` 是 UUID，但授權不得依賴它的不可猜測性；所有對話相關的 Repository 方法都接收 `user_id`，非擁有者一律回 404。
 - **不設軟刪除**：使用者刪除對話即永久刪除；帳號刪除靠 `CASCADE`；`deletion_tombstones` 只存內部編號與日期，備份還原後據此重新執行刪除。
 - **多重串聯路徑**（SQL Server 錯誤 1785）決定了幾個設計：`llm_call_logs.conversation_id` 沒有外鍵、`sessions.source_version_id` 是無動作的外鍵、`script_submissions` 不連到版本、`admin_audit_logs` 只有一個外鍵。
-- **資料庫層的預設值極少**：只有 `users.content_tier_preference`（`'safe'`，讓舊版程式的 INSERT 在新結構上仍有效且保守）；其他預設在 ORM 與 Service。
+- **資料庫層的預設值極少**：只有 `users.content_tier_preference`（`'safe'`，讓舊版程式的 INSERT 在新結構上仍有效且保守）與 `users.story_preference`（`'all'`，同樣讓舊版程式的 INSERT 有效）；其他預設在 ORM 與 Service。
 
 ### 8.4 個資與敏感欄位
 
@@ -1494,6 +1500,7 @@ flowchart LR
 | `0014_rpg_character_creation` | 2026-11-04 | 玩家主角：sessions 新增 protagonist_json（可為空）；runtime_limits 補三個每日生成次數的鍵（只插入缺少的） | 新增欄位，寫入初始資料 |
 | `0015_game_wallet` | 2026-11-05 | 遊戲幣：新增 wallets、wallet_entries；runtime_limits 補五個遊戲幣設定鍵（只插入缺少的） | 新增資料表，寫入初始資料 |
 | `0016_rpg_turn_engine` | 2026-11-09 | RPG 回合引擎：memory_logs 新增 attempt（NOT NULL、預設 1）；sessions 新增 opening_text、opening_state、opening_started_at（可為空）；llm_call_logs 新增 first_chunk_ms（可為空）；runtime_limits 補 rpg.max_months_per_turn（只插入缺少的） | 新增欄位，寫入初始資料 |
+| `0017_story_preference` | 2026-11-10 | 故事偏好與劇本讀者頻道：users 新增 story_preference（NOT NULL、預設 'all'）；script_versions 新增 audience（可為空，既有版本不回填） | 新增欄位 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1590,3 +1597,4 @@ flowchart TD
 | 2026-11-09 | 新增 | `runtime_limits` 的一列初始資料（`rpg.max_months_per_turn` = 24） | 單一回合最多推進的遊戲內月數；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋 | `0016_rpg_turn_engine` |
 | 2026-11-09 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0016_20261109_140913.bak`，`RESTORE VERIFYONLY` 通過，`RESTORE HEADERONLY` 確認為 `project` 的完整備份、未損毀）後，由 `0015_game_wallet` 升級到 `0016_rpg_turn_engine`；`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 沒有差異，`flask show-rpg-settings` 列出一個鍵（24）；唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，五個新欄位的型別與可空和本文一致。由 Claude 依使用者要求執行 | `0016_rpg_turn_engine` |
 | 2026-11-10 | 文件 | 本文件 | 同步 rpg-notebook（RC-2b）：`llm_call_logs.kind` 的允許值新增 `rpg_notebook`（第 5 節的欄位說明與第 7 節的固定值字典），並補寫 `sessions.notebook_text`／`notebook_version`／`notebook_upto_turn` 三欄現在的行為。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：`kind` 為 `NVARCHAR(20)`，新值 12 字放得下；三個記事簿欄位早在 `0012_rpg_data_and_script` 建立 | 本文件 |
+| 2026-11-10 | 新增 | 欄位 `users.story_preference`（NVARCHAR(10)，NOT NULL，資料庫預設 'all'）、`script_versions.audience`（NVARCHAR(10)，可為空） | 故事偏好（只影響劇本清單排序）與劇本讀者頻道（版本內容）；既有帳號取得 all，既有版本的 audience 為空（視同全讀者，不回填，已發佈的版本不可變）；新增兩個欄位，沒有新資料表與新外鍵 | `0017_story_preference` |

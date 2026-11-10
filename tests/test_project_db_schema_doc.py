@@ -315,7 +315,7 @@ def test_the_checks_notice_a_missing_column_a_wrong_type_a_dropped_index_and_a_s
     no_index = re.sub(r"^\| `ix_users_locked_at` \|.*\n", "", text, flags=re.M)
     assert any("ix_users_locked_at" in p for p in compare_table(no_index, "users"))
 
-    stale = re.sub(r"(^\| 35 \| `updated_at` \|.*\n)", r"\1| 36 | `old_column` | INTEGER | 否 | — | — | 已經刪除的欄位 |\n", text, count=1, flags=re.M)
+    stale = re.sub(r"(^\| 36 \| `updated_at` \|.*\n)", r"\1| 37 | `old_column` | INTEGER | 否 | — | — | 已經刪除的欄位 |\n", text, count=1, flags=re.M)
     assert stale != text, "反向驗證的替換沒有生效"
     assert any("users.old_column" in p and "已經沒有" in p for p in compare_table(stale, "users"))
 

@@ -106,6 +106,9 @@ class ScriptVersion(Base, PublicIdMixin, TimestampMixin):
     summary: Mapped[str] = mapped_column(Unicode(150))
     world_name: Mapped[str] = mapped_column(Unicode(50))
     content_tier: Mapped[str] = mapped_column(Unicode(10), default=CONTENT_TIER_SAFE)    # 作者宣告的內容模式
+    # 讀者頻道（story-preference）：`all`／`male`／`female`。屬版本內容，與版本一起不可變。**可為空**：遷移之前建立的版本為空，
+    # 視同全讀者，不回填；新版本寫入明確的值。標準化內容只在 `male`／`female` 時帶有 `audience` 鍵（見 `script_spec`）。
+    audience: Mapped[str | None] = mapped_column(Unicode(10), nullable=True)
 
     # 設定
     background: Mapped[str] = mapped_column(UnicodeText)

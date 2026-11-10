@@ -32,7 +32,7 @@
 
 ### D2：值域與排序集中在一個純函式模組 `story_preference`
 
-新增 `app/services/story_preference.py`（加入既有的純模組架構守門，不得匯入 ORM、Repository、Flask）：常數 `AUDIENCE_ALL／MALE／FEMALE` 與 `AUDIENCES`、`parse_audience(value)`（非列舉值回 `None`）、`normalize_audience(value)`（空值回 `all`）、`rank(preference, audience)`（0 最前）。`script_spec`、Service、Repository 與測試都從這裡取值域，不各寫一份字串。
+新增 `app/services/story_preference.py`（純函式，沒有資料庫、設定與時間的依賴；值域常數自 `app.models.user` 匯入，所以與 `content_tier.py` 一樣不在 `PURE_MODULES` 清單內——那份清單禁止匯入模型）：常數 `AUDIENCE_ALL／MALE／FEMALE` 與 `AUDIENCES`、`parse_audience(value)`（非列舉值回 `None`）、`normalize_audience(value)`（空值回 `all`）、`rank(preference, audience)`（0 最前）。`script_spec`、Service 與測試都從這裡取值域，不各寫一份字串；**Repository 不得匯入 Service（分層守門），所以只用 `app.models.user` 的常數，排序的 `case` 規則與 `rank` 各寫一次，由 Repository 測試逐一比對兩者的結果以守住一致**。
 
 - 模型層需要預設值常數（`users.story_preference` 的 `default` 與 `server_default`），而資料模型不得匯入 Service：沿用 `CONTENT_TIER_*` 的做法，把三個常數放在 `app/models/user.py`，純函式模組自模型匯入。
 - `rank`：偏好 `all` → 一律 0（不重排）；偏好 `male`／`female` → 同頻 0、全讀者（含空值）1、另一頻 2。

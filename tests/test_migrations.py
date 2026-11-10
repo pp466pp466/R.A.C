@@ -837,6 +837,75 @@ def test_migrated_turn_engine_columns_have_the_right_defaults_on_both_databases(
     assert (save["opening_text"], save["opening_state"], save["opening_started_at"], call["first_chunk_ms"]) == (None, None, None, None)
 
 
+def _insert_old_script_version(conn) -> None:
+    """0017 之前的結構上的一位使用者、一個劇本與一個已發佈的版本（欄位只含當時存在的）。"""
+    now = utcnow().replace(tzinfo=None)
+    _insert_user(conn, Table("users", MetaData(), autoload_with=conn), 1)
+    user_id = conn.execute(select(Table("users", MetaData(), autoload_with=conn).c.id)).scalar_one()
+    scripts = Table("scripts", MetaData(), autoload_with=conn)
+    conn.execute(scripts.insert().values(public_id="00000000-0000-4000-8000-0000000000d1", creator_id=user_id, created_at=now, updated_at=now))
+    script_id = conn.execute(select(scripts.c.id)).scalar_one()
+    as_json = (lambda value: json.dumps(value, ensure_ascii=False)) if conn.dialect.name == "mssql" else (lambda value: value)
+    conn.execute(Table("script_versions", MetaData(), autoload_with=conn).insert().values(
+        public_id="00000000-0000-4000-8000-0000000000d2", script_id=script_id, version_no=1, status="published", spec_version=1,
+        content_hash="a" * 64, total_chars=10, title="舊劇本", summary="簡介", world_name="世界", content_tier="safe", background="背景",
+        ending_mode="none", characters_json=as_json([]), locations_json=as_json([]), milestones_json=as_json([]),
+        live_script_id=script_id, published_at=now, created_at=now, updated_at=now,
+    ))
+
+
+def test_0017_adds_the_story_preference_columns_and_keeps_every_row(tmp_path):
+    """story-preference：users.story_preference（NOT NULL，既有帳號為 all）與 script_versions.audience（可為空，既有版本不回填）；
+    既有資料一列不少、內容不變；回復只移除這兩欄；再升級一次不出錯。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'story_preference.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0017_story_preference")
+    assert revision.down_revision == "0016_rpg_turn_engine" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0016_rpg_turn_engine")
+    with engine.begin() as conn:
+        _insert_old_script_version(conn)
+    before = {table: {c["name"] for c in inspect(engine).get_columns(table)} for table in ("users", "script_versions")}
+    before_tables = set(inspect(engine).get_table_names())
+
+    command.upgrade(cfg, "0017_story_preference")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    added = {table: {c["name"]: c for c in inspector.get_columns(table) if c["name"] not in before[table]} for table in before}
+    assert set(added["users"]) == {"story_preference"} and added["users"]["story_preference"]["nullable"] is False
+    assert set(added["script_versions"]) == {"audience"} and added["script_versions"]["audience"]["nullable"] is True
+    assert str(added["users"]["story_preference"]["type"]).upper().startswith(("VARCHAR(10)", "NVARCHAR(10)"))
+    with engine.connect() as conn:                                                           # 既有資料不變；既有帳號為 all，既有版本不回填
+        user = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().one()
+        version = conn.execute(select(Table("script_versions", MetaData(), autoload_with=conn))).mappings().one()
+    assert (user["display_name"], user["story_preference"]) == ("帳號1", "all")
+    assert (version["title"], version["status"], version["content_hash"], version["audience"]) == ("舊劇本", "published", "a" * 64, None)
+
+    command.downgrade(cfg, "0016_rpg_turn_engine")
+    assert {table: {c["name"] for c in inspect(engine).get_columns(table)} for table in before} == before
+    with engine.connect() as conn:                                                           # 回復後既有的帳號與版本仍在，沒有被串聯刪除
+        for name in ("users", "scripts", "script_versions"):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 1, name
+
+    command.upgrade(cfg, "0017_story_preference")                                           # 再升級一次
+    with engine.connect() as conn:
+        assert conn.execute(select(Table("users", MetaData(), autoload_with=conn).c.story_preference)).scalar_one() == "all"
+    engine.dispose()
+
+
+def test_migrated_story_preference_columns_have_the_right_defaults_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：沒有指定偏好的使用者列取得 all（舊版程式的 INSERT 形狀），沒有指定頻道的版本為空值。"""
+    engine = migrated_database
+    with engine.begin() as conn:
+        _insert_old_script_version(conn)
+    with engine.connect() as conn:
+        user = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().one()
+        version = conn.execute(select(Table("script_versions", MetaData(), autoload_with=conn))).mappings().one()
+    assert user["story_preference"] == "all"
+    assert version["audience"] is None
+
+
 def test_migrated_wallet_tables_enforce_their_constraints_and_cascade_with_the_user(migrated_database):
     """SQLite 與 SQL Server 兩軌：升級後有十六個設定（鍵唯一）；餘額不得為負、冪等鍵唯一、刪除使用者串聯刪除錢包與帳本。"""
     engine = migrated_database

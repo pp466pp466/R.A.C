@@ -674,3 +674,100 @@ def test_a_script_character_may_not_have_an_origin():
     assert "characters[0].origin" in errors_of(valid(characters=[char(origin="native")]))
     assert "characters[0].origin" in errors_of(valid(characters=[char(origin="transmigrator")]))
     assert "origin" not in check(valid(characters=[char()]))["characters"][0]
+
+
+# ---- 讀者頻道 audience（story-preference 任務 2.1）---------------------------------------------
+
+# 升級前（規格沒有 audience 欄位）的程式對下面這份固定內容算出的雜湊。**不要更新這個常數**：它守住「全讀者不進標準化內容、
+# 既有內容的 content_hash 逐位元不變」；若測試失敗，代表標準化輸出改變了，待審版本的審查結果與內建劇本種子會連帶失效。
+PRE_AUDIENCE_CONTENT = json.loads(r"""{
+    "title": "青雲問道",
+    "summary": "少年入宗門，一步步走向自己的道。",
+    "world_name": "乾歷朝仙俠世界",
+    "content_tier": "safe",
+    "background": "靈氣復甦的年代，宗門林立。\n凡人亦可修行。",
+    "opening": "山門前，晨霧未散。",
+    "rules": "境界分為煉氣、築基、金丹。",
+    "tags": [
+        "仙俠",
+        "成長"
+    ],
+    "calendar": {
+        "name": "乾歷朝",
+        "start_year": 1200
+    },
+    "ending_mode": "none",
+    "characters": [
+        {
+            "name": "林曉",
+            "personality": "活潑好動",
+            "age": 16,
+            "appearance": "身形瘦小，眼神明亮"
+        }
+    ],
+    "locations": [
+        "古劍山莊",
+        "青雲宗山門"
+    ],
+    "milestones": [
+        {
+            "title": "宗門大測",
+            "trigger": {
+                "kind": "age",
+                "value": 20
+            }
+        }
+    ]
+}""")
+PRE_AUDIENCE_HASH = "c329c48c22e7c8107bcc49c84b4af9cea5b688e34a2e305986b4d0a394fa102b"
+
+
+def test_existing_content_keeps_its_hash_bit_for_bit_after_the_audience_field_was_added():
+    result = validate_script(PRE_AUDIENCE_CONTENT, max_tier="adult")
+    assert result.content_hash == PRE_AUDIENCE_HASH
+    assert "audience" not in result.content
+
+
+@pytest.mark.parametrize("given", [None, "", "all"])
+def test_a_missing_empty_or_all_audience_leaves_the_content_and_hash_exactly_as_without_the_field(given):
+    base = validate_script(valid(), max_tier="adult")
+    raw = valid()
+    raw["audience"] = given
+    result = validate_script(raw, max_tier="adult")
+    assert result.content == base.content and result.content_hash == base.content_hash == validate_script(valid(audience=given), max_tier="adult").content_hash
+    assert "audience" not in result.content
+
+
+@pytest.mark.parametrize("channel", ["male", "female"])
+def test_a_male_or_female_audience_is_kept_and_changes_the_hash(channel):
+    base = validate_script(valid(), max_tier="adult")
+    result = validate_script(valid(audience=channel), max_tier="adult")
+    assert result.content["audience"] == channel
+    assert result.content_hash != base.content_hash
+    assert result.content_hash != validate_script(valid(audience="female" if channel == "male" else "male"), max_tier="adult").content_hash
+    assert {k: v for k, v in result.content.items() if k != "audience"} == base.content
+
+
+@pytest.mark.parametrize("bad", ["Male", "FEMALE", "boys", " male", "male ", 1, 0, True, False, ["male"], {"a": 1}, 1.5])
+def test_an_invalid_audience_is_reported_on_the_audience_field_without_echoing_the_input(bad):
+    fields = errors_of(valid(audience=bad))
+    assert set(fields) == {"audience"}
+    assert "男頻" in fields["audience"] and str(bad) not in fields["audience"]
+
+
+@pytest.mark.parametrize("channel", [None, "all", "male", "female"])
+def test_validating_normalized_content_again_is_idempotent_with_the_audience_field(channel):
+    first = validate_script(valid(audience=channel), max_tier="adult")
+    again = validate_script(json.loads(json.dumps(first.content, ensure_ascii=False)), max_tier="adult")
+    assert again.content == first.content and again.content_hash == first.content_hash
+
+
+def test_the_audience_does_not_count_toward_the_total_characters():
+    base = validate_script(valid(), max_tier="adult")
+    for channel in ("male", "female"):
+        assert validate_script(valid(audience=channel), max_tier="adult").total_chars == base.total_chars
+
+
+def test_an_invalid_audience_is_reported_together_with_other_errors():
+    fields = errors_of(valid(audience="boys", title=""))
+    assert {"audience", "title"} <= set(fields)
