@@ -129,6 +129,12 @@ def build_condense_contents(
     return (LLMContent("user", ("\n\n".join(blocks),)),)
 
 
+def overage(entries: Sequence[str]) -> tuple[int, int]:
+    """條目超出提示詞要求的程度：（超過 `MAX_ENTRIES_PER_CAPTURE` 的條數, 各條超過 `MAX_ENTRY_CHARS` 的字數加總）。
+    只用來記錄整數、調整提示詞；條目仍完整寫入，不丟不截。"""
+    return max(0, len(entries) - MAX_ENTRIES_PER_CAPTURE), sum(max(0, len(entry) - MAX_ENTRY_CHARS) for entry in entries)
+
+
 # ---- 語意規則 ---------------------------------------------------------------------------------
 
 

@@ -62,6 +62,15 @@ ALLOWED_FIELDS = (
     "first_chunk_ms",
     "dropped",
     "categories",
+    # 記事簿事件（rpg_events.py）：邊界輪次、條數、字數與版本（皆為整數），沒有任何記事簿或條目文字
+    "boundary",
+    "entries",
+    "longest",
+    "added",
+    "total",
+    "version",
+    "over_entries",
+    "over_chars",
 )
 
 MAX_TEXT_LENGTH = 300

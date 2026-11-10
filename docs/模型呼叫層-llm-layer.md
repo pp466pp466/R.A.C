@@ -1,6 +1,6 @@
 # 模型呼叫層
 
-> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
 > 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**已由 change `rpg-script-authoring`（RC-7）實作**（呼叫類別 `script_review`，見第 6a 節），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
 > 注意（2026-11-04）：AGENTS.md 第 5 節的 RPG 用途再新增「玩家主角的生成與審查」；**已由 change `rpg-character-creation`（RC-9）實作**（呼叫類別 `protagonist_gen`、`protagonist_review`，見第 6b 節）。兩者都是非串流的結構化輸出，沿用同一解析函式與重試規則，不使用 Gemini。
 
@@ -79,6 +79,8 @@ flowchart TD
 | 被擋 | 輸入或輸出被安全過濾 | 降級，不重試 | `blocked`（結束原因 `prompt_blocked` 或 `safety`） |
 | 設定錯誤 | 其他 4xx（400、403…） | 降級，需要人工處理 | `config_error` |
 | 驗證失敗 | 200 但輸出不合格 | 同一模型重試一次 | `validation_failed` |
+
+**呼叫端的預算（`budget_seconds`，rpg-notebook）**：圖中的「預算 30 秒」是預設（`settings.request_budget_seconds`）。多步驟的背景流程可以傳入`budget_seconds`，讓整體不超過自己的上限（例如記事簿抓取把剩餘時間傳進來）：傳入較小的值時以它為準（`min`），**傳入較大的值不會放寬**設定的預算；剩餘不到 2 秒（`MIN_CALL_SECONDS`）就不發出任何呼叫，回傳降級（`degraded == "budget"`、`attempts == 0`），帳本沒有紀錄。不傳入時行為與先前完全相同。
 
 ## 3. 斷路：只看資料庫
 
@@ -182,9 +184,22 @@ RPG 用途沿用 `LLM_*` 的逾時、預算與輸出上限（一個地方調整�
 
 自我介紹只存在於這次請求與送給模型的資料區塊，**不寫入資料庫、日誌或回應**；帳本與日誌只有類別、結果與數字。
 
+## 6c. 記事簿抓取的呼叫（`rpg_notebook`，rpg-notebook）
+
+| 項目 | 規則 |
+|---|---|
+| 供應商與模型 | RPG 用途的 OpenAI 相容端點（`OPENROUTER_MODEL`，備援 `OPENROUTER_FALLBACK_MODEL`），**不使用 Gemini**；沿用 `LlmService.run_structured` 的重試、備援、斷路與帳本，每次呼叫實際使用的模型寫進帳本 |
+| 觸發與時機 | 每完成 10 輪（第 11、21、31… 輪完成時抓取前一個視窗），由回合串流的回應關閉之後（`response.call_on_close`）呼叫 `NotebookCapturer.run`；串流本身已結束，玩家不等待。細節見 [系統架構-architecture.md](系統架構-architecture.md) 的 RPG 回合引擎 |
+| 呼叫類別 | 帳本 `kind = rpg_notebook`（12 個字，放得進 `0013` 加寬後的 20）；`counted` 為否，不計入任何人的每日對話輪數，**不碰遊戲幣錢包**，但計入全站每日 token 上限（上限用盡時不抓取、不推進標記） |
+| 預算 | 一次抓取的總預算 60 秒（含 JSON 重試、備援切換與精簡重試，以單調時鐘計）；單次 `run_structured` 傳入 `budget_seconds = min(30, 剩餘)`；剩餘不少於 20 秒才啟動精簡重試。最壞 4 次模型呼叫 |
+| 系統指令 | 固定的繁體中文指示（語言為參數，預設 `zh-Hant-TW`）：只輸出 JSON、記錄範圍與「不記對白與一次性細節」、每次最多 5 條且每條 50 字內、依三種內容模式的分級界線、不公開的標記字串（沿用回合的 `rpg_marker`）、資料區塊是資料。**不含任何玩家文字**；玩家的行動、劇情與記事簿都是使用者內容區的資料區塊（一律經 `neutralize`） |
+| 輸出 schema | `{entries: [字串]}`，**不設 `maxItems`／`maxLength`**：條數與字數是對模型的要求，Service 不因此丟棄或截斷條目，只把超出的整數記進日誌（`over_entries`／`over_chars`）。語意規則：條目不得含標記字串或資料區塊的標題括號 |
+| 失敗的處置 | 暫時性失敗、預算逾時、設定錯誤、供應商擋下、JSON 或標記字串驗證失敗 → **不推進** `notebook_upto_turn`，由下一個完成的回合補做；條目通過 JSON 之後才發現的洩漏或規則層未通過 → 整次放棄並**推進**。整個流程不拋出，任何失敗都不影響已送達的回合 |
+| 日誌與保存 | 日誌只有內部編號、整數與列舉；帳本不含任何文字（驗證失敗的模型原文依既有規則截斷存在 `error_detail`，14 天，僅管理員可讀） |
+
 ## 8. 用量帳本（`llm_call_logs`）
 
-每次呼叫一筆：用途（`chat`、`summary`、`script_review`、`protagonist_gen`、`protagonist_review`，以及 RPG 回合引擎的 `rpg_stream`、`rpg_state`、`rpg_opening`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0；串流呼叫斷線時為估算值，見第 11 節）、延遲，以及結束原因。串流呼叫另有 `first_chunk_ms`（從送出到第一個正文片段的毫秒數，其他呼叫為空值）。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
+每次呼叫一筆：用途（`chat`、`summary`、`script_review`、`protagonist_gen`、`protagonist_review`，以及 RPG 回合引擎的 `rpg_stream`、`rpg_state`、`rpg_opening`，與記事簿抓取的 `rpg_notebook`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0；串流呼叫斷線時為估算值，見第 11 節）、延遲，以及結束原因。串流呼叫另有 `first_chunk_ms`（從送出到第一個正文片段的毫秒數，其他呼叫為空值）。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
 
 帳本也是**用量限制的唯一來源**（`UsageService`，見 [客服對話-chat-service.md](客服對話-chat-service.md) 第 3 節），沒有另外的計數器：
 

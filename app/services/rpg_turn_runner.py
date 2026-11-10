@@ -35,6 +35,7 @@ from app.services import rpg_context, rpg_prompt, rpg_world
 from app.services.current_user import CurrentUser
 from app.services.errors import HoldAlreadyRefunded
 from app.services.game_service import TurnPlan
+from app.services.rpg_notebook_capture import CaptureTarget
 from app.services.rpg_runner_base import (
     ATTEMPT_BLOCKED, ATTEMPT_OK, DONE_BLOCKED, DONE_COMPLETE, DONE_ENDED, ERROR_MESSAGES, EVENT_DONE, EVENT_META, EVENT_PING, EVENT_STATE,
     EVENT_TRANSITION, PING_SECONDS, AttemptResult, RunnerBase, RunnerDeps, SseEvent,
@@ -85,8 +86,21 @@ class TurnRunner(RunnerBase):
         self._current = current
         self._final: _Final | None = None
         self._ended_unfinished = False
+        self._capture_due = False
 
     # ---- 對外 ---------------------------------------------------------------------------------
+
+    def capture_target(self) -> CaptureTarget | None:
+        """回應關閉之後要不要抓取記事簿（rpg-notebook 的 design D1）：`done` 已被伺服器取走（`yield` 返回）、回合為 `complete`
+        （不是 `ended`、被擋、中斷、失敗或被取代）時回傳抓取對象（純資料），否則 `None`。`done` 寫入時客戶端斷線（`GeneratorExit`）、
+        從頭就是已完成回合的重送（不經過本類別）都不會設定。每個正常完成的回合都會成立，是否真有待抓取的視窗由 `NotebookCapturer` 判斷。"""
+        if not self._capture_due:
+            return None
+        plan = self._plan
+        return CaptureTarget(
+            user_id=plan.user_id, session_id=plan.session_id, session_public_id=plan.session_public_id, member_tier=self._current.member_tier,
+            content_tier=plan.tier, adult_age=plan.adult_age,
+        )
 
     def events(self) -> Iterator[SseEvent]:
         """事件產生器。呼叫端（Controller）逐個送出；客戶端斷線時 WSGI 伺服器會 `close()` 這個產生器。"""
@@ -135,6 +149,8 @@ class TurnRunner(RunnerBase):
             return
         yield self._send(EVENT_STATE, final.state_event)
         yield self._send(EVENT_DONE, {"status": final.status, "turn_number": final.turn_number, "coins": final.coins})
+        if final.status == DONE_COMPLETE:                                     # 執行到這裡表示 `done` 已被取走；寫入失敗時是 `GeneratorExit`，到不了這一行
+            self._capture_due = True
 
     # ---- 被擋、失敗與中斷 -------------------------------------------------------------------------
 

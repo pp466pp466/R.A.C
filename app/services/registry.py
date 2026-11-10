@@ -73,6 +73,7 @@ from app.services.protagonist_review_service import ProtagonistReviewService
 from app.services.protagonist_service import ProtagonistService
 from app.services.wallet_service import WalletService
 from app.services.game_service import GameService
+from app.services.rpg_notebook_capture import NotebookCapturer
 from app.services.rpg_prompt import rpg_marker
 from app.services.rpg_runner_base import RunnerDeps
 from app.services.rpg_opening_runner import OpeningRunner
@@ -456,6 +457,18 @@ def build_runner_deps() -> RunnerDeps:
 def build_turn_runner(plan, current) -> TurnRunner:
     """回合的串流執行者（在請求內建立，產生器稍後才執行）。"""
     return TurnRunner(plan=plan, current=current, deps=build_runner_deps(), marker=rpg_marker(get_config().secret_key.reveal()))
+
+
+def build_notebook_capturer() -> NotebookCapturer:
+    """回合串流關閉之後的記事簿抓取執行者（**在請求內建立**，回呼稍後才執行，那時請求已結束，不能用 `g`、`current_app` 或請求的工作階段）。
+    全站 token 預算以傳入的工作階段查帳本；沒有 RPG 供應商時拋出 `RuntimeError`（Controller 已先擋）。"""
+    config, clock = get_config(), get_clock()
+    usage_settings = config.usage
+
+    def budget_exhausted(session: Session) -> bool:
+        return build_usage_service(session, settings=usage_settings, clock=clock).global_budget_exhausted()
+
+    return NotebookCapturer(deps=build_runner_deps(), marker=rpg_marker(config.secret_key.reveal()), budget_exhausted=budget_exhausted)
 
 
 def build_opening_runner(plan) -> OpeningRunner:

@@ -27,6 +27,12 @@ EVENT_OPENING_READY = "rpg.opening_ready"
 EVENT_OPENING_FALLBACK = "rpg.opening_fallback"
 EVENT_OPENING_RESET = "rpg.opening_reset"
 EVENT_OPENING_TAKEN_OVER = "rpg.opening_taken_over"
+EVENT_NOTEBOOK_CAPTURED = "rpg.notebook_captured"
+EVENT_NOTEBOOK_SKIPPED = "rpg.notebook_skipped"
+EVENT_NOTEBOOK_ABANDONED = "rpg.notebook_abandoned"
+EVENT_NOTEBOOK_FAILED = "rpg.notebook_failed"
+EVENT_NOTEBOOK_SAVED = "rpg.notebook_saved"
+EVENT_NOTEBOOK_SAVE_REJECTED = "rpg.notebook_save_rejected"
 
 EVENT_NAMES = frozenset(
     value for name, value in dict(globals()).items() if name.startswith("EVENT_") and isinstance(value, str)
@@ -52,6 +58,12 @@ END_REASONS = ("proposed", "age")      # 存檔完結：模型提議（Service �
 
 OPENING_END_REASONS = ("disconnected", "failed", "blocked")
 OPENING_STATES = ("pending", "generating", "ready", "fallback")
+
+# 記事簿（rpg-notebook 的 design D7；`failed` 的 `validation`、`blocked` 是實作時補上的，與回合的 FAIL_REASONS 對應）
+NOTEBOOK_SKIP_REASONS = ("full", "empty", "budget")                  # 已滿（推進標記）、沒有新條目（推進標記）、全站預算用盡（不推進）
+NOTEBOOK_ABANDON_REASONS = ("blocked", "too_long", "stale")          # 規則層／洩漏未通過、精簡後仍超過上限、鎖內發現超過上限（皆推進標記）
+NOTEBOOK_FAIL_REASONS = ("transient", "timeout", "config", "unavailable", "validation", "blocked")    # 皆不推進標記，由後續回合補做
+NOTEBOOK_REJECT_REASONS = ("too_long", "blocked", "conflict", "ended")                                  # 玩家儲存被拒
 
 
 def _integer(name: str, value: object) -> int:
@@ -187,4 +199,90 @@ def log_opening_taken_over(*, user_id: int, session_id: int) -> None:
     _warning(
         EVENT_OPENING_TAKEN_OVER, "RPG 第 0 幕生成權被接手", user_id=user_id, session_id=_integer("session_id", session_id),
         outcome="generating",
+    )
+
+
+# ---- 記事簿（見 rpg-notebook-capture 與 rpg-notebook 規格；欄位只有內部編號、整數與列舉，**沒有任何記事簿、條目、行動或劇情文字**）---------
+
+
+def log_notebook_captured(
+    *, user_id: int, session_id: int, boundary: int, entries: int, longest: int, added: int, total: int, version: int, over_entries: int,
+    over_chars: int, calls: int, latency_ms: int, model: str | None, categories: Iterable[str] = (),
+) -> None:
+    """AI 追加成功：處理到的邊界、實際追加的條數、最長一條的字數、追加的字數（含接在既有內容之後的換行）、追加後的總字數與記事簿版本。
+
+    `over_entries`、`over_chars` 是**超出提示詞要求**（每次 5 條、每條 50 字）的條數與字數（逐條超出的字數加總），條目仍完整寫入、不丟不截，
+    記下來只為了調整提示詞。`calls` 是模型呼叫次數（含重試與精簡）。`categories` 是放行但記錄的類別（`other_concern`）。"""
+    fields: dict[str, object] = {}
+    cats = _categories(categories)
+    if cats:
+        fields["categories"] = cats
+    _info(
+        EVENT_NOTEBOOK_CAPTURED, "RPG 記事簿追加", user_id=user_id, session_id=_integer("session_id", session_id), boundary=_integer("boundary", boundary),
+        entries=_integer("entries", entries), longest=_integer("longest", longest), added=_integer("added", added), total=_integer("total", total),
+        version=_integer("version", version), over_entries=_integer("over_entries", over_entries), over_chars=_integer("over_chars", over_chars),
+        attempt=_integer("calls", calls), latency_ms=_integer("latency_ms", latency_ms), model=model, outcome="captured", **fields,
+    )
+
+
+def log_notebook_skipped(
+    *, user_id: int, session_id: int, boundary: int, reason: str, total: int | None = None, calls: int = 0, latency_ms: int | None = None,
+    model: str | None = None,
+) -> None:
+    """這個視窗沒有追加也不算失敗：記事簿已滿（`full`，沒有呼叫模型，推進標記）、沒有新條目（`empty`，推進標記）、全站預算用盡（`budget`，不推進標記）。"""
+    _info(
+        EVENT_NOTEBOOK_SKIPPED, "RPG 記事簿略過", user_id=user_id, session_id=_integer("session_id", session_id), boundary=_integer("boundary", boundary),
+        reason=_choice("原因", reason, NOTEBOOK_SKIP_REASONS), total=_optional_integer("total", total), attempt=_integer("calls", calls),
+        latency_ms=_optional_integer("latency_ms", latency_ms), model=model, outcome="skipped",
+    )
+
+
+def log_notebook_abandoned(
+    *, user_id: int, session_id: int, boundary: int, reason: str, entries: int, total: int, calls: int, latency_ms: int, model: str | None,
+    categories: Iterable[str] = (),
+) -> None:
+    """放棄這個視窗並推進標記：條目未通過規則層或含洩漏（`blocked`，附類別，沒有被擋的文字）、精簡後仍超過上限（`too_long`）、
+    鎖內發現追加後會超過上限（`stale`）。`total` 是追加後會有的字數。"""
+    fields: dict[str, object] = {}
+    cats = _categories(categories)
+    if cats:
+        fields["categories"] = cats
+    _warning(
+        EVENT_NOTEBOOK_ABANDONED, "RPG 記事簿放棄", user_id=user_id, session_id=_integer("session_id", session_id), boundary=_integer("boundary", boundary),
+        reason=_choice("原因", reason, NOTEBOOK_ABANDON_REASONS), entries=_integer("entries", entries), total=_integer("total", total),
+        attempt=_integer("calls", calls), latency_ms=_integer("latency_ms", latency_ms), model=model, outcome="abandoned", **fields,
+    )
+
+
+def log_notebook_failed(
+    *, user_id: int, session_id: int, boundary: int | None, reason: str, calls: int, latency_ms: int, model: str | None,
+) -> None:
+    """抓取失敗，標記**不**推進，由後續回合補做（暫時性失敗、預算逾時、設定錯誤、驗證失敗、供應商擋下、非預期的錯誤）。"""
+    _warning(
+        EVENT_NOTEBOOK_FAILED, "RPG 記事簿抓取失敗", user_id=user_id, session_id=_integer("session_id", session_id),
+        boundary=_optional_integer("boundary", boundary), reason=_choice("原因", reason, NOTEBOOK_FAIL_REASONS), attempt=_integer("calls", calls),
+        latency_ms=_integer("latency_ms", latency_ms), model=model, outcome="failed",
+    )
+
+
+def log_notebook_saved(*, user_id: int, session_id: int, version: int, total: int) -> None:
+    """玩家儲存了記事簿：新的版本與字數。"""
+    _info(
+        EVENT_NOTEBOOK_SAVED, "RPG 記事簿玩家儲存", user_id=user_id, session_id=_integer("session_id", session_id), version=_integer("version", version),
+        total=_integer("total", total), outcome="saved",
+    )
+
+
+def log_notebook_save_rejected(
+    *, user_id: int, session_id: int, reason: str, total: int | None = None, categories: Iterable[str] = (),
+) -> None:
+    """玩家的儲存被拒：太長（`too_long`）、規則層擋下（`blocked`，附類別，沒有被擋的內容）、版本衝突（`conflict`）、存檔已完結（`ended`）。
+    `total` 是送出的字數。"""
+    fields: dict[str, object] = {}
+    cats = _categories(categories)
+    if cats:
+        fields["categories"] = cats
+    _info(
+        EVENT_NOTEBOOK_SAVE_REJECTED, "RPG 記事簿玩家儲存被拒", user_id=user_id, session_id=_integer("session_id", session_id),
+        reason=_choice("原因", reason, NOTEBOOK_REJECT_REASONS), total=_optional_integer("total", total), outcome="rejected", **fields,
     )

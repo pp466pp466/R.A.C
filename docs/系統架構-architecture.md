@@ -242,6 +242,7 @@ sequenceDiagram
     participant G as GameService（請求工作階段）
     participant R as TurnRunner（產生器）
     participant S as StreamRunner 與 OutputGuard
+    participant N as NotebookCapturer
     participant DB as 資料庫
     C->>Ctl: POST turns/stream
     Ctl->>G: begin_turn
@@ -262,22 +263,32 @@ sequenceDiagram
         Note over R,DB: 短交易：finish_turn 完成回合與世界狀態（版本比對）加 settle
         R-->>C: event state 與 done
     end
+    Note over C,Ctl: done 是最後一個事件 串流隨即結束 不等待抓取
+    Ctl->>R: 回應關閉後 call_on_close 詢問 capture_target
+    alt done 已被取走的正常完成回合
+        R-->>Ctl: CaptureTarget 純資料
+        Ctl->>N: run
+        Note over N,DB: 短交易 A 讀視窗 然後抓取呼叫 rpg_notebook（無交易）然後規則層與長度 然後短交易 B 鎖定後追加（不碰錢包 不計輪數）
+    else 被擋 中斷 失敗 結局 done 前斷線 已完成回合的重送
+        R-->>Ctl: 無對象 不抓取 由下一個完成的回合補做
+    end
 ```
 
 | 元件 | 責任 |
 |---|---|
-| `game_api_controller.py` | `POST /api/game/sessions/<id>/turns/stream`、`POST …/opening/stream`、`GET …/<id>`、`GET …/turns`；只讀請求、呼叫 `GameService`、回應。串流端點先確認有 RPG 供應商（沒有就在預扣之前回 503），再呼叫開始階段；開始前的失敗全是 JSON；已完成的重送由 `rpg_replay.py` 轉成 `meta`（`replayed: true`）、一個含全文的 `token`、`done`；要生成時在建立 Response 之前呼叫 `build_turn_runner`／`build_opening_runner`，Response 的本文把「關閉」傳給事件產生器（斷線收尾）。標頭 `text/event-stream; charset=utf-8`、`no-cache, no-transform`、`X-Accel-Buffering: no`；沒有權限判斷，也不匯入資料層 |
+| `game_api_controller.py` | `POST /api/game/sessions/<id>/turns/stream`、`POST …/opening/stream`、`GET …/<id>`、`GET …/turns`；只讀請求、呼叫 `GameService`、回應。串流端點先確認有 RPG 供應商（沒有就在預扣之前回 503），再呼叫開始階段；開始前的失敗全是 JSON；已完成的重送由 `rpg_replay.py` 轉成 `meta`（`replayed: true`）、一個含全文的 `token`、`done`；要生成時在建立 Response 之前呼叫 `build_turn_runner`／`build_opening_runner`，Response 的本文把「關閉」傳給事件產生器（斷線收尾）；回合串流另以 `response.call_on_close` 在回應關閉之後呼叫記事簿抓取（`_notebook_follow_up`：依賴在請求內由 `build_notebook_capturer` 取好，回呼先問 `TurnRunner.capture_target()`，有值才抓取，並包 `try/except`，絕不拋出）。標頭 `text/event-stream; charset=utf-8`、`no-cache, no-transform`、`X-Accel-Buffering: no`；沒有權限判斷，也不匯入資料層 |
 | `GameService`（`game_service.py`） | `begin_turn`：閘門 → `client_msg_id` 與行動驗證 → 擁有者 → 已完成的重送（`TurnReplay`，不碰錢包）→ 完結與第 0 幕閘門 → 行動的規則層（只擋確定違規，422 `input_blocked`）→ 全站預算 → SAVEPOINT 內 `start_turn` 與 `hold`（鍵含 `attempt`）→ 凍結 `TurnPlan`（最近 10 輪、世界狀態、在場角色與年齡、結局判定、首選模型、版本、上下文）。`begin_opening`：已完成的直接回傳既有文字，否則條件式搶佔生成權（`OpeningPlan`），同時只有一個請求能生成 |
 | `RunnerBase`（`rpg_runner_base.py`） | 兩種 Runner 共用：`SseEvent`、`RunnerDeps`（工作階段工廠、錢包與模型服務工廠、供應商、設定、時鐘，**在建立 Response 之前取出**）、心跳、串流帳本的緩衝與短交易（`_tx`）、一次串流嘗試（`StreamRun` 加 `OutputGuard`，回傳成功、被擋或失敗） |
-| `TurnRunner`（`rpg_turn_runner.py`） | 事件產生器：被擋後同一筆預扣自動重生一次、第二次仍被擋則 `blocked` 並退回；失敗與中斷 `interrupted` 並退回；文字完整後的收尾（狀態呼叫、`apply_proposal`、`finish_turn`、`settle`）不 `yield`，正常路徑與 `GeneratorExit` 路徑共用；版本衝突、狀態呼叫失敗都不影響文字與結算 |
+| `TurnRunner`（`rpg_turn_runner.py`） | 事件產生器：被擋後同一筆預扣自動重生一次、第二次仍被擋則 `blocked` 並退回；失敗與中斷 `interrupted` 並退回；文字完整後的收尾（狀態呼叫、`apply_proposal`、`finish_turn`、`settle`）不 `yield`，正常路徑與 `GeneratorExit` 路徑共用；版本衝突、狀態呼叫失敗都不影響文字與結算；`capture_target()`：`done` 被伺服器取走（`yield` 返回）之後、回合為 `complete`（不是 `ended`、被擋、中斷、失敗或被取代）才回傳抓取對象（`CaptureTarget`，純資料），`done` 寫入時客戶端斷線（`GeneratorExit`）不設定 |
+| `NotebookCapturer`（`rpg_notebook_capture.py`） | 每完成 10 輪抓取重點並追加到記事簿，**在回應關閉之後執行，自己管理短交易**：短交易 A（讀存檔、算邊界與視窗、全站預算）→ 抓取呼叫（`rpg_notebook`，無交易，預算 `min(30, 剩餘)`、總預算 60 秒）→ 驗證（清理與去重、標記字串與洩漏、規則層逐條累積）→ 長度（超過「容量 + 預備空間」且剩餘 ≥ 20 秒才精簡重試一次）→ 短交易 B（條件式 UPDATE 鎖定存檔列，對鎖內讀到的最新文字重新計算後追加）。不碰錢包、不計輪數、不拋出；暫時性失敗與驗證失敗不推進 `notebook_upto_turn`，由下個回合補做。細節見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 6c |
 | `OpeningRunner`（`rpg_opening_runner.py`） | 第 0 幕：不碰錢包、不寫回合表；寫回都是帶憑證（`opening_started_at`）的條件式 UPDATE；失敗或兩次被擋 → `fallback`（劇本的初始對話），斷線 → 退回 `pending` |
-| 純運算模組 | `rpg_prompt`、`rpg_context`、`rpg_world`、`rpg_output_guard`、`rpg_output_rules`（不匯入資料模型、Repository 或 Flask，`tests/architecture/test_rpg_pure_modules.py` 守住） |
-| `rpg_events.py` | 十二個日誌事件，只有內部編號、整數與固定列舉；函式沒有接收文字的參數，所以玩家文字放不進日誌 |
+| 純運算模組 | `rpg_prompt`、`rpg_context`、`rpg_world`、`rpg_output_guard`、`rpg_output_rules`、`notebook_policy`（容量、清理、視窗、追加）、`rpg_notebook_prompt`（抓取的提示詞與 schema）（不匯入資料模型、Repository 或 Flask，`tests/architecture/test_rpg_pure_modules.py` 守住） |
+| `rpg_events.py` | 十八個日誌事件（回合與第 0 幕 12 個、記事簿 6 個），只有內部編號、整數與固定列舉；函式沒有接收文字的參數，所以玩家文字放不進日誌 |
 
 - **交易邊界**：交易 1 由請求提交；之後每個寫入階段各開新工作階段並提交（被擋記錄、中斷或被擋結束、完成回合）。**完成回合、寫入世界狀態與結算預扣在同一個短交易**，不會出現「回合完成但沒結算」。串流的帳本緩衝在下一個短交易寫入，狀態呼叫之前一定先寫入，使帳本順序與實際一致。
 - **斷線**：Controller 逐個送出事件，客戶端斷線時 WSGI 伺服器 `close()` 產生器（`GeneratorExit`）。文字尚未完成 → 上游關閉、回合 `interrupted`、退回預扣；文字已完整且通過審查 → 收尾照常完成並結算，玩家以相同 `client_msg_id` 重送即取得既有結果。
 - **卡住的回合**：產生器所在的 worker 重啟時，回合停在 `streaming`；超過 `coin.hold_timeout_seconds` 後，重送相同編號會接手（`attempt` 加 1、新的預扣鍵），舊預扣已被錢包的逾時規則退回，玩家只被扣一輪。過時的產生器寫回時因 `attempt` 不符而失敗，只送出 `turn_superseded` 錯誤，不影響新的嘗試。
-- 組裝在 `registry.py`（`get_game_service()`、`build_runner_deps()`、`build_turn_runner()`、`build_opening_runner()`）；標記字串由 `SECRET_KEY` 導出（`rpg_marker`），模型名稱取 RPG 用途的首選模型。
+- 組裝在 `registry.py`（`get_game_service()`、`build_runner_deps()`、`build_turn_runner()`、`build_opening_runner()`、`build_notebook_capturer()`）；標記字串由 `SECRET_KEY` 導出（`rpg_marker`），模型名稱取 RPG 用途的首選模型。
 
 ## 3. 一個請求的生命週期
 
@@ -346,6 +357,7 @@ flowchart LR
 | content-tier-modes、script-fixed-spec、script-store、rpg-sessions、builtin-script-seed | `app/services/content_tier.py`、`script_spec.py`、`content_mode_service.py`、`session_service.py`、`script_seed_service.py`、`app/repositories/script_repository.py`、`session_repository.py`、`app/data/scripts/` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) |
 | script-authoring、script-review、script-submission、runtime-limits、player-nickname、appeal-shortcut | `app/services/script_authoring_service.py`、`script_submission_service.py`、`script_review_service.py`、`script_review_prompt.py`、`script_rules.py`、`runtime_limits.py`、`nickname.py`、`nickname_service.py`、`app/repositories/script_submission_repository.py`、`runtime_limit_repository.py`、`app/controllers/script_api_controller.py`、`script_page_controller.py`、`app/data/review/lexicon.json` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[前端結構-frontend.md](前端結構-frontend.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | rpg-protagonist、protagonist-suggestion | `app/services/protagonist.py`、`protagonist_prompt.py`、`protagonist_service.py`、`protagonist_review_service.py`、`startable.py`、`session_service.py`、`app/controllers/session_api_controller.py` | [系統架構-architecture.md](系統架構-architecture.md)（本文）、[資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| rpg-notebook、rpg-notebook-capture | `app/services/notebook_policy.py`、`rpg_notebook_prompt.py`、`rpg_notebook_capture.py`、`rpg_turn_runner.py`（`capture_target`）、`app/controllers/game_api_controller.py`（`call_on_close`）、`app/repositories/session_repository.py`（記事簿方法）、`app/observability/rpg_events.py` | 本文、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 6c、[RPG.md](RPG.md) 7.16 |
 | game-wallet、wallet-api | `app/models/wallet.py`、`app/repositories/wallet_repository.py`、`app/services/wallet_service.py`、`wallet_messages.py`、`app/controllers/wallet_api_controller.py`、`app/observability/wallet_events.py` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |

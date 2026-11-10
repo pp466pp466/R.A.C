@@ -1227,7 +1227,15 @@ check_endpoint(app, spec, owner=alice, intruder=bob)
 | `chars` | RPG 劇情或第 0 幕的字數（整數；`rpg.turn_completed`、`rpg.turn_interrupted`、`rpg.opening_ready`） |
 | `first_chunk_ms` | RPG 串流的首字時間（毫秒，整數；`rpg.turn_completed`、`rpg.opening_ready`） |
 | `dropped` | 狀態呼叫中被丟棄的提議項目數（整數；`rpg.turn_completed`） |
-| `categories` | 輸出被審查擋下的類別（固定列舉，以逗號相連；`rpg.turn_blocked`、`rpg.opening_fallback`），沒有被擋的文字 |
+| `categories` | 輸出被審查擋下的類別（固定列舉，以逗號相連；`rpg.turn_blocked`、`rpg.opening_fallback`、`rpg.notebook_abandoned`、`rpg.notebook_save_rejected`；`rpg.notebook_captured` 為放行但記錄的 `other_concern`），沒有被擋的文字 |
+| `boundary` | RPG 記事簿抓取處理到的邊界輪次（整數；`rpg.notebook_captured`、`rpg.notebook_skipped`、`rpg.notebook_abandoned`、`rpg.notebook_failed`） |
+| `entries` | 記事簿這次追加或放棄的條數（整數；`rpg.notebook_captured`、`rpg.notebook_abandoned`），沒有任何條目文字 |
+| `longest` | 記事簿這次追加的最長一條的字數（整數；`rpg.notebook_captured`） |
+| `added` | 記事簿這次追加的字數（整數，含接在既有內容之後的換行；`rpg.notebook_captured`） |
+| `total` | 記事簿的字數（整數）：追加後（`rpg.notebook_captured`、`rpg.notebook_abandoned`）、已滿時的現有字數（`rpg.notebook_skipped`），或玩家儲存／送出的字數（`rpg.notebook_saved`、`rpg.notebook_save_rejected`） |
+| `version` | 記事簿的版本（整數；`rpg.notebook_captured`、`rpg.notebook_saved`） |
+| `over_entries` | 記事簿一次追加中「超出提示詞要求」的條數（整數，超過每次 5 條的部分；`rpg.notebook_captured`），條目仍完整寫入，只供調整提示詞 |
+| `over_chars` | 記事簿一次追加中各條「超出提示詞要求」的字數加總（整數，每條超過 50 字的部分；`rpg.notebook_captured`） |
 
 **模型呼叫日誌**（`app/observability/llm_events.py`）每次呼叫一筆，函式沒有接收任何文字內容的參數，所以提示詞、使用者訊息、回覆與金鑰「放不進來」。層級：成功與被安全過濾阻擋為資訊；驗證失敗與暫時性錯誤為警告；供應商回應設定錯誤（請求不合法、無權限）為**錯誤**，需要人工處理（多半是金鑰被撤銷或設定錯誤）。`llm.breaker_opened` 在主要模型因逾時或伺服器錯誤而將被暫時跳過時記一筆警告（只有模型名稱與分類），窗口內被跳過的請求不再記錄。驗證失敗的模型原文**不在日誌**，只存在用量帳本 `llm_call_logs.error_detail`（截斷至 2000 字、保存 14 天、僅管理員可讀）。
 

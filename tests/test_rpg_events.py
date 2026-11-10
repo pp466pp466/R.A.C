@@ -28,15 +28,17 @@ STATE = json.dumps({"elapsed_months": 2, "current_location": "祕密山谷", "np
 
 # ---- 事件模組本身 -----------------------------------------------------------------------------
 
-def test_there_are_twelve_unique_events():
+def test_there_are_eighteen_unique_events():
     names = [value for key, value in vars(rpg_events).items() if key.startswith("EVENT_") and isinstance(value, str)]
-    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 12
+    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 18          # 12 個回合與第 0 幕事件 + 6 個記事簿事件
 
 
 def test_no_logging_function_takes_a_free_text_parameter():
     allowed = {
         "user_id", "session_id", "turn_number", "attempt", "start", "tier", "model", "chars", "latency_ms", "first_chunk_ms", "finish_reason",
         "dropped", "state_ok", "world_updated", "ended", "categories", "auto_retry", "final", "reason",
+        # 記事簿：全是整數（或 None）；沒有任何文字參數
+        "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars", "calls",
     }
     for name, function in inspect.getmembers(rpg_events, inspect.isfunction):
         if name.startswith("log_"):
@@ -60,10 +62,22 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         rpg_events.log_opening_fallback(user_id=1, session_id=2, reason="blocked", categories=("minor_sexual",))
         rpg_events.log_opening_reset(user_id=1, session_id=2)
         rpg_events.log_opening_taken_over(user_id=1, session_id=2)
+        rpg_events.log_notebook_captured(
+            user_id=1, session_id=2, boundary=10, entries=3, longest=48, added=130, total=630, version=2, over_entries=0, over_chars=0, calls=1,
+            latency_ms=4000, model="m", categories=("other_concern",),
+        )
+        rpg_events.log_notebook_skipped(user_id=1, session_id=2, boundary=10, reason="full", total=2100)
+        rpg_events.log_notebook_abandoned(
+            user_id=1, session_id=2, boundary=10, reason="blocked", entries=3, total=630, calls=1, latency_ms=3000, model="m", categories=("minor_sexual",),
+        )
+        rpg_events.log_notebook_failed(user_id=1, session_id=2, boundary=10, reason="transient", calls=2, latency_ms=9000, model="m")
+        rpg_events.log_notebook_saved(user_id=1, session_id=2, version=3, total=1800)
+        rpg_events.log_notebook_save_rejected(user_id=1, session_id=2, reason="blocked", total=1800, categories=("minor_sexual",))
     records = [r for r in caplog.records if r.name == "app.rpg"]
     assert {r.event for r in records} == set(rpg_events.EVENT_NAMES)
     extra_keys = {"event", "user_id", "session_id", "turn_number", "attempt", "outcome", "reason", "model", "chars", "latency_ms",
-                  "first_chunk_ms", "finish_reason", "dropped", "categories"}
+                  "first_chunk_ms", "finish_reason", "dropped", "categories",
+                  "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars"}
     for record in records:
         emitted = {key for key in record.__dict__ if key in ALLOWED_FIELDS or key == "event"}
         assert emitted <= extra_keys | set(ALLOWED_FIELDS)
@@ -83,10 +97,105 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         dropped=0, state_ok=True, world_updated=True, ended=False,
     ),
     lambda: rpg_events.log_opening_fallback(user_id=1, session_id=2, reason="其他"),
+    # 記事簿：列舉以外的原因、不是整數的欄位（含布林與字串）、不在列舉內的類別都會立刻出錯
+    lambda: rpg_events.log_notebook_skipped(user_id=1, session_id=2, boundary=10, reason="其他原因"),
+    lambda: rpg_events.log_notebook_skipped(user_id=1, session_id=2, boundary=10, reason="transient"),
+    lambda: rpg_events.log_notebook_abandoned(user_id=1, session_id=2, boundary=10, reason="transient", entries=1, total=1, calls=1, latency_ms=1, model=None),
+    lambda: rpg_events.log_notebook_failed(user_id=1, session_id=2, boundary=10, reason="blocked_by_provider", calls=1, latency_ms=1, model=None),
+    lambda: rpg_events.log_notebook_failed(user_id=1, session_id=2, boundary=10, reason="這個條目寫了什麼", calls=1, latency_ms=1, model=None),
+    lambda: rpg_events.log_notebook_save_rejected(user_id=1, session_id=2, reason="其他"),
+    lambda: rpg_events.log_notebook_save_rejected(user_id=1, session_id=2, reason="blocked", categories=("她說了什麼話",)),
+    lambda: rpg_events.log_notebook_save_rejected(user_id=1, session_id=2, reason="too_long", total="很多"),
+    lambda: rpg_events.log_notebook_saved(user_id=1, session_id=2, version=True, total=1),
+    lambda: rpg_events.log_notebook_saved(user_id=1, session_id=2, version=1, total="一千八百字"),
+    lambda: rpg_events.log_notebook_captured(
+        user_id=1, session_id=2, boundary=10, entries="三條", longest=1, added=1, total=1, version=1, over_entries=0, over_chars=0, calls=1,
+        latency_ms=1, model=None,
+    ),
+    lambda: rpg_events.log_notebook_captured(
+        user_id=1, session_id=2, boundary=10.5, entries=1, longest=1, added=1, total=1, version=1, over_entries=0, over_chars=0, calls=1,
+        latency_ms=1, model=None,
+    ),
+    lambda: rpg_events.log_notebook_captured(
+        user_id=1, session_id=2, boundary=10, entries=1, longest=1, added=1, total=1, version=1, over_entries=0, over_chars=0, calls=1,
+        latency_ms=1, model=None, categories=("自由文字",),
+    ),
 ])
 def test_values_outside_the_enumerations_are_refused(call):
     with pytest.raises(ValueError):
         call()
+
+
+# ---- 記事簿事件 ---------------------------------------------------------------------------------
+
+def _notebook_records(caplog):
+    return {r.event: r for r in caplog.records if r.name == "app.rpg" and r.event.startswith("rpg.notebook_")}
+
+
+def test_the_notebook_events_carry_only_ids_integers_and_enumerations(caplog):
+    with caplog.at_level(logging.INFO, logger="app.rpg"):
+        rpg_events.log_notebook_captured(
+            user_id=7, session_id=8, boundary=10, entries=8, longest=90, added=420, total=1419, version=4, over_entries=3, over_chars=40, calls=2,
+            latency_ms=5200, model="rpg-primary-model",
+        )
+        rpg_events.log_notebook_skipped(user_id=7, session_id=8, boundary=20, reason="full", total=2100)
+        rpg_events.log_notebook_abandoned(user_id=7, session_id=8, boundary=20, reason="too_long", entries=5, total=2600, calls=3, latency_ms=21000, model="m")
+        rpg_events.log_notebook_failed(user_id=7, session_id=8, boundary=None, reason="unavailable", calls=0, latency_ms=3, model=None)
+        rpg_events.log_notebook_saved(user_id=7, session_id=8, version=5, total=1800)
+        rpg_events.log_notebook_save_rejected(user_id=7, session_id=8, reason="too_long", total=2240)
+    records = _notebook_records(caplog)
+    captured = records[rpg_events.EVENT_NOTEBOOK_CAPTURED]
+    assert (captured.user_id, captured.session_id, captured.boundary, captured.entries, captured.longest) == (7, 8, 10, 8, 90)
+    assert (captured.added, captured.total, captured.version, captured.over_entries, captured.over_chars) == (420, 1419, 4, 3, 40)
+    assert (captured.attempt, captured.latency_ms, captured.model, captured.outcome) == (2, 5200, "rpg-primary-model", "captured")
+    assert not hasattr(captured, "categories")                                       # 沒有類別時不帶這個欄位
+    assert records[rpg_events.EVENT_NOTEBOOK_SKIPPED].reason == "full" and records[rpg_events.EVENT_NOTEBOOK_SKIPPED].total == 2100
+    assert records[rpg_events.EVENT_NOTEBOOK_ABANDONED].reason == "too_long" and records[rpg_events.EVENT_NOTEBOOK_ABANDONED].attempt == 3
+    assert records[rpg_events.EVENT_NOTEBOOK_FAILED].boundary is None and records[rpg_events.EVENT_NOTEBOOK_FAILED].reason == "unavailable"
+    assert records[rpg_events.EVENT_NOTEBOOK_SAVED].version == 5 and records[rpg_events.EVENT_NOTEBOOK_SAVE_REJECTED].total == 2240
+    for record in records.values():
+        for key, value in record.__dict__.items():
+            if key in {"event", "reason", "outcome", "model", "categories", "message", "name", "levelname", "pathname", "filename", "module",
+                       "funcName", "msg", "processName", "threadName", "taskName", "asctime", "args", "exc_text", "stack_info"}:
+                continue
+            assert value is None or isinstance(value, (int, float, bool)), f"{record.event} 的 {key} 不是數字：{value!r}"
+
+
+def test_blocked_categories_are_enumerations_never_the_blocked_text(caplog):
+    with caplog.at_level(logging.INFO, logger="app.rpg"):
+        rpg_events.log_notebook_abandoned(
+            user_id=1, session_id=2, boundary=10, reason="blocked", entries=2, total=300, calls=1, latency_ms=10, model=None,
+            categories=("marker_leak", "minor_sexual"),
+        )
+        rpg_events.log_notebook_save_rejected(user_id=1, session_id=2, reason="blocked", categories=("real_person_suspected",))
+    records = _notebook_records(caplog)
+    assert records[rpg_events.EVENT_NOTEBOOK_ABANDONED].categories == "marker_leak,minor_sexual"            # 排序後以逗號相連
+    assert records[rpg_events.EVENT_NOTEBOOK_SAVE_REJECTED].categories == "real_person_suspected"
+
+
+def test_a_captured_event_can_note_a_passed_category(caplog):
+    with caplog.at_level(logging.INFO, logger="app.rpg"):
+        rpg_events.log_notebook_captured(
+            user_id=1, session_id=2, boundary=10, entries=1, longest=20, added=21, total=21, version=2, over_entries=0, over_chars=0, calls=1,
+            latency_ms=5, model=None, categories=("other_concern",),
+        )
+    assert _notebook_records(caplog)[rpg_events.EVENT_NOTEBOOK_CAPTURED].categories == "other_concern"
+
+
+def test_the_notebook_enumerations_match_the_design():
+    assert rpg_events.NOTEBOOK_SKIP_REASONS == ("full", "empty", "budget")
+    assert rpg_events.NOTEBOOK_ABANDON_REASONS == ("blocked", "too_long", "stale")
+    assert set(rpg_events.NOTEBOOK_FAIL_REASONS) >= {"transient", "timeout", "config", "unavailable"}
+    assert rpg_events.NOTEBOOK_REJECT_REASONS == ("too_long", "blocked", "conflict", "ended")
+
+
+def test_the_notebook_logging_functions_take_no_text_parameter():
+    """函式簽名本身就是守門：所有參數不是整數欄位、列舉、類別，就是模型名稱——沒有任何可以放進條目或記事簿文字的參數。"""
+    integers = {"user_id", "session_id", "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars", "calls", "latency_ms"}
+    enumerations = {"reason", "categories", "model"}
+    for name, function in inspect.getmembers(rpg_events, inspect.isfunction):
+        if name.startswith("log_notebook_"):
+            assert set(inspect.signature(function).parameters) <= integers | enumerations, name
 
 
 # ---- 完整流程的日誌掃描 -------------------------------------------------------------------------

@@ -291,3 +291,18 @@ def test_the_window_size_in_the_instruction_is_the_policy_constant():
 
     assert f"最近 {WINDOW_TURNS} 輪" in system()
     assert len({system(tier) for tier in TIERS}) == 3                         # 三種內容模式各有自己的指令
+
+
+# ---- 超出要求的整數（只記錄，不丟不截）----------------------------------------------------------------
+
+
+def test_overage_counts_entries_beyond_the_request_and_characters_beyond_each_limit():
+    assert np.overage([]) == (0, 0)
+    assert np.overage(["短" * 50] * 5) == (0, 0)                              # 剛好等於要求不算超出
+    assert np.overage(["短" * 50] * 6) == (1, 0)
+    assert np.overage(["a" * 51]) == (0, 1)
+    assert np.overage(["長" * 90] + ["短" * 10] * 7) == (3, 40)               # 8 條、其中一條 90 字
+
+
+def test_overage_uses_the_same_constants_the_prompt_states():
+    assert np.overage(["x" * (np.MAX_ENTRY_CHARS + 7)] * (np.MAX_ENTRIES_PER_CAPTURE + 2)) == (2, 7 * (np.MAX_ENTRIES_PER_CAPTURE + 2))

@@ -87,7 +87,7 @@ run(current, plan 的凍結資料, session 的對外識別碼)
 
 ### D7：日誌與帳本
 
-`rpg_events` 新增 `log_notebook_captured`、`log_notebook_skipped`（原因：`full`、`empty`、`budget`）、`log_notebook_abandoned`（原因：`blocked`、`too_long`、`stale`）、`log_notebook_failed`（原因：`transient`、`timeout`、`config`、`unavailable`）、`log_notebook_saved`、`log_notebook_save_rejected`（原因：`too_long`、`blocked`、`conflict`、`ended`）。欄位只有內部編號、整數與列舉：條數、最長一條字數、追加字數、總字數、版本、邊界與嘗試次數，**另記「超出提示詞要求」的條數與字數（整數）**，供調整提示詞。帳本 `KIND_RPG_NOTEBOOK = "rpg_notebook"`，加入 `LLM_KINDS`；後台 `admin-format.js` 的用途標籤補「記事簿」。
+`rpg_events` 新增 `log_notebook_captured`、`log_notebook_skipped`（原因：`full`、`empty`、`budget`）、`log_notebook_abandoned`（原因：`blocked`、`too_long`、`stale`）、`log_notebook_failed`（原因：`transient`、`timeout`、`config`、`unavailable`，以及實作時補上的 `validation`〔JSON 或標記字串驗證失敗〕、`blocked`〔供應商擋下〕；皆不推進標記）、`log_notebook_saved`、`log_notebook_save_rejected`（原因：`too_long`、`blocked`、`conflict`、`ended`）。欄位只有內部編號、整數與列舉：條數、最長一條字數、追加字數、總字數、版本、邊界與嘗試次數，**另記「超出提示詞要求」的條數（`over_entries`：超過每次 5 條的部分）與字數（`over_chars`：各條超過 50 字的部分加總）**（皆為整數），供調整提示詞。帳本 `KIND_RPG_NOTEBOOK = "rpg_notebook"`，加入 `LLM_KINDS`；後台 `admin-format.js` 的用途標籤補「記事簿」。
 
 ### D8：假模型與驗收
 
