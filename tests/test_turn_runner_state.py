@@ -124,6 +124,8 @@ def test_two_failed_state_calls_still_complete_the_turn_and_settle(kit):
     saved = kit.fresh(save)
     assert (saved.version, saved.elapsed_months, saved.entities_json) == (1, 0, {})          # 世界狀態不變
     assert kit.total(user) == 170
+    # 預扣必須真的「結算」（不只是餘額被扣）：沒有結算的預扣會被逾時規則退回，等於狀態呼叫失敗的回合免費
+    assert kit.wallets.entry(user.id, hold_key(save.public_id, "m-1", 1)).resolution == "settled"
     assert [row.status for row in kit.ledger(KIND_RPG_STATE)] == ["validation_failed", "validation_failed"]
 
 
@@ -131,6 +133,7 @@ def test_a_state_call_that_raises_still_completes_the_turn(kit):
     user, save, plan = setup(kit)
     events = play(kit, user, plan, Step(RuntimeError("意外")))
     assert events[-1].data["status"] == "complete" and kit.total(user) == 170
+    assert kit.wallets.entry(user.id, hold_key(save.public_id, "m-1", 1)).resolution == "settled"
 
 
 def test_a_version_conflict_keeps_the_turn_but_not_the_world_update(kit):
