@@ -13,11 +13,11 @@ UTC = timezone.utc
 
 
 @pytest.mark.parametrize(
-    ("tier", "daily", "per_minute", "conversations"),
-    [("free", 30, 6, 20), ("plus", 100, 10, 100), ("vip", 300, 20, 500)],
+    ("tier", "daily", "per_minute", "conversations", "notebook"),
+    [("free", 30, 6, 20, 2000), ("plus", 100, 10, 100, 5000), ("vip", 300, 20, 500, 10000)],
 )
-def test_each_tier_has_the_limits_from_the_specification(tier, daily, per_minute, conversations):
-    assert limits_for(tier) == TierLimits(daily_turns=daily, per_minute=per_minute, conversations=conversations)
+def test_each_tier_has_the_limits_from_the_specification(tier, daily, per_minute, conversations, notebook):
+    assert limits_for(tier) == TierLimits(daily_turns=daily, per_minute=per_minute, conversations=conversations, notebook_capacity=notebook)
 
 
 def test_every_member_tier_has_limits_and_nothing_else_does():
@@ -31,7 +31,7 @@ def test_an_unknown_tier_gets_the_most_conservative_limits(tier):
 
 def test_higher_tiers_never_get_less_than_lower_ones():
     free, plus, vip = (limits_for(t) for t in ("free", "plus", "vip"))
-    for field in ("daily_turns", "per_minute", "conversations"):
+    for field in ("daily_turns", "per_minute", "conversations", "notebook_capacity"):
         assert getattr(free, field) < getattr(plus, field) < getattr(vip, field)
 
 
@@ -42,7 +42,7 @@ def test_the_rate_window_is_one_minute():
 def test_tier_facts_state_every_number_of_the_table():
     text = tier_facts()
     for tier, limits in TIER_LIMITS.items():
-        for number in (limits.daily_turns, limits.per_minute, limits.conversations):
+        for number in (limits.daily_turns, limits.per_minute, limits.conversations, limits.notebook_capacity):
             assert f"{tier} {number}" in text
     assert f"{MAX_MESSAGE_CHARS} 字" in text                    # 單則訊息上限與聊天輸入驗證用的是同一個數字
 

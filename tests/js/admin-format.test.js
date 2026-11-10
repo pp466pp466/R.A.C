@@ -15,7 +15,7 @@ test('every status, tier, role, action, kind and message value has a Chinese lab
   for (const value of TIERS) { assert.notEqual(Format.tierLabel(value), value, value); }
   for (const value of ['user', 'admin']) { assert.notEqual(Format.roleLabel(value), value, value); }
   for (const value of ACTIONS) { assert.notEqual(Format.actionLabel(value), value, value); }
-  for (const value of ['chat', 'summary', 'script_review']) { assert.notEqual(Format.kindLabel(value), value, value); }
+  for (const value of ['chat', 'summary', 'script_review', 'rpg_notebook']) { assert.notEqual(Format.kindLabel(value), value, value); }
   for (const value of ['user', 'assistant']) { assert.notEqual(Format.messageRoleLabel(value), value, value); }
   for (const value of ['ok', 'fallback']) { assert.notEqual(Format.messageStatusLabel(value), value, value); }
 });

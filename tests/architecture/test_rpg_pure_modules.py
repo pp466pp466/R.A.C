@@ -1,6 +1,6 @@
 """rpg-turn-engine 的結構守門（任務 3.6）：
 
-1. **純邏輯模組**（提示詞、上下文、世界狀態、輸出審查）不匯入資料模型、Repository、資料庫、Flask，也不碰網路、時間與隨機：
+1. **純邏輯模組**（提示詞、上下文、世界狀態、輸出審查，以及 rpg-notebook 的記事簿政策與抓取提示詞）不匯入資料模型、Repository、資料庫、Flask，也不碰網路、時間與隨機：
    它們必須能在沒有資料庫的情況下單元測試，相同輸入永遠得到相同輸出（rpg-turn-context「組裝函式是不碰資料庫與網路的純函式」）。
    只檢查**直接**的匯入；它們依賴的 `script_rules`、`script_spec` 等同樣是純運算的服務模組（只引用資料模型裡的常數）。
 2. **世界狀態欄位**（`entities_json`、`goals_json`、`milestone_progress_json`）只有 Service 可以寫入：Controller 與其他層不得賦值、不得以關鍵字傳入、
@@ -12,7 +12,10 @@ import ast
 from app.config import PROJECT_ROOT
 
 APP = PROJECT_ROOT / "app"
-PURE_MODULES = ("rpg_context.py", "rpg_world.py", "rpg_output_guard.py", "rpg_output_rules.py", "rpg_prompt.py")
+PURE_MODULES = (
+    "rpg_context.py", "rpg_world.py", "rpg_output_guard.py", "rpg_output_rules.py", "rpg_prompt.py",
+    "notebook_policy.py", "rpg_notebook_prompt.py",             # rpg-notebook：容量、清理、視窗、追加與抓取提示詞
+)
 FORBIDDEN_IMPORTS = (
     "app.models", "app.repositories", "app.db", "app.controllers", "app.security", "app.observability", "app.llm.openai_compatible",
     "app.llm.transport", "app.llm.gemini", "app.services.llm_service", "app.services.rpg_stream",

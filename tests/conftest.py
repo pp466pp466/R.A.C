@@ -85,9 +85,11 @@ def generous_free_limits(monkeypatch):
     用量限制本身在 `test_usage_service.py`（單元）與 `test_chat_usage_limits.py`（整合）逐項測試，那兩個檔案不使用它。
     用法：測試檔加上 `pytestmark = pytest.mark.usefixtures("generous_free_limits")`。
     """
-    from app.services.quota_policy import TIER_LIMITS, TierLimits
+    from dataclasses import replace
 
-    monkeypatch.setitem(TIER_LIMITS, "free", TierLimits(daily_turns=10_000, per_minute=10_000, conversations=10_000))
+    from app.services.quota_policy import TIER_LIMITS
+
+    monkeypatch.setitem(TIER_LIMITS, "free", replace(TIER_LIMITS["free"], daily_turns=10_000, per_minute=10_000, conversations=10_000))
 
 
 @pytest.fixture()

@@ -169,19 +169,22 @@ def test_the_platform_facts_follow_the_real_constants(monkeypatch):
 
 
 def test_the_initial_quotas_match_agents_md_section_7():
-    for fact in ("free 30、plus 100、vip 300", "free 6、plus 10、vip 20", "free 20、plus 100、vip 500", "1000 字"):
+    for fact in ("free 30、plus 100、vip 300", "free 6、plus 10、vip 20", "free 20、plus 100、vip 500", "free 2000、plus 5000、vip 10000", "1000 字"):
         assert fact in INSTRUCTION
 
 
 def test_the_quotas_in_the_instruction_come_from_the_same_table_the_limits_use(monkeypatch):
     """cs-usage-limits 規格：客服所述的額度與實際限制一致——改動限制表，提示詞跟著改。"""
-    from app.services.quota_policy import TIER_LIMITS, TierLimits
+    from dataclasses import replace
+
+    from app.services.quota_policy import TIER_LIMITS
 
     assert tier_facts() in INSTRUCTION
-    monkeypatch.setitem(TIER_LIMITS, "free", TierLimits(daily_turns=77, per_minute=3, conversations=9))
+    monkeypatch.setitem(TIER_LIMITS, "free", replace(TIER_LIMITS["free"], daily_turns=77, per_minute=3, conversations=9, notebook_capacity=1234))
     changed = build_system_instruction(MARKER)
     assert "free 77、plus 100、vip 300" in changed and "free 3、plus 10、vip 20" in changed and "free 9、plus 100、vip 500" in changed
-    assert "free 30" not in changed
+    assert "free 1234、plus 5000、vip 10000" in changed                                  # 記事簿容量也來自同一張表
+    assert "free 30" not in changed and "free 2000" not in changed
 
 
 def test_intents_in_the_schema_the_validator_and_the_prompt_are_identical(monkeypatch):

@@ -21,12 +21,13 @@ class TierLimits:
     daily_turns: int         # 每日對話輪數（一則使用者訊息加一則正常的 AI 回覆）
     per_minute: int          # 每分鐘可被接受的訊息數
     conversations: int       # 對話數上限
+    notebook_capacity: int   # RPG 記事簿容量（NFC 字元數；預備空間與判斷見 `notebook_policy`，rpg-notebook 規格）
 
 
 TIER_LIMITS: dict[str, TierLimits] = {
-    TIER_FREE: TierLimits(daily_turns=30, per_minute=6, conversations=20),
-    TIER_PLUS: TierLimits(daily_turns=100, per_minute=10, conversations=100),
-    TIER_VIP: TierLimits(daily_turns=300, per_minute=20, conversations=500),
+    TIER_FREE: TierLimits(daily_turns=30, per_minute=6, conversations=20, notebook_capacity=2000),
+    TIER_PLUS: TierLimits(daily_turns=100, per_minute=10, conversations=100, notebook_capacity=5000),
+    TIER_VIP: TierLimits(daily_turns=300, per_minute=20, conversations=500, notebook_capacity=10000),
 }
 
 RATE_WINDOW = timedelta(seconds=60)
@@ -53,7 +54,7 @@ def tier_facts() -> str:
 
     return (
         f"會員等級的額度——每日對話輪數：{by_tier('daily_turns')}；每分鐘訊息數：{by_tier('per_minute')}；"
-        f"對話數上限：{by_tier('conversations')}；單則訊息上限一律是 1000 字。"
+        f"對話數上限：{by_tier('conversations')}；RPG 記事簿容量（字）：{by_tier('notebook_capacity')}；單則訊息上限一律是 1000 字。"
     )
 
 
