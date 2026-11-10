@@ -1167,7 +1167,7 @@ flowchart LR
 
 ### 7.16 RC-2b 探索結論（2026-11-10）
 
-> 來源：`/openspec-explore RC-2b`，與使用者逐項確認。**已立案**（change `rpg-notebook`，2026-11-10：批次 1 至 4 已實作並通過測試，驗收批次 5 進行中；實作紀錄見 README「RPG 記事簿（rpg-notebook）」）。與 R-17 與 7.9 不同之處以本節為準；與 AGENTS.md 衝突之處見「對 AGENTS.md 的修訂」。
+> 來源：`/openspec-explore RC-2b`，與使用者逐項確認。**已立案**（change `rpg-notebook`，2026-11-10：21 項任務全部實作完成，待使用者驗收後封存；實作紀錄見 README「RPG 記事簿（rpg-notebook）」）。與 R-17 與 7.9 不同之處以本節為準；與 AGENTS.md 衝突之處見「對 AGENTS.md 的修訂」。
 
 #### 7.16.1 已確認的決定
 

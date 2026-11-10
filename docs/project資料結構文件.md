@@ -1,6 +1,6 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-09 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0016_rpg_turn_engine` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、232 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
@@ -829,7 +829,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 1 | `id` | INTEGER IDENTITY(1,1) | 否 | — | PK | 內部主鍵（自動遞增）；不對外暴露。 |
 | 2 | `user_id` | INTEGER | 是 | — | FK→users.id | 呼叫的使用者；帳號刪除時變空值（匿名化），帳本那一筆保留。 |
 | 3 | `conversation_id` | INTEGER | 是 | — | — | 對應的客服對話內部編號；沒有外鍵（SQL Server 的多重串聯路徑限制），刪除對話時由 Repository 先清為空值。 |
-| 4 | `kind` | NVARCHAR(20) | 否 | — | — | 呼叫用途：chat｜summary｜script_review｜protagonist_gen｜protagonist_review｜rpg_stream｜rpg_state｜rpg_opening。 |
+| 4 | `kind` | NVARCHAR(20) | 否 | — | — | 呼叫用途：chat｜summary｜script_review｜protagonist_gen｜protagonist_review｜rpg_stream｜rpg_state｜rpg_opening｜rpg_notebook。 |
 | 5 | `provider` | NVARCHAR(20) | 否 | — | — | 供應商：gemini｜openai-compatible。 |
 | 6 | `model` | NVARCHAR(64) | 否 | — | — | 實際使用的模型名稱（備援時為備援模型）。 |
 | 7 | `attempt` | INTEGER | 否 | — | — | 這次請求的第幾次呼叫（含重試與備援）。 |
@@ -1057,9 +1057,9 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 13 | `milestone_progress_json` | NVARCHAR(max)（JSON） | 否 | — | — | 里程碑的進度；行為屬回合引擎（RC-2）。 |
 | 14 | `elapsed_months` | INTEGER | 否 | — | — | 故事開始後經過的遊戲內月數。 |
 | 15 | `version` | INTEGER | 否 | — | — | 世界狀態的版本號；以條件式更新（成功加 1），不一致以後端為準。 |
-| 16 | `notebook_text` | NVARCHAR(max) | 否 | — | — | 記事簿（長期記憶，個資）；容量依會員等級；行為屬回合引擎（RC-2）。 |
-| 17 | `notebook_version` | INTEGER | 否 | — | — | 記事簿的版本號；偵測與 AI 寫入的衝突。 |
-| 18 | `notebook_upto_turn` | INTEGER | 否 | — | — | 記事簿已處理到第幾輪（每 10 輪抓一次重點）。 |
+| 16 | `notebook_text` | NVARCHAR(max) | 否 | — | — | 記事簿（長期記憶，個資）；容量依會員等級（2000／5000／10000 字，AI 另有 25% 預備空間）。行為由 rpg-notebook（RC-2b）實作：AI 於每完成 10 輪後只在末尾追加，玩家可檢視與編輯；只存在這一個欄位，沒有副本，全文不進日誌。 |
+| 17 | `notebook_version` | INTEGER | 否 | — | — | 記事簿的版本號（新存檔從 1 開始）；AI 追加與玩家儲存都加 1，玩家儲存須帶預期版本，不一致即衝突（以後端為準）。 |
+| 18 | `notebook_upto_turn` | INTEGER | 否 | — | — | 記事簿已處理到第幾輪（每 10 輪抓一次重點；已滿、放棄與沒有重點時也推進，暫時性失敗不推進，由下個回合補做）。 |
 | 19 | `opening_text` | NVARCHAR(max) | 是 | — | — | 第 0 幕（開場）的文字：`ready` 為生成的開場，`fallback` 為劇本的初始對話（可能是空字串）；`pending`、`generating` 與遷移之前建立的存檔為空。玩家文字衍生的個資：不進日誌、不在管理員預設可檢視的範圍，隨存檔保存、刪除與匯出。0016 新增。 |
 | 20 | `opening_state` | NVARCHAR(12) | 是 | — | — | 第 0 幕的狀態：pending｜generating｜ready｜fallback（值見第 6 節）。新存檔為 pending；遷移之前建立的存檔為空，視同 fallback，不生成也不阻擋回合。搶佔、接手、完成與退回都是帶狀態條件的單一 UPDATE；ready 與 fallback 之後不再重新生成。0016 新增。 |
 | 21 | `opening_started_at` | DATETIME2(6) | 是 | — | — | 第 0 幕開始生成的時間（UTC），同時是這次生成的憑證：寫回必須帶同一個值，所以被接手而過時的產生器不會覆蓋新的結果；`generating` 超過 90 秒視同生成者已不在，可被接手；退回 pending 時清為空值。不納入匯出。0016 新增。 |
@@ -1184,7 +1184,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `chat_messages.role` | `user`｜`assistant` | user＝使用者；assistant＝客服 AI。 |
 | `chat_messages.msg_status` | `ok`｜`fallback` | ok＝正常回覆；fallback＝降級文案（模型兩次失敗），不計入每日配額。 |
 | `chat_messages.intent` | `greeting`｜`general_qa`｜`membership_info`｜`account_help`｜`complaint_feedback`｜`human_handoff`｜`unknown` | 見下方「客服意圖」。 |
-| `llm_call_logs.kind` | `chat`｜`summary`｜`script_review`｜`protagonist_gen`｜`protagonist_review`｜`rpg_stream`｜`rpg_state`｜`rpg_opening` | chat＝客服對話；summary＝對話摘要壓縮；script_review＝劇本審查的模型層；protagonist_gen＝AI 生成主角預覽；protagonist_review＝開存檔時主角文字的模型層審查；rpg_stream＝RPG 回合的劇情串流；rpg_state＝回合結束後的狀態呼叫（結構化輸出）；rpg_opening＝第 0 幕的串流。 |
+| `llm_call_logs.kind` | `chat`｜`summary`｜`script_review`｜`protagonist_gen`｜`protagonist_review`｜`rpg_stream`｜`rpg_state`｜`rpg_opening`｜`rpg_notebook` | chat＝客服對話；summary＝對話摘要壓縮；script_review＝劇本審查的模型層；protagonist_gen＝AI 生成主角預覽；protagonist_review＝開存檔時主角文字的模型層審查；rpg_stream＝RPG 回合的劇情串流；rpg_state＝回合結束後的狀態呼叫（結構化輸出）；rpg_opening＝第 0 幕的串流；rpg_notebook＝每完成 10 輪的記事簿抓取（結構化輸出，背景執行）。 |
 | `llm_call_logs.provider` | `gemini`｜`openai-compatible` | gemini＝客服；openai-compatible＝RPG 用途（目前為 OpenRouter 的開放模型）。兩者各有自己的金鑰與模型。 |
 | `llm_call_logs.status` | `ok`｜`validation_failed`｜`rate_limited`｜`server_error`｜`timeout`｜`network`｜`blocked`｜`config_error` | 見下方「帳本結果狀態」。 |
 | `admin_audit_logs.action` | `user.lookup`｜`user.suspend`｜`user.unsuspend`｜`user.change_tier`｜`conversation.read`｜`conversation.delete`｜`failures.read`｜`reauth.failed`｜`account.lock`｜`appeal.submit`｜`appeal.read`｜`account.unlock`｜`limit.set`｜`publish.suspend`｜`publish.lift`｜`wallet.adjust` | 見下方「稽核動作」。 |
@@ -1589,3 +1589,4 @@ flowchart TD
 | 2026-11-09 | 新增 | 欄位 `memory_logs.attempt`（INTEGER，NOT NULL，資料庫預設 1）、`sessions.opening_text`、`sessions.opening_state`、`sessions.opening_started_at`、`llm_call_logs.first_chunk_ms`（皆可為空） | RPG 回合引擎：預扣冪等鍵的嘗試序號、第 0 幕（開場）的文字、狀態與搶佔時間、串流呼叫的首字延遲；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（視同 fallback，不生成） | `0016_rpg_turn_engine` |
 | 2026-11-09 | 新增 | `runtime_limits` 的一列初始資料（`rpg.max_months_per_turn` = 24） | 單一回合最多推進的遊戲內月數；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋 | `0016_rpg_turn_engine` |
 | 2026-11-09 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0016_20261109_140913.bak`，`RESTORE VERIFYONLY` 通過，`RESTORE HEADERONLY` 確認為 `project` 的完整備份、未損毀）後，由 `0015_game_wallet` 升級到 `0016_rpg_turn_engine`；`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 沒有差異，`flask show-rpg-settings` 列出一個鍵（24）；唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，五個新欄位的型別與可空和本文一致。由 Claude 依使用者要求執行 | `0016_rpg_turn_engine` |
+| 2026-11-10 | 文件 | 本文件 | 同步 rpg-notebook（RC-2b）：`llm_call_logs.kind` 的允許值新增 `rpg_notebook`（第 5 節的欄位說明與第 7 節的固定值字典），並補寫 `sessions.notebook_text`／`notebook_version`／`notebook_upto_turn` 三欄現在的行為。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：`kind` 為 `NVARCHAR(20)`，新值 12 字放得下；三個記事簿欄位早在 `0012_rpg_data_and_script` 建立 | 本文件 |
