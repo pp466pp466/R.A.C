@@ -9,10 +9,7 @@
   `text` 是單行文字，1 至 60 字。關係的規則（使用者 2026-11-09 修訂；這是**欄位錯誤**，不是審查的 `reject`：它是結構規則，不帶審查類別，也不進任何拒絕計次）：
   - 任何年齡：不得是性奴等禁斷關係（詞表 `sexual_violence`）；
   - 主角或對象（指向人物時）未成年：不得是性的關係；
-  - 戀愛關係：兩位都成年，或兩位都未成年（青梅竹馬、同門的情侶等，不涉性）才允許；一成年一未成年不允許，指向的不是人物而主角未成年時也不允許（對方的年齡不明，
-    無法確認也是未成年）；
-  - 婚姻關係（結婚、成親、夫妻、童養媳…，詞表 `marriage_relation`）：兩位都成年才允許，任一方未成年不允許；
-  - **婚約類**（娃娃親、指腹為婚、訂婚、未婚夫妻）是歷史題材常見的背景設定，只在主角與對象一成年、一未成年時才擋。
+  - **戀愛、婚姻與婚約類**（戀人、青梅竹馬、結婚、成親、童養媳、娃娃親、指腹為婚…）不論年齡一律開放，不在詞表中（使用者 2026-11-09）；性的部分仍不行。
 - 自我介紹：選填的使用者文字（至多 300 字），這裡只做標準化與長度檢查；它只用於生成預覽，不保存。
 - 錯誤訊息只描述規則，**不回顯輸入**，也不顯示不公開的標記字串。
 - 成年門檻由呼叫端提供（年齡規則的單一來源 `AccessPolicy.adult_age`），這裡不寫死。
@@ -22,7 +19,7 @@ from __future__ import annotations
 from typing import Any, Iterable, Mapping
 
 from app.services.script_rules import (
-    Lexicon, mentions_betrothal, mentions_forbidden_relation, mentions_marriage, mentions_romantic_relation, mentions_sexual,
+    Lexicon, mentions_forbidden_relation, mentions_sexual,
 )
 from app.services.script_spec import fold, normalize_multi_line, normalize_single_line, validate_character
 
@@ -176,24 +173,9 @@ def relation_problem(text: str, protagonist_age: int | None, target_age: int | N
         return "聯繫不能是性奴等禁斷關係。"
     if protagonist_age is None:                       # 角色卡本身不合格，玩家得先修正，年齡相關的守衛略過
         return None
-    someone_minor = _someone_is_minor(protagonist_age, target_age, adult_age)
-    if someone_minor and mentions_sexual(text, lexicon=lexicon):
+    if _someone_is_minor(protagonist_age, target_age, adult_age) and mentions_sexual(text, lexicon=lexicon):
         return "主角或對象未成年時，聯繫不能是性的關係。"
-    if mentions_romantic_relation(text, lexicon=lexicon):
-        if _adult_with_minor(protagonist_age, target_age, adult_age) or (target_age is None and protagonist_age < adult_age):
-            return "主角與對象一成年、一未成年（或對象的年齡不明而主角未成年）時，聯繫不能是戀愛或婚姻關係。"
-        if someone_minor and mentions_marriage(text, lexicon=lexicon):
-            return "未成年的聯繫可以是戀愛關係，但不能是婚姻關係。"
-    if _adult_with_minor(protagonist_age, target_age, adult_age) and mentions_betrothal(text, lexicon=lexicon):
-        return "成年與未成年之間的聯繫，不能是婚約關係。"
     return None
-
-
-def _adult_with_minor(protagonist_age: int | None, target_age: int | None, adult_age: int) -> bool:
-    """主角與對象（指向人物時才有年齡）一成年、一未成年。兩位都未成年的娃娃親是歷史題材常見的背景設定，不在此限；年齡不明（對象不是人物）也不擋。"""
-    if protagonist_age is None or target_age is None:
-        return False
-    return (protagonist_age < adult_age) != (target_age < adult_age)
 
 
 def _someone_is_minor(protagonist_age: int | None, target_age: int | None, adult_age: int) -> bool:

@@ -118,15 +118,14 @@ def test_a_protagonist_that_is_not_a_mapping_is_a_field_error(member_session, ba
     assert "protagonist" in caught.value.fields and count(member_session, RpgSession) == 0
 
 
-# ---- 未成年的戀愛或婚姻聯繫 --------------------------------------------------------------------------
+# ---- 未成年的性關係聯繫 --------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("age", "ref", "text"), [
-    (16, "蘇長風", "他的未婚妻"),              # 未成年主角與成年對象的婚約
-    (30, "林曉", "指腹為婚的對象"),            # 成年主角與未成年對象的婚約
-    (30, "林曉", "舊日的戀人"), (17, "林曉", "兩人已經成親"), (16, "林曉", "被賣去當童養媳"),
+    (30, "林曉", "舊日的戀人，兩人發生過性關係"), (16, "蘇長風", "他的戀人，彼此情慾糾纏"),    # 戀愛類但涉及性
+    (16, "林曉", "兩人已經成親，發生過性關係"),                                               # 婚姻類但涉及性
 ])
-def test_a_romantic_marriage_or_adult_minor_betrothal_link_is_refused_for_a_minor_in_the_pair(member_session, age, ref, text):
+def test_a_sexual_link_is_refused_at_open_even_when_it_is_romance_or_marriage(member_session, age, ref, text):
     service, _ = service_for(member_session)
     with pytest.raises(ValidationError) as caught:
         open_save(service, player(member_session), script(member_session), **start_kwargs(name="林舟", age=age, anchor={"kind": "character", "ref": ref, "text": text}))
@@ -134,13 +133,19 @@ def test_a_romantic_marriage_or_adult_minor_betrothal_link_is_refused_for_a_mino
     assert count(member_session, RpgSession) == 0
 
 
-def test_two_minors_with_a_romantic_childhood_link_open_a_save_but_a_marriage_or_sexual_slavery_does_not(member_session):
-    """使用者 2026-11-09：青梅竹馬、國中時就開始交往是可以的；婚姻關係與性奴等禁斷關係仍不行。"""
+def test_romantic_and_marriage_links_open_a_save_at_any_age_but_sexual_slavery_does_not(member_session):
+    """使用者 2026-11-09：青梅竹馬、國中時就開始交往、早婚的設定都可以；戀愛與婚姻類不論年齡一律開放；性奴等禁斷關係與性的關係不行。"""
     service, _ = service_for(member_session)
     user, version = player(member_session), script(member_session)
     save = open_save(service, user, version, **start_kwargs(name="小舟", age=16, anchor={"kind": "character", "ref": "林曉", "text": "青梅竹馬的戀人，國中時就開始交往"}))
     assert save.protagonist_json["anchor"]["text"] == "青梅竹馬的戀人，國中時就開始交往"
-    for text in ("兩人已經成親", "他是我的性奴"):
+    married = open_save(service, user, version, **start_kwargs(name="小舟", age=16, anchor={"kind": "character", "ref": "林曉", "text": "兩人已經成親"}))
+    assert married.protagonist_json["anchor"]["text"] == "兩人已經成親"
+    adult_minor = open_save(service, user, version, **start_kwargs(name="小舟", age=30, anchor={"kind": "character", "ref": "林曉", "text": "舊日的戀人"}))
+    assert adult_minor.protagonist_json["anchor"]["ref"] == "林曉"         # 成年與未成年之間的戀愛也開放（使用者 2026-11-09）
+    arranged = open_save(service, user, version, **start_kwargs(name="小舟", age=10, anchor={"kind": "character", "ref": "蘇長風", "text": "出生就和他結姻，他是重生者，決定直接投資我"}))
+    assert arranged.protagonist_json["anchor"]["ref"] == "蘇長風"        # 婚姻與婚約類不論年齡一律開放（使用者 2026-11-09）
+    for text in ("他是我的性奴", "兩人已經成親，發生過性關係"):
         with pytest.raises(ValidationError) as caught:
             open_save(service, user, version, **start_kwargs(name="小舟", age=16, anchor={"kind": "character", "ref": "林曉", "text": text}))
         assert list(caught.value.fields) == ["anchor.text"] and text not in str(caught.value.fields)

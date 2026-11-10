@@ -133,36 +133,42 @@ def test_anchor_errors_do_not_echo_the_input_and_markers_are_refused(script):
     assert list(errors) == ["anchor.text"] and "secret" not in str(errors).lower()
 
 
-# ---- 未成年的主角或對象不得有戀愛或婚姻的聯繫 ------------------------------------------------------
+# ---- 戀愛、婚姻與婚約不論年齡一律開放，只有性的部分與性奴等禁斷關係不行（使用者 2026-11-09）--------------------------
 
 
-def test_a_minor_protagonist_may_not_have_a_romantic_or_marriage_link(script):
-    for text in ("舊日的戀人", "他的道侶", "兩人已經成親", "被賣去當童養媳"):
-        result, errors = check(anchor(text=text), script, age=16)
-        assert result is None and list(errors) == ["anchor.text"], text
-        assert text not in str(errors)
+def test_romance_is_open_at_every_age_combination(script):
+    """使用者 2026-11-09：「戀愛關係也放行，只有性方面不行」——成年與未成年之間（不論誰是主角）、兩位都未成年、兩位都成年，都通過。"""
+    for text in ("舊日的戀人", "他的道侶", "暗戀已久的對象", "青梅竹馬，從國中起就在交往"):
+        for ref, age in (("林曉", 25), ("蘇長風", 16), ("林曉", 16), ("蘇長風", 30), ("蘇長風", 10)):
+            result, errors = check(anchor(ref=ref, text=text), script, age=age)
+            assert errors == {} and result["text"] == text, (text, ref, age)
+    assert check(anchor(ref="蘇長風", text="他的同門師兄"), script, age=16)[1] == {}
 
 
-def test_a_betrothal_between_an_adult_and_a_minor_is_refused_in_both_directions(script):
-    """成年與未成年之間不能是婚約：成年主角指向未成年人物，或未成年主角指向成年人物，都擋。"""
-    for text in ("他的未婚妻", "指腹為婚的對象", "訂有婚約"):
-        adult_to_minor, errors = check(anchor(ref="林曉", text=text), script, age=25)
-        assert adult_to_minor is None and list(errors) == ["anchor.text"], text
-        minor_to_adult, errors = check(anchor(ref="蘇長風", text=text), script, age=16)
-        assert minor_to_adult is None and list(errors) == ["anchor.text"], text
-        assert text not in str(errors)
+def test_marriage_and_betrothal_are_open_at_every_age_combination(script):
+    """使用者 2026-11-09：「婚姻類一律開放不論年齡，性部分則不行」——成年與未成年之間、兩位都未成年、兩位都成年，結婚、成親、夫妻、童養媳、
+    娃娃親、指腹為婚、未婚夫妻與各種同義詞（結姻、聯姻、許配、成婚…）都通過。"""
+    texts = (
+        "他的未婚妻", "指腹為婚的對象", "訂有婚約", "兩人已經成親", "被賣去當童養媳", "他們是夫妻", "新婚的新郎", "出生就和他結姻", "兩家聯姻", "被許配給他",
+        "已經下聘", "與他成婚", "已經完婚", "兩家自幼訂下娃娃親",
+    )
+    for text in texts:
+        for ref, age in (("林曉", 25), ("蘇長風", 16), ("林曉", 16), ("蘇長風", 30), ("蘇長風", 10)):         # 成年→未成年、未成年→成年、兩位未成年、兩位成年、幼童→成年
+            result, errors = check(anchor(ref=ref, text=text), script, age=age)
+            assert errors == {} and result["text"] == text, (text, ref, age)
 
 
-def test_a_betrothal_between_two_minors_is_a_historical_backdrop_and_is_allowed(script):
-    """兩位都未成年的娃娃親與指腹為婚是歷史題材常見的背景設定；已成婚的詞仍然擋。"""
-    for text in ("兩家自幼訂下娃娃親", "指腹為婚的對象", "他的未婚妻"):
-        result, errors = check(anchor(ref="林曉", text=text), script, age=16)
-        assert errors == {} and result["text"] == text, text
-    for text in ("兩人已經成親", "被賣去當童養媳"):
-        assert list(check(anchor(ref="林曉", text=text), script, age=16)[1]) == ["anchor.text"], text
+def test_marriage_and_betrothal_stay_open_for_places_and_milestones_at_every_age(script):
+    for kind, ref in (("location", "古劍山莊"), ("milestone", "ceremony")):
+        for age in (10, 16, 25):
+            assert check({"kind": kind, "ref": ref, "text": "兩家在此指腹為婚，後來結為夫妻"}, script, age=age)[1] == {}, (kind, age)
 
 
-# ---- 使用者 2026-11-09 修訂：兩位都未成年可以是戀愛關係（不涉性、不得是婚姻）；性奴等禁斷關係一律不行 ------------------------
+def test_a_marriage_is_still_refused_when_it_is_a_sexual_link_or_sexual_slavery(script):
+    for text in ("兩人已經成親，發生過性關係", "新婚之夜情慾糾纏", "被賣去當童養媳的性奴"):
+        for ref, age in (("林曉", 16), ("蘇長風", 16), ("林曉", 25)):
+            result, errors = check(anchor(ref=ref, text=text), script, age=age)
+            assert result is None and list(errors) == ["anchor.text"] and text not in str(errors), (text, ref, age)
 
 
 def test_two_minors_may_have_a_romantic_link_such_as_childhood_sweethearts(script):
@@ -170,12 +176,6 @@ def test_two_minors_may_have_a_romantic_link_such_as_childhood_sweethearts(scrip
     for text in ("青梅竹馬，從國中起就在交往", "舊日的戀人", "同門的情侶", "兩人互許終身的道侶", "暗戀多年的同窗"):
         result, errors = check(anchor(ref="林曉", text=text), script, age=16)
         assert errors == {} and result["text"] == text, text
-
-
-def test_two_minors_may_not_be_married_or_a_child_bride(script):
-    for text in ("兩人已經成親", "被賣去當童養媳", "他們是夫妻", "新婚的新郎"):
-        result, errors = check(anchor(ref="林曉", text=text), script, age=16)
-        assert result is None and list(errors) == ["anchor.text"] and text not in str(errors), text
 
 
 def test_a_sexual_link_is_refused_when_either_side_is_a_minor_and_the_message_does_not_echo_it(script):
@@ -193,13 +193,6 @@ def test_sexual_slavery_and_other_forbidden_relations_are_refused_at_every_age(s
     assert check({"kind": "location", "ref": "古劍山莊", "text": "他曾在此被當作性奴"}, script, age=30)[1] != {}
 
 
-def test_a_romantic_link_stays_refused_between_an_adult_and_a_minor_in_both_directions(script):
-    assert check(anchor(ref="林曉", text="舊日的戀人"), script, age=25)[1] != {}         # 成年主角、未成年 NPC（使用者：不能單方面 NPC 未成年）
-    assert check(anchor(ref="蘇長風", text="舊日的戀人"), script, age=16)[1] != {}       # 未成年主角、成年 NPC
-    assert check(anchor(ref="蘇長風", text="他的道侶"), script, age=17)[1] != {}
-    assert check(anchor(ref="蘇長風", text="他的同門師兄"), script, age=16)[1] == {}      # 非戀愛的關係不受影響
-
-
 def test_a_betrothal_between_two_adults_is_allowed(script):
     assert check(anchor(text="他的未婚妻"), script, age=25)[1] == {}
 
@@ -210,8 +203,9 @@ def test_a_betrothal_with_a_place_or_milestone_has_no_target_age_so_it_is_not_bl
             assert check({"kind": kind, "ref": ref, "text": "兩家在此指腹為婚"}, script, age=age)[1] == {}, (kind, age)
 
 
-def test_a_minor_target_blocks_a_romantic_link_even_for_an_adult_protagonist(script):
-    result, errors = check(anchor(ref="林曉", text="舊日的戀人"), script, age=25)
+def test_a_romantic_link_with_a_minor_target_is_open_for_an_adult_protagonist_but_a_sexual_one_is_not(script):
+    assert check(anchor(ref="林曉", text="舊日的戀人"), script, age=25)[1] == {}
+    result, errors = check(anchor(ref="林曉", text="舊日的戀人，兩人發生過性關係"), script, age=25)
     assert result is None and list(errors) == ["anchor.text"]
 
 
@@ -221,15 +215,15 @@ def test_ordinary_links_pass_for_minors_and_adults(script):
             assert check(anchor(ref="林曉", text=text), script, age=age)[1] == {}, (age, text)
 
 
-def test_romance_between_adults_is_allowed_and_locations_and_milestones_only_look_at_the_protagonist(script):
-    assert check(anchor(text="舊日的戀人"), script, age=25)[1] == {}
-    assert check({"kind": "location", "ref": "古劍山莊", "text": "與戀人初識之地"}, script, age=25)[1] == {}
-    assert check({"kind": "milestone", "ref": "ceremony", "text": "他的戀人也會到場"}, script, age=16)[1] != {}
-    assert check({"kind": "location", "ref": "古劍山莊", "text": "與戀人初識之地"}, script, age=16)[1] != {}
+def test_romance_with_locations_and_milestones_is_open_at_every_age(script):
+    for age in (16, 25):
+        assert check(anchor(text="舊日的戀人"), script, age=age)[1] == {}
+        assert check({"kind": "location", "ref": "古劍山莊", "text": "與戀人初識之地"}, script, age=age)[1] == {}
+        assert check({"kind": "milestone", "ref": "ceremony", "text": "他的戀人也會到場"}, script, age=age)[1] == {}
 
 
 def test_the_adult_age_is_the_one_the_caller_provides_not_a_constant(script):
-    link = anchor(text="舊日的戀人")
+    link = anchor(text="兩人發生過性關係")
     assert pro.validate_anchor(link, script_content=script, protagonist_age=19, adult_age=20)[0] is None
     assert pro.validate_anchor(link, script_content=script, protagonist_age=19, adult_age=18)[0] is not None
 

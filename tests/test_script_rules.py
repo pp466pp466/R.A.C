@@ -51,7 +51,7 @@ def test_the_module_is_a_pure_function_without_database_network_or_model_imports
 def test_the_lexicon_is_a_utf8_data_file_with_a_version_and_all_groups():
     data = json.loads(Path(LEXICON_PATH).read_text(encoding="utf-8-sig"))
     assert data["version"] and set(data["groups"]) == {
-        "sexual_explicit", "sexual_suggestive", "minor", "rape", "sexual_violence", "non_consent", "real_person", "romantic_relation", "betrothal", "marriage_relation",
+        "sexual_explicit", "sexual_suggestive", "minor", "rape", "sexual_violence", "non_consent", "real_person",
     }
     assert all(data["groups"][name] for name in data["groups"])
     lexicon = load_lexicon()
@@ -300,57 +300,16 @@ def test_checking_does_not_change_the_content_it_was_given():
     assert json.dumps(content, sort_keys=True, ensure_ascii=False) == before
 
 
-# ---- romantic_relation 群組（rpg-character-creation：只供玩家主角的錨定事實守衛）------------------------------
+# ---- 錨定關係守衛借用的詞表（使用者 2026-11-09：戀愛、婚姻、婚約不論年齡一律開放，詞表沒有這類群組）------------------------------
 
 
-def test_the_romantic_relation_group_is_loaded_and_the_lexicon_version_moved_on():
+def test_the_lexicon_has_no_romance_marriage_or_betrothal_group_and_its_version_moved_on():
     lexicon = load_lexicon()
-    assert lexicon.romantic_relation, "詞表應載入戀愛與婚姻關係的群組"
     assert lexicon.version != "2026-11-04-4" and re.fullmatch(r"\d{4}-\d{2}-\d{2}-\d+", lexicon.version)
-    texts = {term.text for term in lexicon.romantic_relation}
-    assert {"戀人", "道侶", "夫妻", "結婚", "童養媳"} <= texts
-    # 純婚約類在獨立的群組：歷史題材常見的背景設定，不和戀愛混在一起
-    assert not texts & {"未婚妻", "未婚夫", "婚約", "訂婚", "定親", "指腹為婚", "娃娃親"}
-    assert {"未婚妻", "未婚夫", "婚約", "訂婚", "定親", "指腹為婚", "娃娃親"} <= {term.text for term in lexicon.betrothal}
-
-
-@pytest.mark.parametrize(("sentence", "hit"), [
-    ("他的未婚妻", False), ("從小指腹為婚", False), ("舊日的戀人", True), ("被賣去當童養媳", True), ("兩人已經成親", True), ("兩人是道侶", True), ("她愛慕他多年", True), ("他的老婆", True), ("她的男友", True),
-    ("他的同門師弟", False), ("同鄉的鄰家哥哥", False), ("大丈夫能屈能伸", False), ("老婆婆開的茶鋪", False),
-    ("愛慕虛榮的商人", False), ("男友人送來的信", False), ("結拜的兄妹", False),
-])
-def test_romantic_relation_terms_hit_relationships_and_skip_common_false_positives(sentence, hit):
-    from app.services.script_rules import fold_text, matches_any
-
-    assert matches_any(load_lexicon().romantic_relation, fold_text(sentence)) is hit
-
-
-@pytest.mark.parametrize(("sentence", "hit"), [
-    ("他的未婚妻", True), ("從小指腹為婚", True), ("兩家自幼訂下娃娃親", True), ("已經訂婚多年", True), ("婚約在身", True),
-    ("舊日的戀人", False), ("他的同門師弟", False), ("兩人已經成親", False),
-])
-def test_betrothal_terms_hit_only_the_betrothal_group(sentence, hit):
-    from app.services.script_rules import fold_text, matches_any
-
-    assert matches_any(load_lexicon().betrothal, fold_text(sentence)) is hit
-
-
-def test_the_marriage_group_is_a_subset_of_the_romantic_group_so_the_existing_behavior_is_unchanged():
-    lexicon = load_lexicon()
-    romantic = {(term.text, term.not_after, term.not_before) for term in lexicon.romantic_relation}
-    marriage = {(term.text, term.not_after, term.not_before) for term in lexicon.marriage_relation}
-    assert marriage and marriage <= romantic
-    assert not {term.text for term in lexicon.marriage_relation} & {"戀人", "情侶", "道侶", "暗戀", "戀愛"}
-
-
-@pytest.mark.parametrize(("sentence", "hit"), [
-    ("兩人已經成親", True), ("被賣去當童養媳", True), ("他們是夫妻", True), ("他的老婆", True), ("新娘子", True), ("大丈夫能屈能伸", False),
-    ("舊日的戀人", False), ("兩人是道侶", False), ("暗戀多年", False), ("他的同門師弟", False), ("老婆婆開的茶鋪", False),
-])
-def test_mentions_marriage_separates_marriage_from_dating(sentence, hit):
-    from app.services.script_rules import mentions_marriage
-
-    assert mentions_marriage(sentence) is hit
+    for removed in ("romantic_relation", "betrothal", "marriage_relation"):
+        assert not hasattr(lexicon, removed), removed
+    from app.services import script_rules
+    assert not hasattr(script_rules, "mentions_romantic_relation") and not hasattr(script_rules, "mentions_betrothal")
 
 
 @pytest.mark.parametrize(("sentence", "hit"), [
@@ -369,15 +328,8 @@ def test_mentions_sexual_covers_explicit_and_suggestive_wording(sentence, hit):
     assert mentions_sexual(sentence) is hit
 
 
-def test_the_mention_helpers_are_pure_and_do_not_echo_the_match():
-    from app.services.script_rules import mentions_betrothal, mentions_romantic_relation
-
-    assert mentions_betrothal("從小訂有娃娃親") is True and mentions_betrothal("同門師弟") is False
-    assert mentions_romantic_relation("舊日的戀人") is True and mentions_romantic_relation("從小訂有娃娃親") is False
-
-
-def test_the_rules_layer_ignores_both_protagonist_groups():
-    """check_rules 的判定與這兩個群組無關：同一份劇本加上戀愛與婚約用語，結果不變（既有劇本的審查結果不受影響）。"""
+def test_the_rules_layer_ignores_romance_marriage_and_betrothal_wording():
+    """check_rules 的判定與戀愛、婚姻、婚約的用語無關：同一份劇本加上這些用語，結果不變（既有劇本的審查結果不受影響）。"""
     plain = check(background="少年與同門師弟一同修行。")
     romantic = check(background="少年與他的未婚妻、戀人與道侶，還有指腹為婚的對象一同修行。")
     assert plain == romantic

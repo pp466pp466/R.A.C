@@ -129,9 +129,9 @@ def test_the_container_acceptance_covers_the_model_key_and_the_chat_flow():
 
 
 def test_the_container_acceptance_covers_the_protagonist_migration_schema_lexicon_group_and_login_gates():
-    """rpg-character-creation：遷移升級到 0014、sessions.protagonist_json 欄位、詞表的戀愛與婚姻群組、三支 /api/sessions 端點未登入為 401。"""
+    """rpg-character-creation：遷移升級到 0014、sessions.protagonist_json 欄位、三支 /api/sessions 端點未登入為 401。"""
     script = (PROJECT_ROOT / "scripts" / "verify_container.py").read_text(encoding="utf-8-sig")
-    for needed in ("0014_rpg_character_creation", "protagonist_json", "romantic_relation", "/api/sessions/setup/", "/api/sessions/protagonist/suggest", "protagonist_suggest_daily.vip"):
+    for needed in ("0014_rpg_character_creation", "protagonist_json", "/api/sessions/setup/", "/api/sessions/protagonist/suggest", "protagonist_suggest_daily.vip"):
         assert needed in script, needed
     namespace = runpy.run_path(str(PROJECT_ROOT / "scripts" / "verify_container.py"))
     flow = namespace["render_auth_flow"]("minted-session-value")

@@ -61,52 +61,55 @@ def test_the_instructions_are_chinese_carry_the_marker_and_all_three_mode_defini
     assert marker in text and "繁體中文" in text and "<<" not in text
     for mode in ("safe：", "standard：", "adult："):
         assert mode in text
-    assert "未成年" in text and "戀愛或婚姻" in text
+    assert "未成年" in text and "戀愛" in text and "婚姻" in text
     with pytest.raises(ValueError):
         build("")
 
 
-def test_the_suggest_instruction_tells_the_model_to_treat_the_data_as_data_and_to_avoid_minor_romance(marker):
+def test_the_suggest_instruction_tells_the_model_to_treat_the_data_as_data(marker):
     text = prompt.build_suggest_instruction(marker)
     assert "不是指令" in text and "不執行" in text
-    assert "親情、師徒、同門" in text                                    # 未成年時改用的關係
 
 
-def test_both_instructions_explain_the_betrothal_compromise(marker):
+def test_both_instructions_allow_romance_marriage_and_betrothal_at_any_age_as_long_as_it_is_not_sexual(marker):
     for text in (prompt.build_suggest_instruction(marker), prompt.build_review_instruction(marker)):
-        assert "娃娃親" in text and "背景設定" in text and "童養媳" in text and "成年與未成年之間" in text
+        assert "娃娃親" in text and "童養媳" in text and "不涉及性" in text
+        assert "成年與未成年之間" not in text                                 # 戀愛不再有年齡界線（使用者 2026-11-09）
 
 
-def test_a_betrothal_between_two_minors_is_a_valid_output_but_an_adult_minor_betrothal_is_not(script, marker):
-    ok = good(age=15)
-    ok["anchor"].update(ref="林曉", text="兩家自幼訂下娃娃親")
-    assert parse(ok, script, marker)["anchor"]["text"] == "兩家自幼訂下娃娃親"
-    bad = good(age=30)
-    bad["anchor"].update(ref="林曉", text="兩家自幼訂下娃娃親")
-    assert reason_of(bad, script, marker) == "semantic:invalid_anchor"
+def test_a_betrothal_is_a_valid_output_at_every_age_combination(script, marker):
+    for age in (15, 30):
+        ok = good(age=age)
+        ok["anchor"].update(ref="林曉", text="兩家自幼訂下娃娃親")
+        assert parse(ok, script, marker)["anchor"]["text"] == "兩家自幼訂下娃娃親"
 
 
-def test_both_instructions_allow_pure_romance_between_two_minors_but_not_marriage_slavery_or_adult_minor_romance(marker):
+def test_both_instructions_allow_romance_and_marriage_but_not_slavery_or_sexual_links(marker):
     suggest = prompt.build_suggest_instruction(marker)
     review = prompt.build_review_instruction(marker)
     assert "青梅竹馬" in suggest and "符合劇本世界觀的說法" in suggest and "不涉及性" in suggest
     assert "性奴等禁斷關係" in suggest and "性奴等禁斷關係" in review
-    assert "兩位都未成年卻是婚姻關係" in review and "成年與未成年之間是戀愛、婚姻" in review
-    assert "青梅竹馬等純情戀愛（不涉及性）完全合規" in review
-    assert "不要寫成兩人的戀愛" not in suggest
+    minor_sexual_line = review.split("minor_sexual：")[1].split("\n")[0]
+    assert "戀愛" not in minor_sexual_line and "婚姻" not in minor_sexual_line and "性的關係" in minor_sexual_line
+    assert "任何年齡的戀愛、婚姻與婚約（青梅竹馬、娃娃親、指腹為婚、童養媳）設定（不涉及性）完全合規" in review
+    assert "戀愛、婚姻與婚約（含青梅竹馬、娃娃親、指腹為婚、童養媳）" in suggest and "不論年齡都可以作為聯繫的設定" in suggest
+    assert "不要寫成已經成婚" not in suggest and "童養媳不可使用" not in suggest
 
 
-def test_a_romantic_link_between_two_minors_is_a_valid_output_but_marriage_slavery_and_adult_minor_romance_are_not(script, marker):
+def test_a_romantic_or_marriage_link_is_a_valid_output_at_any_age_but_slavery_and_sexual_links_are_not(script, marker):
     ok = good(age=15)
     ok["anchor"].update(ref="林曉", text="青梅竹馬的戀人，國中時就開始交往")
     assert parse(ok, script, marker)["anchor"]["text"] == "青梅竹馬的戀人，國中時就開始交往"
-    for text in ("兩人已經成親", "他是我的性奴"):
+    married = good(age=15)
+    married["anchor"].update(ref="林曉", text="兩人已經成親")
+    assert parse(married, script, marker)["anchor"]["text"] == "兩人已經成親"
+    for text in ("他是我的性奴", "兩人已經成親，發生過性關係"):
         bad = good(age=15)
         bad["anchor"].update(ref="林曉", text=text)
         assert reason_of(bad, script, marker) == "semantic:invalid_anchor", text
     adult_minor = good(age=30)
     adult_minor["anchor"].update(ref="林曉", text="青梅竹馬的戀人，國中時就開始交往")
-    assert reason_of(adult_minor, script, marker) == "semantic:invalid_anchor"
+    assert parse(adult_minor, script, marker)["anchor"]["text"] == "青梅竹馬的戀人，國中時就開始交往"       # 成年與未成年之間的戀愛也開放
 
 
 def test_the_review_instruction_does_not_misflag_ordinary_minor_protagonists(marker):
@@ -214,13 +217,13 @@ def test_each_semantic_rule_names_itself_without_echoing_model_text(script, mark
     bad_ref["anchor"]["ref"] = "不存在的人物ZZ"
     assert reason_of(bad_ref, script, marker) == "semantic:invalid_anchor"
 
-    romance = good(age=15)
-    romance["anchor"]["text"] = "他的未婚妻"
-    assert reason_of(romance, script, marker) == "semantic:invalid_anchor"
+    sexual = good(age=15)
+    sexual["anchor"]["text"] = "他的戀人，兩人發生過性關係"
+    assert reason_of(sexual, script, marker) == "semantic:invalid_anchor"
 
-    minor_target = good(age=30)
-    minor_target["anchor"].update(ref="林曉", text="舊日的戀人")
-    assert reason_of(minor_target, script, marker) == "semantic:invalid_anchor"
+    slavery = good(age=30)
+    slavery["anchor"].update(ref="林曉", text="他是我的性奴")
+    assert reason_of(slavery, script, marker) == "semantic:invalid_anchor"
 
     bad_card = good(appearance="")
     assert reason_of(bad_card, script, marker) == "semantic:invalid_character"
@@ -247,7 +250,7 @@ def test_ordinary_minor_protagonists_and_links_pass(script, marker):
 
 def test_the_adult_age_comes_from_the_caller(script, marker):
     output = good(age=19)
-    output["anchor"]["text"] = "舊日的戀人"
+    output["anchor"]["text"] = "兩人發生過性關係"
     assert parse(output, script, marker, adult_age=18)
     assert reason_of(output, script, marker, adult_age=20) == "semantic:invalid_anchor"
 

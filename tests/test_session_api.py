@@ -255,7 +255,7 @@ def test_skipping_the_anchor_opens_a_save_without_one(app, provider):
     ({"protagonist": None}, "protagonist"),
     ({"anchor": None}, "anchor"),
     ({"anchor": {**ANCHOR, "ref": "沒有這個人"}}, "anchor.ref"),
-    ({"anchor": {**ANCHOR, "text": "他的未婚妻"}, "protagonist": {**CARD, "age": 16}}, "anchor.text"),
+    ({"anchor": {**ANCHOR, "text": "他的戀人，兩人發生過性關係"}, "protagonist": {**CARD, "age": 16}}, "anchor.text"),
 ])
 def test_field_errors_are_a_400_with_the_field_paths_and_no_save(app, provider, changes, field):
     client, version = signed_in(app), builtin(app)

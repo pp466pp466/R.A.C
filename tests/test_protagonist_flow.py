@@ -100,14 +100,14 @@ def test_skipping_the_anchor_opens_a_save_and_each_request_opens_its_own_save(ap
     assert skipped.get_json()["session"]["protagonist"]["anchor"] is None
 
 
-def test_a_minor_cannot_get_a_romantic_link_by_any_route(app, provider):
-    """AI 生成的輸出、玩家直接送出的聯繫，兩條路都被擋：前者進入重試，後者是欄位錯誤。"""
+def test_a_sexual_link_with_a_minor_cannot_get_through_by_any_route(app, provider):
+    """AI 生成的輸出、玩家直接送出的聯繫，兩條路都被擋：前者進入重試，後者是欄位錯誤（戀愛本身已開放，只擋性的關係）。"""
     client, version = signed_in(app), builtin(app, characters=[LIN, NPC])
-    romantic = {**ANCHOR, "ref": "林曉", "text": "舊日的戀人"}
-    bad = json.dumps({"character": {**CARD, "age": 30, "occupation": None, "speech_style": None, "hidden_trait": None}, "anchor": romantic}, ensure_ascii=False)
+    sexual = {**ANCHOR, "ref": "林曉", "text": "舊日的戀人，兩人發生過性關係"}
+    bad = json.dumps({"character": {**CARD, "age": 16, "occupation": None, "speech_style": None, "hidden_trait": None}, "anchor": sexual}, ensure_ascii=False)
     provider.script(bad, bad)
     assert client.post("/api/sessions/protagonist/suggest", json={"version_id": version}).status_code == 503
-    direct = client.post("/api/sessions", json=start_body(version, protagonist={**CARD, "age": 30}, anchor=romantic))
+    direct = client.post("/api/sessions", json=start_body(version, protagonist={**CARD, "age": 16}, anchor=sexual))
     assert direct.status_code == 400 and "anchor.text" in direct.get_json()["error"]["fields"] and saves(app) == 0
 
 

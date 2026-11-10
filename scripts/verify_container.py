@@ -544,8 +544,8 @@ def verify_script_authoring_commands(name: str) -> None:
     check("[劇本創作] 映像內有規則層的審查詞表（資料檔已隨映像封裝）", code == 0 and "lexicon.json" in listing, listing.strip()[:120])
     code, loaded = docker("exec", name, "python", "-c", "from app.services.script_rules import load_lexicon; load_lexicon(); print('lexicon-ok')")
     check("[劇本創作] 審查詞表可以在映像內載入", code == 0 and "lexicon-ok" in loaded, loaded.strip()[-160:])
-    code, loaded = docker("exec", name, "python", "-c", "from app.services.script_rules import load_lexicon; print('romantic-ok' if load_lexicon().romantic_relation else 'romantic-missing')")
-    check("[玩家主角] 審查詞表含戀愛與婚姻關係的群組（未成年聯繫的守衛）", code == 0 and "romantic-ok" in loaded, loaded.strip()[-160:])
+    code, loaded = docker("exec", name, "python", "-c", "from app.services.script_rules import load_lexicon; print('relation-ok' if load_lexicon().sexual_violence else 'relation-missing')")
+    check("[玩家主角] 審查詞表含性奴等禁斷關係的群組（錨定關係的守衛）", code == 0 and "relation-ok" in loaded, loaded.strip()[-160:])
     code, schema = docker(
         "exec", name, "python", "-c",
         "from app import create_app; from sqlalchemy import inspect; "

@@ -515,7 +515,7 @@ class _Applier:
         if text is not None and relation_problem(
             text, protagonist_age(self.entities, self.ctx.protagonist, self.elapsed), card_age(card, self.elapsed), self.ctx.adult_age,
         ) is not None:
-            text = None                                           # 與開存檔的錨定事實同一份關係規則：性奴等禁斷關係、未成年的性關係、成年與未成年之間的戀愛或婚姻
+            text = None                                           # 與開存檔的錨定事實同一份關係規則：性奴等禁斷關係、未成年的性關係（戀愛與婚姻不論年齡開放）
         if text is None:
             self.dropped += 1
         elif not card.get("anchor_fact"):
