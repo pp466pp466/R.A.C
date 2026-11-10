@@ -176,7 +176,9 @@ SYNCED_RULES = [
     (7, "故事偏好：玩家可選男頻、女頻、全讀者，預設全讀者，只影響劇本目錄的排序", "references/business-encoding.md"),
     (7, "對話人設：玩家可保存可重用的主角角色卡模板（不含錨定事實，錨定事實綁特定劇本）", "references/business-encoding.md"),
     (7, "劇情輸出在送達玩家之前，須由伺服器端自有的審查層逐句檢查（以保留一句緩衝的方式串流，通過才釋放）", "references/business-encoding.md"),
-    (7, "不另設每回合的模型層審查（模型層用於劇本、主角與記事簿條目）", "references/business-encoding.md"),
+    (7, "不另設每回合的模型層審查（模型層用於劇本與主角；記事簿條目只用規則層）", "references/business-encoding.md"),
+    # 2026-11-10（rpg-notebook 探索）：玩家儲存記事簿時跑規則層，已完結的存檔不可編輯
+    (6, "儲存時須通過伺服器端的規則層（只擋必須拒絕的類別：未成年的性內容、性暴力、非自願的性情節、以真人名義的性內容；不呼叫模型，被拒時只告知類別），已完結的存檔不可編輯", "references/llm-streaming.md"),
     (7, "RPG 劇情對話不使用每日對話輪數與每分鐘訊息數，改以遊戲幣控制", "references/business-encoding.md"),
     (6, "於玩家送出下一輪、該輪回覆寫入後觸發（此時前一輪已不可重新生成或編輯）", "references/llm-streaming.md"),
     (6, "與主角的來歷（本地人或穿越者）", "references/llm-streaming.md"),
