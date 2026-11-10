@@ -73,6 +73,7 @@ from app.services.protagonist_review_service import ProtagonistReviewService
 from app.services.protagonist_service import ProtagonistService
 from app.services.wallet_service import WalletService
 from app.services.game_service import GameService
+from app.services.notebook_service import NotebookService
 from app.services.rpg_notebook_capture import NotebookCapturer
 from app.services.rpg_prompt import rpg_marker
 from app.services.rpg_runner_base import RunnerDeps
@@ -434,6 +435,11 @@ def get_game_service() -> GameService:
         budget_exhausted=usage.global_budget_exhausted, marker=rpg_marker(config.secret_key.reveal()), model=_rpg_llm_settings().primary_model,
         clock=clock,
     )
+
+
+def get_notebook_service() -> NotebookService:
+    """目前請求的記事簿服務：玩家檢視與儲存自己存檔的記事簿（不呼叫模型，所以沒有 RPG 供應商也能用）。"""
+    return NotebookService(sessions=SessionRepository(get_session()), policy=get_access_policy())
 
 
 def has_rpg_provider() -> bool:

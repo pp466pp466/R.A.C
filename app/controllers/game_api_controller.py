@@ -4,6 +4,9 @@
 - `POST /api/game/sessions/<id>/opening/stream`：第 0 幕（開場），沒有本文欄位；已完成者回傳既有文字，不重新生成。
 - `GET  /api/game/sessions/<id>`：存檔狀態、第 0 幕、世界狀態的玩家視圖與已完成輪數（已完結的存檔仍可讀）。
 - `GET  /api/game/sessions/<id>/turns?since_seq=&limit=`：序號遞增的回合；被擋與中斷的回合不含任何部分內容。
+- `GET  /api/game/sessions/<id>/notebook`：記事簿全文、版本、字數、容量、預備空間與是否已滿（已完結的存檔仍可讀）。
+- `PUT  /api/game/sessions/<id>/notebook`：本文 `{"text": "…", "expected_version": 1}`，玩家儲存編輯後的記事簿（不呼叫模型、不改已處理到的輪次）；
+  版本不符回 409 `notebook_conflict` 並附後端最新的記事簿，太長 422、規則層命中 422（只有類別）、已完結 409 `session_ended`。
 
 Controller 只讀取請求並回傳 `Response`：閘門、驗證、擁有者（非擁有者與不存在同為 404）、預扣與搶佔都在 `GameService`。
 **開始前的失敗**（驗證、閘門、餘額不足、衝突、404、沒有供應商）都在建立 `Response` 之前由 `GameService` 拋出，
@@ -27,7 +30,9 @@ from app.observability import rpg_events
 from app.security.session import require_login
 from app.services.errors import ServiceUnavailable
 from app.services.game_service import TURNS_PAGE_MAX
-from app.services.registry import build_notebook_capturer, build_opening_runner, build_turn_runner, get_game_service, has_rpg_provider
+from app.services.registry import (
+    build_notebook_capturer, build_opening_runner, build_turn_runner, get_game_service, get_notebook_service, has_rpg_provider,
+)
 from app.services.rpg_replay import opening_replay_events, turn_replay_events
 from app.services.rpg_runner_base import SseEvent
 from app.services.rpg_turn_runner import TurnRunner
@@ -128,3 +133,16 @@ def list_turns(session_id: str):
         user, session_id, since_seq=int_arg("since_seq", 0), limit=int_arg("limit", TURNS_PAGE_MAX),
     )
     return jsonify(turns=turns, has_more=has_more)
+
+
+@game_api_bp.get("/sessions/<session_id>/notebook")
+def get_notebook(session_id: str):
+    user = require_login()
+    return jsonify(notebook=get_notebook_service().view(user, session_id))
+
+
+@game_api_bp.put("/sessions/<session_id>/notebook")
+def put_notebook(session_id: str):
+    user = require_login()
+    body = read_json_object()
+    return jsonify(notebook=get_notebook_service().save(user, session_id, text=body.get("text"), expected_version=body.get("expected_version")))

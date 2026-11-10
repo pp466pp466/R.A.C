@@ -196,6 +196,8 @@ flowchart TD
 | `/api/game/sessions/<id>/opening/stream` | POST | 是 | 第 0 幕的事件串流；不扣遊戲幣，已完成者回傳既有文字 |
 | `/api/game/sessions/<id>` | GET | 是 | 存檔狀態與世界狀態的玩家視圖（不含 NPC 角色卡）；已完結仍可讀 |
 | `/api/game/sessions/<id>/turns` | GET | 是 | 回合清單（`since_seq` 增量）；被擋與中斷的回合不含文字 |
+| `/api/game/sessions/<id>/notebook` | GET | 是 | 記事簿全文與用量；非擁有者與不存在同為 404；已完結仍可讀；禁止快取；管理員沒有任何讀取記事簿的功能 |
+| `/api/game/sessions/<id>/notebook` | PUT | 是 | 玩家儲存編輯後的記事簿：CSRF 與 Origin、版本比對（409）、容量（422）、規則層（422，只回類別）；不呼叫模型；已完結 409 |
 
 頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/scripts`（劇本創作，第 7d 節）、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
 

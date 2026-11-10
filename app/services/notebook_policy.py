@@ -121,3 +121,25 @@ def merge_entries(existing: str | None, entries: Iterable[object]) -> NotebookMe
     text = base + separator + LINE_SEPARATOR.join(accepted)
     length = length_of(text)
     return NotebookMerge(tuple(accepted), text, length, length - length_of(base), max(len(entry) for entry in accepted))
+
+
+# ---- 玩家視圖 ---------------------------------------------------------------------------------
+
+
+def view_of(text: str | None, version: int, tier: object) -> dict[str, object]:
+    """檢視與儲存端點的內容（`GET`／`PUT …/notebook`、版本衝突時的 `notebook`）：全文、版本、字數、容量、預備空間與是否已滿。
+
+    容量與預備空間由目前的會員等級推得（不儲存）；`full` 為長度大於容量。這是記事簿全文離開伺服器的唯一形狀，只給擁有者。
+    """
+    body = text or ""
+    length = length_of(body)
+    return {
+        "text": body, "version": int(version), "length": length, "capacity": capacity_for(tier), "reserve": reserve_for(tier),
+        "full": is_full(length, tier),
+    }
+
+
+def summary_of(text: str | None, version: int, tier: object) -> dict[str, object]:
+    """存檔快照裡的記事簿摘要：版本、字數、容量與是否已滿，**不含全文**（全文只走檢視端點）。"""
+    length = length_of(text)
+    return {"version": int(version), "length": length, "capacity": capacity_for(tier), "full": is_full(length, tier)}

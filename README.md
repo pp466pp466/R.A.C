@@ -1054,8 +1054,10 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 |---|---|---|
 | `/api/game/sessions/<session_id>/turns/stream` | POST | 一個回合。本文 `{"client_msg_id": "1 至 64 字", "action": "1 至 1000 字"}`，回應 `text/event-stream`。已 `complete` 的 `client_msg_id` 重送回傳既有劇情（不呼叫模型、不碰錢包）；`interrupted`／`blocked` 的編號可重送（嘗試序號加 1，預扣用新的鍵） |
 | `/api/game/sessions/<session_id>/opening/stream` | POST | 第 0 幕（開場），沒有本文欄位。已 `ready`／`fallback` 回傳既有文字、不重新生成；`pending` 取得生成權；他人正在生成回 409 `opening_in_progress`。不扣遊戲幣、不寫回合 |
-| `/api/game/sessions/<session_id>` | GET | 存檔狀態：狀態與是否已完結、第 0 幕（狀態與文字）、世界狀態的玩家視圖（經過月數、地點、摘要、進行中目標、去過的地點、主角年齡；**不含 NPC 角色卡與隱藏特質**）、已完成輪數、版本。已完結的存檔仍可讀 |
+| `/api/game/sessions/<session_id>` | GET | 存檔狀態：狀態與是否已完結、第 0 幕（狀態與文字）、世界狀態的玩家視圖（經過月數、地點、摘要、進行中目標、去過的地點、主角年齡；**不含 NPC 角色卡與隱藏特質**）、已完成輪數、版本、記事簿的用量摘要（`notebook`：版本、字數、容量、是否已滿；**不含全文**）。已完結的存檔仍可讀 |
 | `/api/game/sessions/<session_id>/turns` | GET | 回合清單，依 `seq` 遞增。查詢參數 `since_seq`（預設 0，增量同步）與 `limit`（預設與上限 200）；回應 `{turns, has_more}`。只有 `complete` 的回合含劇情；被擋、中斷與生成中的回合只有狀態（`story: null`），被擋的文字永遠不離開伺服器 |
+| `/api/game/sessions/<session_id>/notebook` | GET | 記事簿（見「RPG 記事簿（rpg-notebook）」）：`{notebook: {text, version, length, capacity, reserve, full}}`。已完結的存檔仍可讀；不呼叫模型，沒有 RPG 供應商也能用 |
+| `/api/game/sessions/<session_id>/notebook` | PUT | 玩家儲存編輯後的記事簿。本文 `{"text": "…", "expected_version": 1}`，成功回傳同形的 `{notebook}`（版本加 1）。`notebook_too_long`（422，附 `length`、`capacity`）、`notebook_blocked`（422，只附 `categories`）、`notebook_conflict`（409，附後端最新的 `notebook`）、`session_ended`（409）、`validation_error`（400） |
 
 開始前的錯誤代碼：`insufficient_coins`（409，附 `balance`、`needed`）、`session_ended`（409）、`opening_pending`（409，第 0 幕尚未完成）、`opening_in_progress`（409）、`turn_in_progress`（409，同一編號仍在處理）、`input_blocked`（422，行動命中必須拒絕的類別，只附類別）、`system_busy`（503，全站今日用量用盡，附 `Retry-After`）、`service_unavailable`（503，沒有設定 RPG 模型供應商：在預扣之前就回應，不扣幣、不搶佔）、`age_confirmation_required`／`account_locked`（403）。
 
@@ -1123,6 +1125,45 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | **正式模型與提示詞** | 只驗證了免費的 nemotron；時間、字數（偏長）與品質（重複段落、錯字）要在最終選定的模型上驗收 |
 | **多 worker 容量與全站同時串流上限** | 屬 RC-4（壓測）；每個進行中的串流多佔一條上游讀取執行緒，gunicorn 的 `workers`／`threads` 是初始值 |
 | **畫面** | 屬 RC-3（打字機、轉場文字、逾時與重送） |
+
+## RPG 記事簿（rpg-notebook）
+
+change `rpg-notebook`（RC-2b）。RPG 以記事簿取代對話摘要：每個存檔一本、新存檔為空，每完成 10 輪由模型從最近 10 輪抓取重點，**只追加在末尾**；玩家可檢視並自行編輯。**這個 change 只有後端**（API 與抓取）；記事簿面板屬 RC-3。端點見「RPG 回合引擎」的端點表（`GET`／`PUT /api/game/sessions/<id>/notebook`，加上存檔快照的 `notebook` 摘要）。**不需要資料庫遷移**（欄位在 RC-1 已建好，`llm_call_logs.kind` 是自由字串）。
+
+### 規則與數值
+
+| 項目 | 內容 |
+|---|---|
+| 容量與預備空間 | free 2000／500、plus 5000／1250、vip 10000／2500 字（NFC 正規化後的 Unicode 字元數）。容量只有一個來源（`quota_policy`），由目前的會員等級推得、不儲存；預備空間是容量的 25%，**只供 AI 寫入** |
+| 已滿 | 長度**大於**容量（等於不算）：不呼叫模型、不補抓被跳過的輪次，AI 仍帶最近 10 輪。降級後超過新容量視同已滿、不自動刪除；升級後立即有新容量 |
+| 觸發 | 玩家送出第 11、21、31… 輪、該輪**完成之後**，抓取前一個 10 輪（邊界 B = ⌊(完成輪數 − 1) ÷ 10⌋ × 10；第 10 輪完成時還沒有待抓取的視窗）。結局、被擋、中斷、失敗與已完成回合的重送都不觸發 |
+| 執行時機 | 在串流回應**關閉之後**（`response.call_on_close`）：事件序列與結束時間不變，`done` 之後連線隨即結束；但抓取會佔用同一條 gunicorn 執行緒最多約 60 秒（RC-4 的容量估算要計入）。**gthread 的呼叫時機尚待容器驗收（任務 5.2）** |
+| 抓取的要求與限制 | 提示詞要求每次最多 5 條、每條 50 字內；Service **不因條數或字數丟棄或截斷**，只守「容量 ＋ 預備空間」（超過時要求精簡並重試 1 次，仍超過則放棄本次並推進標記）。總預算 60 秒，單次呼叫 `min(30, 剩餘)` 秒，剩餘不足 20 秒不啟動精簡重試 |
+| 標記 | `notebook_upto_turn` 標記已處理到的輪次。成功（含 0 條）、已滿、放棄都推進；暫時性失敗、驗證失敗、全站預算用盡不推進，由下個回合補做；跨過下一個邊界時只抓最新的視窗（舊視窗放棄） |
+| 條目的審查 | 只用規則層（`rpg_output_rules`）與洩漏檢查（階段英文名稱、資料區塊標題、標記字串）；不另呼叫模型審查。未通過者整次放棄 |
+| 玩家儲存 | 順序：閘門 → 擁有者（404）→ 清理 → 已完結（409 `session_ended`）→ 長度大於容量（422 `notebook_too_long`，**玩家沒有預備空間**；已滿的記事簿原樣再儲存也被擋，須一次刪到容量以內）→ 規則層（422 `notebook_blocked`，只擋必須拒絕的類別；「分級不符」不擋，不回顯內容）→ 條件式寫入（進行中且版本相符）。版本不符回 409 `notebook_conflict` 並附後端最新的 `notebook`；AI 追加與玩家儲存都使版本加 1，所以任一方都不會覆蓋對方。儲存**不呼叫模型、不改已處理到的輪次** |
+| 帳本與錢包 | 帳本用途 `rpg_notebook`（記入實際使用的模型，後台標籤「記事簿」）；**不碰錢包**，不計輪數，計入全站每日 token 上限 |
+
+### 日誌與隱私
+
+記事簿全文是個資：隨存檔保存與刪除（只在 `sessions.notebook_text` 一個欄位，沒有副本）、納入個人資料匯出、**不在管理員可檢視的範圍**（後台的所有 GET 端點與程式碼都不碰它）。日誌只有六種事件，欄位只有內部編號、整數與列舉，絕不含記事簿內容、行動或劇情：
+
+| 事件 | 時機 |
+|---|---|
+| `rpg.notebook_captured` | 抓取成功並追加（條數、最長一條、追加字數、總字數、版本、邊界，以及超出提示詞要求的條數與字數 `over_entries`、`over_chars`，供調整提示詞） |
+| `rpg.notebook_skipped` | 跳過並推進標記：`full`（已滿）、`empty`（沒有新條目）、`budget`（全站預算用盡，不推進） |
+| `rpg.notebook_abandoned` | 放棄並推進標記：`blocked`（規則層或洩漏檢查）、`too_long`（精簡後仍超過）、`stale`（舊視窗） |
+| `rpg.notebook_failed` | 失敗、不推進標記：`transient`、`timeout`、`config`、`unavailable`、`validation`、`blocked`（供應商擋下） |
+| `rpg.notebook_saved` | 玩家儲存成功（新版本與字數） |
+| `rpg.notebook_save_rejected` | 玩家儲存被拒：`too_long`、`blocked`（附類別）、`conflict`、`ended` |
+
+### 已知限制
+
+- ①**gthread 的關閉回呼時序尚未在 Linux 容器驗證**（任務 5.2）：測試環境只能證明回呼本身的邏輯。若「先送出結束 chunk、再執行回呼」不成立，依 design D1 的退路改在產生器內執行。②**免費模型常寫超過 5 條或 50 字**，免費記事簿會比預期早滿；這是刻意的取捨（不丟棄、不截斷），日誌的 `over_*` 供量測。③**抓取失敗會在每個回合重試**（最壞 4 次呼叫，計入全站預算）；若觀察到成本問題，之後再加冷卻（需要新欄位，屬後續 change）。④儲存端點目前只有入口層的一般限流。
+
+### 驗收紀錄（rpg-notebook，進行中）
+
+批次 1 至 4（純邏輯、Repository 與 `budget_seconds`、抓取執行者與串流接線、玩家 API 與隱私測試）已實作；假模型與 HTTP 驗收（5.1）、容器驗收（5.2）、真實模型驗證（5.3）、破壞驗證（5.4）與全套測試（5.5）完成後補在這裡。
 
 ## 撰寫新端點：權限與 IDOR 測試
 

@@ -25,10 +25,10 @@
 
 ## 4. 玩家檢視與儲存的 API
 
-- [ ] 4.1 新 `app/services/notebook_service.py`：`view`、`save`（design D6 的順序：閘門 → 擁有者 → 清理 → 已完結 → 長度 → 規則層 → 條件式寫入 → 衝突時重新讀取並回報）；`registry.get_notebook_service`；`GameService.session_snapshot` 加 `notebook` 摘要（版本、字數、容量、已滿，不含全文）。驗證：`tests/test_notebook_service.py` 通過（容量三等級；2001 被拒；2240 字刪到 2100 被拒、刪到 2000 通過；已滿時原文再儲存被拒；規則層命中只回類別且不回顯；分級不符不擋；版本衝突附最新內容；已完結 `session_ended`；非擁有者 404；清空；儲存不呼叫模型也不改標記）。
-- [ ] 4.2 `game_api_controller`：`GET`／`PUT /api/game/sessions/<id>/notebook`（登入、CSRF 與 Origin、`GET` 回應 `Cache-Control: no-store`、JSON 錯誤）。驗證：`tests/test_notebook_api.py` 通過（未登入 401、無 CSRF 被拒、非擁有者 404、各錯誤代碼與狀態碼、快照摘要不含全文、已完結仍可 `GET`）。
-- [ ] 4.3 隱私：日誌掃描、匯出、刪除與管理員不可讀。驗證：`tests/test_notebook_privacy.py` 通過（走過 AI 追加、玩家儲存與被規則層拒絕的儲存後掃描日誌，找不到任何記事簿文字或被拒內容；個人資料匯出含記事簿全文；存檔與帳號刪除後記事簿消失；後台沒有可讀取記事簿全文的端點），既有的抹除涵蓋與匯出測試通過。
-- [ ] 4.4 文件：README（端點表加兩個記事簿端點、驗收紀錄預留）、`docs/路線圖-roadmap.md`（RC-2b 已實作）、`docs/RPG.md`（7.16 標示已立案並指向 change、R-17 的狀態）。驗證：`tests/test_design_docs.py`、`tests/test_readme.py` 通過。
+- [x] 4.1 新 `app/services/notebook_service.py`：`view`、`save`（design D6 的順序：閘門 → 擁有者 → 清理 → 已完結 → 長度 → 規則層 → 條件式寫入 → 衝突時重新讀取並回報）；`registry.get_notebook_service`；`GameService.session_snapshot` 加 `notebook` 摘要（版本、字數、容量、已滿，不含全文）。驗證：`tests/test_notebook_service.py` 通過（容量三等級；2001 被拒；2240 字刪到 2100 被拒、刪到 2000 通過；已滿時原文再儲存被拒；規則層命中只回類別且不回顯；分級不符不擋；版本衝突附最新內容；已完結 `session_ended`；非擁有者 404；清空；儲存不呼叫模型也不改標記）。
+- [x] 4.2 `game_api_controller`：`GET`／`PUT /api/game/sessions/<id>/notebook`（登入、CSRF 與 Origin、`GET` 回應 `Cache-Control: no-store`、JSON 錯誤）。驗證：`tests/test_notebook_api.py` 通過（未登入 401、無 CSRF 被拒、非擁有者 404、各錯誤代碼與狀態碼、快照摘要不含全文、已完結仍可 `GET`）。
+- [x] 4.3 隱私：日誌掃描、匯出、刪除與管理員不可讀。驗證：`tests/test_notebook_privacy.py` 通過（走過 AI 追加、玩家儲存與被規則層拒絕的儲存後掃描日誌，找不到任何記事簿文字或被拒內容；個人資料匯出含記事簿全文；存檔與帳號刪除後記事簿消失；後台沒有可讀取記事簿全文的端點），既有的抹除涵蓋與匯出測試通過。
+- [x] 4.4 文件：README（端點表加兩個記事簿端點、驗收紀錄預留）、`docs/路線圖-roadmap.md`（RC-2b 已實作）、`docs/RPG.md`（7.16 標示已立案並指向 change、R-17 的狀態）。**範圍經使用者同意擴充（2026-11-10）**：另加 `docs/系統架構-architecture.md`（`NotebookService` 元件列、控制器列、對照表）與 `docs/帳號與安全-auth-security.md`（兩個端點列）；README 新增「RPG 記事簿（rpg-notebook）」一節（數值、玩家儲存順序、六種日誌事件、已知限制、驗收紀錄預留），`tests/test_readme.py` 的 `/api/game` 路由數由 4 改為 6（刻意的新增）並加一個守住該節數值與事件的測試。驗證：`tests/test_design_docs.py`、`tests/test_readme.py` 通過。
 
 ## 5. 驗收與收尾
 

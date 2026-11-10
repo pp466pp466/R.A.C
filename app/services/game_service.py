@@ -33,7 +33,7 @@ from app.repositories.errors import SessionEndedError, TurnInProgressError
 from app.repositories.session_repository import (
     OPENING_BUSY, OPENING_CLAIMED, OPENING_DONE, OPENING_TAKEN_OVER, TURN_CREATED, TURN_REPLAYED, SessionRepository,
 )
-from app.services import rpg_context, rpg_world
+from app.services import notebook_policy, rpg_context, rpg_world
 from app.services.access_policy import AccessPolicy
 from app.services.current_user import CurrentUser
 from app.services.errors import (
@@ -352,9 +352,10 @@ class GameService:
         return self._wallet.balance(current.id)
 
     def session_snapshot(self, current: CurrentUser, session_public_id: str) -> dict[str, Any]:
-        """存檔狀態視圖：對外識別碼、狀態、第 0 幕、世界狀態的玩家視圖與已完成輪數。已完結的存檔也可以讀。
+        """存檔狀態視圖：對外識別碼、狀態、第 0 幕、世界狀態的玩家視圖、記事簿用量摘要與已完成輪數。已完結的存檔也可以讀。
 
-        沒有內部編號、來源版本與劇本複本全文（只有標題）；世界狀態只含玩家可以知道的欄位（NPC 的特質與隱藏的歸屬不在其中）。"""
+        沒有內部編號、來源版本與劇本複本全文（只有標題）；世界狀態只含玩家可以知道的欄位（NPC 的特質與隱藏的歸屬不在其中）；
+        記事簿只有版本、字數、容量與是否已滿，**沒有全文**（全文只走 `NotebookService.view`）。"""
         self._policy.require_chat_access(current)
         save = self._sessions.get_owned(current.id, session_public_id)
         if save is None:
@@ -365,6 +366,7 @@ class GameService:
             "ended": save.status == SESSION_ENDED, "protagonist": save.protagonist_json, "version": save.version,
             "completed_turns": self._sessions.count_complete_turns(current.id, session_public_id) or 0,
             "opening": opening_view(save, script), "world": world_view(save),
+            "notebook": notebook_policy.summary_of(save.notebook_text, save.notebook_version, current.member_tier),
         }
 
     def turn_views(

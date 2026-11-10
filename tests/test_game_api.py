@@ -411,8 +411,9 @@ def test_the_session_snapshot_has_no_internal_fields_and_no_script_copy(app, pro
     assert body["id"] == save_id and body["status"] == "active" and body["completed_turns"] == 0
     assert body["opening"] == {"state": "ready", "text": "開場的劇情。"}
     assert set(body["world"]) == {"elapsed_months", "location", "summary", "goals", "places", "protagonist_age"}
+    assert body["notebook"] == {"version": 1, "length": 0, "capacity": 2000, "full": False}      # 只有用量摘要（rpg-notebook）
     raw = json.dumps(body, ensure_ascii=False)
-    for forbidden in ("script_snapshot", "entities", "marker", "source_version", "user_id", "notebook"):
+    for forbidden in ("script_snapshot", "entities", "marker", "source_version", "user_id", "notebook_text", "notebook_upto_turn"):
         assert forbidden not in raw
     with db(app) as s:
         internal = s.scalar(select(RpgSession.id))

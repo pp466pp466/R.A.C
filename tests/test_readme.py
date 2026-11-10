@@ -246,7 +246,7 @@ def test_readme_rpg_turn_engine_section_lists_exactly_the_registered_game_routes
         (rule.rule.replace("<session_id>", "<id>"), method) for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/game")
         for method in rule.methods - {"HEAD", "OPTIONS"}
     }
-    assert len(actual) == 4, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 6, "沒有掃到預期數量的路由，比對可能是空洞的"       # 4 個回合與唯讀端點，加上記事簿的 GET 與 PUT（rpg-notebook）
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
     for event in ("meta", "token", "ping", "transition", "state", "done", "error"):
         assert f"| `{event}` |" in section, event
@@ -256,6 +256,29 @@ def test_readme_rpg_turn_engine_section_lists_exactly_the_registered_game_routes
         assert code in section, code
     assert SSE_CONTENT_TYPE in section and SSE_CACHE_CONTROL in section and "X-Accel-Buffering: no" in section
     assert "180 秒" in section and "gunicorn.rpg.conf.py" in section and "0016_rpg_turn_engine" in section
+
+
+def test_readme_rpg_notebook_section_documents_the_numbers_errors_and_every_log_event():
+    """記事簿一節的數值（三個等級的容量與預備空間、5 條 50 字、60／30／20 秒）、玩家 API 的錯誤代碼與六種日誌事件都要記載，且與程式的常數一致。"""
+    from app.observability import rpg_events
+    from app.services import notebook_policy
+    from app.services.rpg_notebook_capture import CALL_BUDGET_SECONDS, CONDENSE_MIN_REMAINING_SECONDS, TOTAL_BUDGET_SECONDS
+    from app.services.rpg_notebook_prompt import MAX_ENTRIES_PER_CAPTURE, MAX_ENTRY_CHARS
+
+    section = readme_section("RPG 記事簿（rpg-notebook）")
+    for tier in ("free", "plus", "vip"):
+        assert f"{tier} {notebook_policy.capacity_for(tier)}／{notebook_policy.reserve_for(tier)}" in section, tier
+    assert f"每次最多 {MAX_ENTRIES_PER_CAPTURE} 條、每條 {MAX_ENTRY_CHARS} 字" in section
+    assert f"總預算 {int(TOTAL_BUDGET_SECONDS)} 秒" in section and f"min({int(CALL_BUDGET_SECONDS)}, 剩餘)" in section
+    assert f"不足 {int(CONDENSE_MIN_REMAINING_SECONDS)} 秒" in section
+    for code in ("notebook_too_long", "notebook_blocked", "notebook_conflict", "session_ended"):
+        assert f"`{code}`" in section, code
+    for event in (
+        rpg_events.EVENT_NOTEBOOK_CAPTURED, rpg_events.EVENT_NOTEBOOK_SKIPPED, rpg_events.EVENT_NOTEBOOK_ABANDONED,
+        rpg_events.EVENT_NOTEBOOK_FAILED, rpg_events.EVENT_NOTEBOOK_SAVED, rpg_events.EVENT_NOTEBOOK_SAVE_REJECTED,
+    ):
+        assert f"| `{event}` |" in section, event
+    assert "/api/game/sessions/<id>/notebook" in section and "rpg_notebook" in section and "不需要資料庫遷移" in section
 
 
 def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():

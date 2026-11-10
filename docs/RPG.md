@@ -660,7 +660,7 @@ sequenceDiagram
 
 ### 4.10 R-17　記事簿（Session Notebook）　**[已確認]**
 
-> 來源：使用者於 2026-10-30 提出並逐項確認（v1.2）。**取代 RPG 的對話摘要**。已套用到 AGENTS.md 第 3、5、6、7、10、11 節與 skill 鏡像（RA-15）。規格與實作留待 RC-1、RC-2、RC-3 的 propose。
+> 來源：使用者於 2026-10-30 提出並逐項確認（v1.2）。**取代 RPG 的對話摘要**。已套用到 AGENTS.md 第 3、5、6、7、10、11 節與 skill 鏡像（RA-15）。規格與實作留待 RC-1、RC-2、RC-3 的 propose。**狀態（2026-11-10）**：RC-2b `rpg-notebook` 已立案，後端（每 10 輪抓取、玩家檢視與儲存的 API）已實作；記事簿面板屬 RC-3；與本節不同之處以 7.16 為準。
 
 #### R-17.1　目的與取代關係
 
@@ -1167,7 +1167,7 @@ flowchart LR
 
 ### 7.16 RC-2b 探索結論（2026-11-10）
 
-> 來源：`/openspec-explore RC-2b`，與使用者逐項確認。**尚未立案**（下一步 `/openspec-propose`）。與 R-17 與 7.9 不同之處以本節為準；與 AGENTS.md 衝突之處見「對 AGENTS.md 的修訂」。
+> 來源：`/openspec-explore RC-2b`，與使用者逐項確認。**已立案**（change `rpg-notebook`，2026-11-10：批次 1 至 4 已實作並通過測試，驗收批次 5 進行中；實作紀錄見 README「RPG 記事簿（rpg-notebook）」）。與 R-17 與 7.9 不同之處以本節為準；與 AGENTS.md 衝突之處見「對 AGENTS.md 的修訂」。
 
 #### 7.16.1 已確認的決定
 
@@ -1187,7 +1187,7 @@ flowchart LR
 - **條目格式**：純文字、每行一條、無編號與輪次標記；去重比對去空白後的整行。
 - **AI 追加**：在鎖定的存檔列上對最新文字追加，標記檢查在鎖內，追加後 `notebook_version` 加 1（重複抓取時，第二個發現標記已推進而不動作）；玩家儲存才以 `expected_version` 比對。
 - **觸發**：邊界 B = floor((完成輪數 − 1) / 10) × 10（剛完成的那輪不在視窗內）；B 大於 `notebook_upto_turn` 才抓取。結局回合、被擋、中斷與已完成回合的重送不觸發；文字完整後、`done` 前斷線的收尾路徑不抓取（由下個回合補做）。長度已超過容量時跳過並推進標記。暫時性失敗不推進；期間又跨過下一個邊界，舊視窗放棄。
-- **玩家 API**：`GET /api/game/sessions/<id>/notebook`（文字、版本、容量、用量、是否已滿）；`PUT` 帶 `expected_version`，版本衝突回 409 並附後端最新內容，超過容量或規則層命中回 422（只帶類別）；存檔快照只帶用量摘要，不帶全文。
+- **玩家 API**：`GET /api/game/sessions/<id>/notebook`（文字、版本、容量、用量、是否已滿）；`PUT` 帶 `expected_version`，版本衝突回 409 並附後端最新內容，超過容量或規則層命中回 422（只帶類別）；存檔快照只帶用量摘要（`notebook`：版本、字數、容量、是否已滿），不帶全文。**已實作（批次 4）**：欄位名稱為 `text`、`version`、`length`、`capacity`、`reserve`、`full`。
 - **模型與帳本**：`OPENROUTER_MODEL`（備援 `OPENROUTER_FALLBACK_MODEL`），帳本類別 `rpg_notebook`；後台類別標籤補「記事簿」。
 - **資料庫**：不需要遷移（欄位 RC-1 已建好）。
 - **驗收**：假模型加抓取行為、HTTP 驗收腳本擴充、破壞驗證；R-14.7 角色漂移重測等正式模型選定後（7.14）。
