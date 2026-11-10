@@ -90,6 +90,7 @@ class Turn:
     error_code: str | None = None
     aborted: bool = False
     malformed: list[str] = field(default_factory=list)
+    ended_at: float | None = None       # 伺服器結束回應（讀到結尾）距送出請求的秒數；客戶端自己提早離開（stop_after）時為 None
 
     @property
     def names(self) -> list[str]:
@@ -169,6 +170,7 @@ class Client:
             while True:
                 raw = response.readline()
                 if not raw:
+                    turn.ended_at = time.monotonic() - started
                     break
                 line = raw.decode("utf-8").rstrip("\r\n")
                 if line.startswith("event: "):

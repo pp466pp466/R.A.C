@@ -360,3 +360,171 @@ def test_a_fresh_player_gets_paid_coins_only_when_asked_and_the_signup_grant_sti
     assert plain is None                                        # 不要求補幣：還沒有錢包，行為與先前完全相同
     assert (rich.free_balance, rich.paid_balance) == (0, 700)  # 首登的 200 免費幣在年齡確認通過時才發放
     assert cookie.startswith(player_app.config["SESSION_COOKIE_NAME"] + "=")
+
+
+# ---- 結束回應的時序（eof 案例，rpg-notebook 任務 5.2）、容器驗收腳本與真實模型腳本（任務 5.2、5.3）-----------------------------
+
+def test_the_client_records_when_the_server_ends_the_response_and_not_when_the_client_leaves(event_server):
+    client = turn_script.Client(event_server, "--base-url")
+    finished = client.stream("/x", {})
+    assert finished.ended_at is not None and finished.ended_at >= finished.first_at("done")
+    left = client.stream("/x", {}, stop_after=lambda name, data: name == "token")
+    assert left.aborted and left.ended_at is None                      # 客戶端自己離開不算「伺服器結束了回應」
+
+
+def _run_eof_case(monkeypatch, *, gap, at_eof, assert_eof, ended=True):
+    """以替身跑 eof 案例：第 11 輪的 done 在 1.0 秒，伺服器在 done 之後 `gap` 秒結束回應，結束當下的記事簿是 `at_eof`。"""
+    report = turn_script.Report()
+    case = notebook_script.NotebookAcceptance("http://localhost:5010", "http://localhost:5001", None, report, notebook_script.ServerLog(None), assert_eof=assert_eof)
+    turn = turn_script.Turn(200, {}, events=[("done", {"status": "complete", "turn_number": 11}, 1.0)], ended_at=1.0 + gap if ended else None)
+    final = {"text": "a\nb\nc", "version": 2, "length": 5, "capacity": 2000, "full": False}
+    states = [at_eof, final]
+    monkeypatch.setattr(case, "fresh", lambda coins: notebook_script.Player(None, {}, coins))
+    monkeypatch.setattr(case, "start_save", lambda player: "save")
+    monkeypatch.setattr(case, "play_turns", lambda *args, **kwargs: True)
+    monkeypatch.setattr(case, "play", lambda *args, **kwargs: turn)
+    monkeypatch.setattr(case, "notebook", lambda player, save: states.pop(0))
+    monkeypatch.setattr(case, "wait_until", lambda predicate, **kwargs: True)
+    monkeypatch.setattr(case, "wait_for_capture", lambda *args, **kwargs: None)
+    monkeypatch.setattr(case, "ledger_is_clean", lambda *args, **kwargs: None)
+    monkeypatch.setattr(case, "log_checks", lambda *args, **kwargs: None)
+    case.case_eof()
+    return report
+
+
+EMPTY_AT_EOF = {"text": "", "version": 1, "length": 0}
+FILLED_AT_EOF = {"text": "a\nb\nc", "version": 2, "length": 5}
+
+
+def test_the_eof_case_passes_when_the_closing_chunk_comes_first_and_the_notebook_is_still_empty(monkeypatch, capsys):
+    report = _run_eof_case(monkeypatch, gap=0.05, at_eof=EMPTY_AT_EOF, assert_eof=True)
+    assert report.count(notebook_script.FAIL) == 0
+    assert any("結束 chunk 先送出" in name for name, _ in report.results) and any("關閉回呼在結束 chunk 之後才執行" in name for name, _ in report.results)
+    assert "實測：done 在 1.00 秒、結束回應在 1.05 秒" in capsys.readouterr().out          # 容器驗收把這行搬進驗收輸出
+
+
+def test_the_eof_case_fails_when_the_response_ends_only_after_the_callback_has_run(monkeypatch):
+    """間隔太長與結束當下記事簿已經有內容，各是一項失敗——這正是 D1 的前提不成立時的樣子。"""
+    report = _run_eof_case(monkeypatch, gap=5.2, at_eof=FILLED_AT_EOF, assert_eof=True)
+    failed = [name for name, status in report.results if status == notebook_script.FAIL]
+    assert len(failed) == 2 and any("間隔" in name for name in failed) and any("記事簿還是空的" in name for name in failed)
+
+
+def test_the_eof_case_without_the_flag_only_records_the_numbers(monkeypatch, capsys):
+    """開發伺服器的行為不當作通過條件：同樣的壞時序，沒有 --assert-eof 時不失敗，只印一行資訊。"""
+    report = _run_eof_case(monkeypatch, gap=5.2, at_eof=FILLED_AT_EOF, assert_eof=False)
+    assert report.count(notebook_script.FAIL) == 0
+    assert not any("結束 chunk" in name for name, _ in report.results)
+    assert "沒有 --assert-eof，不計入通過或失敗" in capsys.readouterr().out
+
+
+def test_the_eof_case_fails_when_the_server_never_ended_the_response(monkeypatch):
+    report = _run_eof_case(monkeypatch, gap=0, at_eof=EMPTY_AT_EOF, assert_eof=True, ended=False)
+    assert any(status == notebook_script.FAIL and "伺服器結束了回應" in name for name, status in report.results)
+
+
+def test_the_eof_case_is_part_of_the_default_run_and_the_flag_is_accepted(capsys):
+    assert notebook_script.CASES[-1] == "eof" and notebook_script.EOF_LIMIT_SECONDS == 1.0
+    assert notebook_script.main(["--assert-eof", "--only", "nonsense"]) == 2          # 旗標有被解析：回的是「未知的案例」，不是 argparse 的用法錯誤
+    assert "nonsense" in capsys.readouterr().err
+
+
+# ---- scripts/verify_container.py（容器驗收）---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def container_script():
+    import runpy
+
+    return runpy.run_path(str(SCRIPTS / "verify_container.py"))
+
+
+def test_the_container_verifier_runs_the_notebook_script_with_the_timing_assertion(container_script):
+    source = (SCRIPTS / "verify_container.py").read_text(encoding="utf-8-sig")
+    for needed in ("acceptance_rpg_notebook.py", "--assert-eof", "rpg.notebook_captured", "rpg.notebook_abandoned", "rpg.notebook_saved", "rpg.notebook_failed"):
+        assert needed in source, needed
+    assert container_script["NOTEBOOK_MIN_CHECKS"] >= 60
+
+
+def test_the_container_leak_scan_covers_the_notebook_texts_that_the_fake_model_and_the_script_produce(container_script):
+    leaks = container_script["RPG_LEAKS"]
+    for text in (harness.NOTEBOOK_DEFAULT_ENTRIES[0], harness.NOTEBOOK_FILLER, notebook_script.EDIT_LINE):
+        assert any(leak in text for leak in leaks), text
+
+
+def _judge(container_script, output, minimum):
+    results = container_script["results"]
+    results.clear()
+    container_script["judge_acceptance_output"](output, "X", minimum)
+    return list(results)
+
+
+def test_the_container_verifier_accepts_a_clean_output_and_ignores_unverified_log_items(container_script):
+    output = "\n".join([f"通過  項目 {i}" for i in range(5)] + ["未驗證  基本案例：日誌的記事簿事件  — 未提供 --server-log", "", "摘要：通過 5、失敗 0、未驗證 1（1.0 秒）"])
+    results = _judge(container_script, output, 5)
+    assert [(name, ok) for name, ok, _ in results] == [("[RPG 串流池] X在容器內全部通過（5 項）", True)]
+
+
+@pytest.mark.parametrize("output,minimum", [
+    ("通過  a\n通過  b\n\n摘要：通過 2、失敗 0、未驗證 0（1.0 秒）", 3),                                 # 通過的項目比最低要求少
+    ("通過  a\n失敗  壞掉的項目  — 原因\n\n摘要：通過 1、失敗 1、未驗證 0（1.0 秒）", 1),               # 有失敗
+    ("通過  a\n未驗證  連不上假模型  — 原因\n\n摘要：通過 1、失敗 0、未驗證 1（1.0 秒）", 1),           # 與日誌無關的未驗證算失敗
+    ("通過  a\n通過  b", 2),                                                                              # 沒有摘要行（腳本中途死掉）
+])
+def test_the_container_verifier_fails_on_too_few_checks_failures_non_log_unverified_and_a_missing_summary(container_script, output, minimum):
+    results = _judge(container_script, output, minimum)
+    assert results and results[-1][1] is False and "全部通過" in results[-1][0]
+
+
+def test_a_failed_item_is_reported_with_its_own_title(container_script):
+    results = _judge(container_script, "失敗  壞掉的項目  — 原因說明\n摘要：通過 0、失敗 1、未驗證 0（1.0 秒）", 1)
+    assert results[0][:2] == ("[RPG 串流池] X：壞掉的項目", False) and "原因說明" in results[0][2]
+
+
+# ---- scripts/acceptance_rpg_real_model.py（任務 5.3）-------------------------------------------------------------------------
+
+def test_the_real_model_plan_tops_up_coins_only_for_the_notebook_run():
+    actions, coins = real_script.plan(False)
+    assert actions == real_script.ACTIONS[:3] and coins == 0                       # 預設行為與先前相同：3 輪、不補幣
+    actions, coins = real_script.plan(True)
+    assert len(actions) == 11 and coins == 11 * turn_script.TURN_COST == 330     # 首登的 200 幣只夠 6 輪
+
+
+def test_the_real_model_actions_are_distinct_harmless_and_free_of_the_fake_models_keywords():
+    actions = real_script.ACTIONS
+    assert len(set(actions)) == len(actions)
+    assert actions[0] == "我向守門的弟子問路，想知道宗門大測是什麼時候。"                    # rpg-turn-engine 的前 3 句不變
+    assert not any("測試" in action for action in actions)                       # 真實模型不需要、也不該帶假模型的關鍵字
+
+
+def test_the_real_model_script_and_the_application_agree_on_the_prompt_numbers_and_the_window():
+    from app.services import notebook_policy, rpg_notebook_prompt
+
+    assert (real_script.PROMPT_ENTRIES, real_script.PROMPT_ENTRY_CHARS) == (rpg_notebook_prompt.MAX_ENTRIES_PER_CAPTURE, rpg_notebook_prompt.MAX_ENTRY_CHARS)
+    assert real_script.NOTEBOOK_TURNS == notebook_policy.WINDOW_TURNS + 1          # 完成 10 輪之後的下一輪（第 11 輪）才觸發第一次抓取
+
+
+class _FakeApp:
+    def __init__(self, notebooks):
+        self.notebooks = list(notebooks)
+
+    def call(self, method, path, body=None, timeout=60):
+        import types
+
+        value = self.notebooks.pop(0) if len(self.notebooks) > 1 else self.notebooks[0]
+        return types.SimpleNamespace(json={"notebook": value})
+
+
+def test_the_notebook_observation_polls_until_content_appears_and_reports_counts_and_overlong_entries(monkeypatch, capsys):
+    monkeypatch.setattr(real_script.time, "sleep", lambda seconds: None)
+    long_entry = "第 1 至 10 輪：" + "字" * 60
+    text = "\n".join(["第 1 至 10 輪：主角答應送信。", "第 1 至 10 輪：主角買了乾糧。", long_entry])
+    app = _FakeApp([{"text": "", "length": 0}, {"text": "", "length": 0}, {"text": text, "length": len(text), "capacity": 2000, "version": 2, "full": False}])
+    real_script.observe_notebook(app, "save", real_script.time.monotonic())
+    out = capsys.readouterr().out
+    assert "3 條" in out and "超過的有 1 條" in out and "主角答應送信" in out and "版本 2" in out
+
+
+def test_the_notebook_observation_says_so_when_the_notebook_stays_empty(monkeypatch, capsys):
+    monkeypatch.setattr(real_script, "NOTEBOOK_WAIT_SECONDS", 0)
+    real_script.observe_notebook(_FakeApp([{"text": "", "length": 0}]), "save", real_script.time.monotonic())
+    assert "仍是空的" in capsys.readouterr().out

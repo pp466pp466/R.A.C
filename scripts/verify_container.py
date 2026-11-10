@@ -511,8 +511,33 @@ def verify_member_flow(image: str) -> None:
 
 
 RPG_MODEL_PORT, RPG_HELPER_PORT = 9100, 9101
-RPG_LEAKS = ("清晨的海風", "守門的弟子", "晨霧之中", "十歲的少女", "我沿著山路往上走")        # 假模型的劇情與驗收腳本的行動文字：日誌裡不得出現
+RPG_LEAKS = (
+    "清晨的海風", "守門的弟子", "晨霧之中", "十歲的少女", "我沿著山路往上走",                    # 假模型的劇情與驗收腳本的行動文字：日誌裡不得出現
+    "主角在青雲宗山門認識了", "山門前的石階共有九百九十九級", "玩家補充：主角怕黑",              # 記事簿：假模型的條目、長條目的內容、驗收腳本的玩家編輯
+)
 RPG_SUMMARY = re.compile(r"摘要：通過 (\d+)、失敗 (\d+)、未驗證 (\d+)")
+NOTEBOOK_MIN_CHECKS = 90            # 記事簿驗收腳本在容器內（沒有日誌檔）至少要有這麼多項通過（2026-11-10 實測 96）；調整腳本時同步更新
+
+
+def judge_acceptance_output(out: str, label: str, minimum: int) -> None:
+    """解析容器內 HTTP 驗收腳本的輸出（每項一行「通過／失敗／未驗證  名稱  — 原因」加最後的摘要），每個失敗項各記一筆，最後記總結。
+
+    「未驗證」只允許與日誌檔有關的項目（容器內沒有日誌檔；日誌改由呼叫端掃描 docker logs）；其他未驗證一律算失敗。"""
+    summary = RPG_SUMMARY.search(out)
+    passed = failed_count = 0
+    for line in out.splitlines():
+        status, _, rest = line.partition("  ")
+        if status not in ("通過", "失敗", "未驗證"):
+            continue
+        title = rest.split("  — ")[0]
+        if status == "未驗證" and "日誌" in title:
+            continue                                         # 日誌掃描需要檔案路徑；容器的日誌改由呼叫端掃描 docker logs
+        ok = status == "通過"
+        passed, failed_count = passed + ok, failed_count + (not ok)
+        if not ok:
+            check(f"[RPG 串流池] {label}：{title}", False, rest[len(title):].strip(" —")[:200])
+    check(f"[RPG 串流池] {label}在容器內全部通過（{passed} 項）", summary is not None and failed_count == 0 and passed >= minimum,
+          f"{passed} 項通過、{failed_count} 項失敗；{out.strip()[-200:]!r}" if failed_count or summary is None else "")
 
 
 def verify_rpg_pool(image: str) -> None:
@@ -548,7 +573,7 @@ def verify_rpg_pool(image: str) -> None:
         code, out = docker("exec", name, "python", "-m", "flask", "--app", "wsgi", "seed-scripts", timeout=120)
         check("[RPG 串流池] seed-scripts 建立首發劇本", code == 0, out.strip()[-160:].replace("\n", " "))
 
-        for source in ("rpg_acceptance_harness.py", "acceptance_rpg_turn.py"):
+        for source in ("rpg_acceptance_harness.py", "acceptance_rpg_turn.py", "acceptance_rpg_notebook.py"):
             code, out = docker("cp", to_wsl_path(PROJECT_ROOT / "scripts" / source), f"{name}:/tmp/{source}")
             if code != 0:
                 check(f"[RPG 串流池] 複製 {source} 進容器", False, out.strip()[-160:])
@@ -571,25 +596,26 @@ def verify_rpg_pool(image: str) -> None:
             "exec", "-w", "/app", name, "python", "/tmp/acceptance_rpg_turn.py", "--base-url", "http://localhost:8080",
             "--helper-url", f"http://localhost:{RPG_HELPER_PORT}", "--model-url", f"http://127.0.0.1:{RPG_MODEL_PORT}", timeout=600,
         )
-        summary = RPG_SUMMARY.search(out)
-        passed = failed_count = 0
+        judge_acceptance_output(out, "HTTP 驗收腳本", minimum=60)
+
+        # 記事簿（rpg-notebook）：同一支容器、同一個假模型；`--assert-eof` 把 design D1 的前提當成通過條件——
+        # gunicorn gthread 先送出結束 chunk、再執行關閉回呼（done 到結束回應不到 1 秒，結束當下記事簿仍是空的，約 5 秒後才更新）；
+        # 而 basic 案例的「done 之後客戶端立即斷線，抓取仍然完成」也在這裡一併驗證
+        code, out = docker(
+            "exec", "-w", "/app", name, "python", "/tmp/acceptance_rpg_notebook.py", "--base-url", "http://localhost:8080",
+            "--helper-url", f"http://localhost:{RPG_HELPER_PORT}", "--model-url", f"http://127.0.0.1:{RPG_MODEL_PORT}", "--assert-eof", timeout=900,
+        )
+        judge_acceptance_output(out, "記事簿 HTTP 驗收腳本", minimum=NOTEBOOK_MIN_CHECKS)
         for line in out.splitlines():
-            status, _, rest = line.partition("  ")
-            if status not in ("通過", "失敗", "未驗證"):
-                continue
-            title = rest.split("  — ")[0]
-            if status == "未驗證" and "日誌" in title:
-                continue                                         # 日誌掃描需要檔案路徑；容器的日誌改由下面掃描 docker logs
-            ok = status == "通過"
-            passed, failed_count = passed + ok, failed_count + (not ok)
-            if not ok:
-                check(f"[RPG 串流池] 驗收腳本：{title}", False, rest[len(title):].strip(" —")[:200])
-        check(f"[RPG 串流池] HTTP 驗收腳本在容器內全部通過（{passed} 項）", summary is not None and failed_count == 0 and passed >= 60,
-              f"{passed} 項通過、{failed_count} 項失敗；{out.strip()[-200:]!r}" if failed_count or summary is None else "")
+            if "done 在" in line and "結束回應在" in line:
+                print(f"      {line.strip()}")                   # 時序的實測數字留在驗收輸出裡，供填入驗收紀錄
+
         code, logs = docker("logs", name)
         leaked = [text for text in RPG_LEAKS if text in logs]
-        check("[RPG 串流池] 容器日誌沒有劇情與行動文字", not leaked, ", ".join(leaked))
+        check("[RPG 串流池] 容器日誌沒有劇情、行動與記事簿文字", not leaked, ", ".join(leaked))
         check("[RPG 串流池] 日誌有 RPG 回合事件（完成、被擋、中斷）", all(event in logs for event in ('"event":"rpg.turn_completed"', '"event":"rpg.turn_blocked"', '"event":"rpg.turn_interrupted"')))
+        check("[RPG 串流池] 日誌有記事簿事件（追加、放棄、玩家儲存）", all(event in logs for event in ('"event":"rpg.notebook_captured"', '"event":"rpg.notebook_abandoned"', '"event":"rpg.notebook_saved"')))
+        check("[RPG 串流池] 日誌沒有 rpg.notebook_failed", '"event":"rpg.notebook_failed"' not in logs)
 
         started = time.time()
         code, out = docker("stop", "-t", "30", name)

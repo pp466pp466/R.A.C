@@ -1,7 +1,7 @@
 """rpg-notebook（RC-2b）的 HTTP 驗收腳本（任務 5.1）。
 
     python scripts/acceptance_rpg_notebook.py [--base-url http://localhost:5010] [--helper-url http://localhost:5001]
-                                             [--model-url http://127.0.0.1:5002] [--server-log 路徑] [--only basic,full,abandon,rules]
+                                             [--model-url http://127.0.0.1:5002] [--server-log 路徑] [--only basic,full,abandon,rules,eof] [--assert-eof]
 
 對一個**本機驗收環境**（應用程式、切換身分的小幫手、假的 RPG 模型供應商；啟動方式同 `acceptance_rpg_turn.py`）走完記事簿的四個案例，
 逐項輸出「通過」、「失敗」或「未驗證」，最後輸出摘要（結束代碼：沒有失敗為 0，有失敗為 1，位址不是本機為 2）。
@@ -10,7 +10,7 @@
 
 - **只對本機執行**、腳本本身不含機密、輸出只有項目名稱、數字與結果（同 `acceptance_rpg_turn.py`）。
 - 每個案例各用一位**全新玩家**（小幫手 `GET /fresh/rpg?coins=N` 補給付費幣：記事簿要走 11 輪以上，每輪 30 幣，首登的 200 幣不夠），
-  所以案例彼此獨立，可用 `--only` 單獨重跑；總共約 64 輪，在驗收環境約 1.5 至 2 分鐘。
+  所以案例彼此獨立，可用 `--only` 單獨重跑；總共約 75 輪，在驗收環境約 2 分鐘。
 - **與假模型的約定**：動作文字裡的關鍵字決定抓取呼叫的行為，只要視窗（第 1 至 10 輪）內任何一輪帶關鍵字就生效。
 
     測試記事簿慢速   抓取呼叫先等 5 秒才回覆（讓串流先結束、抓取後完成）
@@ -19,12 +19,14 @@
     測試記事簿違規   在預設條目之外多一條必擋的句子（未成年的性內容）→ 規則層整次放棄
     （沒有關鍵字）   回 3 條各約 26 字、開頭為「第 1 至 10 輪」
 
-- 四個案例：
+- 五個案例：
     basic    11 輪：第 10 輪後記事簿仍空 → 第 11 輪的 `done` 先到、記事簿稍後才有 3 條（慢速）→ 帳本與遊戲幣沒有異動；
              接著玩家編輯與版本衝突、太長、規則層命中、清空，以及未登入、缺 CSRF、他人（404）
     full     31 輪：超量 → 已滿 → 原文再儲存被拒 → 已滿時第 21 輪不呼叫模型 → 刪到容量以內才能儲存 → 第 31 輪 AI 恢復更新
     abandon  11 輪：精簡重試後仍超過上限 → 放棄，記事簿不變
     rules    11 輪：條目含必擋的句子 → 放棄，記事簿不變
+    eof      11 輪（慢速）：第 11 輪不提早離開，量 done 到伺服器結束回應的間隔與結束當下的記事簿（design D1 的前提：gthread 先送出結束 chunk、
+             再執行關閉回呼）。預設只記錄數字；`--assert-eof`（容器內的 gunicorn 驗收）才要求間隔小於 1 秒、結束當下記事簿仍是空的
 - `--server-log` 是應用程式日誌的路徑：提供時，腳本讀取本次新增的 JSON 行，確認 `rpg.notebook_*` 事件、模型呼叫的用途為 `rpg_notebook`
   （帳本的用途）、沒有 `rpg.notebook_failed`，並掃描整段日誌找不到任何記事簿文字；未提供時這些項目標為「未驗證」。
   假模型的 `GET /_status`（`--model-url`）提供抓取呼叫計數，連不上時「呼叫次數」類的項目標為「未驗證」。
@@ -53,7 +55,8 @@ WINDOW = 10
 EDIT_LINE = "玩家補充：主角怕黑，睡覺一定要點燈。"
 FILLER = "山門前的石階共有九百九十九級"       # 假模型長條目的內容
 MISSING_ID = "00000000-0000-4000-8000-000000000000"
-CASES = ("basic", "full", "abandon", "rules")
+CASES = ("basic", "full", "abandon", "rules", "eof")
+EOF_LIMIT_SECONDS = 1.0                     # gthread 先送出結束 chunk、再執行關閉回呼：done 到結束回應的間隔必須小於這個值（design D1）
 LEDGER_KINDS = frozenset({"signup_grant", "admin_adjust", "turn_hold"})
 
 
@@ -100,8 +103,9 @@ class ServerLog:
 
 
 class NotebookAcceptance:
-    def __init__(self, base_url: str, helper_url: str, model: Client | None, report: Report, log: ServerLog) -> None:
+    def __init__(self, base_url: str, helper_url: str, model: Client | None, report: Report, log: ServerLog, *, assert_eof: bool = False) -> None:
         self.base_url, self.helper_url, self.model, self.r, self.log = base_url, helper_url, model, report, log
+        self.assert_eof = assert_eof
         self.run_id = secrets.token_hex(3)
         self.sequence = 0
         self.log_start = log.mark()
@@ -439,6 +443,45 @@ class NotebookAcceptance:
         self.ledger_is_clean(player, 11, "規則層案例")
         self.log_checks(since, "規則層案例", expect={"abandoned": 1}, notebook_calls=1)
 
+    def case_eof(self) -> None:
+        """D1 的前提：串流先結束、關閉回呼之後才執行。第 11 輪不提早離開（讀到伺服器結束回應為止），量 `done` 到結束的間隔與結束當下的記事簿。
+
+        gunicorn gthread 的預期：結束 chunk 在 `done` 之後立刻送出（間隔遠小於慢速抓取的 5 秒），結束當下記事簿還是空的，約 5 秒後才有內容。
+        Werkzeug 開發伺服器（HTTP/1.0、沒有 Content-Length）可能要等到回呼跑完才關連線，所以預設只記錄數字、不計入通過或失敗；
+        `--assert-eof`（容器內的 gunicorn 驗收使用）才把這兩項當成通過條件。"""
+        r = self.r
+        player = self.fresh(coins=11 * TURN_COST)
+        save = self.start_save(player) if player else None
+        if player is None or save is None:
+            return
+        since, base = self.log.mark(), self.capture_calls()
+        if not self.play_turns(player, save, 1, 10, {2: KW_SLOW}):
+            return
+        started = time.monotonic()
+        eleventh = self.play(player, save, 11)
+        at_eof = self.notebook(player, save)                    # 讀到結束的當下（多一次往返的誤差在毫秒內）
+        done_at, ended_at = eleventh.first_at("done"), eleventh.ended_at
+        r.check("第 11 輪：done 為 complete、turn_number 11，且伺服器結束了回應（沒有提早離開）",
+                (eleventh.done or {}).get("status") == "complete" and (eleventh.done or {}).get("turn_number") == 11 and ended_at is not None, str(eleventh.done))
+        if done_at is not None and ended_at is not None:
+            gap = ended_at - done_at
+            empty_at_eof = at_eof.get("length") == 0 and at_eof.get("version") == 1
+            summary = f"done 在 {done_at:.2f} 秒、結束回應在 {ended_at:.2f} 秒（間隔 {gap:.2f} 秒）；結束當下記事簿 {at_eof.get('length')} 字、版本 {at_eof.get('version')}"
+            if self.assert_eof:
+                r.note(f"實測：{summary}")
+                r.check(f"結束 chunk 先送出：done 到結束回應的間隔小於 {EOF_LIMIT_SECONDS:.0f} 秒（抓取要約 {SLOW_SECONDS:.0f} 秒）", gap < EOF_LIMIT_SECONDS, summary)
+                r.check("結束回應當下記事簿還是空的：關閉回呼在結束 chunk 之後才執行", empty_at_eof, summary)
+            else:
+                r.note(f"資訊（沒有 --assert-eof，不計入通過或失敗）：{summary}")
+        appeared = self.wait_until(lambda: (self.notebook(player, save).get("length") or 0) > 0)
+        r.check(f"結束回應之後記事簿才更新：關閉回呼確實執行（自第 11 輪送出起 {time.monotonic() - started:.1f} 秒內有內容）", appeared)
+        notebook = self.notebook(player, save)
+        lines = str(notebook.get("text", "")).split("\n")
+        r.check(f"記事簿追加 {DEFAULT_ENTRIES} 條、版本 2、字數與全文一致", len(lines) == DEFAULT_ENTRIES and notebook.get("version") == 2 and notebook.get("length") == len(str(notebook.get("text", ""))), str(notebook.get("version")))
+        self.wait_for_capture(base, 1, since, "rpg.notebook_captured")
+        self.ledger_is_clean(player, 11, "結束回應案例")
+        self.log_checks(since, "結束回應案例", expect={"captured": 1}, notebook_calls=1)
+
     def log_scan(self) -> None:
         if not self.log.available:
             self.r.unverified("應用程式日誌沒有任何記事簿文字、玩家行動與被擋的句子", "未提供 --server-log")
@@ -456,6 +499,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--model-url", default="http://127.0.0.1:5002", help="假的 RPG 模型（計數端點 /_status）")
     parser.add_argument("--server-log", type=Path, default=None, help="應用程式日誌的路徑（選填）")
     parser.add_argument("--only", default=",".join(CASES), help=f"只跑指定的案例（逗號分隔，預設全部：{','.join(CASES)}）")
+    parser.add_argument("--assert-eof", action="store_true",
+                        help="把 eof 案例的時序（done 到結束回應小於 1 秒、結束當下記事簿仍是空的）當成通過條件；只在 gunicorn gthread 下使用（容器驗收），開發伺服器預設只記錄數字")
     args = parser.parse_args(argv)
     only = tuple(name.strip() for name in args.only.split(",") if name.strip())
     unknown = [name for name in only if name not in CASES]
@@ -471,7 +516,7 @@ def main(argv: list[str] | None = None) -> int:
     report = Report()
     started = time.monotonic()
     try:
-        NotebookAcceptance(args.base_url, args.helper_url, model, report, ServerLog(args.server_log)).run(only)
+        NotebookAcceptance(args.base_url, args.helper_url, model, report, ServerLog(args.server_log), assert_eof=args.assert_eof).run(only)
     except OSError as error:
         report.check("連線到驗收環境", False, f"{type(error).__name__}（驗收環境是否已啟動？）")
     print(f"\n摘要：通過 {report.count(PASS)}、失敗 {report.count(FAIL)}、未驗證 {report.count(UNVERIFIED)}（{time.monotonic() - started:.1f} 秒）")
