@@ -1044,7 +1044,7 @@ change `game-wallet`（W1）。RPG 劇情對話改為消耗遊戲幣（客服不
 
 ## RPG 回合引擎（rpg-turn-engine）
 
-change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來：回合與第 0 幕的 Server-Sent Events 串流、逐句輸出審查、世界狀態驗證與寫回、遊戲幣的預扣結算與退款、被擋與中斷的處理。**這個 change 只有後端**：畫面（打字機、轉場文字、逾時處理）屬 RC-3。規範在 AGENTS.md 第 5、6、7、10 節；設計見 `openspec/changes/rpg-turn-engine/design.md`（D1 至 D16），流程圖與模組分工見 [docs/系統架構-architecture.md](docs/系統架構-architecture.md) 的「RPG 回合引擎」。
+change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來：回合與第 0 幕的 Server-Sent Events 串流、逐句輸出審查、世界狀態驗證與寫回、遊戲幣的預扣結算與退款、被擋與中斷的處理。**這個 change 只有後端**：畫面（打字機、轉場文字、逾時處理）屬 RC-3。規範在 AGENTS.md 第 5、6、7、10 節；設計見 `openspec/changes/archive/2026-11-10-rpg-turn-engine/design.md`（D1 至 D16），流程圖與模組分工見 [docs/系統架構-architecture.md](docs/系統架構-architecture.md) 的「RPG 回合引擎」。
 
 ### 端點
 
@@ -1103,7 +1103,7 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | `scripts/rpg_acceptance_harness.py` | 驗收用的測試替身：假的 RPG 模型（OpenAI 相容，串流、狀態呼叫與 `GET /_status` 計數；動作文字的關鍵字 `測試被擋一次`、`測試被擋兩次`、`測試中斷`、`測試慢速`、`測試結局` 決定行為）與「建立全新玩家」小幫手（`GET /fresh/rpg`）。本機驗收環境（專案之外的 `newprojet-acceptance`）與 `scripts/verify_container.py` 的容器驗收共用同一份 |
 | `python scripts/acceptance_rpg_real_model.py --base-url http://localhost:5011 [--server-log …]` | **真實模型驗證**（人工執行、不是自動測試）：對第二個應用程式行程（用 `.env` 的 OpenRouter 設定，資料庫用驗收環境的）各跑一次第 0 幕與三個回合，輸出首字與整段時間、字數、狀態事件與日誌事件。只送劇本內建內容與寫死的示範行動，沒有個資 |
 
-### 驗收紀錄（rpg-turn-engine，2026-11-10，批次 ① 至 ⑥ 已實作，尚未提交、尚未使用者驗收）
+### 驗收紀錄（rpg-turn-engine，2026-11-10，已提交 `70e6786`，已封存）
 
 | 已驗證 | 結果 |
 |---|---|

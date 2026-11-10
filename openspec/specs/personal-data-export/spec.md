@@ -5,9 +5,6 @@
 
 ## Requirements
 
-
-
-
 ### Requirement: 登入使用者可匯出自己的資料
 登入使用者 SHALL 能匯出自己的帳號資料與全部對話，格式為 JSON 或 CSV。端點 SHALL 需要登入，只匯出呼叫者本人的資料，且 SHALL NOT 接受任何指定其他使用者的參數。未登入 SHALL 回應 401。狀態為 `deletion_pending` 的受限登入狀態 SHALL NOT 能匯出。
 
@@ -156,3 +153,14 @@ CSV 匯出 SHALL 為一個 zip 檔，內含 `account.csv`（帳號資料，一�
 #### Scenario: 沒有錢包的使用者
 - **WHEN** 從未存取錢包的使用者匯出
 - **THEN** 餘額為 0、帳本為空，且沒有因此建立錢包
+
+### Requirement: 匯出納入第 0 幕
+個人資料匯出的每個存檔 SHALL 含第 0 幕的狀態與文字（`pending` 或空文字時為空）。第 0 幕是由玩家的主角衍生的文字，視為個資，SHALL 隨存檔匯出；JSON 與 CSV 的存檔資料 SHALL 各含該欄位。匯出 SHALL NOT 含開始生成的時間與內部編號。
+
+#### Scenario: 有第 0 幕
+- **WHEN** 有第 0 幕的存檔被匯出
+- **THEN** 匯出的存檔含第 0 幕的狀態與文字
+
+#### Scenario: 尚未生成
+- **WHEN** 第 0 幕仍是 `pending` 的存檔被匯出
+- **THEN** 該存檔的第 0 幕文字為空
