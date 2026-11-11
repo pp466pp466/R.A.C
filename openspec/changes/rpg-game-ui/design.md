@@ -84,9 +84,9 @@
 
 `app/static/js/game/` 新增（載入順序即相依順序，樣板守門測試固定）：`sse-parser.js` → `turn-stream.js` → `game-state.js`（時間軸資料模型、事件到狀態的轉換、錯誤對照、記事簿與簽到的純函式）→ `game-store.js` → `game-sync.js` → `game-wallet.js`、`game-notebook.js`、`game-session.js`（三個 `createXxx(deps)`，回傳 `refs＋methods`，用 Vue 全域的 `ref`／`computed`，依賴由 `game.js` 注入）→ `game.js`（掛載與接線，唯一直接碰 `document`／`window` 的地方）。拆成三個 `create` 是為了讓每個都能在 `vm` 沙盒用替身測試（與 `entry.js`／`wizard.js` 的做法一致），也讓批次的檔案邊界清楚。`game-api.js` 擴充 `snapshot`、`turns`、`wallet`、`checkin`、`notebook`、`saveNotebook`（axios，`timeout` 與 `signal` 由呼叫端傳入）；`game-labels.js` 補串流與記事簿用的對照。樣式在 `game.css` 以 `gm-` 前綴擴充（既有 `ge-`、`gw-`）。
 
-### D7 版面：時間軸＋側欄，沿用客服的 992px 斷點
+### D7 版面：時間軸＋可開關的側欄，沿用客服的 992px 斷點
 
-桌面（≥992px）為兩欄：左側時間軸與底部固定的輸入區，右側 320px 的側欄（分頁「世界」「記事簿」）預設開啟；手機與平板（<992px）側欄預設關閉，以覆蓋方式開啟並附遮罩，不記住狀態。開關由 Vue 響應式變數接管，不用 `data-bs-*`。桌面側欄的開關**不寫入 localStorage**（客服的 Sidebar 有記，但這裡側欄是資訊面板而非導覽，預設開啟已足夠；少一個儲存點就少一個個資面）。時間軸只渲染最近 60 個項目，上方有「顯示更早的內容」；新內容到達時，只有玩家在底部附近（≤80px）才自動捲動，否則顯示「回到最新」。輸入區用 `<textarea>`，Enter 換行、`Ctrl＋Enter` 或按鈕送出；字數上限取自初始狀態的 `limits.action_max`（以 NFC 正規化後的 Unicode 字元計，與後端 `ACTION_MAX` 同一個算法）。
+側欄（分頁「世界」「記事簿」，寬 320px）**在桌面與手機都預設收合**（使用者決定），頂列有開關按鈕（`aria-expanded`、`aria-label`）。桌面（≥992px）開啟時推擠主區域成兩欄；手機與平板（<992px）以覆蓋方式開啟並附遮罩，Esc 與遮罩可關閉。開關由 Vue 響應式變數接管，不用 `data-bs-*`，**不寫入 localStorage**（客服的 Sidebar 有記，但這裡側欄是資訊面板而非導覽，每次回到預設收合即可；少一個儲存點就少一個個資面）。預設收合讓時間軸在所有寬度都有最大的閱讀空間；代價是世界狀態不會一眼可見，所以頂列在收合時以一行摘要顯示目前地點。時間軸只渲染最近 60 個項目，上方有「顯示更早的內容」；新內容到達時，只有玩家在底部附近（≤80px）才自動捲動，否則顯示「回到最新」。輸入區用 `<textarea>`，Enter 換行、`Ctrl＋Enter` 或按鈕送出；字數上限取自初始狀態的 `limits.action_max`（以 NFC 正規化後的 Unicode 字元計，與後端 `ACTION_MAX` 同一個算法）。
 
 ### D8 遊戲幣與簽到
 
