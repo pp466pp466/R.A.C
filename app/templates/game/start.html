@@ -1,21 +1,206 @@
 {% extends "base.html" %}
-{# 開存檔精靈的外殼（精靈本體在後續批次）：目前只是說明與回到入口的連結，沒有腳本與請求。
-   版本識別碼只在網址裡，不在頁面內容中。 #}
+{# 開存檔精靈（序章、聯繫、創角）：Vue 3 全域變數模式。步驟、提示、按鈕的禁用與三個 Modal 的顯示完全由 Vue 的響應式變數接管（v-if／v-show），
+   不使用 Bootstrap 的 JavaScript 外掛與任何 Bootstrap 的互動屬性；所有來自劇本作者與玩家的文字一律以雙大括號插值顯示（純文字），不解析任何標記語言。
+   Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。劇本內容不在初始狀態裡，由 setup 端點（GET /api/sessions/setup/ 加版本識別碼）取得；版本識別碼只在網址裡，頁面內容不含它。
+   創角內容只在頁面記憶體：不寫任何瀏覽器儲存、不放網址，重新整理就回到序章（刻意的，見 rpg-creation-wizard 規格）。
+
+   與 wizard.js（tasks 4.1，由 setup() 回傳）的約定——這份樣板用到的名稱：
+   - 狀態：phase（'loading'｜'ready'｜'failed'）、loadFailure（{ message, link, retry }｜null）、restriction、gateNotice（{ text, link, linkText }｜null）、
+     setup（setup 的回應）、steps、step（'prologue'｜'contact'｜'create'）、stepIndex、draft、anchor（Game.blankAnchor() 的形狀）、
+     counts（Game.fieldCounts）、anchorCounts（Game.anchorCount）、fieldErrors（鍵見 Game.fieldKeyOf）、notice（{ text, link }｜null）、
+     busy（開存檔進行中）、suggesting（生成進行中）、modal（{ skip, overwrite, leave }）。
+   - 計算：cardFields（Game.CARD_FIELDS）、originOptions、targetGroups、chosenTarget（{ kindLabel, label }｜null）、anchorErrors（字串陣列）、
+     anchorSummary（字串）、bubbles、suggestionsRemaining、suggestNotice（字串）、canSuggest、startDisabled。
+   - 方法：loadSetup、next、back、goTo、chooseTarget、isChosen、askSkip、confirmSkip、unskip、requestSuggestion、confirmSuggestion、start、
+     leaveClick、confirmLeave、originLabel。 #}
 {% block title %}開始冒險{% endblock %}
 {% block head_assets %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
 {% endblock %}
 {% block content %}
-<div class="ge-shell">
+{# 過渡用的說明：wizard.js（tasks 4.1）加入之後移除這一段；在那之前下方的精靈沒有腳本，v-cloak 會把它藏起來。 #}
+<p id="wizard-pending-note" class="ge-banner gw-pending" role="status">建立主角的畫面建置中，暫時還不能從這裡開始冒險。<a href="/game">回到冒險</a></p>
+
+<div id="wizard-app" class="ge-shell" v-cloak>
+{% raw %}
   <header class="ge-topbar">
     <h1 class="ge-topbar__title">開始冒險</h1>
-    <a class="ge-topbar__link" href="/game">回到冒險</a>
+    <a class="ge-topbar__link" href="/game" @click="leaveClick">回到冒險</a>
   </header>
+
+  <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
+  <p v-if="gateNotice" class="ge-banner" role="alert">
+    {{ gateNotice.text }}
+    <a v-if="gateNotice.link" :href="gateNotice.link">{{ gateNotice.linkText }}</a>
+  </p>
+
   <main class="ge-main">
-    <section class="ge-panel">
-      <p class="ge-banner" role="status">建立主角的畫面建置中，暫時還不能從這裡開始冒險。</p>
-      <p class="ge-card__actions"><a class="ui-btn ui-btn--primary" href="/game">回到冒險</a></p>
+    <p v-if="phase === 'loading'" class="ge-hint" role="status">載入中…</p>
+
+    <!-- ===== 載入失敗：找不到、分級高於目前模式、可重試的失敗 ===== -->
+    <section v-else-if="phase === 'failed'" class="ge-panel">
+      <p class="ge-banner" role="alert">
+        {{ loadFailure.message }}
+        <a v-if="loadFailure.link" :href="loadFailure.link.href">{{ loadFailure.link.text }}</a>
+      </p>
+      <p class="gw-actions">
+        <button v-if="loadFailure.retry" type="button" class="ui-btn ui-btn--primary" @click="loadSetup">重試</button>
+        <a v-else class="ui-btn" href="/game">回到冒險</a>
+      </p>
     </section>
+
+    <template v-else>
+      <ol class="gw-steps" aria-label="建立主角的步驟">
+        <li v-for="(item, index) in steps" :key="item.id" class="gw-step"
+            :class="{ 'gw-step--current': item.id === step, 'gw-step--done': index < stepIndex }" :aria-current="item.id === step ? 'step' : null">
+          <span class="gw-step__no">{{ index + 1 }}</span>{{ item.label }}
+        </li>
+      </ol>
+
+      <p v-if="notice" class="ge-error" role="alert">
+        {{ notice.text }}
+        <a v-if="notice.link" :href="notice.link.href">{{ notice.link.text }}</a>
+      </p>
+
+      <!-- ===== 序章：唯讀 ===== -->
+      <section v-if="step === 'prologue'" class="gw-panel" aria-labelledby="gw-prologue-title">
+        <p class="gw-eyebrow">序章</p>
+        <h2 id="gw-prologue-title" class="gw-title">{{ setup.title }}</h2>
+        <div class="gw-story">{{ setup.background }}</div>
+        <p class="gw-actions">
+          <button type="button" class="ui-btn ui-btn--primary" :disabled="busy" @click="next">下一步：聯繫</button>
+        </p>
+      </section>
+
+      <!-- ===== 聯繫：選一個人物、地點或里程碑，寫一句關係；或明確略過 ===== -->
+      <section v-else-if="step === 'contact'" class="gw-panel" aria-labelledby="gw-contact-title">
+        <p class="gw-eyebrow">聯繫</p>
+        <h2 id="gw-contact-title" class="gw-title">主角與這個世界的聯繫</h2>
+        <p class="ge-hint">選一個劇本裡的人物、地點或里程碑，用一句話寫下主角與它的關係，開場會從這裡展開。內容會經過系統檢查，不符合規範時只會告訴您類別。</p>
+
+        <div v-if="anchor.skipped" class="gw-summary" role="status">
+          <p>您選擇略過聯繫：開場只依背景故事與您的角色卡展開。</p>
+          <button type="button" class="ui-btn" :disabled="busy" @click="unskip">改為填寫聯繫</button>
+        </div>
+
+        <template v-else>
+          <fieldset v-for="group in targetGroups" :key="group.kind" class="gw-targets">
+            <legend class="gw-legend">{{ group.label }}</legend>
+            <div class="gw-target-list">
+              <button v-for="option in group.options" :key="option.kind + ':' + option.ref" type="button" class="gw-target"
+                      :class="{ 'gw-target--chosen': isChosen(option.kind, option.ref) }" :aria-pressed="isChosen(option.kind, option.ref) ? 'true' : 'false'"
+                      :disabled="busy" @click="chooseTarget(option.kind, option.ref)">{{ option.label }}<span v-if="option.detail" class="gw-target__detail">{{ option.detail }}</span></button>
+            </div>
+          </fieldset>
+          <p v-if="targetGroups.length === 0" class="ge-hint">這個劇本沒有可以聯繫的人物、地點或里程碑，請選擇略過聯繫。</p>
+
+          <div class="gw-field">
+            <label for="gw-anchor-text">
+              <template v-if="chosenTarget">與{{ chosenTarget.kindLabel }}「{{ chosenTarget.label }}」的關係（一句話）</template>
+              <template v-else>關係（一句話）</template>
+              <small v-if="anchorCounts.max !== null" class="gw-count" :class="{ 'gw-count--over': anchorCounts.over }">{{ anchorCounts.count }} / {{ anchorCounts.max }}</small>
+            </label>
+            <input id="gw-anchor-text" type="text" class="gw-input" v-model="anchor.text" :disabled="busy" autocomplete="off" placeholder="例：自幼同門的師兄，總是替我說話">
+            <p v-for="(message, index) in anchorErrors" :key="index" class="gw-field-error" role="alert">{{ message }}</p>
+          </div>
+        </template>
+
+        <p class="gw-actions">
+          <button type="button" class="ui-btn" :disabled="busy" @click="back">上一步</button>
+          <button v-if="!anchor.skipped" type="button" class="ui-btn" :disabled="busy" @click="askSkip">略過聯繫</button>
+          <button type="button" class="ui-btn ui-btn--primary" :disabled="busy" @click="next">下一步：創角</button>
+        </p>
+      </section>
+
+      <!-- ===== 創角：角色卡、來歷、示範氣泡、自我介紹與「請 AI 生成」 ===== -->
+      <section v-else class="gw-panel" aria-labelledby="gw-create-title">
+        <p class="gw-eyebrow">創角</p>
+        <h2 id="gw-create-title" class="gw-title">建立您的主角</h2>
+
+        <div class="gw-summary" role="status">
+          <p>聯繫：{{ anchorSummary }}</p>
+          <button type="button" class="ui-btn" :disabled="busy || suggesting" @click="goTo('contact')">修改聯繫</button>
+        </div>
+
+        <div class="gw-ai">
+          <div class="gw-field">
+            <label for="gw-intro">
+              自我介紹（選填）
+              <small v-if="counts.intro.max !== null" class="gw-count" :class="{ 'gw-count--over': counts.intro.over }">{{ counts.intro.count }} / {{ counts.intro.max }}</small>
+            </label>
+            <textarea id="gw-intro" class="gw-input" rows="3" v-model="draft.intro" :disabled="busy || suggesting" autocomplete="off" placeholder="簡單說說您想扮演怎樣的人，AI 會據此生成角色卡與一個和劇本的聯繫。"></textarea>
+            <p class="ge-hint">自我介紹會送交 AI 處理，只用於這一次生成，不會被保存；請不要輸入真實的個人資料。</p>
+            <p v-if="fieldErrors.intro" class="gw-field-error" role="alert">{{ fieldErrors.intro }}</p>
+          </div>
+          <p class="gw-actions">
+            <button type="button" class="ui-btn" :disabled="!canSuggest" :aria-busy="suggesting ? 'true' : 'false'" @click="requestSuggestion">{{ suggesting ? '生成中…' : '請 AI 生成' }}</button>
+            <span class="gw-remaining">今日剩餘 {{ suggestionsRemaining }} 次</span>
+          </p>
+          <p v-if="suggestNotice" class="ge-hint" role="status">{{ suggestNotice }}</p>
+        </div>
+
+        <p v-if="fieldErrors.protagonist" class="gw-field-error" role="alert">{{ fieldErrors.protagonist }}</p>
+        <div v-for="field in cardFields" :key="field.key" class="gw-field">
+          <label :for="'gw-' + field.key">
+            {{ field.label }}<span v-if="field.required" class="gw-required" aria-hidden="true"> *</span><span v-else class="gw-optional">（選填）</span>
+            <small v-if="field.counted && counts[field.key].max !== null" class="gw-count" :class="{ 'gw-count--over': counts[field.key].over }">{{ counts[field.key].count }} / {{ counts[field.key].max }}</small>
+          </label>
+          <textarea v-if="field.multiline" :id="'gw-' + field.key" class="gw-input" rows="3" v-model="draft[field.key]" :disabled="busy || suggesting" autocomplete="off"></textarea>
+          <input v-else :id="'gw-' + field.key" type="text" class="gw-input" :inputmode="field.key === 'age' ? 'numeric' : null" v-model="draft[field.key]" :disabled="busy || suggesting" autocomplete="off">
+          <p v-if="field.hint" class="ge-hint">{{ field.hint }}</p>
+          <p v-if="fieldErrors[field.key]" class="gw-field-error" role="alert">{{ fieldErrors[field.key] }}</p>
+        </div>
+
+        <fieldset class="gw-field gw-origin">
+          <legend class="gw-legend">來歷</legend>
+          <label v-for="option in originOptions" :key="option" class="gw-radio">
+            <input type="radio" name="gw-origin" :value="option" v-model="draft.origin" :disabled="busy || suggesting">{{ originLabel(option) }}
+          </label>
+          <p class="ge-hint">穿越者會保留現代的知識，卻和這個世界格格不入。AI 生成不會決定來歷，由您自己選擇。</p>
+          <p v-if="fieldErrors.origin" class="gw-field-error" role="alert">{{ fieldErrors.origin }}</p>
+        </fieldset>
+
+        <section class="gw-demo" aria-label="示範氣泡">
+          <h3 class="gw-subtitle">示範</h3>
+          <p class="ge-hint">依您輸入的姓名與說話風格排出的示範，不會送出任何請求。</p>
+          <ul class="gw-bubbles">
+            <li v-for="(bubble, index) in bubbles" :key="index" class="gw-bubble" :class="'gw-bubble--' + bubble.kind">
+              <span v-if="bubble.speaker" class="gw-bubble__speaker">{{ bubble.speaker }}</span>
+              <span class="gw-bubble__text">{{ bubble.text }}</span>
+              <span v-if="bubble.note" class="gw-bubble__note">{{ bubble.note }}</span>
+            </li>
+          </ul>
+        </section>
+
+        <p class="gw-actions">
+          <button type="button" class="ui-btn" :disabled="busy || suggesting" @click="back">上一步</button>
+          <button type="button" class="ui-btn ui-btn--primary" :disabled="startDisabled" :aria-busy="busy ? 'true' : 'false'" @click="start">{{ busy ? '處理中…' : '開始冒險' }}</button>
+        </p>
+        <p v-if="busy" class="ge-hint" role="status">正在檢查內容並建立存檔，最久可能需要約一分鐘，請不要關閉頁面。</p>
+      </section>
+    </template>
   </main>
+
+  <ui-modal v-model="modal.skip" title="略過聯繫？" status-code="SKIP_CONTACT" confirm-text="略過聯繫" @confirm="confirmSkip">
+    <p>略過之後，開場只會依劇本的背景故事與您的角色卡展開，不會連到特定的人物、地點或事件。之後隨時可以回到「聯繫」這一步改為填寫。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.overwrite" title="覆蓋目前的內容？" status-code="OVERWRITE_DRAFT" confirm-text="覆蓋並生成" @confirm="confirmSuggestion">
+    <p>AI 生成的角色卡與聯繫會取代您目前已填寫的角色卡與聯繫（來歷與自我介紹不變）。生成之後仍然可以修改，也可以再次生成。</p>
+    <p class="ge-hint">生成成功會用掉今日的一次機會。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.leave" title="離開之前" status-code="LEAVE_WIZARD" confirm-text="離開" cancel-text="留在這裡" @confirm="confirmLeave">
+    <p>您填寫的角色卡與聯繫不會被保存，離開之後需要重新開始。</p>
+  </ui-modal>
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
 </div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取。只有會員等級、閘門結果與兩個請求逾時，沒有劇本內容 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/wizard-state.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
+  {# tasks 4.1 加入：wizard.js（Vue 掛載，必須是最後一個） #}
 {% endblock %}

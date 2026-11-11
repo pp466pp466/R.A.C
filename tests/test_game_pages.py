@@ -2,7 +2,7 @@
 
 - `/game`：入口頁（選劇本與我的存檔）。初始狀態只有會員等級、故事偏好與閘門結果，**沒有清單內容**。
 - `/game/<存檔>`：存檔頁的空殼。標題與主角姓名由伺服器渲染（自動跳脫），非擁有者與不存在的得到逐字相同的 404。
-- `/game/start/<版本>`：開存檔精靈的外殼；與存檔頁的路徑不衝突。
+- `/game/start/<版本>`：開存檔精靈（序章、聯繫、創角）的樣板；初始狀態只有會員等級、閘門結果與兩個請求逾時（沒有劇本內容）；與存檔頁的路徑不衝突。
 
 清單端點的資料與規則在 `test_session_api.py`、`test_game_entry_service.py`；前端純函式與掛載邏輯在 `tests/js/game-labels.test.js`、`tests/js/entry.test.js`。
 """
@@ -240,6 +240,101 @@ def test_the_three_game_routes_are_distinct_rules(app):
         assert rule.methods - {"HEAD", "OPTIONS"} == {"GET"}, rule.rule
 
 
+# ---- /game/start/<版本>：精靈頁的初始狀態與樣板（精靈的行為在 tests/js/wizard-state.test.js 與之後的 wizard.test.js） -----------------
+
+RPG_ENV = {
+    "OPENROUTER_API_KEY": "sk-or-v1-fake-key-for-tests-0123456789", "OPENROUTER_MODEL": "cognitivecomputations/dolphin-mistral-24b-venice-edition:free",
+}
+SESSION_API = PROJECT_ROOT / "app" / "controllers" / "session_api_controller.py"
+
+
+def test_the_wizard_initial_state_holds_only_the_tier_the_gate_and_the_two_timeouts_never_script_content(app):
+    client, _ = client_for(app)
+    version_id = publish_builtin(app, title="不該出現在精靈外殼的劇本")
+    response = client.get(f"/game/start/{version_id}")
+    assert response.status_code == 200
+    assert state_of(response) == {"member_tier": "free", "gate": None, "suggest_timeout_ms": 35000, "start_timeout_ms": 65000}
+    html = response.get_data(as_text=True)
+    assert "不該出現在精靈外殼" not in html and version_id not in html            # 劇本內容由 setup 端點取得；識別碼只在網址裡
+    assert "user1@example.com" not in html and "birth" not in html.lower()
+
+
+def test_the_start_timeout_matches_the_65_seconds_the_session_api_documents(app):
+    """開存檔最壞是兩次模型呼叫（劇本審查與主角審查）：2 × 後端單次請求總預算 + 5 秒；預設預算 30 秒，所以是 65 秒。"""
+    assert "65 秒" in read(SESSION_API)
+    client, _ = client_for(app)
+    assert state_of(client.get(f"/game/start/{GHOST}"))["start_timeout_ms"] == 65000
+
+
+@pytest.mark.parametrize("extra", [{}, RPG_ENV], ids=["without-rpg-model", "with-rpg-model"])
+def test_both_timeouts_follow_the_budget_setting_not_a_constant(extra):
+    config = load_config(environ={"APP_ENV": "testing", "LLM_REQUEST_BUDGET_SECONDS": "40", "LLM_CALL_TIMEOUT_SECONDS": "25", **extra})
+    application = create_app(config, clock=FakeClock())
+    Base.metadata.create_all(application.extensions["db_engine"])
+    client, _ = client_for(application)
+    state = state_of(client.get(f"/game/start/{GHOST}"))
+    assert state["suggest_timeout_ms"] == 45000                                  # 後端預算 40 秒加 5 秒（與 /scripts 的送審相同的算法）
+    assert state["start_timeout_ms"] == 85000                                    # 2 × 40 + 5
+
+
+@pytest.mark.parametrize("overrides, gate", [
+    ({"role": ROLE_ADMIN, "age": None}, "age_confirmation_required"), ({"age": 12}, "age_restricted"), ({"member_tier": "vip"}, None),
+])
+def test_the_wizard_carries_the_gate_the_server_decided_and_the_member_tier(app, overrides, gate):
+    client, _ = client_for(app, **overrides)
+    response = client.get(f"/game/start/{GHOST}")
+    assert response.status_code == 200                                           # 管理員沒有受限登入狀態：頁面可以開，開始由閘門禁用
+    state = state_of(response)
+    assert state["gate"] == gate and state["member_tier"] == overrides.get("member_tier", "free")
+
+
+def test_the_wizard_template_has_the_three_steps_the_three_modals_and_a_state_driven_root():
+    html = read(TEMPLATES / "start.html")
+    for title_id in ("gw-prologue-title", "gw-contact-title", "gw-create-title"):
+        assert f'id="{title_id}"' in html
+    assert 'v-for="(item, index) in steps"' in html and "step === 'prologue'" in html and "step === 'contact'" in html
+    assert re.search(r'<div id="wizard-app" class="ge-shell" v-cloak>', html)
+    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["SKIP_CONTACT", "OVERWRITE_DRAFT", "LEAVE_WIZARD"]
+    assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
+    assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)               # 初始狀態經 tojson 跳脫
+    assert re.search(r'<a class="ge-topbar__link" href="/game" @click="leaveClick">', html)   # 離開前要先確認，所以由 Vue 接管點擊
+    assert re.search(r':disabled="startDisabled"[^>]*@click="start"', html)      # 「開始冒險」的禁用由 Vue 的狀態決定
+
+
+def test_the_wizard_shows_script_and_player_text_only_as_plain_interpolations():
+    html = read(TEMPLATES / "start.html")
+    for expression in ("setup.title", "setup.background", "option.label", "option.detail", "bubble.text", "bubble.speaker", "bubble.note", "draft.intro", "anchor.text"):
+        assert re.search(r"\{\{\s*" + re.escape(expression) + r"\s*\}\}|v-model=\"" + re.escape(expression) + '"', html), expression
+    assert "v-html" not in html and "innerHTML" not in html and "|safe" not in html
+
+
+def test_the_contact_step_options_only_bind_a_name_and_an_occupation_never_age_or_hidden_traits():
+    html = read(TEMPLATES / "start.html")
+    assert "setup.characters" not in html                                        # 選項一律來自 targetGroups（只取姓名與職業，見 wizard-state.test.js）
+    assert not re.search(r"option\.(age|hidden\w*|personality|appearance)", html)
+    assert "v-for=\"group in targetGroups\"" in html and "v-for=\"option in group.options\"" in html
+
+
+def test_the_wizard_has_no_avatar_upload_and_no_gender_field():
+    html = read(TEMPLATES / "start.html")
+    assert not re.search(r'type="file"|gender|avatar|<img|頭像|性別', html, re.I)
+    assert 'type="radio"' in html and 'v-model="draft.origin"' in html           # 只有來歷單選
+    assert "{{ field.hint }}" in html and "與您本人的年齡無關" in read(JS_DIR / "wizard-state.js")   # 年齡是劇中年齡的說明在年齡欄位下
+
+
+def test_the_wizard_loads_its_scripts_in_dependency_order_and_hard_codes_no_timeout(app):
+    client, _ = client_for(app)
+    html = client.get(f"/game/start/{GHOST}").get_data(as_text=True)
+    names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
+    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "wizard-state.js", "game-api.js"):
+        assert needed in names, needed
+    assert names.index("auth-common.js") < names.index("game-labels.js") < names.index("wizard-state.js")     # wizard-state 要用 game-labels 的對照表
+    assert names.index("auth-common.js") < names.index("game-api.js")
+    assert not re.search(r"\b(35000|65000|45000|85000)\b", read(TEMPLATES / "start.html"))
+    api = strip_js_comments(read(JS_DIR / "game-api.js"))
+    assert not re.search(r"timeout\w*\s*[:=]\s*\d", api, re.I)                   # 逾時與中止訊號由呼叫端傳入，這裡不寫死
+
+
 # ---- 前端檔案的規則 --------------------------------------------------------------------------------------------------
 
 
@@ -363,8 +458,11 @@ def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
     for storage in ("localStorage", "sessionStorage", "indexedDB", "document.cookie"):
         assert storage not in js, storage
     api = strip_js_comments(read(JS_DIR / "game-api.js"))
-    assert "axios" in api and not re.search(r"""method:\s*['"](post|put|patch|delete)""", api, re.I)   # 入口頁只讀
-    assert "/api/sessions" in api
+    assert "axios" in api and "/api/sessions" in api
+    assert not re.search(r"""method:\s*['"](post|put|patch|delete)""", api, re.I)   # 兩個清單端點的 get() 只用 GET，入口頁只讀
+    # 寫入的呼叫只有精靈的兩個：生成預覽（無狀態）與開存檔；沒有其他會改動資料的呼叫
+    assert re.findall(r"""call\('(post|put|patch|delete)',\s*'([^']*)'""", api) == [("post", "/protagonist/suggest"), ("post", "")]
+    assert "request.timeout" in api and "request.signal" in api                 # 逾時與中止訊號由呼叫端傳入
 
 
 def test_every_loading_path_restores_its_state_in_a_finally_block():

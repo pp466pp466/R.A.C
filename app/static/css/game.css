@@ -112,6 +112,86 @@
 /* 存檔頁與精靈外殼的容器 */
 .ge-panel { min-width: 0; }
 
+/* ---- 開存檔精靈（/game/start/<版本>）-------------------------------------------- */
+/* 過渡用說明（wizard.js 加入之後連同樣板中的那一行一起移除）：不在 .ge-shell 內，所以自己置中 */
+.gw-pending { width: calc(100% - 32px); max-width: 960px; margin: 1rem auto 0; }
+
+.gw-steps { display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; margin: 0 0 1rem; padding: 0; list-style: none; }
+.gw-step { color: var(--color-text-muted); font-size: 0.9rem; }
+.gw-step__no { display: inline-block; min-width: 1.5rem; margin-right: 0.4rem; border: var(--border-hairline); border-radius: 999px; font-size: 0.8rem; text-align: center; }
+.gw-step--current { color: var(--color-text); }
+.gw-step--current .gw-step__no { border-color: var(--color-accent); color: var(--color-accent); }
+.gw-step--done .gw-step__no { background: var(--color-accent); border-color: var(--color-accent); color: var(--color-bg); }
+
+.gw-panel { min-width: 0; padding: 0.9rem 1rem 1rem; background: var(--color-surface); border: var(--border-hairline); }
+.gw-eyebrow { margin: 0 0 0.2rem; color: var(--color-text-muted); font-size: 0.8rem; letter-spacing: 0.12em; }
+.gw-title { margin: 0 0 0.6rem; font-size: 1.1rem; font-weight: 500; overflow-wrap: anywhere; }
+.gw-subtitle { margin: 0 0 0.3rem; font-size: 0.95rem; font-weight: 500; }
+.gw-story { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.95rem; line-height: 1.9; }
+
+.gw-field { min-width: 0; margin: 0 0 0.9rem; }
+.gw-field label, .gw-legend { display: block; margin-bottom: 0.3rem; padding: 0; color: var(--color-text); font-size: 0.9rem; }
+.gw-count { margin-left: 0.4rem; color: var(--color-text-muted); font-size: 0.8rem; font-weight: 400; }
+.gw-count--over { color: var(--color-accent); }
+.gw-required { color: var(--color-accent); }
+.gw-optional { margin-left: 0.2rem; color: var(--color-text-muted); font-size: 0.8rem; }
+.gw-field-error { margin: 0.3rem 0 0; color: var(--color-accent); font-size: 0.85rem; overflow-wrap: anywhere; }
+
+.gw-input {
+  display: block;
+  width: 100%;
+  padding: 0.45rem 0.65rem;
+  background: var(--color-bg);
+  border: var(--border-hairline);
+  border-radius: 0;
+  color: var(--color-text);
+  font: inherit;
+}
+
+.gw-input:focus { border-color: var(--color-accent); outline: none; }
+.gw-input:disabled { opacity: 0.6; }
+textarea.gw-input { resize: vertical; }
+
+.gw-targets { min-width: 0; margin: 0 0 0.9rem; padding: 0; border: 0; }
+.gw-target-list { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+
+.gw-target {
+  appearance: none;
+  max-width: 100%;
+  padding: 0.4rem 0.85rem;
+  background: transparent;
+  border: var(--border-hairline);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font: inherit;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.gw-target:hover, .gw-target:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
+.gw-target--chosen { border-color: var(--color-accent); color: var(--color-text); }
+.gw-target:disabled { opacity: 0.6; cursor: not-allowed; }
+.gw-target__detail { margin-left: 0.4rem; color: var(--color-text-muted); font-size: 0.8rem; }
+
+.gw-origin { margin-left: 0; margin-right: 0; padding: 0; border: 0; }
+.gw-radio { display: inline-block; margin: 0 1.2rem 0.3rem 0; cursor: pointer; }
+.gw-radio input { margin-right: 0.4rem; accent-color: var(--color-accent); }
+
+.gw-summary { margin: 0 0 1rem; padding: 0.6rem 0.9rem; border: var(--border-hairline); border-left: 2px solid var(--color-accent); overflow-wrap: anywhere; }
+.gw-summary p { margin: 0 0 0.5rem; }
+.gw-ai { margin: 0 0 1rem; padding: 0 0 0.25rem; border-bottom: var(--border-hairline); }
+
+.gw-demo { margin: 1rem 0; padding: 0.7rem 0.9rem; border: var(--border-hairline); border-left: 2px solid var(--color-accent); }
+.gw-bubbles { display: flex; flex-direction: column; gap: 0.5rem; margin: 0; padding: 0; list-style: none; }
+.gw-bubble { max-width: 100%; padding: 0.5rem 0.8rem; background: var(--color-bg); border: var(--border-hairline); overflow-wrap: anywhere; }
+.gw-bubble--narration { color: var(--color-text-muted); }
+.gw-bubble__speaker { display: block; color: var(--color-accent); font-size: 0.8rem; }
+.gw-bubble__note { display: block; margin-top: 0.25rem; color: var(--color-text-muted); font-size: 0.8rem; }
+
+.gw-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; margin: 1rem 0 0; }
+.gw-remaining { color: var(--color-text-muted); font-size: 0.85rem; }
+
 @media (min-width: 768px) {
   .ge-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -119,4 +199,5 @@
 @media (max-width: 575.98px) {
   .ge-tab { flex: 1 1 0; padding-left: 0.5rem; padding-right: 0.5rem; }
   .ge-card__actions .ui-btn { width: 100%; text-align: center; }
+  .gw-actions .ui-btn { flex: 1 1 100%; text-align: center; }
 }
