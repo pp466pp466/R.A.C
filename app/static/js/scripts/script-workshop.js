@@ -28,7 +28,7 @@
       var editor = Vue.reactive({
         version: null, draft: Scripts.blankDraft(), baseline: '', saving: false, submitting: false, working: false, errors: {}, general: ''
       });
-      var open = Vue.reactive({ catalog: true, background: true, characters: true, locations: false, milestones: true, ending: false });
+      var open = Vue.reactive({ catalog: true, background: true, characters: true, locations: false, milestones: true, ending: false, audience: true });
       var modal = Vue.reactive({ submit: false, conflict: false, leave: false, example: false, remove: false, removeTarget: null });
       var controller = null;
       var pendingLeave = null;

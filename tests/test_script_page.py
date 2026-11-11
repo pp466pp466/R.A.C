@@ -195,3 +195,36 @@ def test_the_page_is_traditional_chinese_with_the_utf8_declarations(app):
     html = client.get("/scripts").get_data(as_text=True)
     assert '<html lang="zh-Hant-TW"' in html and '<meta charset="UTF-8"' in html
     assert "新增劇本" in html
+
+
+# ---- 讀者頻道（story-preference；script-authoring 的「創作頁面的行為」）---------------------------------------------
+
+def audience_section() -> str:
+    html = read(TEMPLATE)
+    start = html.index("<!-- 讀者頻道")
+    return html[start:html.index("全部文字約", start)]
+
+
+def test_the_audience_section_is_the_last_block_of_the_editor_after_the_ending():
+    html = read(TEMPLATE)
+    assert html.index("<!-- 結局 -->") < html.index("<!-- 讀者頻道") < html.index("全部文字約") < html.index('type="submit"')
+    section = audience_section()
+    assert 'v-show="open.audience"' in section and 'class="sw-hint sw-lead"' in section
+    assert re.search(r"open\s*=\s*Vue\.reactive\(\{[^}]*\baudience: true\b", read(JS_DIR / "script-workshop.js"))   # 預設展開，不藏在摺疊裡
+
+
+def test_the_audience_radios_offer_exactly_three_values_bound_to_the_draft_and_are_disabled_when_the_version_is_read_only():
+    section = audience_section()
+    radios = re.findall(r"<input\b[^>]*>", section)
+    assert [re.search(r'value="(\w+)"', tag).group(1) for tag in radios] == ["all", "male", "female"]
+    assert all('type="radio"' in tag and 'v-model="editor.draft.audience"' in tag for tag in radios)
+    assert re.search(r'<fieldset class="sw-fieldset" :disabled="!canEdit">', section)                  # 唯讀版本（待審、已發佈）整組禁用
+    for label in ("全讀者", "男頻", "女頻"):
+        assert label in section, label
+
+
+def test_the_audience_section_says_it_only_orders_the_list_and_never_restricts_who_can_play():
+    section = audience_section()
+    assert "只影響劇本在清單中的排序" in section and "不限制誰能玩" in section
+    assert "err('audience')" in section and 'class="sw-error" role="alert"' in section                # 伺服器的欄位錯誤顯示在欄位旁
+    assert "v-html" not in section and "data-bs-" not in section

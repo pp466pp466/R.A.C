@@ -312,6 +312,23 @@
         </div>
       </section>
 
+      <!-- 讀者頻道（story-preference）：只影響劇本在清單中的排序 -->
+      <section class="sw-section">
+        <button type="button" class="sw-section__toggle" :aria-expanded="open.audience ? 'true' : 'false'" @click="toggle('audience')">
+          <span>讀者頻道</span><span aria-hidden="true">{{ open.audience ? '−' : '＋' }}</span>
+        </button>
+        <div v-show="open.audience" class="sw-section__body">
+          <p class="sw-hint sw-lead">選擇這份劇本主要寫給哪一類讀者看。它只影響劇本在清單中的排序（偏好相同的玩家會先看到），不限制誰能玩，也不影響內容模式。</p>
+          <fieldset class="sw-fieldset" :disabled="!canEdit">
+            <legend class="sw-legend">讀者頻道</legend>
+            <label class="sw-radio"><input type="radio" name="sw-audience" value="all" v-model="editor.draft.audience"> 全讀者（預設）</label>
+            <label class="sw-radio"><input type="radio" name="sw-audience" value="male" v-model="editor.draft.audience"> 男頻</label>
+            <label class="sw-radio"><input type="radio" name="sw-audience" value="female" v-model="editor.draft.audience"> 女頻</label>
+          </fieldset>
+          <p v-if="err('audience')" class="sw-error" role="alert">{{ err('audience') }}</p>
+        </div>
+      </section>
+
       <p class="sw-hint" :class="{ 'sw-error': total > spec.total }">全部文字約 {{ total }} / {{ spec.total }} 字。</p>
 
       <div class="sw-actions">

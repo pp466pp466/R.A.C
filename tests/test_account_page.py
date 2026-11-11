@@ -149,6 +149,63 @@ def test_the_login_page_explains_the_grace_period_only_for_the_known_notice_code
     assert 'v-if="info"' in client.get("/login").get_data(as_text=True)
 
 
+# ---- 故事偏好（story-preference 規格的「帳號頁的故事偏好設定」）----------------------------------------------------
+
+def story_block(html: str) -> str:
+    start = html.index('aria-labelledby="story-title"')
+    return html[start:html.index('aria-labelledby="security-title"', start)]
+
+
+def test_the_story_preference_block_has_three_radios_a_hint_and_a_save_button_after_the_nickname_section(app):
+    html = page_for(app).get_data(as_text=True)
+    assert html.index('aria-labelledby="nickname-title"') < html.index('aria-labelledby="story-title"') < html.index('aria-labelledby="security-title"')
+    block = story_block(html)
+    radios = re.findall(r"<input\b[^>]*>", block)
+    assert [re.search(r'value="(\w+)"', tag).group(1) for tag in radios] == ["all", "male", "female"]
+    assert all('type="radio"' in tag and 'v-model="storyForm.values.story_preference"' in tag for tag in radios)
+    for needle in ("故事偏好", "全讀者", "男頻", "女頻", "儲存偏好", "只會影響劇本清單的排序", "不會限制你可以看或可以玩的劇本"):
+        assert needle in block, needle
+    assert '@submit.prevent="saveStoryPreference"' in block
+    assert ':disabled="storyForm.state.submitting"' in block and "storyForm.state.submitting ? 'true' : 'false'" in block     # 忙碌時禁用並標示
+    assert 'v-if="storyForm.fieldErrors.story_preference"' in block                                                           # 欄位錯誤顯示在欄位旁
+
+
+def test_the_story_preference_block_is_shown_only_once_the_age_is_confirmed_like_the_nickname_block(app):
+    html = page_for(app).get_data(as_text=True)
+    assert re.search(r'<section v-if="ageConfirmed" class="account-section" aria-labelledby="story-title">', html)
+
+
+@pytest.mark.parametrize("value", ["all", "male", "female"])
+def test_the_initial_state_carries_the_current_preference_and_still_has_no_birthday_or_age_range(app, value):
+    page = page_for(app, story_preference=value)
+    user = state_of(page)["user"]
+    assert user["story_preference"] == value                                                  # 前端據此選取對應的單選
+    assert not {"birth_date", "age_range", "age_confirmed_at"} & set(user)                    # 生日與年齡區間不進頁面狀態
+    assert birth_date_for_age(30).isoformat() not in page.get_data(as_text=True)
+
+
+def test_a_member_without_a_stored_choice_gets_all_readers_in_the_initial_state(app):
+    assert state_of(page_for(app))["user"]["story_preference"] == "all"                       # 預設值（新帳號與遷移前的帳號）
+
+
+def test_a_member_awaiting_deletion_has_no_story_preference_block_at_all(app):
+    page = page_for(app, status=STATUS_DELETION_PENDING, deletion_requested_at=START, status_before_deletion="active")
+    html = page.get_data(as_text=True)
+    for absent in ("story-title", "故事偏好", "saveStoryPreference", "storyForm", 'name="story_preference"', 'type="radio"'):
+        assert absent not in html, absent                         # 初始狀態 JSON 裡的使用者資料有 story_preference 鍵，那是狀態，不是區塊
+
+
+def test_the_account_script_saves_the_preference_with_put_through_the_form_helper_and_keeps_the_selection_on_failure():
+    script = (JS_DIR / "account.js").read_text(encoding="utf-8-sig")
+    body = script.split("function saveStoryPreference()", 1)[1].split("// ---- 匯出我的資料", 1)[0]
+    assert "storyForm.run(" in body                                                         # 送出中禁用、finally 恢復都在 Auth.useForm
+    assert "axios.put('/api/account/story-preference', { story_preference: storyForm.values.story_preference })" in body
+    assert "UI.toast('故事偏好已儲存。')" in body and "{ type: 'error' }" in body
+    on_error = body.split("onError: function (info)", 1)[1]
+    assert "storyForm.values" not in on_error                                               # 失敗時不改動玩家目前的選取
+    assert "localStorage" not in script and "v-html" not in script
+
+
 def test_account_page_loads_every_script_that_account_js_depends_on(app):
     """帳號頁腳本用到的每個 `Auth.xxx` 都必須由同一頁載入的其他腳本提供。
 

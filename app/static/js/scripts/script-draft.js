@@ -31,13 +31,18 @@
   var FIELD_LABELS = {
     content: '劇本內容', title: '標題', summary: '簡介', world_name: '世界觀名稱', content_tier: '內容模式', background: '背景與體系',
     opening: '初始對話', rules: '世界規則（狀態轉移規則）', tags: '標籤', calendar: '曆法', 'calendar.name': '曆法名稱', 'calendar.start_year': '曆法起始年',
-    ending_mode: '結局模式', ending_text: '結局說明', ending_age: '壽終年齡', characters: '角色', locations: '地點', milestones: '里程碑',
+    ending_mode: '結局模式', ending_text: '結局說明', ending_age: '壽終年齡', audience: '讀者頻道', characters: '角色', locations: '地點', milestones: '里程碑',
     total: '全部文字', spec_version: '規格版本', cover_image: '封面圖片', base_hash: '編輯版本'
   };
   var CHARACTER_FIELDS = {
     name: '姓名', age: '年齡', personality: '個性', appearance: '外貌', occupation: '職業', speech_style: '說話風格', hidden_trait: '隱藏個性', image: '頭像'
   };
   var MILESTONE_FIELDS = { id: '編號', title: '事件名稱', note: '備註', trigger: '觸發', 'trigger.kind': '觸發種類', 'trigger.value': '觸發數值' };
+
+  /* 讀者頻道：全讀者是預設與缺值（舊版本沒有這個鍵）；伺服器只在男頻、女頻時才保存該鍵。 */
+  var AUDIENCES = ['all', 'male', 'female'];
+  var AUDIENCE_LABELS = { all: '全讀者', male: '男頻', female: '女頻' };
+  function audienceOf(value) { return AUDIENCES.indexOf(value) >= 0 ? value : 'all'; }
 
   var counter = 0;
   function nextKey() { counter += 1; return counter; }
@@ -71,6 +76,7 @@
       tagsText: Array.isArray(c.tags) ? c.tags.map(text).join('、') : '',
       calendar_name: text(calendar.name), calendar_start_year: numberText(calendar.start_year),
       ending_mode: c.ending_mode === 'custom' ? 'custom' : 'none', ending_text: text(c.ending_text), ending_age: numberText(c.ending_age),
+      audience: audienceOf(c.audience),
       characters: (Array.isArray(c.characters) ? c.characters : []).map(function (ch) {
         ch = ch || {};
         return {
@@ -103,6 +109,7 @@
       background: text(d.background).trim(), opening: orNull(d.opening), rules: orNull(d.rules), tags: splitTags(d.tagsText),
       calendar: calendarName || calendarYear ? { name: calendarName, start_year: intOrRaw(calendarYear) } : null,
       ending_mode: custom ? 'custom' : 'none', ending_text: custom ? orNull(d.ending_text) : null, ending_age: custom ? intOrRaw(d.ending_age) : null,
+      audience: audienceOf(d.audience),            // 永遠送出；全讀者時由伺服器決定不保存該鍵（雜湊相容，見 story-preference 設計 D1）
       characters: (d.characters || []).map(function (ch) {
         return {
           name: text(ch.name).trim(), age: intOrRaw(ch.age), personality: text(ch.personality).trim(), appearance: text(ch.appearance).trim(),
@@ -164,7 +171,7 @@
   }
 
   return {
-    TIER_LABELS: TIER_LABELS, STATUS_LABELS: STATUS_LABELS, CATEGORY_LABELS: CATEGORY_LABELS,
+    TIER_LABELS: TIER_LABELS, STATUS_LABELS: STATUS_LABELS, CATEGORY_LABELS: CATEGORY_LABELS, AUDIENCE_LABELS: AUDIENCE_LABELS,
     charCount: charCount, allowedTiers: allowedTiers, blankDraft: blankDraft, toDraft: toDraft, toContent: toContent,
     splitTags: splitTags, totalChars: totalChars, snapshot: snapshot, labelFor: labelFor, errorList: errorList,
     categoryText: categoryText, rejectionMessage: rejectionMessage

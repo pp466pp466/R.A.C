@@ -121,6 +121,25 @@
     </form>
   </section>
 
+  <section v-if="ageConfirmed" class="account-section" aria-labelledby="story-title">
+    <h2 id="story-title">故事偏好</h2>
+    <p class="auth-hint">選擇你喜歡的故事類型。它只會影響劇本清單的排序（符合偏好的排在前面），不會限制你可以看或可以玩的劇本，也不會改變內容模式。</p>
+    <form @submit.prevent="saveStoryPreference" novalidate>
+      <fieldset class="account-radios" :disabled="storyForm.state.submitting">
+        <legend class="auth-label">喜歡的類型</legend>
+        <label class="account-radio"><input type="radio" name="story_preference" value="all" v-model="storyForm.values.story_preference"> 全讀者（預設）</label>
+        <label class="account-radio"><input type="radio" name="story_preference" value="male" v-model="storyForm.values.story_preference"> 男頻</label>
+        <label class="account-radio"><input type="radio" name="story_preference" value="female" v-model="storyForm.values.story_preference"> 女頻</label>
+      </fieldset>
+      <p v-if="storyForm.fieldErrors.story_preference" class="auth-error" role="alert">{{ storyForm.fieldErrors.story_preference }}</p>
+      <div class="auth-actions">
+        <button type="submit" class="ui-btn ui-btn--primary" :disabled="storyForm.state.submitting" :aria-busy="storyForm.state.submitting ? 'true' : 'false'">
+          {{ storyForm.state.submitting ? '儲存中…' : '儲存偏好' }}
+        </button>
+      </div>
+    </form>
+  </section>
+
   <section class="account-section" aria-labelledby="security-title">
     <h2 id="security-title">安全性</h2>
     <div class="auth-actions">

@@ -9,6 +9,7 @@
   var state = Auth.readInitialState(document);
   var lifecycle = Auth.lifecycle;
   var TIER_LABELS = { free: '一般', plus: '進階', vip: '尊榮' };
+  var STORY_PREFERENCES = ['all', 'male', 'female'];       // 全讀者、男頻、女頻（伺服器是唯一的驗證者，這裡只用來還原初始選取）
 
   var app = Vue.createApp({
     setup: function () {
@@ -17,6 +18,7 @@
       var passwordForm = Auth.useForm({ current_password: '', new_password: '' });
       var ageForm = Auth.useForm({ birth_date: '', age_range: '' });
       var nicknameForm = Auth.useForm({ nickname: user.nickname || '' });
+      var storyForm = Auth.useForm({ story_preference: STORY_PREFERENCES.indexOf(user.story_preference) >= 0 ? user.story_preference : 'all' });
       var nickname = Vue.ref(user.nickname || '');
       var nicknameCode = Vue.ref(user.nickname_code || '');
       var nicknameText = Vue.computed(function () {
@@ -110,6 +112,23 @@
             UI.toast('暱稱已儲存。');
           });
         }, { onError: onError });
+      }
+
+      // 故事偏好（story-preference）：只影響劇本清單的排序。送出中禁用、無論成功或失敗都在 finally 恢復（Auth.useForm）；
+      // 失敗時以 Toast 說明並保留玩家目前的選取（不重設為舊值）；網路、逾時與頁面過期的 Toast 已由 useForm 顯示，這裡不重複。
+      function saveStoryPreference() {
+        return storyForm.run(function () {
+          return axios.put('/api/account/story-preference', { story_preference: storyForm.values.story_preference }).then(function (response) {
+            var saved = response.data && response.data.story_preference;
+            if (STORY_PREFERENCES.indexOf(saved) >= 0) { storyForm.values.story_preference = saved; }
+            UI.toast('故事偏好已儲存。');
+          });
+        }, {
+          onError: function (info) {
+            if (info.kind !== 'network' && info.kind !== 'timeout' && info.kind !== 'csrf') { UI.toast(info.message, { type: 'error' }); }
+            onError(info);
+          }
+        });
       }
 
       // ---- 匯出我的資料：POST 後以 blob 下載（不使用外部程式庫）；逾時 60 秒，離開頁面時中止 ----
@@ -224,6 +243,7 @@
         ageForm: ageForm,
         restrictionKind: restrictionKind,
         nicknameForm: nicknameForm,
+        storyForm: storyForm,
         nickname: nickname,
         nicknameText: nicknameText,
         ageConfirmed: ageConfirmed,
@@ -244,6 +264,7 @@
         logoutAll: logoutAll,
         verifyAge: verifyAge,
         saveNickname: saveNickname,
+        saveStoryPreference: saveStoryPreference,
         changePassword: changePassword,
         resetPasswordForm: resetPasswordForm,
         downloadExport: downloadExport,

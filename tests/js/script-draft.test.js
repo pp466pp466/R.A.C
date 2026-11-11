@@ -172,3 +172,73 @@ test('status and tier labels cover every value the server can send', () => {
   for (const status of ['draft', 'pending_review', 'published', 'rejected', 'superseded']) { assert.ok(Draft.STATUS_LABELS[status], status); }
   for (const tier of ['safe', 'standard', 'adult']) { assert.ok(Draft.TIER_LABELS[tier], tier); }
 });
+
+// ---- 讀者頻道（story-preference 規格：script-authoring 的「創作頁面的行為」）------------------------------------
+
+test('a content without an audience (an old version, the example) shows as all readers and is sent as all', () => {
+  assert.equal(SERVER_CONTENT.audience, undefined);                            // 前提：舊版本的內容沒有這個鍵
+  assert.equal(Draft.toDraft(SERVER_CONTENT).audience, 'all');
+  assert.equal(Draft.toContent(Draft.toDraft(SERVER_CONTENT)).audience, 'all');
+  assert.equal(Draft.toDraft({}).audience, 'all');
+  assert.equal(Draft.toDraft(null).audience, 'all');
+});
+
+test('a new blank draft defaults to all readers', () => {
+  const draft = Draft.blankDraft();
+  assert.equal(draft.audience, 'all');
+  assert.equal(Draft.toContent(draft).audience, 'all');
+});
+
+test('male and female round-trip through the draft', () => {
+  for (const audience of ['male', 'female']) {
+    const draft = Draft.toDraft({ ...SERVER_CONTENT, audience });
+    assert.equal(draft.audience, audience);
+    assert.equal(Draft.toContent(draft).audience, audience);
+  }
+});
+
+test('anything that is not exactly one of the three values becomes all readers (a draft is a form, the server validates)', () => {
+  for (const bad of ['Male', 'FEMALE', 'boys', '', 1, 0, null, undefined, true, ['male'], { audience: 'male' }]) {
+    assert.equal(Draft.toDraft({ audience: bad }).audience, 'all', String(bad));
+  }
+  const draft = Draft.blankDraft();
+  for (const bad of ['Male', 1, null, undefined]) {
+    draft.audience = bad;
+    assert.equal(Draft.toContent(draft).audience, 'all', String(bad));
+  }
+  delete draft.audience;                                                       // 沒有這個鍵的草稿（例如舊程式組出來的）仍然送出 all
+  assert.equal(Draft.toContent(draft).audience, 'all');
+});
+
+test('loading an example (which has no channel) replaces a chosen channel with all readers', () => {
+  const draft = Draft.toDraft({ ...SERVER_CONTENT, audience: 'male' });
+  assert.equal(draft.audience, 'male');
+  const replaced = Draft.toDraft(SERVER_CONTENT);                              // 工作坊的「帶入範例」就是整份草稿換成 toDraft(範例內容)
+  assert.equal(replaced.audience, 'all');
+  assert.equal(Draft.toContent(replaced).audience, 'all');
+});
+
+test('changing the channel makes the draft dirty, and the channel is not counted as text', () => {
+  const draft = Draft.toDraft(SERVER_CONTENT);
+  const before = Draft.snapshot(draft);
+  const chars = Draft.totalChars(draft);
+  draft.audience = 'male';
+  assert.notEqual(Draft.snapshot(draft), before);
+  draft.audience = 'all';
+  assert.equal(Draft.snapshot(draft), before);                                 // 改回去就不算修改
+  draft.audience = 'female';
+  assert.equal(Draft.totalChars(draft), chars);                                // 字數與頻道無關
+});
+
+test('the channel has a Chinese field name and Chinese labels, so a server error on it can be shown', () => {
+  assert.equal(Draft.labelFor('audience'), '讀者頻道');
+  assert.deepEqual(Draft.errorList({ audience: '讀者頻道必須是男頻、女頻或全讀者。' }).map((item) => item.label), ['讀者頻道']);
+  assert.deepEqual(Draft.AUDIENCE_LABELS, { all: '全讀者', male: '男頻', female: '女頻' });
+});
+
+test('the audience of one draft never leaks into another (each draft owns its own value)', () => {
+  const first = Draft.blankDraft();
+  first.audience = 'male';
+  assert.equal(Draft.blankDraft().audience, 'all');
+  assert.equal(Draft.toDraft({}).audience, 'all');
+});
