@@ -1282,7 +1282,7 @@ flowchart LR
 
 #### 7.17.5 `story-preference` 的實作結果（2026-11-11）
 
-> 狀態：**已實作並經使用者驗收（20／20 項），待封存**。立案 `a98b6a5`，實作 A 批 `6e309da`、B 批 `a675454`、C 批 `f6b6d05`，D 批（破壞驗證、全套測試與本節）為最後一批；任務 4.3（瀏覽器實測）由使用者親自操作，回報五項都正常，已記入 README。**尚未封存。**細節與驗收紀錄在 `openspec/changes/story-preference/` 與 README「故事偏好與讀者頻道（story-preference）」。
+> 狀態：**已實作並經使用者驗收（20／20 項），已封存為 `2026-11-11-story-preference`（2026-11-11）**。立案 `a98b6a5`，實作 A 批 `6e309da`、B 批 `a675454`、C 批 `f6b6d05`，D 批（破壞驗證、全套測試與本節）為最後一批；任務 4.3（瀏覽器實測）由使用者親自操作，回報五項都正常，已記入 README。細節與驗收紀錄在 `openspec/changes/archive/2026-11-11-story-preference/` 與 README「故事偏好與讀者頻道（story-preference）」。
 
 | # | 實作時的決定（7.17.4 的待處理項目都已有結論） | 理由與備選 |
 |---|---|---|
@@ -1300,7 +1300,7 @@ flowchart LR
 
 #### 7.17.6 `rpg-entry-ui`（RC-3a）的實作結果（2026-11-11）
 
-> 狀態：**已實作，瀏覽器實測（任務 5.1）已由使用者在 Chrome 做過（AI 生成預覽與故事偏好排序兩項未驗證，見 README），tasks 20／20，待封存**。立案 `6387770`，實作 A 批 `92a0c60`、B 批 `8adf187`、C 批 `67d0b59`、D 批 `4bbef64`、E 批 `8a691d8`，F 批（破壞驗證、全套測試與本節）為最後一批。細節與驗收紀錄在 `openspec/changes/rpg-entry-ui/` 與 README「RPG 入口與開存檔畫面（rpg-entry-ui）」「驗收紀錄（rpg-entry-ui）」。
+> 狀態：**已實作，瀏覽器實測（任務 5.1）已由使用者在 Chrome 做過（AI 生成預覽與故事偏好排序兩項未驗證，見 README），tasks 20／20，已封存為 `2026-11-11-rpg-entry-ui`（2026-11-11）**。立案 `6387770`，實作 A 批 `92a0c60`、B 批 `8adf187`、C 批 `67d0b59`、D 批 `4bbef64`、E 批 `8a691d8`，F 批（破壞驗證、全套測試與本節）為最後一批。細節與驗收紀錄在 `openspec/changes/archive/2026-11-11-rpg-entry-ui/` 與 README「RPG 入口與開存檔畫面（rpg-entry-ui）」「驗收紀錄（rpg-entry-ui）」。
 
 | # | 實作時的決定（7.17.4 的待處理項目都已有結論） | 理由與備選 |
 |---|---|---|
