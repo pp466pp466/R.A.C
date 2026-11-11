@@ -1236,7 +1236,7 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 - 排序的 Repository 方法（`list_published`、`list_published_by_tag` 的 `preference` 參數）目前**沒有任何玩家端點使用**，只由 Repository 測試（SQLite 與真實 SQL Server）證明；端到端的效果在 `rpg-entry-ui` 接上清單之後才看得到。
 - `/age` 年齡確認頁沒有偏好步驟（屬 `onboarding-polish`）；偏好與頻道沒有統計、審查或依頻道篩選的功能。
 
-### 驗收紀錄（story-preference，進行中：A、B、C 批已實作，D 批尚未）
+### 驗收紀錄（story-preference，A、B、C、D 批已實作，待使用者驗收 4.3 後封存）
 
 **前端（C 批，任務 4.1、4.2，2026-11-11）**：
 
@@ -1248,7 +1248,36 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 
 **瀏覽器操作（任務 4.3）**：**未驗證**——由使用者親自操作，結果待記入此處（要看的項目：`/account` 切換三種偏好並重新整理仍保留；`/scripts` 儲存男頻草稿後重新載入仍是男頻；唯讀版本的單選為禁用；360px 手機寬度版面不溢出）。
 
-**破壞驗證（5.1）與全套測試（5.2）**：尚未執行（D 批）。
+**破壞驗證（任務 5.1，D 批，2026-11-11）**：專案外的暫時腳本逐項對程式做單行破壞、跑相關測試檔、用 `git checkout` 還原（最後 `git diff -- app` 乾淨）；未破壞時同一組 11 個測試檔為 924 項全過。**10 組變體全部至少有一個測試失敗**（任務列的五項，其中 ②、③、⑤ 各拆成更細的變體）：
+
+| # | 破壞 | 失敗／執行 | 抓到的測試 |
+|---|---|---|---|
+| ① | `validate_script` 對 `all` 也寫入 `audience` | 17／585 | `test_script_spec` 6（既有內容雜湊逐位元不變的固定常數、缺值與空值與 `all` 的輸出相同）、`test_script_repository` 8（還原內容與雜湊）、`test_seed_scripts` 3（見下方補強） |
+| ②a | `list_published` 不套用 `preference` | 6／225 | `test_script_repository`（三種偏好的順序，SQLite 與 SQL Server 各一） |
+| ②b | `list_published_by_tag` 不套用 `preference` | 2／225 | `test_script_repository`（依標籤查詢同樣排序） |
+| ③a | `UserRepository.set_story_preference` 不驗證值域 | 14／186 | `test_user_repositories`（API 測試沒有失敗：Service 先擋掉不合法值） |
+| ③b | `StoryPreferenceService.set` 不驗證值域（Repository 仍驗證） | 13／166 | `test_story_preference_api`（不合法值不再得到 400 與欄位錯誤；Repository 測試沒有失敗） |
+| ③c | Service 與 Repository 都不驗證 | 28／166 | 兩邊都失敗：`test_story_preference_api` 14、`test_user_repositories` 14 |
+| ④ | `content_of` 對 `all` 也還原 `audience` | 8／448 | `test_script_repository`（還原的內容與雜湊和驗證的結果不同） |
+| ⑤a | `export_scripts` 的版本字典漏掉 `audience`（JSON 匯出） | 9／337 | `test_script_repository` 2、`test_personal_export_rpg_data` 6、`test_account_export_api` 1 |
+| ⑤b | CSV 欄位清單漏掉 `audience` | 5／153 | `test_personal_export_rpg_data` 4、`test_account_export_api` 1 |
+| ⑤c | CSV 的 `audience` 欄一律空白 | 5／153 | 同 ⑤b |
+
+- **破壞驗證發現的缺口與補強**：第一次跑 ①，只有 `test_script_spec` 與 `test_script_repository` 失敗（14 項），**`test_seed_scripts` 沒有任何失敗**，與任務預期不符。原因：種子測試的「已存雜湊」是第一次執行時由同一份（被破壞的）`validate_script` 算出的，已存與重算的雜湊一起改變，仍判定「未變更」。補強兩處（只動測試）：「升級前的版本（`audience` 為空）重跑種子仍是未變更」改為把已存雜湊設成升級前的算法（標準化內容去掉 `audience` 鍵的雜湊），首發劇本檔的測試加上斷言「全讀者不進標準化內容」。補強後未破壞的 `test_seed_scripts` 61 項通過；重跑 ① 變成 17 項失敗（種子 3 項）。
+- ③a、③b 顯示值域驗證是兩道互為備援的防線：只拿掉其中一道，只有對應那一層的測試失敗；兩道都拿掉（③c）兩層測試都失敗。
+- ⑤ 的三個變體都由匯出測試抓到；JSON 與 CSV 各有獨立的斷言。
+
+**全套測試（任務 5.2，D 批，2026-11-11）**：
+
+| 項目 | 結果 |
+|---|---|
+| `pytest -q`（含真實 SQL Server `project_test`） | **9644 通過、0 失敗、1 略過**（686.6 秒） |
+| `node --test "tests/js/**/*.test.js"` | **267 項通過** |
+| `openspec validate story-preference --strict` | 通過 |
+| 警告 | 1 個：`test_assets_manifest` 的子行程輸出解碼執行緒警告（既有，與本 change 無關） |
+
+- **第 2 次全套發現 3 項真實失敗，已修**：`test_auth_pages::test_the_account_page_state_holds_the_members_own_profile_only` 與 `test_auth_session_service::test_the_profile_has_the_members_own_data_and_nothing_internal`（SQLite 與 SQL Server 各一）。B 批讓 `/api/auth/me` 的 `user`（個人資料）多了 `story_preference` 鍵（刻意，見設計 D5），這兩個鍵集合測試不在 B 批的測試清單內，到全套才發現。已把期望值更新為多一個鍵（預設 `all`）；這是行為的刻意改變，不是放寬斷言。
+- **第 1 次全套的結果不採信**：36 失敗、7 error（9601 通過，1185 秒）；我用 `| tail` 截斷了輸出，只看得到最後 14 項（都在 `test_seed_scripts`），這些測試單獨重跑 61 項全過，之後兩次完整重跑（第 2 次的 3 項是上一點，第 3 次 0 失敗）都沒有重現。**原因未查明**；不把它當成通過的依據，只記錄有過這次異常。
 
 ## 撰寫新端點：權限與 IDOR 測試
 

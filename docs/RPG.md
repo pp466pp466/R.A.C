@@ -1241,7 +1241,7 @@ flowchart LR
 
 ### 7.17 RC-3 探索結論（2026-11-10）
 
-> 來源：`/openspec-explore`（RC-2b 封存之後），與使用者逐項確認。**尚未立案**；本節只記決定，沒有程式碼變動，也沒有對 AGENTS.md 的修訂。與 7.11 的順序不同之處以本節為準。
+> 來源：`/openspec-explore`（RC-2b 封存之後），與使用者逐項確認。本節記決定，沒有對 AGENTS.md 的修訂；其中 `story-preference` 已立案並實作（見 7.17.5），其餘項目尚未立案。與 7.11 的順序不同之處以本節為準。
 
 #### 7.17.1 已確認的決定
 
@@ -1276,6 +1276,24 @@ flowchart LR
 #### 7.17.4 仍待處理（各自 propose 時帶建議一次確認）
 
 - RC-3b 的 IndexedDB 角色（建議：RPG 以後端為準，只當離線閱讀快取加待送佇列，沿用 `cs-sync.js` 的模式）、`/game` 的網址設計、是否帶最小的簽到入口讓餘額不足時有路可走。
-- `story-preference` 在 `/account` 的版面，以及 `audience` 在作者工作坊的位置。
+- ~~`story-preference` 在 `/account` 的版面，以及 `audience` 在作者工作坊的位置。~~ 已於 `story-preference` 立案時決定並實作，見 7.17.5。
 - 2c 的待決事項（見 7.17.1 的 1）。
 - 未成年主角在成人模式的釐清（HANDOFF 沿用的待決事項，與 RC-3 無關）。
+
+#### 7.17.5 `story-preference` 的實作結果（2026-11-11）
+
+> 狀態：**已實作，待驗收**。立案 `a98b6a5`，實作 A 批 `6e309da`、B 批 `a675454`、C 批 `f6b6d05`，D 批（破壞驗證、全套測試與本節）為最後一批；任務 20 項中 4.3（瀏覽器實測）由使用者親自看，結果待回報後記入 README。**尚未封存。**細節與驗收紀錄在 `openspec/changes/story-preference/` 與 README「故事偏好與讀者頻道（story-preference）」。
+
+| # | 實作時的決定（7.17.4 的待處理項目都已有結論） | 理由與備選 |
+|---|---|---|
+| 1 | **`audience` 為全讀者（缺值、空值、`all`）時不寫進標準化內容**，只有 `male`／`female` 才帶該鍵；規格版本維持 1 | 讓所有既有內容的 `content_hash` 與升級前逐位元相同：待審版本的審查結果不失效、`update_draft` 的衝突偵測不誤報、`flask seed-scripts` 重跑仍判定「未變更」（否則升級後會憑空發佈內建劇本的第 2 版）。備選：永遠帶 `audience`（上述三項都被擾動）；`audience` 不進雜湊（改頻道不會被「內容變了要重新送審」抓到，違反 AGENTS.md） |
+| 2 | 資料：`users.story_preference`（NOT NULL，預設 `all`）、`script_versions.audience`（可為空，不回填；新版本寫明確值，全讀者寫 `all`）；遷移 `0017`，只新增（expand） | 「明確選了全讀者」與「遷移前的舊資料」可區分，兩者行為相同；不加 CHECK 約束（方言差異）、不建索引（目錄量體小） |
+| 3 | 排序以 ORM `case` 在 SQL 層、`LIMIT`／`OFFSET` 之前完成：同頻 0、全讀者（含空值）1、另一頻 2，其後仍是發佈時間由新到舊；偏好為 `all` 或沒有偏好時**不加排序鍵**，不隱藏任何劇本 | Service 只拿得到一頁，無法做全域排序；`case` 把空值明確映射，不依賴 NULL 排序方向的方言差異。Repository 不得匯入 Service，所以 `rank` 純函式與 `case` 各寫一次，由測試比對一致 |
+| 4 | `/account` 的「故事偏好」放在「暱稱與劇本創作」之後，與暱稱同條件（完成年齡確認後才顯示）；三個單選加「儲存偏好」，失敗時保留玩家的選取 | 沿用暱稱表單的 `Auth.useForm` 模式 |
+| 5 | 作者工作坊的「讀者頻道」放在「結局」之後、字數統計之前，做成與其他區塊相同的可摺疊區塊、預設展開；唯讀版本整組禁用；頻道不計入字數、不進審查提示詞與規則層 | 預設展開讓唯讀版本的禁用單選一眼可見 |
+| 6 | `GET`／`PUT /api/account/story-preference` 只要求登入（`require_login()`），**不過年齡閘門**；`story_preference` 也放進 `GET /api/auth/me` 的 `user`；成功只記事件 `account.story_preference_changed`（不含值）；偏好與頻道納入個人資料匯出 | 偏好不涉及模型，沒有年齡風險；受限登入狀態仍一律被擋 |
+| 7 | 偏好與頻道**不影響**內容分級、可看或可玩的劇本、敘事、遊戲幣與額度，也不進任何傳給模型的內容 | AGENTS.md 第 7 節「故事偏好」 |
+
+- **目前玩家看不到排序的效果**：`list_published` 與 `list_published_by_tag` 的 `preference` 參數沒有玩家端點使用，只由 Repository 測試（SQLite 與真實 SQL Server）證明。RC-3a 接上可玩劇本清單時，傳入 `current.story_preference` 即可。
+- **部署**：備份 → `alembic upgrade head`（`0016` → `0017`）→ 部署新版程式 → `flask --app wsgi seed-scripts --dry-run` 確認內建劇本為「未變更」。本機 SQL Server `project` 與 Azure 在撰寫時都仍在 `0016`。
+- **不做**（沿用 7.17.1 的 5）：偏好的統計、依頻道篩選與審查；`/age` 的偏好步驟屬 `onboarding-polish`。

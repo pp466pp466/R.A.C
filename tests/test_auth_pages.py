@@ -459,7 +459,7 @@ def test_the_account_page_state_holds_the_members_own_profile_only(app):
     assert (user["email"], user["display_name"], user["member_tier"]) == ("user1@example.com", "使用者1", "plus")
     assert set(user) == {
         "public_id", "email", "display_name", "member_tier", "role", "status", "email_verified", "has_password",
-        "age_confirmed", "age_group", "google_linked", "restriction", "nickname", "nickname_code", "publish_suspended",
+        "age_confirmed", "age_group", "google_linked", "restriction", "nickname", "nickname_code", "publish_suspended", "story_preference",
     }
     assert user["restriction"] is None                                                # 管理員不會是待確認年齡的受限狀態
     assert user["age_confirmed"] is False and user["age_group"] is None

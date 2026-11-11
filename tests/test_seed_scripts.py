@@ -20,7 +20,7 @@ from app.services.current_user import CurrentUser
 from app.services.script_seed_service import (
     BUILTIN_MAX_TIER, SEED_CREATED, SEED_DIRECTORY, ScriptSeedService, SeedDataError,
 )
-from app.services.script_spec import TOTAL_CHARS_MAX, validate_script
+from app.services.script_spec import TOTAL_CHARS_MAX, hash_content, validate_script
 from app.services.session_service import SessionService
 from tests.support.auth import FakeClock, add_user
 from tests.support.protagonist import start_kwargs
@@ -367,6 +367,11 @@ def test_a_live_version_from_before_the_migration_with_an_empty_audience_is_repo
     service.run()
     live = member_session.scalar(select(ScriptVersion))
     live.audience = None                                         # 升級前的狀態：版本的 audience 欄位為空
+    # 已存的雜湊也要是「升級前的程式」算出的：標準化內容沒有 audience 鍵。不能沿用第一次執行時由 validate_script 算出的雜湊——
+    # 那樣一旦 validate_script 對全讀者也寫入 audience，已存與重算的雜湊會一起改變，這個測試就抓不到（破壞驗證 5.1 ① 發現的缺口）。
+    stored = json.loads((seeds / "alpha.json").read_text(encoding="utf-8"))["content"]
+    legacy_content = {key: value for key, value in validate_script(stored, max_tier=BUILTIN_MAX_TIER).content.items() if key != "audience"}
+    live.content_hash = hash_content(legacy_content)
     member_session.commit()
     before = snapshot_of(member_session)
     report = service.run()
@@ -403,4 +408,6 @@ def test_the_shipped_seed_files_hash_is_unaffected_by_the_audience_field():
         content = json.loads(path.read_text(encoding="utf-8-sig"))["content"]
         assert "audience" not in content                          # 首發劇本沒有宣告頻道，視同全讀者
         as_all = validate_script({**content, "audience": "all"}, max_tier=BUILTIN_MAX_TIER)
-        assert as_all.content_hash == validate_script(content, max_tier=BUILTIN_MAX_TIER).content_hash
+        plain = validate_script(content, max_tier=BUILTIN_MAX_TIER)
+        assert as_all.content_hash == plain.content_hash
+        assert "audience" not in plain.content and "audience" not in as_all.content      # 全讀者不進標準化內容（設計 D1）

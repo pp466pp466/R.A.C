@@ -34,9 +34,9 @@
 
 ## 5. 整合與收尾
 
-- [ ] 5.1 破壞驗證（每項驗證後還原，用 `git checkout`／備份）：①讓 `validate_script` 對 `all` 也寫入 `audience` → 雜湊相容測試與種子「未變更」測試失敗；②`list_published` 改成不套用 `preference` → 排序測試失敗；③`set_story_preference` 不驗證值域 → API 與 Repository 測試失敗；④`content_of` 對 `all` 也還原 `audience` → 重新驗證雜湊測試失敗；⑤匯出漏掉 `audience` → 匯出測試失敗。驗證：五項都至少有一個測試失敗，結果記入 README 驗收紀錄。
-- [ ] 5.2 全套驗證：`pytest -q`（SQL Server 服務 `MSSQLSERVER` 執行中、同時只能一個 pytest 行程）、`node --test`、`openspec validate story-preference --strict`。驗證：全部通過，筆數記入 README 驗收紀錄；有失敗先修再重跑。
-- [ ] 5.3 更新 `docs/RPG.md` 7.17（`story-preference` 已立案／已實作，並記實作時決定的取捨：雜湊相容、`audience` 為全讀者不進標準化內容）、`docs/路線圖-roadmap.md`（`story-preference` 節點與狀態表、日期）、`docs/README.md` 對照表如有需要，並讓 `tests/test_design_docs.py` 通過。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py`、`tests/architecture` 通過。
+- [x] 5.1 破壞驗證（每項驗證後還原，用 `git checkout`／備份）：①讓 `validate_script` 對 `all` 也寫入 `audience` → 雜湊相容測試與種子「未變更」測試失敗；②`list_published` 改成不套用 `preference` → 排序測試失敗；③`set_story_preference` 不驗證值域 → API 與 Repository 測試失敗；④`content_of` 對 `all` 也還原 `audience` → 重新驗證雜湊測試失敗；⑤匯出漏掉 `audience` → 匯出測試失敗。驗證：五項都至少有一個測試失敗，結果記入 README 驗收紀錄。 （實作：②、③、⑤ 拆成 10 組變體〔②a／②b、③a／③b／③c、⑤a／⑤b／⑤c〕全部至少一項失敗，結果表在 README。**第一次跑 ① 時 `test_seed_scripts` 沒有失敗**——種子測試的已存雜湊與重算的雜湊由同一份被破壞的程式算出，一起改變——已補強兩個種子測試〔已存雜湊改用升級前的算法、首發劇本檔斷言全讀者不進標準化內容〕，重跑 ① 種子 3 項失敗。）
+- [x] 5.2 全套驗證：`pytest -q`（SQL Server 服務 `MSSQLSERVER` 執行中、同時只能一個 pytest 行程）、`node --test`、`openspec validate story-preference --strict`。驗證：全部通過，筆數記入 README 驗收紀錄；有失敗先修再重跑。 （實作：最終 `pytest -q` **9644 通過、0 失敗、1 略過**，`node --test` 267，`openspec validate --strict` 通過。第 2 次全套發現 3 項真實失敗——`/api/auth/me` 的 `user` 多了 `story_preference` 鍵，`test_auth_pages` 與 `test_auth_session_service` 的鍵集合測試沒更新——已更新期望值；第 1 次全套出現 36 失敗與 7 error 且之後兩次都沒有重現，原因未查明，記在 README，不當成通過的依據。）
+- [x] 5.3 更新 `docs/RPG.md` 7.17（`story-preference` 已立案／已實作，並記實作時決定的取捨：雜湊相容、`audience` 為全讀者不進標準化內容）、`docs/路線圖-roadmap.md`（`story-preference` 節點與狀態表、日期）、`docs/README.md` 對照表如有需要，並讓 `tests/test_design_docs.py` 通過。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py`、`tests/architecture` 通過。
 
 ## Workflow follow-up
 

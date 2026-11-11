@@ -87,6 +87,7 @@ def test_the_profile_has_the_members_own_data_and_nothing_internal(member_sessio
         "role": "user", "status": "active", "email_verified": False, "has_password": True, "age_confirmed": False,
         "age_group": None, "google_linked": False, "restriction": "age_pending",
         "nickname": None, "nickname_code": None, "publish_suspended": False,
+        "story_preference": "all",                                     # story-preference：預設全讀者，只回給本人
     }
     assert not (FORBIDDEN_KEYS & set(profile))
     assert user.password_hash not in str(profile)
