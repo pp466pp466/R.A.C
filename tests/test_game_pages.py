@@ -463,15 +463,38 @@ def test_no_game_template_or_script_uses_forbidden_patterns():
 
 
 def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
-    js = "\n".join(strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js")))
-    for storage in ("localStorage", "sessionStorage", "indexedDB", "document.cookie"):
-        assert storage not in js, storage
-    api = strip_js_comments(read(JS_DIR / "game-api.js"))
+    """rpg-game-ui 2.1 與 2.3 **有意識地改變**了這個測試的契約（不是刪除，也不是掩蓋缺陷）：原本是「整個 `game/` 目錄都不碰瀏覽器儲存、
+    API 只有精靈的兩個寫入」；遊戲頁現在要離線閱讀的快取與在途回合，所以 IndexedDB 只允許出現在 `game-store.js`（一個檔案、一個出口），
+    其餘的瀏覽器儲存（localStorage、sessionStorage、cookie）整個目錄仍然都不得出現。API 的寫入呼叫由下一個測試固定為四個。
+    入口頁本身不變：`entry.js` 只讀（只引用 catalog 與 sessions），精靈只用 setup、suggest、start。"""
+    code = {path.name: strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js"))}
+    assert code, "沒有找到前端腳本"
+    for name, js in code.items():
+        for storage in ("localStorage", "sessionStorage", "document.cookie"):
+            assert storage not in js, (name, storage)
+        if name != "game-store.js":
+            assert "indexedDB" not in js, name                                   # 瀏覽器端的快取只在 game-store.js
+    assert "indexedDB" in code["game-store.js"]
+    api = code["game-api.js"]
     assert "axios" in api and "/api/sessions" in api
     assert not re.search(r"""method:\s*['"](post|put|patch|delete)""", api, re.I)   # 兩個清單端點的 get() 只用 GET，入口頁只讀
-    # 寫入的呼叫只有精靈的兩個：生成預覽（無狀態）與開存檔；沒有其他會改動資料的呼叫
-    assert re.findall(r"""call\('(post|put|patch|delete)',\s*'([^']*)'""", api) == [("post", "/protagonist/suggest"), ("post", "")]
+    assert set(re.findall(r"Game\.api\.(\w+)", code["entry.js"])) == {"catalog", "sessions"}
+    assert set(re.findall(r"Game\.api\.(\w+)", code["wizard.js"])) == {"setup", "suggest", "start"}
+
+
+def test_the_game_api_writes_through_exactly_four_calls_and_takes_timeouts_and_signals_from_the_caller():
+    """寫入的呼叫恰好是 suggest（生成預覽，無狀態）、start（開存檔）、checkin（每日簽到）與 saveNotebook（玩家儲存記事簿）；
+    其餘都是 GET。回合與第 0 幕的串流不在 game-api.js（那是 turn-stream.js 的原生 fetch）。"""
+    api = strip_js_comments(read(JS_DIR / "game-api.js"))
+    calls = re.findall(r"""(\w+):\s*function\s*\([^)]*\)\s*\{\s*return\s+(?:call|send)\('(get|post|put|patch|delete)'""", api, re.I)
+    assert sorted(name for name, method in calls if method != "get") == ["checkin", "saveNotebook", "start", "suggest"]
+    assert dict(calls)["saveNotebook"] == "put" and dict(calls)["checkin"] == "post"
+    assert sorted(name for name, method in calls if method == "get") == ["notebook", "setup", "snapshot", "turns", "wallet"]
+    for needed in ("/api/game/sessions", "/api/wallet", "encodeURIComponent"):
+        assert needed in api, needed
     assert "request.timeout" in api and "request.signal" in api                 # 逾時與中止訊號由呼叫端傳入
+    assert not re.search(r"timeout\w*\s*[:=]\s*\d", api, re.I)                   # 檔內沒有任何逾時數字
+    assert "fetch" not in api and "EventSource" not in api and "/stream" not in api
 
 
 def test_every_loading_path_restores_its_state_in_a_finally_block():

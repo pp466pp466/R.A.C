@@ -1,6 +1,6 @@
 # 前端架構
 
-> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕進行中：第 1 批的串流核心純邏輯已實作並通過 Node 測試，尚未被任何頁面載入，頁面、掛載與面板為規劃中） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕進行中：第 1 批的串流核心與第 2 批的本機暫存、同步與 API 封裝已實作並通過 Node 測試，尚未被任何頁面載入，頁面、掛載與面板為規劃中） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
@@ -198,7 +198,7 @@ flowchart LR
 - **樣板與 `wizard.js` 的約定**：樣板標頭列出 `wizard.js` 的 `setup()` 要回傳的名稱（狀態、計算、方法），`tests/js/wizard-template.test.js` 以離線 Vue 編譯樣板，並檢查樣板用到的名稱與這份清單完全一致（多一個或少一個都會失敗）。`wizard-template.test.js` 另以 `vm` 沙盒執行 `wizard.js` 的 `setup()`，檢查它實際回傳了清單的每一個名稱、不多不少；過渡用的「建置中」說明已隨 `wizard.js` 移除。
 - **`wizard.js`（Vue 掛載）**：只負責狀態、請求的時機與 `finally` 的恢復，邏輯都在 `wizard-state.js`。掛載時才呼叫 `setup`（版本識別碼從網址最後一段讀，讀不出來就是「找不到」，不送請求）；載入有 404、403（分級高於目前模式、年齡確認、鎖定）與可重試失敗各自的畫面，看不懂的成功回應也當成可重試的失敗。往後的步驟要通過前進條件，往前（`back`、`goTo`）不受限；「請 AI 生成」在已有手動內容時先開覆蓋確認 Modal，成功只填表、更新今日剩餘並出 Toast；「開始冒險」同一時間只送一個請求，送出期間所有按鈕禁用，成功後導向 `/game/<存檔>`，**導向之前仍保持禁用**（開存檔沒有冪等鍵，連點會開出兩個存檔）；400 依欄位路徑跳回較前面的那一步，422 與其他失敗只顯示固定文字；`pagehide` 時三種請求（載入、生成、開存檔）的 `AbortController` 都中止，被中止的請求不顯示錯誤。沒有任何瀏覽器儲存、主控台輸出與網址參數；`tests/js/wizard.test.js` 在 `vm` 沙盒用儲存物件與主控台的陷阱斷言這一點。
 
-## 3e. 遊戲主畫面的串流核心（`/game/<存檔識別碼>`，rpg-game-ui 第 1 批）
+## 3e. 遊戲主畫面的串流核心、本機暫存與 API（`/game/<存檔識別碼>`，rpg-game-ui 第 1、2 批）
 
 ```mermaid
 flowchart LR
@@ -209,15 +209,36 @@ flowchart LR
     Gs --> Labels["game-labels.js<br/>固定的中文文字：串流結束 轉場與中斷 記事簿 簽到"]
     Gs -->|"effects：push discard transition finish world coins failure"| Run
     Run -->|"push 與 finish"| Tw["typewriter.js<br/>每個氣泡一個"]
-    Run -->|"done 之後以 since_seq 補齊"| Api["game-api.js turns<br/>第 2 批 規劃中"]
+    Run -->|"任何結果之後都補齊一次"| Sync["game-sync.js<br/>catchUp resolveInflight remember<br/>永不拋出 從不呼叫串流"]
+    Sync -->|"since_seq 增量"| Api["game-api.js<br/>turns snapshot notebook wallet checkin saveNotebook"]
+    Sync --> Store["game-store.js<br/>IndexedDB 或記憶體 sessions turns inflight"]
 ```
 
-- **現況**：本批只有純邏輯，**沒有任何樣板或頁面載入它們**；`/game/<存檔識別碼>` 仍是伺服器渲染的空殼。新增的 `sse-parser.js`、`turn-stream.js`、`game-state.js` 與 `game-labels.js` 的擴充沒有 `window`、`document`、瀏覽器儲存與主控台，Node 可以直接測試。預定的載入順序（即相依順序，見 rpg-game-ui 的 design D6）：`game-labels.js` → `sse-parser.js` → `turn-stream.js` → `game-state.js` → `game-store.js` → `game-sync.js` → `game-wallet.js`、`game-notebook.js`、`game-session.js` → `game.js`；後面的批次才會加入。
+- **現況**：第 1、2 批只有純邏輯、本機暫存與 API 封裝，**沒有任何樣板或頁面載入它們**；`/game/<存檔識別碼>` 仍是伺服器渲染的空殼。`sse-parser.js`、`turn-stream.js`、`game-state.js` 與 `game-labels.js` 的擴充沒有 `window`、`document`、瀏覽器儲存與主控台；`game-store.js` 是 IndexedDB 的唯一出口，`game-sync.js` 沒有任何瀏覽器 API，Node 都可以直接測試（`game-api.js` 用全域的 axios，測試以 `vm` 沙盒替換）。預定的載入順序（即相依順序，見 rpg-game-ui 的 design D6）：`game-labels.js` → `sse-parser.js` → `turn-stream.js` → `game-state.js` → `game-store.js` → `game-sync.js` → `game-wallet.js`、`game-notebook.js`、`game-session.js` → `game.js`；後面的批次才會加入。
 - **`sse-parser.js`（UMD 純函式）**：`createParser().feed(text)` 吃 `TextDecoder({stream: true})` 解碼後的字串，回傳這一塊完成的事件 `[{ event, data }]`。事件以空行分隔（容許 `\r\n` 與單獨的 `\r`，結尾的 `\r` 先保留到下一塊再決定），多行 `data:` 以換行串接，`:` 開頭是註解；`data` 必須是 JSON 物件，解析失敗、不是物件或缺 `event` 的事件整個丟棄，後續照常；不完整的尾端留在緩衝。串流結束時殘餘的緩衝不會被當成事件。
 - **`turn-stream.js`（UMD，`createTurnStream(deps)`）**：`fetch`、`setTimeout`／`clearTimeout`、`AbortController`、`TextDecoder` 與 `describeHttpFailure` 都由呼叫端注入。`run({ url, body, csrf, idleMs, totalMs, signal, onEvent })` **永不 reject**，回傳 `{ outcome, done, failure }`：`done`（收到 `done` 事件，立即結案並取消讀取）、`error_event`、`interrupted`（連線在 `done` 前結束，含讀取例外與連線建立前的網路失敗）、`timeout_idle`、`timeout_total`、`aborted`、`rejected`（伺服器在開始串流之前以 HTTP 錯誤拒絕，尚未預扣）。**完整接收的唯一依據是 `done` 事件**，不是 HTTP 狀態或讀取結束旗標；優先順序為 `done` > `error` 事件 > 逾時或取消 > `interrupted`。任何位元組（含回應標頭與只有 `ping` 的資料塊）重設 45 秒的閒置計時器，180 秒的總逾時不重設；兩者與外部 `signal` 共用一個內部 `AbortController`，計時器觸發時不等 `fetch` 回報 abort，直接結案；每條結果路徑都清除計時器並移除對外部 `signal` 的監聽。逾時數值必須由呼叫端傳入（取自頁面初始狀態），模組沒有預設值，不合法就回 `rejected`（`failure.kind === 'config'`）而不送出請求。事件只轉交已知的七種名稱（meta、token、ping、transition、state、done、error），`onEvent` 拋出的例外被吞掉，不影響串流。
 - **`game-state.js`（UMD 純函式，載入順序在 `game-labels.js` 之後）**：①`newStreamTurn`、`applyStreamEvent(turn, event)`、`applyStreamEnd(turn, result)` 回傳 `{ turn, effects }`（不修改傳入的物件）；`effects` 是給掛載層的純資料指令：`push`（推進打字機）、`discard`（丟棄目前的氣泡）、`transition`（插入一行轉場，`willRetry` 為真才開新氣泡）、`world`、`notices`、`coins`、`finish`、`hint`、`failure`、`done`、`meta`。**被擋與中斷的回合不保存任何部分文字**；`state` 事件只取白名單欄位（地點、月數、摘要、目標與年齡更正通知，NPC 的特質與隱藏資訊本來就不在其中）。②`normalizeTurn`、`mergeTurns(local, remote)`（以 `seq` 為準、後端覆寫、不認得的狀態當成 `interrupted`、非 `complete` 的回合一律沒有行動與劇情）、`timelineFrom(opening, turns, inflight)`（完整回合的 key 是 `turn:<client_msg_id>`，與串流中的氣泡同一個 key，補齊時就地取代）。③`describeHttpFailure`（串流開始前的 JSON 錯誤，訊息一律說明沒有扣除遊戲幣）、`describeRequestFailure`、`describeStreamFailure`、`describeNotebookFailure`、`describeCheckinFailure`：回傳同一個形狀 `{ kind, status, code, message, fields, link, retry, reload, catchUp, silent, keepDraft, … }`。**訊息只來自固定文字與列舉對照，不含玩家文字**；唯二的例外是不認得的 409 與 400 的逐欄位說明，伺服器的文字必須通過 `trusted()`（含中文、不含角括號與控制字元、不超過 120 字）才顯示，後端的固定訊息本來就不含玩家文字。④`notebookLength` 與後端 `notebook_policy.length_of` 同一個算法（NFC 之後的碼點數）：黃金案例在 `tests/js/fixtures/notebook-length-cases.json`，Node 測試檢查前端、`tests/test_game_notebook_length_parity.py` 檢查後端，任何一邊的算法改變都有一個測試失敗。⑤`sendBlocker`／`canSend`（失敗時關閉：第 0 幕必須明確完成才能送出）、`actionProblem`、`worldView`／`mergeWorld`、`noticeText`（年齡更正含更正前的值）、`notebookView`。
 - **`game-labels.js` 的擴充**：回合與串流結束狀態的名稱、連線中斷與逾時的說明（每一則都提醒「這一輪可能已在伺服器完成」，因為前端中止不代表後端中止）、歷史裡未完成回合的一行說明、串流 `error` 事件代碼的訊息、記事簿與簽到的固定文字；不認得的值一律退回固定文字。回合狀態、`done` 的結束狀態與串流錯誤代碼是否與後端一致，由 `tests/test_game_pages.py` 以後端常數比對。
-- **隱私**：這些模組不寫任何瀏覽器儲存、不直接碰全域的 `fetch`（`turn-stream.js` 的請求一律經由呼叫端注入的 `fetch`，`tests/test_game_pages.py` 掃描）、不輸出主控台；`game-state.js` 的測試掃描原始碼確認沒有儲存、網路、計時器與主控台。
+- **`game-store.js`（UMD，第 2 批；載入順序在 `game-state.js` 之後，不修改 `cs-store.js`）**：資料庫 `game-cache-<使用者的對外識別碼>`（`databaseName` 組名；識別碼格式不對或沒有名稱就只用記憶體，不共用資料庫），三個資料集：`sessions`（key＝存檔識別碼：標題、內容模式、是否完結、已完成輪數、第 0 幕的狀態與文字、世界狀態的玩家視圖）、`turns`（key＝`<存檔>|<補零序號>`，字典序即序號順序：`Game.normalizeTurn` 的形狀）、`inflight`（key＝存檔識別碼，所以**每個存檔最多一筆**：`client_msg_id`、行動文字、建立時間）。**只寫白名單欄位**：記事簿（全文與摘要）、主角角色卡、email、生日與年齡區間一律不進來，傳入物件多出的欄位直接丟掉；被擋與中斷的回合只存序號與狀態；**進行中（`streaming`）的回合不存**——它之後會變成別的狀態，存下來的話「以本機最大序號做 `since_seq`」會跳過它完成後的內容。開啟失敗（沒有 IndexedDB、被禁止、被阻擋、3 秒逾時）、寫入失敗（配額）與連線已關閉造成的同步例外都退回記憶體並照常運作，不拋出給畫面（退回後已寫入的快取不搬移，重新整理後不保證保存）。
+- **`game-sync.js`（UMD，`createSync({ api, store })`，第 2 批）**：`catchUp(sessionId, { signal })` 以本機已定稿的最大序號做 `since_seq`，迴圈到 `has_more` 為假，後端的回合覆寫同序號的快取；**永不拋出**，回傳 `{ status, changed, added, turns, error? }`：`ok`、`offline`（連線失敗或逾時，快取不變仍可閱讀）、`gone`（404，該存檔的快取與在途回合已清除）、`canceled`、`failed`（401、403、5xx…，`error` 交給 `Game.describeRequestFailure`）；`turns` 是顯示用的完整清單（快取合併這次後端的回合，含沒有文字的進行中回合）。伺服器一直說還有更多卻沒有前進時停止，不會無限迴圈。`resolveInflight(sessionId)` 先補齊，本機已有該 `client_msg_id` 的 `complete` 回合就移除在途紀錄並回傳 null，否則回傳在途紀錄（畫面提供「重送」與「放棄」）；補齊失敗時保留、存檔不存在時回傳 null；呼叫端剛做完 `catchUp` 時可把結果以 `result` 傳進來，就不會再多問一次伺服器。`remember(sessionId, snapshot)` 存入快照的白名單欄位。**這個檔案從不呼叫串流端點**（它的 API 只有 `turns`，測試以只提供 `turns` 的替身與原始碼掃描證明）：重送只有玩家按下才發生，每一輪都要消耗遊戲幣，所以沒有自動排隊。
+- **`game-api.js` 的擴充（第 2 批）**：新增 `snapshot`、`turns`、`notebook`、`saveNotebook`（`/api/game/sessions/<id>`）、`wallet`、`checkin`（`/api/wallet`）；`timeout` 與 `signal` 由呼叫端傳入，檔內沒有逾時數字；識別碼經 `encodeURIComponent`。寫入的呼叫恰好是四個：`suggest`、`start`、`checkin`、`saveNotebook`（`tests/test_game_pages.py` 固定）。失敗一律是 `Auth.describeError` 整理過的物件，再加上固定形狀的欄位供 `game-state.js` 的失敗對照使用：`categories`、`notebook`（409 `notebook_conflict` 時後端最新的記事簿）、`length` 與 `capacity`（422 `notebook_too_long`）、`checkin`（409 `checkin_overflow` 的預覽）、`balance` 與 `needed`（409 `insufficient_coins`）；型別不對的值與未列出的欄位一律不複製。
+
+```mermaid
+flowchart TD
+    Start["開啟存檔 或 串流結束 任何結果"] --> Catch["catchUp：since_seq 等於本機最大序號 迴圈到 has_more 為假"]
+    Catch -->|"網路失敗或逾時"| Off["offline：快取不變 仍可閱讀 送出禁用"]
+    Catch -->|"404"| Gone["gone：清除該存檔的快取與在途回合"]
+    Catch -->|"成功"| Put["後端的回合覆寫同序號 進行中的回合只顯示不存"]
+    Put --> Res["resolveInflight"]
+    Off --> Res
+    Res --> Has{"本機有該 client_msg_id 的 complete 回合嗎"}
+    Has -->|"有"| Clear["移除在途回合 沒有重送提示"]
+    Has -->|"沒有"| Keep["保留在途回合 顯示行動文字 提供重送與放棄 不自動送出"]
+    Keep -->|"玩家按重送"| Resend["以原本的 client_msg_id 再呼叫串流 後端冪等 已完成者重播 不重複扣幣"]
+```
+
+- **本機暫存的已知限制**：①IndexedDB 在裝置上，帳號刪除與登出無法由伺服器清除（與客服的快取同一個限制，README 記載）；快取只含劇情與行動，不含記事簿、角色卡與個資，內容與後端分歧時一律以後端覆寫。②重新整理後的在途回合只在 IndexedDB 可用時保存；退回記憶體後不保證。③`since_seq` 只往後讀：同序號的內容在後端被取代（之後的重新生成與編輯輸入，RC-2c）時，增量補齊不會自己發現，屆時要由那個 change 重讀最後一輪。④沒有離線佇列：離線時不能送出，在途回合要連線後由玩家明確重送。
+- **隱私**：這些模組除了 `game-store.js`（IndexedDB 的唯一出口，`tests/test_game_pages.py` 掃描整個 `game/` 目錄，其餘檔案不得出現 `indexedDB`，所有檔案都不得出現 `localStorage`、`sessionStorage` 與 cookie）之外不寫任何瀏覽器儲存、不直接碰全域的 `fetch`（`turn-stream.js` 的請求一律經由呼叫端注入的 `fetch`，同一個測試掃描）、不輸出主控台；`game-state.js` 與 `game-sync.js` 的測試掃描原始碼確認沒有儲存、網路與主控台。
 
 ## 4. 暫存、待送與同步
 
@@ -266,12 +287,13 @@ sequenceDiagram
 - **後端是權威**：訊息由後端先寫入並指派序號；本機只有可離線閱讀的快取與尚未同步成功的待送。衝突時以後端為準：`since_seq` 增量拉取、同序號覆寫、已有完整回覆的待送隨之移除。
 - **中止不代表後端中止**：取消、切換對話、離開頁面只中止請求；後端仍會完成並寫入，之後以序號補齊（重送同一識別碼不會重複）。
 - **離線**：只能閱讀暫存的歷史並保存待送訊息；產生新回覆需要連線。離線建立的對話以 `client_id` 冪等重送建立，成功後訊息與待送改掛正式識別碼。
+- **RPG 遊戲頁的暫存是另一套**（`game-store.js`、`game-sync.js`，見 3e）：沒有待送佇列、不自動重送（每一輪都要連線生成並消耗遊戲幣），只有閱讀快取與每個存檔最多一筆在途回合；`cs-store.js` 與 `cs-sync.js` 不因此修改。
 
 ## 5. 驗證方式
 
 | 層級 | 內容 |
 |---|---|
-| Node 單元測試 | `tests/js/*.test.js`（劇本創作頁另有 `script-draft`、`milestone-preview`、`restriction` 與 Vue 範本編譯 `script-workshop-template`；帳號頁的故事偏好有 `account-story-preference`：以真的 Vue 與 `Auth.useForm` 在 `vm` 沙盒執行 `account.js` 的 `setup()`，axios、Toast 與 mount 為替身；RPG 入口有 `game-labels`〔對照表、未知值、閘門與內容模式的提示、路徑、台灣時間〕與 `entry`〔同樣以 `vm` 沙盒執行 `entry.js` 的 `setup()`：預設分頁、載入更多、失敗保留與重試、閘門禁用開始、401、樣板用到的名稱都由 `setup()` 回傳；每個測試都有逾時，被破壞的程式讓 Promise 永遠不完成時會失敗而不是掛住〕；開存檔精靈有 `wizard-state`〔純函式：草稿與聯繫三態、字數與前進條件、示範氣泡、套用預覽、開存檔本文的兩種形狀、欄位路徑對應步驟、各種失敗的固定訊息且不含玩家文字〕、`wizard-template`〔樣板以離線 Vue 編譯，用到的名稱與 `wizard.js` 的約定清單一致，`setup()` 實際回傳每一個名稱〕與 `wizard`〔以 `vm` 沙盒執行 `wizard.js`，沙盒在 `tests/js/support/wizard-sandbox.js`：載入的三種失敗與重試、聯繫的選擇與略過、示範氣泡不送請求、欄位上限禁用、生成預覽只填表與覆蓋確認、各種失敗保留內容、離開頁面時中止、重複點擊只送一次、導向前保持禁用、整個流程沒有儲存寫入與主控台輸出〕；遊戲主畫面的串流核心有 `sse-parser`〔事件切塊、CRLF、註解、壞 JSON 丟棄〕、`turn-stream`〔假 fetch 與假計時器：各種結果、ping 重設、兩種逾時、取消、多位元組字元、請求標頭、每條路徑都清除計時器與監聽，每個測試都有逾時〕與 `game-state`〔事件到 effects 的轉換、合併與時間軸、各狀態碼與代碼的失敗對照且不含玩家文字、字數與後端的黃金案例〕，`game-labels` 另有新增的固定文字案例）：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式、後台的顯示邏輯（`admin-format.test.js`：每個列舉值都有標籤、日界、比例邊界）；`tests/test_admin_format_labels.py` 比對前端標籤與後端的列舉 |
+| Node 單元測試 | `tests/js/*.test.js`（劇本創作頁另有 `script-draft`、`milestone-preview`、`restriction` 與 Vue 範本編譯 `script-workshop-template`；帳號頁的故事偏好有 `account-story-preference`：以真的 Vue 與 `Auth.useForm` 在 `vm` 沙盒執行 `account.js` 的 `setup()`，axios、Toast 與 mount 為替身；RPG 入口有 `game-labels`〔對照表、未知值、閘門與內容模式的提示、路徑、台灣時間〕與 `entry`〔同樣以 `vm` 沙盒執行 `entry.js` 的 `setup()`：預設分頁、載入更多、失敗保留與重試、閘門禁用開始、401、樣板用到的名稱都由 `setup()` 回傳；每個測試都有逾時，被破壞的程式讓 Promise 永遠不完成時會失敗而不是掛住〕；開存檔精靈有 `wizard-state`〔純函式：草稿與聯繫三態、字數與前進條件、示範氣泡、套用預覽、開存檔本文的兩種形狀、欄位路徑對應步驟、各種失敗的固定訊息且不含玩家文字〕、`wizard-template`〔樣板以離線 Vue 編譯，用到的名稱與 `wizard.js` 的約定清單一致，`setup()` 實際回傳每一個名稱〕與 `wizard`〔以 `vm` 沙盒執行 `wizard.js`，沙盒在 `tests/js/support/wizard-sandbox.js`：載入的三種失敗與重試、聯繫的選擇與略過、示範氣泡不送請求、欄位上限禁用、生成預覽只填表與覆蓋確認、各種失敗保留內容、離開頁面時中止、重複點擊只送一次、導向前保持禁用、整個流程沒有儲存寫入與主控台輸出〕；遊戲主畫面的串流核心有 `sse-parser`〔事件切塊、CRLF、註解、壞 JSON 丟棄〕、`turn-stream`〔假 fetch 與假計時器：各種結果、ping 重設、兩種逾時、取消、多位元組字元、請求標頭、每條路徑都清除計時器與監聽，每個測試都有逾時〕與 `game-state`〔事件到 effects 的轉換、合併與時間軸、各狀態碼與代碼的失敗對照且不含玩家文字、字數與後端的黃金案例〕，`game-labels` 另有新增的固定文字案例；本機暫存與 API 有 `game-store`〔記憶體與假 IndexedDB 兩種後端、白名單、帳號隔離、開啟失敗與寫入失敗退回記憶體、整個資料庫沒有記事簿全文與個資〕、`game-sync`〔增量補齊、分頁、後端覆寫、離線與 404、在途回合的各種結果、從不呼叫串流〕與 `game-api`〔`vm` 沙盒與替身 axios：每個呼叫的方法、路徑、本文、逾時與 signal，失敗物件帶出的欄位且餵給 `game-state` 的失敗對照〕，假 IndexedDB 在 `tests/js/support/fake-indexeddb.js`）：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式、後台的顯示邏輯（`admin-format.test.js`：每個列舉值都有標籤、日界、比例邊界）；`tests/test_admin_format_labels.py` 比對前端標籤與後端的列舉 |
 | 架構掃描 | `tests/architecture/test_frontend_rules.py`、`tests/test_cs_pages.py`、`tests/test_admin_page.py`、`tests/test_script_page.py`、`tests/test_game_pages.py`、`tests/test_game_notebook_length_parity.py`、`tests/test_appeal_shortcut.py`：離線規則、逾時不寫死、`v-cloak`、純文字、自製 Modal 與 Toast；`/admin` 只有外殼與管理員的顯示名稱 |
 | 瀏覽器驗收 | Edge 無頭模式（CDP）的整頁驗收，結果與截圖摘要記在 README 的「瀏覽器驗收」與「管理員後台（C-4b）」 |
 
