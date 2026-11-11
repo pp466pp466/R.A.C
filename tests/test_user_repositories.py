@@ -252,6 +252,71 @@ def test_the_adult_confirmation_is_recorded_replaced_and_kept_when_the_preferenc
     assert (user.adult_confirmed_at, user.adult_rules_version) == (second, "r2")      # 只保存目前這一次
 
 
+# ---- 故事偏好（story-preference 任務 3.1）-----------------------------------------------------
+
+def test_a_new_account_has_the_all_audience_preference_by_default(session, users):
+    user = users.add_user(make_user(1))
+    session.commit()
+    session.expire_all()
+    assert users.get_by_id(user.id).story_preference == "all"
+
+
+@pytest.mark.parametrize("value", ["male", "female", "all"])
+def test_setting_the_story_preference_is_stored_and_read_back(session, users, value):
+    user = users.add_user(make_user(1))
+    assert users.set_story_preference(user, value) is True
+    session.commit()
+    session.expire_all()
+    assert users.get_by_id(user.id).story_preference == value
+
+
+def test_setting_the_same_story_preference_again_succeeds(session, users):
+    user = users.add_user(make_user(1))
+    assert users.set_story_preference(user, "male") is True
+    assert users.set_story_preference(user, "male") is True
+    assert user.story_preference == "male"
+
+
+def test_the_loaded_object_is_refreshed_after_the_update(session, users):
+    user = users.add_user(make_user(1))
+    assert user.story_preference == "all"
+    users.set_story_preference(user, "female")
+    assert user.story_preference == "female"                      # 不是更新前載入的舊值
+
+
+def test_setting_the_story_preference_writes_only_that_column_for_that_user(session, users):
+    user = users.add_user(make_user(1))
+    other = users.add_user(make_user(2))
+    users.complete_age_verification_if_unset(user, **age_args())
+    before = user.content_tier_preference
+    assert users.set_story_preference(user, "female") is True
+    assert (user.story_preference, other.story_preference) == ("female", "all")
+    assert user.content_tier_preference == before == "standard" and user.birth_date == date(1996, 1, 5)
+
+
+def test_the_story_preference_does_not_need_a_completed_age_check(session, users):
+    """偏好沒有年齡風險：與內容模式不同，不要求已有生日。"""
+    user = users.add_user(make_user(1))
+    assert user.birth_date is None
+    assert users.set_story_preference(user, "male") is True and user.story_preference == "male"
+
+
+def test_a_repeated_age_confirmation_does_not_change_the_story_preference(session, users):
+    user = users.add_user(make_user(1))
+    users.set_story_preference(user, "female")
+    assert users.complete_age_verification_if_unset(user, **age_args()) is True
+    assert user.story_preference == "female"
+
+
+@pytest.mark.parametrize("value", ["Male", "boys", "", None, 1, "ALL", " all"])
+def test_an_unknown_story_preference_is_a_programming_error_and_writes_nothing(session, users, value):
+    user = users.add_user(make_user(1))
+    users.set_story_preference(user, "male")
+    with pytest.raises(ValueError):
+        users.set_story_preference(user, value)
+    assert user.story_preference == "male"
+
+
 def test_the_age_statistics_count_per_range_and_expose_nothing_individual(session, users):
     for n, (birth, chosen) in enumerate(
         [(date(2011, 1, 1), "13_17"), (date(2010, 2, 2), "13_17"), (date(1996, 1, 5), "25_34"), (date(1990, 3, 3), "25_34"),

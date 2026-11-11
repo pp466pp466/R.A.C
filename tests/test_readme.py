@@ -359,7 +359,7 @@ def test_readme_privacy_lifecycle_endpoint_tables_list_exactly_the_registered_ro
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/account/"):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 6, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 8, "沒有掃到預期數量的路由，比對可能是空洞的"       # story-preference 新增 GET 與 PUT /api/account/story-preference（6 → 8）
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 

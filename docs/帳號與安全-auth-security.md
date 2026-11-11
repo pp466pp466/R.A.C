@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-10 ｜ 對應 change：story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -138,6 +138,7 @@ flowchart TD
 - **成人模式須同時滿足**：部署開關 `ADULT_MODE_ENABLED` 開啟；已滿 18 歲；在目前的安全規範版本（`ADULT_RULES_VERSION`）下完成成年確認；偏好為 `adult`。成年確認在切換為成人模式時完成：同時確認「我確定已滿 18 歲」與同意安全規範兩項（缺一回 400 並指出缺哪一項），記錄確認時間、規範版本與方式（目前 `self_declared`，不蒐集證件、不接第三方驗證）；規範版本改變後先前的確認失效，須重新確認；離開成人模式不清除紀錄。
 - **API**（需登入、CSRF、先過年齡閘門；受限登入狀態依既有規則被拒絕）：`GET /api/account/content-mode` 與 `PUT /api/account/content-mode`。回應只有 `preference`、`effective`、`selectable`（三種模式各是否可選）、`adult_reason`（`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`，**不含**生日、年齡區間、年齡確認時間或內部編號。錯誤：400（`mode` 不是三種之一，或缺少確認的那一項）、403 `content_mode_restricted`（未滿成年門檻者要求 `standard` 或 `adult`）、403 `adult_mode_unavailable`（部署開關關閉）、403 `age_confirmation_required`、401。成功時記錄 `account.content_mode.safe`／`standard`／`adult` 事件（只有事件名稱與使用者編號）。
 - `/account` 對 13 至 17 歲的使用者顯示安全模式的提示與原因，依生日於當下計算的年齡群組決定，不看儲存的偏好；目前**沒有切換內容模式的介面**（RC-3）。
+- **故事偏好**（change `story-preference`）：`users.story_preference`（`all`／`male`／`female`，預設 `all`）**只影響劇本清單的排序**，與內容模式是兩回事——不影響生效的內容模式、可看或可玩的劇本、敘事、提示詞與額度，也不被年齡確認、切換內容模式或滿 18 歲自動改變。端點 `GET`／`PUT /api/account/story-preference` 用 `require_login()`（受限登入狀態一律被拒），**不過年齡閘門 `require_chat_access`**——那一道檢查的是「能不能呼叫模型」，偏好不涉及模型。值必須完全等於三個列舉值之一（否則 400 並指出 `story_preference`，偏好不變，錯誤不回顯輸入）；請求中沒有任何可指定他人的欄位。`CurrentUser.public_dict` 多一個 `story_preference` 鍵（`/api/auth/me`），不含生日與年齡區間。成功只記 `account.story_preference_changed`（事件名稱與使用者編號，不含值）。
 - 年齡規則的數字不在 `AccessPolicy` 內嵌（測試以 AST 掃描不得出現 13、17、18）；`AccessPolicy.content_access(user)` 回傳 `ContentAccess`（偏好、年齡上限、生效模式、是否已成年、成人模式是否可選、是否已確認、原因）。
 
 **成人模式的環境開關**（AGENTS.md 第 7 節）：`ADULT_MODE_ENABLED` 預設關閉，**不能在程式裡寫死為開啟**，由組裝處依設定傳入 `AccessPolicy(adult_mode_enabled=…)`；未成年者、尚未完成年齡確認者、管理員與各會員等級都不受開關影響（未成年永遠是安全模式）。
@@ -186,6 +187,8 @@ flowchart TD
 | `/api/account/cancel-deletion` | POST | 是（含受限狀態） | 寬限期內撤銷刪除，還原為申請前的狀態 |
 | `/api/account/export` | POST | 是 | 匯出自己的帳號資料與全部對話（JSON 或 CSV zip）；受限狀態不可用 |
 | `/api/account/nickname` | PUT | 是 | 更改公開暱稱（2 至 20 字；短代號不變）；不合格只回欄位錯誤 |
+| `/api/account/story-preference` | GET | 是 | 查詢故事偏好（`all`／`male`／`female`）；只要求已登入，受限登入狀態一律 403，不過年齡閘門 |
+| `/api/account/story-preference` | PUT | 是 | 設定故事偏好（必須完全等於列舉值，其餘 400 指出 `story_preference`）；冪等；只改自己的；成功記 `account.story_preference_changed` |
 | `/api/wallet` | GET | 是 | 遊戲幣餘額與簽到狀態（第 7f 節）；先完成年齡確認，否則 403 `age_confirmation_required` |
 | `/api/wallet/checkin` | POST | 是 | 每日簽到；會有幣作廢時須帶 `confirm_overflow` |
 | `/api/wallet/entries` | GET | 是 | 遊戲幣記錄（游標分頁） |
@@ -315,6 +318,7 @@ flowchart TD
 | `age_pending` | 玩家沒有生日（Google 首次登入後） | `age_confirmation_required` | `/age` | `/api/auth/me`、`POST /api/auth/verify-age`、`GET /age` |
 | `deletion_pending` | 申請刪除後的寬限期內 | `account_deletion_pending` | `/account` | `/api/auth/me`、`GET /account`、`POST /api/account/cancel-deletion` |
 
+- **允許清單不變**：`/api/account/story-preference` 與其他需要登入的端點一樣被三種受限登入狀態預設拒絕（`locked` 回 `account_locked`、`age_pending` 回 `age_confirmation_required`、`deletion_pending` 回 `account_deletion_pending`），不在任何狀態的允許清單內；`tests/test_restricted_session.py` 的全路由掃描自動涵蓋，`tests/test_story_preference_api.py` 另逐一證明三種狀態的代碼且偏好不變。
 - **年齡確認**：玩家首次以 Google 登入只建立帳號（沒有生日，`age_deadline_at` = 建立後 24 小時），登入後被導向 `/age`；`POST /api/auth/verify-age` 驗證生日與區間：未滿 13 歲立即抹除（`AccountErasureService.erase_underage`，不保存生日）、不一致回通用訊息並計入鎖定計次、成功則寫入並清空期限。逾時由 `purge-unconfirmed-accounts` 每小時清除。
 - **帳號鎖定**：`AccountLockService.register_strike` 把兩類計次寫入 `lock_strikes`——`identity_rejected`（已辨識出帳號卻被拒絕的 Google 登入、補填年齡不一致；15 分鐘內 5 次）與 `rate_limited`（被每分鐘訊息數上限擋下；15 分鐘內 10 次）；達門檻時以條件式 UPDATE 鎖定並寫 `account.lock` 稽核（管理員欄位為空）。計次發生在會以 4xx 結束的請求裡，所以寫入後呼叫 `keep_changes_on_error`。無法辨識出帳號的失敗不計次。
 - **申訴**：`/api/appeals` 對被鎖定或被暫停發佈的玩家有效（兩者皆非則 404，管理員也一樣），1000 字、每小時 3 則、同時 1 則待處理，兩種狀態共用同一套上限；內容是個資，日誌與稽核只有字數（`appeal.submit`）。`/appeal` 頁面由 `CurrentUser.appeal_kind`（`locked` 優先、`suspended`）決定說明文字，兩者皆非時導向預設頁面。
@@ -402,7 +406,7 @@ flowchart TD
 
 - 生日與年齡區間：不進 API 回應、日誌與模型；管理員只看年齡區間的彙總統計（`flask age-stats` 與後台總覽），後台看不到任何個別使用者的生日、年齡區間或年齡群組。
 - 連續 12 個月未登入的帳號由 `flask purge-inactive-accounts` 直接刪除（管理員不納入）；使用者自助刪除寬限期滿後由 `flask execute-account-deletions` 刪除。兩者走同一個抹除出口（先清帳本的對話編號，再刪使用者，並寫入只含內部編號、日期與原因的 `deletion_tombstones`，見 [資料模型-data-model.md](資料模型-data-model.md)）。各類資料的保存期限由 `flask purge-expired-data` 清除。
-- 使用者可在帳號頁匯出自己的帳號資料（含生日與年齡區間）與全部對話；匯出不含密碼雜湊、權杖與模型內部欄位，CSV 的公式字元會被中和。
+- 使用者可在帳號頁匯出自己的帳號資料（含生日、年齡區間與故事偏好）與全部對話（自己創作的劇本版本含讀者頻道，舊版本的空值匯出為 `all`）；匯出不含密碼雜湊、權杖與模型內部欄位，CSV 的公式字元會被中和。
 - 玩家主角（`sessions.protagonist_json`）：角色卡與錨定事實隨所屬存檔保存、刪除與匯出；自我介紹只用於生成當下，不寫入資料庫，但會傳送至 RPG 模型供應商，適用供應商的個資限制；日誌只記內部編號與整數長度。
 - 日誌只記錄白名單欄位，絕不記錄 email、密碼、權杖、生日、訊息全文與模型輸出（見 [營運與部署-operations.md](營運與部署-operations.md)）。
 

@@ -6,7 +6,8 @@
   （訊息內容是使用者與模型寫的，不可信任）。
 - 訊息以序號為游標每頁 500 則讀取，寫入 `SpooledTemporaryFile`（超過 8 MB 才落地），所以記憶體用量與訊息總數無關。
 - 範圍：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間，**自己送出的申訴**（內容、時間、處理狀態；CSV 為 `appeals.csv`），
-  **自己創作的劇本**（全部版本，含草稿、待審、被退回與已被取代的；CSV 為 `scripts.csv`，每個版本一列）與**自己的存檔**（含記事簿全文與每個回合的
+  **自己創作的劇本**（全部版本，含草稿、待審、被退回與已被取代的，每個版本含讀者頻道，遷移之前的舊版本空值匯出為 `all`；
+  CSV 為 `scripts.csv`，每個版本一列）、**故事偏好**（帳號資料的一個欄位）與**自己的存檔**（含記事簿全文與每個回合的
   玩家行動與劇情原文；CSV 為 `sessions.csv` 與 `turns.csv`；NPC 狀態、目標與里程碑進度等世界狀態只在 JSON）。存檔內的劇本複本不匯出，
   它是來源劇本作者的內容，存檔只帶該劇本的標題。劇本與存檔也以產生器逐筆、逐頁讀取，記憶體用量與總量無關。
   **自己的送審紀錄**（結果、被拒絕的類別、時間；CSV 為 `script_submissions.csv`）：紀錄本來就只有固定列舉與時間，沒有任何劇本文字；
@@ -42,6 +43,7 @@ from app.services.age_policy import taipei_today
 from app.services.current_user import CurrentUser, iso_utc
 from app.services.errors import Unauthenticated, ValidationError
 from app.services.protagonist import origin_of
+from app.services.story_preference import normalize_audience
 
 FORMAT_JSON = "json"
 FORMAT_CSV = "csv"
@@ -52,15 +54,15 @@ SPOOL_LIMIT_BYTES = 8 * 1024 * 1024
 
 ACCOUNT_COLUMNS = (
     "email", "display_name", "nickname", "nickname_code", "member_tier", "email_verified_at", "created_at", "last_login_at", "terms_version",
-    "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "google_linked",
+    "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "google_linked", "story_preference",
 )
 MESSAGE_COLUMNS = ("conversation_id", "conversation_title", "seq", "role", "content", "created_at")
 APPEAL_COLUMNS = ("appeal_id", "content", "created_at", "status")
 SUBMISSION_COLUMNS = ("outcome", "categories", "created_at")
 SCRIPT_COLUMNS = (
     "script_id", "version_no", "status", "spec_version", "title", "summary", "world_name", "content_tier", "background", "opening",
-    "rules", "tags", "calendar_name", "calendar_start_year", "ending_mode", "ending_text", "ending_age", "characters", "locations",
-    "milestones", "author_name", "author_code", "created_at", "published_at",
+    "rules", "tags", "calendar_name", "calendar_start_year", "ending_mode", "ending_text", "ending_age", "audience", "characters",
+    "locations", "milestones", "author_name", "author_code", "created_at", "published_at",
 )
 SESSION_COLUMNS = (
     "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "origin", "personality", "appearance",
@@ -162,6 +164,7 @@ class PersonalExportService:
             "age_confirmed_at": when(user.age_confirmed_at),
             "age_policy_version": user.age_policy_version,
             "google_linked": self._identities.get_for_user(user.id, PROVIDER_GOOGLE) is not None,
+            "story_preference": normalize_audience(user.story_preference),
         }
 
     def _appeal_rows(self, user_id: int) -> list[dict[str, Any]]:
@@ -329,6 +332,7 @@ class PersonalExportService:
                                 "tags": "、".join(version["tags"]), "calendar_name": calendar.get("name"),
                                 "calendar_start_year": calendar.get("start_year"), "ending_mode": version["ending_mode"],
                                 "ending_text": version["ending_text"], "ending_age": version["ending_age"],
+                                "audience": normalize_audience(version.get("audience")),
                                 "characters": json.dumps(version["characters"], ensure_ascii=False),
                                 "locations": json.dumps(version["locations"], ensure_ascii=False),
                                 "milestones": json.dumps(version["milestones"], ensure_ascii=False),

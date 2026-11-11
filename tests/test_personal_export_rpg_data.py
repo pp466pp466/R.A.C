@@ -481,3 +481,51 @@ def test_the_origin_is_in_the_json_card_and_the_csv_column_and_an_old_card_reads
     assert entries["穿越者"]["protagonist"]["character"]["origin"] == "transmigrator"
     by_name = {row["player_name"]: row for row in rows(export_csv(s, me)["sessions.csv"])}
     assert by_name["穿越者"]["origin"] == "transmigrator" and by_name["本地人"]["origin"] == "native"        # 沒有來歷欄位的角色卡視為本地人
+
+
+# ---- 讀者頻道（story-preference 任務 3.4）-----------------------------------------------------------
+
+def test_each_version_exports_its_audience_and_an_old_version_with_no_value_exports_all(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    scripts = ScriptRepository(s)
+    male = validated(audience="male")
+    first = scripts.create_script(me.id, author_name="筆名甲", author_code="abc123", content=male.content, content_hash=male.content_hash, total_chars=male.total_chars)
+    scripts.submit_for_review(me.id, first.public_id)
+    scripts.approve_version(first.public_id, now=START)
+    female = validated(audience="female", title="女頻的新版本")
+    second = scripts.create_draft_version(me.id, scripts.get_script_of(first).public_id, content=female.content, content_hash=female.content_hash, total_chars=female.total_chars)
+    legacy_content = validated(title="遷移之前的舊劇本")
+    legacy = scripts.create_script(me.id, author_name="筆名甲", author_code="abc123", content=legacy_content.content, content_hash=legacy_content.content_hash, total_chars=legacy_content.total_chars)
+    legacy.audience = None                                              # 遷移之前建立的版本：欄位為空，不回填
+    s.commit()
+
+    data = export_json(s, me)
+    by_title = {v["title"]: v["audience"] for script in data["scripts"] for v in script["versions"]}
+    assert by_title == {"青雲問道": "male", "女頻的新版本": "female", "遷移之前的舊劇本": "all"}
+    assert second.audience == "female"
+
+    table = rows(export_csv(s, me)["scripts.csv"])
+    assert {row["title"]: row["audience"] for row in table} == by_title
+
+
+def test_the_csv_header_has_the_audience_column_and_every_row_lines_up_with_it(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_script(s, me, audience="male")
+    s.commit()
+    raw = export_csv(s, me)["scripts.csv"]
+    header = next(csv.reader(io.StringIO(raw.decode("utf-8-sig"), newline="")))
+    assert header == list(SCRIPT_COLUMNS) and header.count("audience") == 1
+    table = rows(raw)
+    assert len(table) == 2 and all(len(row) == len(header) for row in table)       # 每列的欄位數都與標頭相同（DictReader 對齊）
+    assert [row["audience"] for row in table] == ["male", "male"]
+    assert all(None not in row and all(value is not None for value in row.values()) for row in table)
+
+
+def test_a_script_without_a_stated_audience_exports_all(member_session):
+    s = member_session
+    me = add_user(s, 1)
+    make_script(s, me, publish_first=False)
+    s.commit()
+    assert export_json(s, me)["scripts"][0]["versions"][0]["audience"] == "all"

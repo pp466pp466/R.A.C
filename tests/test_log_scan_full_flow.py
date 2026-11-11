@@ -408,6 +408,9 @@ def test_a_complete_rpg_tour_leaves_no_script_action_story_notebook_or_world_sta
     client = logged_in_client(app, user_object)
     assert client.put("/api/account/content-mode", json={"mode": "safe"}).status_code == 200
     assert client.get("/api/account/content-mode").status_code == 200
+    assert client.put("/api/account/story-preference", json={"story_preference": "female"}).status_code == 200      # story-preference
+    assert client.get("/api/account/story-preference").status_code == 200
+    assert client.put("/api/account/story-preference", json={"story_preference": "Female"}).status_code == 400        # 被拒的值不記事件
 
     raw = log_lines.raw()
     for sample in RPG_SECRETS.values():
@@ -415,3 +418,6 @@ def test_a_complete_rpg_tour_leaves_no_script_action_story_notebook_or_world_sta
     for line in log_lines():
         assert set(line) <= BASE_KEYS | set(ALLOWED_FIELDS), f"出現不允許的欄位：{set(line) - BASE_KEYS - set(ALLOWED_FIELDS)}"
     assert [line["event"] for line in log_lines() if str(line.get("event", "")).startswith("account.content_mode.")] == ["account.content_mode.safe"]
+    # 偏好只記事件名稱與編號：值（female）與被拒的輸入（Female）都不在日誌裡
+    assert [line["event"] for line in log_lines() if str(line.get("event", "")).startswith("account.story_preference")] == ["account.story_preference_changed"]
+    assert "Female" not in raw and '"female"' not in raw

@@ -96,3 +96,12 @@ def test_every_event_constant_used_in_the_code_exists():
         referenced |= set(re.findall(r"security_events\.([A-Z][A-Z_]+)", path.read_text(encoding="utf-8-sig")))
     missing = {name for name in referenced if not hasattr(security_events, name)}
     assert not missing, f"未定義的事件常數：{sorted(missing)}"
+
+
+def test_the_story_preference_event_is_registered_as_an_info_event_with_only_the_name_and_the_id(log_lines):
+    """story-preference：事件名稱本身不含值；偏好改變是正常的操作，不是警告。"""
+    assert security_events.STORY_PREFERENCE_CHANGED == "account.story_preference_changed" and "account.story_preference_changed" in EVENT_NAMES
+    log_event(security_events.STORY_PREFERENCE_CHANGED, user_id=9)
+    payload = log_lines()[-1]
+    assert (payload["event"], payload["level"], payload["user_id"]) == ("account.story_preference_changed", "INFO", 9)
+    assert set(payload) <= {"time", "level", "logger", "message", *ALLOWED_FIELDS}

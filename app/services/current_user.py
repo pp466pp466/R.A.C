@@ -11,8 +11,9 @@ from datetime import date, datetime, timezone
 from typing import Any
 
 from app.models.user import (
-    DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, User,
+    AUDIENCE_ALL, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE, STATUS_DELETION_PENDING, User,
 )
+from app.services.story_preference import normalize_audience
 
 
 def iso_utc(moment: datetime) -> str:
@@ -53,6 +54,8 @@ class CurrentUser:
     nickname: str | None = None
     nickname_code: str | None = None
     publish_suspended_at: datetime | None = None
+    # 故事偏好（story-preference）：`all`／`male`／`female`，只影響劇本清單的排序；低敏感，進 `public_dict` 讓 `/account` 有初始值
+    story_preference: str = AUDIENCE_ALL
 
     @property
     def age_confirmed(self) -> bool:
@@ -83,6 +86,7 @@ class CurrentUser:
             nickname=user.nickname,
             nickname_code=user.nickname_code,
             publish_suspended_at=user.publish_suspended_at,
+            story_preference=normalize_audience(user.story_preference),          # 尚未寫入資料庫的物件為 None → 全讀者
         )
 
     @property
@@ -151,6 +155,7 @@ class CurrentUser:
             "nickname": self.nickname,
             "nickname_code": self.nickname_code,
             "publish_suspended": self.publish_suspended_at is not None,
+            "story_preference": self.story_preference,
         }
         if google_linked is not None:
             data["google_linked"] = google_linked

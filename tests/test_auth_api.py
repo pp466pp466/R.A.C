@@ -19,6 +19,7 @@ PROFILE_KEYS = {
     "public_id", "email", "display_name", "member_tier", "role", "status",
     "email_verified", "has_password", "age_confirmed", "age_group", "google_linked", "restriction",
     "nickname", "nickname_code", "publish_suspended",                 # rpg-script-authoring：只回給本人
+    "story_preference",                                               # story-preference：低敏感的列舉，讓 /account 有初始值（刻意多一個鍵）
 }
 AGE_SECRETS = ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult")
 

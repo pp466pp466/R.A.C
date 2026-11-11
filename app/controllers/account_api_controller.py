@@ -10,6 +10,8 @@ Controller 只讀取請求、呼叫 Service、處理登入狀態；確認本人�
 - `GET /api/account/content-mode`、`PUT /api/account/content-mode`：查詢與切換自己的內容模式（安全、一般、成人）。
   先過年齡閘門；回應只含偏好、生效模式、各模式是否可選與成人模式沒有啟用的原因，不含生日與年齡區間。
   切換為成人模式時本文須帶 `confirm_adult` 與 `confirm_rules` 兩項確認（見 `ContentModeService`）。
+- `GET /api/account/story-preference`、`PUT /api/account/story-preference`：查詢與設定自己的故事偏好（全讀者、男頻、女頻）。
+  偏好只影響劇本清單的排序，所以只要求已登入（受限登入狀態一律拒絕），不過年齡閘門；值必須完全等於列舉值，否則 400 與欄位錯誤。
 - `PUT /api/account/nickname`：設定或更改自己的公開暱稱（第一次設定時產生短代號，之後不變）。先過年齡閘門，受限登入狀態不可用；
   格式不合格時以暱稱欄位的錯誤回應。回應是最新的帳號資料（本人才看得到暱稱與短代號）。
 - `POST /api/account/cancel-deletion`：寬限期內撤銷。**這是少數允許「受限登入狀態」的端點之一**（見 `require_login`）：
@@ -22,7 +24,7 @@ from app.security.session import logout_user, require_login
 from app.services.current_user import iso_utc
 from app.services.registry import (
     get_account_deletion_service, get_auth_service, get_content_mode_service, get_nickname_service,
-    get_personal_export_service,
+    get_personal_export_service, get_story_preference_service,
 )
 
 account_api_bp = Blueprint("account_api", __name__, url_prefix="/api/account")
@@ -69,6 +71,19 @@ def set_content_mode():
         user, body.get("mode"), confirm_adult=body.get("confirm_adult"), confirm_rules=body.get("confirm_rules")
     )
     return jsonify(ok=True, content_mode=state)
+
+
+@account_api_bp.get("/story-preference")
+def get_story_preference():
+    user = require_login()
+    return jsonify(ok=True, story_preference=get_story_preference_service().get(user))
+
+
+@account_api_bp.put("/story-preference")
+def set_story_preference():
+    user = require_login()
+    body = read_json_object()
+    return jsonify(ok=True, story_preference=get_story_preference_service().set(user, body.get("story_preference")))
 
 
 @account_api_bp.put("/nickname")

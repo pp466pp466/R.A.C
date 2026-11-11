@@ -507,6 +507,8 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 | `/api/account/cancel-deletion` | POST | 撤銷刪除（只在申請後 7 天內）：一律還原為 `active`（`pending_verification` 已退役）。**少數允許受限登入狀態的端點之一**；`token_version` 不變，撤銷後目前的登入狀態直接變成完整的。錯誤：409 `grace_expired`、`not_pending` | 是（含待刪除） |
 | `/api/account/content-mode` | GET | 查詢自己的內容模式（安全、一般、成人，見 AGENTS.md 第 7 節）。需登入、先過年齡閘門（尚未確認年齡 403 `age_confirmation_required`，未登入 401）。回應 `content_mode` 只含 `preference`（偏好）、`effective`（生效模式，偏好與年齡上限中較保守者）、`selectable`（`safe`／`standard`／`adult` 各是否可選）、`adult_reason`（成人模式沒有啟用的原因：`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`（是否已在目前的安全規範版本下確認），**不含**生日、年齡區間、年齡確認時間或內部編號；`Cache-Control: no-store`。滿 18 歲不會自動調高偏好，`selectable.standard` 變成真值時介面提示可自行切換 | 是 |
 | `/api/account/content-mode` | PUT | 切換自己的內容模式，本文 `mode`（`safe`、`standard`、`adult`，其餘 400 並指出 `mode`）。成年玩家可選任一種（含安全模式）；未滿成年門檻者只能選 `safe`，否則 403 `content_mode_restricted`。切換為 `adult` 另須：部署開關開啟（否則 403 `adult_mode_unavailable`）、尚未在目前規範版本確認時本文須同時帶 `confirm_adult: true` 與 `confirm_rules: true`（缺哪一項就 400 並指出哪一項）；確認成功記錄時間、規範版本與方式（自行聲明）。已確認後再切換不需再勾選，離開成人模式不清除紀錄。成功時記錄 `account.content_mode.<模式>` 事件（只含事件名稱與使用者編號）。回應同 GET | 是 |
+| `/api/account/story-preference` | GET | 查詢自己的故事偏好（全讀者 `all`、男頻 `male`、女頻 `female`，預設 `all`，見 AGENTS.md 第 7 節）。**只影響劇本清單的排序**，不影響內容分級、可看或可玩的劇本、敘事與額度。只要求已登入（受限登入狀態一律 403：`account_locked`、`account_deletion_pending`、`age_confirmation_required`；未登入 401），**不過年齡閘門**（偏好不涉及模型）。回應 `{ok, story_preference}`，不含任何個資；`Cache-Control: no-store`。`GET /api/auth/me` 的 `user` 也多一個 `story_preference` 鍵，讓 `/account` 有初始值 | 是 |
+| `/api/account/story-preference` | PUT | 設定自己的故事偏好，本文 `story_preference`（必須**完全等於** `all`、`male`、`female` 之一；大小寫不同、空白、數字、`null`、陣列或缺欄位都是 400 並指出 `story_preference`，偏好不變，錯誤訊息不回顯輸入）。冪等：設成目前的值同樣成功。需通過 CSRF 與來源檢查；請求中沒有任何可指定他人的欄位（多餘的 `user_id` 等一律忽略）。成功時記錄 `account.story_preference_changed` 事件（只含事件名稱與使用者編號，**不含偏好的值**）。回應同 GET | 是 |
 | `/api/account/export` | POST | 匯出自己的帳號資料與全部對話。本文 `format`：`json` 或 `csv`（其餘 400）。回應是附件與 `Cache-Control: no-store`：JSON 為 UTF-8（無 BOM）；CSV 為一個 zip，內含 `account.csv` 與 `messages.csv`（UTF-8-sig，Excel 開啟繁體中文不亂碼；以 `=`、`+`、`-`、`@`、Tab 或歸位字元開頭的儲存格前加單引號，避免被當成公式）。用 POST 是為了受 CSRF 與來源檢查保護、不被預取連結觸發；請求夾帶的其他使用者識別碼一律忽略。受限登入狀態不可用 | 是 |
 
 `/api/auth/me` 另有 `deletion_scheduled_at`（UTC，只有待刪除的帳號才有）。頁面：`/account` 多了「匯出我的資料」與「刪除帳號」（管理員沒有刪除）；帳號正在等待刪除的人看到的是**另一份 HTML**（預定刪除時間、撤銷、登出，沒有其他區塊；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕）；`/login?notice=deletion_requested` 顯示寬限期的說明（代碼是固定列舉）。
@@ -769,7 +771,7 @@ change `rpg-data-and-script`（RC-1）。RPG 的資料基礎，**還沒有任何
 ### 抹除、匯出與保存期限
 
 - **抹除**：`scripts.creator_id`、`sessions.user_id` 與其下的版本、標籤、回合都是 `ON DELETE CASCADE`；別的玩家用該作者的劇本開過的存檔**保留**（有自己的劇本複本），抹除前先把它們的來源參照清為空值（`UserRepository.clear_script_version_refs`，在同一個交易，條件不成立時一併回復）。
-- **匯出**：JSON 新增 `scripts`（含全部版本）與 `sessions`（含記事簿全文、每個回合與世界狀態）；CSV 新增 `scripts.csv`（每個版本一列）、`sessions.csv`、`turns.csv`（沒有世界狀態）。存檔內的劇本複本、種子鍵、內容雜湊與內部編號不匯出。
+- **匯出**：JSON 新增 `scripts`（含全部版本；每個版本含讀者頻道 `audience`，舊版本的空值匯出為 `all`）與 `sessions`（含記事簿全文、每個回合與世界狀態）；帳號資料另含 `story_preference`（story-preference）；CSV 新增 `scripts.csv`（每個版本一列）、`sessions.csv`、`turns.csv`（沒有世界狀態）。存檔內的劇本複本、種子鍵、內容雜湊與內部編號不匯出。
 - **保存期限**（`purge-expired-data` 新增兩類）：RPG 存檔最後活動後 365 天刪除（回合與記事簿一併消失，不論進行中或已完結）；中斷或被擋的回合的部分劇情內容 14 天後清為空字串（回合紀錄保留）。
 
 ### 已知限制

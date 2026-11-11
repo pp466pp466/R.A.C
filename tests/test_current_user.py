@@ -65,3 +65,30 @@ def test_the_age_group_must_be_passed_explicitly():
     """沒有預設值：忘了傳會立刻出錯，而不是悄悄把成年人顯示成未知。"""
     with pytest.raises(TypeError):
         CurrentUser.from_model(make_model()).public_dict()          # type: ignore[call-arg]
+
+
+# ---- 故事偏好（story-preference 任務 3.1）-----------------------------------------------
+
+def test_the_story_preference_defaults_to_all_even_for_an_object_that_was_never_written_to_the_database():
+    """尚未寫入資料庫的 ORM 物件，欄位預設值還沒套用（None）：快照仍得到全讀者。"""
+    assert make_model().story_preference is None
+    assert CurrentUser.from_model(make_model()).story_preference == "all"
+
+
+@pytest.mark.parametrize("value", ["all", "male", "female"])
+def test_the_snapshot_carries_the_stored_story_preference_into_the_public_dict(value):
+    current = CurrentUser.from_model(make_model(**age_columns(30), story_preference=value))
+    assert current.story_preference == value
+    assert current.public_dict(age_group="adult", google_linked=False)["story_preference"] == value
+
+
+@pytest.mark.parametrize("stored", ["", "Male", "boys", "1", None])
+def test_an_unrecognised_stored_value_reads_as_all(stored):
+    assert CurrentUser.from_model(make_model(story_preference=stored)).story_preference == "all"
+
+
+def test_the_story_preference_in_the_public_dict_comes_without_adding_any_age_data():
+    data = CurrentUser.from_model(make_model(**age_columns(30), story_preference="female")).public_dict(age_group="adult", google_linked=False)
+    text = json.dumps(data, default=str)
+    for secret in ("birth_date", "age_range", "age_confirmed_at", "age_policy_version", "1996", "25_34"):
+        assert secret not in text

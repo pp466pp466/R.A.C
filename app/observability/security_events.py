@@ -68,6 +68,10 @@ CONTENT_MODE_SAFE = "account.content_mode.safe"
 CONTENT_MODE_STANDARD = "account.content_mode.standard"
 CONTENT_MODE_ADULT = "account.content_mode.adult"
 
+# ---- 故事偏好（story-preference）----
+# 只有事件名稱與內部編號，不帶偏好的值（偏好只影響清單排序，低敏感，但沿用「事件不含輸入」的作法）
+STORY_PREFERENCE_CHANGED = "account.story_preference_changed"
+
 # ---- 其他安全事件 ----
 CSRF_REJECTED = "security.csrf_rejected"
 MAIL_SEND_FAILED = "mail.send_failed"

@@ -81,6 +81,7 @@ from app.services.rpg_opening_runner import OpeningRunner
 from app.services.rpg_turn_runner import TurnRunner
 from app.services.session_service import SessionService
 from app.services.startable import StartableVersions
+from app.services.story_preference_service import StoryPreferenceService
 from app.services.summary_service import SummaryService
 from app.services.usage_service import UsageService
 
@@ -364,6 +365,11 @@ def get_account_deletion_service() -> AccountDeletionService:
 def get_content_mode_service() -> ContentModeService:
     """目前請求的內容模式服務：只讀寫呼叫者本人的偏好與成年確認紀錄。"""
     return ContentModeService(users=UserRepository(get_session()), policy=get_access_policy(), clock=get_clock())
+
+
+def get_story_preference_service() -> StoryPreferenceService:
+    """目前請求的故事偏好服務：只讀寫呼叫者本人的偏好（不碰內容分級，也不需要模型供應商）。"""
+    return StoryPreferenceService(users=UserRepository(get_session()))
 
 
 def get_script_authoring_service() -> ScriptAuthoringService:

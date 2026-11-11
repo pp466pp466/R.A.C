@@ -17,7 +17,7 @@ from app.models.llm_call_log import LlmCallLog
 from app.models.rpg_session import RpgSession
 from app.models.script import Script, ScriptVersion
 from app.models.user import (
-    CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIERS, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
+    AUDIENCES, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIERS, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
     STATUS_DELETION_PENDING, User,
 )
 from app.repositories.base import BaseRepository
@@ -210,6 +210,20 @@ class UserRepository(BaseRepository[User]):
             user,
             update(User).where(User.id == user.id).where(User.birth_date.is_not(None)).values(content_tier_preference=tier),
         )
+        return changed == 1
+
+    # ---- 故事偏好（story-preference 規格）-------------------------------------------------
+
+    def set_story_preference(self, user: User, value: str) -> bool:
+        """設定故事偏好。條件式 UPDATE 只針對這個使用者，回傳是否真的寫入（帳號已不存在時為 False）。
+
+        `value` 必須是 `all`、`male`、`female` 之一，否則拋出 `ValueError`（程式錯誤，不是使用者輸入錯誤；
+        使用者輸入由 `StoryPreferenceService` 先驗證）。與內容模式不同，不要求已完成年齡確認：偏好沒有年齡風險，
+        也不影響內容分級。設成目前的值同樣成功（冪等）。
+        """
+        if value not in AUDIENCES:
+            raise ValueError("故事偏好必須是 all、male、female 之一。")
+        changed = self._run_update(user, update(User).where(User.id == user.id).values(story_preference=value))
         return changed == 1
 
     def record_adult_confirmation(self, user: User, *, confirmed_at: datetime, rules_version: str, method: str) -> bool:

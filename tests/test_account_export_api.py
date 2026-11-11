@@ -118,3 +118,32 @@ def test_the_log_has_the_event_name_the_id_and_the_format_only(app, log_lines):
     assert [(e["user_id"], e["reason"]) for e in events] == [(owner.id, "json")]
     for secret in ("機密姓名", "機密對話內容", "user1@example.com", birth_date_for_age(30).isoformat(), GOOD_PASSWORD):
         assert secret not in log_lines.raw()
+
+
+def test_both_formats_carry_the_story_preference_and_the_script_audience(app):
+    from app.repositories.script_repository import ScriptRepository
+    from app.repositories.user_repository import UserRepository
+    from tests.support.script_data import validated
+
+    owner = make_member(app, 1)
+    with Session(app.extensions["db_engine"]) as s:
+        UserRepository(s).set_story_preference(s.get(type(owner), owner.id), "male")
+        result = validated(audience="female")
+        ScriptRepository(s).create_script(
+            owner.id, author_name="筆名", author_code="abc123", content=result.content, content_hash=result.content_hash,
+            total_chars=result.total_chars,
+        )
+        s.commit()
+    client = logged_in_client(app, owner)
+
+    data = json.loads(client.post("/api/account/export", json={"format": "json"}).get_data().decode("utf-8"))
+    assert data["account"]["story_preference"] == "male"
+    assert [v["audience"] for v in data["scripts"][0]["versions"]] == ["female"]
+
+    with zipfile.ZipFile(io.BytesIO(client.post("/api/account/export", json={"format": "csv"}).get_data())) as archive:
+        account, scripts = archive.read("account.csv").decode("utf-8-sig"), archive.read("scripts.csv").decode("utf-8-sig")
+    import csv
+
+    assert dict(zip(*csv.reader(io.StringIO(account))))["story_preference"] == "male"
+    script_header, script_row = list(csv.reader(io.StringIO(scripts)))[:2]
+    assert dict(zip(script_header, script_row))["audience"] == "female"

@@ -319,3 +319,32 @@ def test_lock_strikes_and_lock_state_are_not_part_of_the_export(member_session):
         text = raw.decode("utf-8-sig", "ignore")
         for hidden in ("lock_strikes", "locked_at", "lock_reason", "rate_limited", "identity_rejected", "age_deadline_at"):
             assert hidden not in text, (fmt, hidden)
+
+
+# ---- 故事偏好（story-preference 任務 3.4）-----------------------------------------------
+
+def account_cells(files: dict[str, bytes]) -> dict[str, str]:
+    header, row = csv_rows(files["account.csv"])
+    return dict(zip(header, row))
+
+
+def test_a_player_with_the_female_preference_exports_it_in_json_and_csv(member_session):
+    user = rich_user(member_session)
+    UserRepository(member_session).set_story_preference(user, "female")
+    member_session.commit()
+    service = service_for(member_session)
+    assert read_json(service.build(me(member_session, user), "json"))["account"]["story_preference"] == "female"
+    assert account_cells(read_zip(service.build(me(member_session, user), "csv")))["story_preference"] == "female"
+
+
+def test_a_player_who_never_set_the_preference_exports_all(member_session):
+    user = rich_user(member_session)
+    service = service_for(member_session)
+    assert read_json(service.build(me(member_session, user), "json"))["account"]["story_preference"] == "all"
+    assert account_cells(read_zip(service.build(me(member_session, user), "csv")))["story_preference"] == "all"
+
+
+def test_an_unwritten_user_object_still_exports_all(member_session):
+    """資料庫欄位為空（理論上不會發生，欄位 NOT NULL）時仍匯出 `all`，匯出不因缺值而失敗。"""
+    user = rich_user(member_session)
+    assert service_for(member_session)._account(User(id=user.id, email="x@example.com", display_name="x"))["story_preference"] == "all"
