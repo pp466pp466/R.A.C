@@ -1002,9 +1002,9 @@ change `rpg-entry-ui`（RC-3a）。第一批玩家能親手操作的 RPG 畫面�
 
 - ①**還沒有在瀏覽器裡看過**：畫面、Toast、Modal、360px 不溢出、分頁切換目前只有字串與 `vm` 沙盒層級的證明（見下方驗收紀錄的 5.1）。②**存檔頁只是空殼**：按「開始冒險」之後只看到標題與主角，遊戲主畫面、串流、第 0 幕的顯示、記事簿面板與餘額屬 RC-3b。③清單只含上架的劇本（不含自己的草稿，試玩草稿另行處理）；沒有搜尋、標籤篩選與劇本詳情頁（RC-8）。④精靈沒有瀏覽器原生的離開警告：重新整理或關閉分頁會直接丟掉已填的內容（刻意，個資不落地）。⑤`/age` 的分步精靈與對話人設預填不在這個 change。
 
-### 驗收紀錄（rpg-entry-ui，實作中，5.1 至 5.4 尚未進行）
+### 驗收紀錄（rpg-entry-ui，2026-11-11，已實作，5.1 瀏覽器實測待使用者操作）
 
-E 批（`wizard.js`、導覽連結、整合測試與本節）完成時的狀態；破壞驗證、全套測試與瀏覽器實測屬 F 批與使用者的操作，結果補在這裡，**沒做的項目如實寫「未驗證」**。
+E 批（`wizard.js`、導覽連結、整合測試與本節）完成時的狀態，加上 F 批的八項破壞驗證與文件；瀏覽器實測屬使用者的操作，結果補在這裡，**沒做的項目如實寫「未驗證」**。
 
 | 已驗證（E 批） | 結果 |
 |---|---|
@@ -1013,10 +1013,33 @@ E 批（`wizard.js`、導覽連結、整合測試與本節）完成時的狀態�
 | 導覽 | `/scripts`、`/cs`、`/account` 頁首各有「冒險」連結，`/game` 頂列有客服、創作、帳號；等待刪除者的 `/account` 沒有 |
 | 整合測試 | `tests/test_game_entry_flow.py`（SQLite 與真實 SQL Server `project_test`，各 3 項）：`/game` → `catalog` → 精靈頁 → `setup` → `suggest` → 開存檔 → `GET /api/sessions` → `/game/<存檔>`；預覽不開存檔、錢包與帳本前後完全相同、日誌沒有劇本文字、角色卡、自我介紹、聯繫與暱稱、別的玩家看不到也開不了（與不存在逐字相同的 404）、生成不可用後自創與略過聯繫 |
 
+**八項破壞驗證（F 批 5.2，2026-11-11）**：每項破壞後跑相關測試，**八項都至少有一個測試失敗**；每項驗證後逐位元還原（位元組比對相同，`git status` 只剩預期的文件變動）。
+
+| 破壞驗證（暫時把一行改壞） | 失敗的測試（節錄） |
+|---|---|
+| ① `catalog` 不套用內容模式篩選（傳入最寬鬆的 `adult`） | `test_game_entry_service`：`test_the_catalog_only_holds_versions_up_to_the_players_effective_mode`（SQLite 與 SQL Server 共 5 項，上限 5 項後停止） |
+| ② `catalog` 不套用 `preference`（傳入 `None`） | `test_game_entry_service`：`test_the_catalog_follows_the_players_story_preference_and_newest_first_for_everyone_else`（男頻、女頻，SQLite 與 SQL Server 共 4 項） |
+| ③ `my_sessions` 去掉 `user_id` 條件（`list_owned` 的條件改為恆真） | 兩個層級都被抓到：Repository 層 `test_session_repository`：`test_listing_shows_only_the_players_own_saves_newest_activity_first`、`test_an_admin_account_has_no_special_path_to_other_players_saves`（SQLite 與 SQL Server）；Service 與 HTTP 層（不含 Repository 測試檔）`test_game_entry_service::test_my_sessions_holds_only_the_callers_own_saves`（兩種資料庫）、`test_session_api::test_one_player_never_sees_another_players_save_in_their_list`、`test_my_sessions_holds_only_the_callers_saves_newest_first_with_complete_turn_counts` 共 4 項 |
+| ④ `session_summary` 對非擁有者不拋 `NotFound`（改回傳一份摘要） | `test_game_entry_service::test_another_player_a_missing_save_and_a_malformed_id_all_get_the_identical_not_found`（兩種資料庫）、`test_game_pages::test_someone_elses_save_and_a_missing_one_get_the_identical_404`、`test_a_path_that_is_not_a_save_id_is_a_404_not_an_error`（共 5 項後停止） |
+| ⑤ 清單卡片多回 `content_hash`（另試多回內部編號 `version_id`） | `content_hash`：`test_a_card_has_exactly_the_whitelisted_keys_and_only_plain_public_values`、`test_a_card_never_carries_the_script_body_hash_review_or_internal_ids`（兩種資料庫共 4 項，加上 1 項後停止）；內部編號：同一白名單測試加 `test_session_api::test_the_catalog_response_has_exactly_the_documented_keys_and_no_script_body`（共 3 項） |
+| ⑥ `buildStartPayload` 略過聯繫時仍帶 `anchor` | `wizard-state.test.js`：`skipping sends skip_anchor true and no anchor at all`、`skipping wins even if a target was chosen before`；`wizard.test.js`（掛載）：`skipping the contact needs the confirmation, and the start request then carries skip_anchor and no anchor`（共 3 項） |
+| ⑦ `wizard.js` 把草稿寫進 `sessionStorage`（在 `next()` 裡） | `wizard.test.js`：`a whole run writes to no storage, logs nothing, and puts no player text in any URL or path`、`failures write nothing and log nothing either`；`test_game_pages::test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes`（整個前端目錄的掃描，共 3 項） |
+| ⑧ `DEFAULT_AFTER_LOGIN` 改回 `/cs` | `test_landing::test_the_default_page_is_the_game_entry_not_the_chat`、`test_opening_the_chat_directly_is_not_redirected_to_the_game_entry`；`test_age_page::test_a_player_who_already_confirmed_is_sent_to_the_game_entry_not_the_chat`、`test_the_age_step_without_a_destination_leads_to_the_game_entry_afterwards`（共 5 項後停止） |
+
+破壞驗證的限制：①pytest 以 `--maxfail=5` 執行，所以失敗筆數是「至少」，不是全部會失敗的數目；②每項只跑與它相關的測試檔（不是全套），「沒有別的測試也失敗」不代表什麼；③沒有因為破壞驗證而新增或修改任何測試（八項第一次就有測試失敗）。
+
+**全套驗證（F 批 5.3，2026-11-11）**：
+
+| 項目 | 結果 |
+|---|---|
+| `pytest -q` | **9946 項通過、1 略過、0 失敗**（721 秒）。SQL Server 服務 `MSSQLSERVER` 執行中，測試用真實的 `project_test`（不是 `project`），同時只有一個 pytest 行程，輸出導到檔案。略過的是 `tests/test_container_files.py:124`（需要 Linux 的 `grp` 模組，Windows 上略過，既有）；唯一的警告是 `test_assets_manifest` 既有的 cp950 子行程解碼執行緒警告（與本 change 無關） |
+| `node --test "tests/js/**/*.test.js"` | **446 項通過**、0 失敗 |
+| `openspec validate rpg-entry-ui --strict` | 通過 |
+| 全套測試跑在哪個狀態上 | F 批的程式沒有變動（破壞驗證全部還原）；全套是在 `docs/RPG.md`、`docs/路線圖-roadmap.md` 與本節的破壞驗證表都寫完之後執行，之後只改了本表與 `tasks.md` 的勾選，文件守門（`test_design_docs`、`test_readme`、`test_agents_skill_sync`、`tests/architecture`）另行重跑，見任務 5.4 |
+
 | 未驗證 | 說明 |
 |---|---|
 | **瀏覽器實測（5.1）** | 尚未進行（使用者親自操作）：登入後落在 `/game`、卡片與偏好排序、精靈三步驟、AI 生成（假模型）、存檔頁、安全模式與未成年的提示、重新整理後表單為空且儲存區沒有創角內容、360px 寬度 |
-| **八項破壞驗證（5.2）、全套 `pytest -q`（5.3）** | 尚未進行（F 批） |
 | **真實的 RPG 模型** | 沒有：生成與審查只以假供應商驗證 |
 
 ## 遊戲幣錢包（game-wallet）

@@ -1241,7 +1241,7 @@ flowchart LR
 
 ### 7.17 RC-3 探索結論（2026-11-10）
 
-> 來源：`/openspec-explore`（RC-2b 封存之後），與使用者逐項確認。本節記決定，沒有對 AGENTS.md 的修訂；其中 `story-preference` 已立案並實作（見 7.17.5），其餘項目尚未立案。與 7.11 的順序不同之處以本節為準。
+> 來源：`/openspec-explore`（RC-2b 封存之後），與使用者逐項確認。本節記決定，沒有對 AGENTS.md 的修訂；其中 `story-preference` 已立案並實作（見 7.17.5），`rpg-entry-ui`（RC-3a）已立案並實作（見 7.17.6），其餘項目尚未立案。與 7.11 的順序不同之處以本節為準。
 
 #### 7.17.1 已確認的決定
 
@@ -1275,7 +1275,7 @@ flowchart LR
 
 #### 7.17.4 仍待處理（各自 propose 時帶建議一次確認）
 
-- RC-3b 的 IndexedDB 角色（建議：RPG 以後端為準，只當離線閱讀快取加待送佇列，沿用 `cs-sync.js` 的模式）、`/game` 的網址設計、是否帶最小的簽到入口讓餘額不足時有路可走。
+- RC-3b 的 IndexedDB 角色（建議：RPG 以後端為準，只當離線閱讀快取加待送佇列，沿用 `cs-sync.js` 的模式）、~~`/game` 的網址設計~~（已於 `rpg-entry-ui` 立案時決定並實作，見 7.17.6）、是否帶最小的簽到入口讓餘額不足時有路可走。
 - ~~`story-preference` 在 `/account` 的版面，以及 `audience` 在作者工作坊的位置。~~ 已於 `story-preference` 立案時決定並實作，見 7.17.5。
 - 2c 的待決事項（見 7.17.1 的 1）。
 - 未成年主角在成人模式的釐清（HANDOFF 沿用的待決事項，與 RC-3 無關）。
@@ -1294,6 +1294,26 @@ flowchart LR
 | 6 | `GET`／`PUT /api/account/story-preference` 只要求登入（`require_login()`），**不過年齡閘門**；`story_preference` 也放進 `GET /api/auth/me` 的 `user`；成功只記事件 `account.story_preference_changed`（不含值）；偏好與頻道納入個人資料匯出 | 偏好不涉及模型，沒有年齡風險；受限登入狀態仍一律被擋 |
 | 7 | 偏好與頻道**不影響**內容分級、可看或可玩的劇本、敘事、遊戲幣與額度，也不進任何傳給模型的內容 | AGENTS.md 第 7 節「故事偏好」 |
 
-- **目前玩家看不到排序的效果**：`list_published` 與 `list_published_by_tag` 的 `preference` 參數沒有玩家端點使用，只由 Repository 測試（SQLite 與真實 SQL Server）證明。RC-3a 接上可玩劇本清單時，傳入 `current.story_preference` 即可。
+- **（封存當時）玩家看不到排序的效果**：`list_published` 與 `list_published_by_tag` 的 `preference` 參數沒有玩家端點使用，只由 Repository 測試（SQLite 與真實 SQL Server）證明。**2026-11-11 已由 `rpg-entry-ui` 接上**：`GET /api/sessions/catalog` 傳入 `current.story_preference`（見 7.17.6）。
 - **部署**：備份 → `alembic upgrade head`（`0016` → `0017`）→ 部署新版程式 → `flask --app wsgi seed-scripts --dry-run` 確認內建劇本為「未變更」。本機 SQL Server `project` 已於 2026-11-11 備份後升級到 `0017`（`flask seed-scripts --dry-run` 內建劇本為「沒有變動」）；Azure 仍在 `0016`，由使用者自行升級。
 - **不做**（沿用 7.17.1 的 5）：偏好的統計、依頻道篩選與審查；`/age` 的偏好步驟屬 `onboarding-polish`。
+
+#### 7.17.6 `rpg-entry-ui`（RC-3a）的實作結果（2026-11-11）
+
+> 狀態：**已實作；任務 5.1（瀏覽器實測）由使用者親自操作，尚未進行，所以尚未封存**。立案 `6387770`，實作 A 批 `92a0c60`、B 批 `8adf187`、C 批 `67d0b59`、D 批 `4bbef64`、E 批 `8a691d8`，F 批（破壞驗證、全套測試與本節）為最後一批。細節與驗收紀錄在 `openspec/changes/rpg-entry-ui/` 與 README「RPG 入口與開存檔畫面（rpg-entry-ui）」「驗收紀錄（rpg-entry-ui）」。
+
+| # | 實作時的決定（7.17.4 的待處理項目都已有結論） | 理由與備選 |
+|---|---|---|
+| 1 | **網址**：`/game` 是入口（「選劇本」「我的存檔」兩個分頁）、`/game/start/<版本識別碼>` 是開存檔精靈、`/game/<存檔識別碼>` 是遊戲頁（RC-3b 沿用，本 change 只放空殼） | 備選：入口放 `/play`、遊戲放 `/game`。拒絕：多一個頂層路徑，且與 AGENTS.md 把 `/game` 當 RPG 視圖的寫法不符。兩種路徑的段數不同，存檔識別碼是 UUID 不會等於 `start`，由測試固定 |
+| 2 | **清單端點不過年齡閘門**：`GET /api/sessions/catalog` 與 `GET /api/sessions` 只要求登入（受限登入狀態照舊被擋），不呼叫 `require_chat_access` | `/game` 是登入後的預設頁面，尚未完成年齡確認的管理員登入後也會落在這裡，端點若拒絕他們，預設頁面就是一片錯誤。清單不呼叫模型、不碰錢包，內容模式對尚未確認年齡者本來就是安全模式，所以放行是安全的；會花成本的「開始」仍由 `POST /api/sessions` 既有的閘門擋下，頁面依初始狀態的 `gate` 禁用按鈕並說明。備選：全過閘門（與 `AccessPolicy.chat_gate` 說明中「列表端點不過閘門」的原意相反） |
+| 3 | 新增唯讀的 `GameEntryService`（`catalog`、`my_sessions`、`session_summary`）：不呼叫模型、不碰錢包、不寫任何日誌；回應欄位為白名單（卡片沒有劇本內文、內容雜湊、審查結果、作者的使用者編號與任何內部整數編號）；分頁以 `limit + 1` 決定 `has_more`，預設與上限由測試固定（目錄 12／24、存檔 20／50） | 備選：塞進 `SessionService`（已經很大）、沿用 `GET /api/scripts` 加參數（該端點是作者自己的劇本，語意與權限不同）。`offset` 上限 10000 是實作時加的，避免很深的跳頁，RC-8 的完整目錄再改用游標 |
+| 4 | Repository 以固定次數的查詢取回一頁：`list_published_cards`（版本與劇本一次、與 `list_published` 共用篩選與排序）、`tags_of_versions`（標籤一次）、`complete_turn_counts`（外部連接 `memory_logs`，只計 `complete` 的回合，**只有呼叫者自己的存檔會有鍵**） | 查詢次數不隨筆數增加，由測試以語句計數固定。存檔標題取自 `script_snapshot_json["title"]`（JSON 欄位不能做篩選，讀出後取值是允許的）；若存檔變多造成延遲，再以 expand/contract 新增標題欄位 |
+| 5 | **`DEFAULT_AFTER_LOGIN` 改為 `/game`**（單一常數）；`/cs` 仍可直接開啟，各頁頁首有「冒險」連結（`/account` 本來沒有頁首，改在卡片頂端加一條小導覽，等待刪除者的版本沒有） | 實際只有 3 個測試檔共 6 項因預設頁面改變而失敗，逐一確認原因後改期望值；直接開 `/cs` 的測試沒有改。使用者先前提出的「設定暱稱後自動導向選擇劇本」隨此一併滿足 |
+| 6 | **存檔頁 `/game/<存檔>` 由伺服器直接渲染**（Jinja 自動跳脫），沒有 Vue、沒有初始狀態 JSON、沒有腳本、不發任何 API 請求；擁有者條件與 404 全在 `GameEntryService.session_summary`（非擁有者與不存在逐字相同） | 與原設計（放進初始狀態）不同：這頁只讀、RC-3b 會整頁取代，少一個掛載點就少一類錯誤。頁面明講「劇情畫面建置中」，沒有任何會花遊戲幣的動作 |
+| 7 | **開存檔精靈是單頁，狀態只在記憶體**：序章 → 聯繫 → 創角，重新整理回到序章且表單為空是刻意的；沒有任何瀏覽器儲存、沒有 `console` 輸出、創角內容不進網址；`wizard.js` 的沙盒測試以儲存物件與主控台的陷阱斷言整個流程沒有寫入 | 創角內容是個資（AGENTS.md 第 11 節）。合規與審查全由伺服器判斷，前端只做必要欄位與長度的即時回饋，不重複實作規則。**沒有瀏覽器原生的離開警告**（`beforeunload`），只有頁內「回到冒險」會跳自製 Modal |
+| 8 | 精靈的逾時由頁面初始狀態提供：AI 生成 = 後端單次請求總預算 + 5 秒（預設 35 秒）、開存檔 = 2 × 預算 + 5 秒（預設 65 秒，與 RC-9 的「最壞約 60 秒」一致）；`pagehide` 時三個請求都以 `AbortController` 中止；前端中止不等於後端中止，所以逾時與斷線的訊息提醒玩家先到「我的存檔」確認 | 前端不寫死數字，後端調整預算時一起變動 |
+| 9 | 「開始冒險」只在字數超過上限時禁用；必要欄位沒填、聯繫沒完成時按鈕可按，按下才在欄位旁標出原因並跳到對應步驟；AI 預覽只是填表（覆蓋聯繫內容前先以 Modal 確認），玩家修改後按「開始冒險」才寫入 | 避免「按鈕是灰的卻不知道為什麼」 |
+
+- **RC-3b 接手的項目**：①把 `/game/<存檔>` 的空殼換成遊戲主畫面（第 0 幕、串流與打字機、歷史以 `since_seq` 補齊、餘額與 `insufficient_coins`、記事簿面板；`session.html` 整頁取代，`session_summary` 可保留或擴充）；「我的存檔」的卡片已連到這個網址。②`insufficient_coins` 時要有路可走（最小的簽到入口，見 7.17.4）。③IndexedDB 的角色（7.17.4）。④「我的存檔」是否顯示最後一幕的摘要或封面（不影響契約）。
+- **其他後續**：RC-8 的完整目錄取代 `catalog` 時，畫面沿用；`player-personas` 在精靈的創角步驟預填；`onboarding-polish` 的 `/age` 分步精靈。
+- **不做**：頭像與性別欄位（沿用 7.17.2）、搜尋與標籤篩選與劇本詳情頁（RC-8）、刪除或封存存檔的介面、清單中自己的草稿（試玩草稿另行處理）。
