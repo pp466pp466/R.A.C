@@ -1,0 +1,46 @@
+# Tasks
+
+> 批次建議（apply 前依 `openspec-batch-workflow` 確認）：① 第 1 組（後端，含預設頁面常數）② 第 2 組（入口頁與空殼）③ 第 3 組（精靈純函式與樣板）④ 第 4 組（精靈掛載與導覽）⑤ 第 5 組（整合）。每批只跑相關測試，全套測試留到 5.3。
+> 測試約定：Repository 與 Service 的測試依專案慣例同時跑 SQLite 與真實 SQL Server（`project_test`）；同時只能有一個 pytest 行程；背景跑全套時輸出存檔，不接 `tail`。
+> 沒有遷移、沒有新環境變數、沒有新日誌事件；`app/` 內不得出現 Raw SQL（`tests/architecture/test_no_raw_sql.py`）。
+
+## 1. 後端：兩個唯讀端點與預設頁面
+
+- [ ] 1.1 `ScriptRepository`：新增 `list_published_cards(max_tier, *, limit, offset, preference)`（一次以 `select(ScriptVersion, Script)` 加 join 取回版本與劇本）與 `tags_of_versions(version_ids)`（一次 `IN` 取回標籤），並把 `list_published` 的條件與排序抽成共用的私有方法，兩者行為逐項不變。驗證：`tests/test_script_repository.py` 新增案例通過（SQLite 與 `project_test`）——只含上架版本、內容模式上限、三種偏好的順序、分頁串起來等於一次取得、集合不隨偏好改變、標籤批次取回與 `tags_of` 一致、空版本清單回空、**查詢次數固定（1 筆與 12 筆相同）**；既有 `list_published` 測試無須修改即通過；`tests/architecture/test_no_raw_sql.py` 通過。
+- [ ] 1.2 `SessionRepository`：新增 `complete_turn_counts(user_id, session_ids)`（ORM `GROUP BY`，只計 `complete`，以 `sessions.user_id` 為條件，沒有回合者補 0）。驗證：`tests/test_session_repository.py` 新增案例通過（SQLite 與 `project_test`）——完整、被擋、中斷與生成中的回合只計完整者、他人的存檔編號不會被計入、空輸入回空字典、一次查詢；`tests/architecture/test_chat_repository_scoping.py`／`test_protagonist_boundaries.py` 這類擁有者與寫入守門通過。
+- [ ] 1.3 新增 `app/services/game_entry_service.py`：`catalog(current, *, limit, offset)`（生效模式取自 `AccessPolicy`、偏好取自 `CurrentUser.story_preference`、`limit + 1` 取 `has_more`、卡片欄位白名單、頻道空值轉 `all`、含 `content_mode` 摘要）、`my_sessions(current, *, limit, offset)`（`include_archived=False`、欄位白名單、已完成輪數、狀態 `active`／`ended`）、`session_summary(current, session_public_id)`（擁有者條件、非擁有者與不存在皆 `NotFound`、不過年齡閘門）；分頁參數不合法拋 `ValidationError` 帶欄位。不呼叫模型、不碰錢包。在 `registry.py` 加 `get_game_entry_service()`。驗證：新增 `tests/test_game_entry_service.py` 通過（SQLite 與 `project_test`）——規格中 `rpg-entry-api` 的每個情境（範圍、模式篩選、偏好排序、分頁邊界與 `has_more`、欄位白名單的鍵集合、內建劇本署名、`content_mode` 不含生日與年齡、存檔隔離、輪數、已完結、空清單）；`tests/test_protagonist_registry.py` 風格的組裝測試確認 registry 能組出服務；`tests/architecture/test_layering.py` 通過。
+- [ ] 1.4 `session_api_controller.py` 新增 `GET /api/sessions/catalog` 與 `GET /api/sessions`（`require_login()`、`int_arg` 讀 `limit`／`offset`、回 `{ok, …}`），更新檔頭說明；確認 `/api/sessions` 與 `/api/sessions/catalog` 都在禁止快取的前綴內。驗證：`tests/test_session_api.py` 新增案例通過——401、受限登入狀態各自的 403 代碼、未完成年齡確認的管理員得到安全模式的清單、不合法的 `limit`／`offset` 得 400 與欄位、回應不含內部編號與內文、回應標頭禁止快取、兩個端點呼叫前後遊戲幣餘額與帳本不變且沒有模型呼叫、與既有 `POST /api/sessions`、`GET /api/sessions/setup/<id>` 並存不衝突；`tests/test_no_store.py`、`tests/test_restricted_session.py` 的全路由掃描通過。
+- [ ] 1.5 `app/security/redirects.py`：`DEFAULT_AFTER_LOGIN = "/game"` 並更新註解；把既有以 `/cs` 為預設頁面的測試期望值改成 `/game`（`test_landing`、`test_safe_next`、`test_auth_pages`、`test_google_endpoints`、`test_age_page`、`test_account_api` 等；逐一確認失敗原因都是「預設頁面」而不是別的，**直接開啟 `/cs` 的測試不得改**）。此時 `/game` 尚未有頁面，所以導向 `/game` 的測試只檢查 Location，不跟隨轉址。驗證：這些測試改後通過，並新增「完成年齡確認後導向 `/game`」「直接開 `/cs` 不被導向」兩個案例。
+- [ ] 1.6 同步文件：`README.md` 的 `/api/sessions` 端點表新增兩列（`tests/test_readme.py::…protagonist_table_lists_exactly_the_registered_session_routes…` 會守門，端點數改為 5）；`docs/系統架構-architecture.md`（`GameEntryService` 與兩個端點）、`docs/帳號與安全-auth-security.md`（預設頁面與受限登入矩陣不變的說明）。驗證：`tests/test_readme.py`、`tests/test_design_docs.py` 通過。
+
+## 2. 入口頁與存檔空殼
+
+- [ ] 2.1 新增 `app/controllers/game_page_controller.py`（藍圖註冊於 `app/__init__.py`）：`/game`（`@login_required_page`，初始狀態含會員等級、故事偏好與 `chat_gate` 的結果）與 `/game/<存檔識別碼>`（呼叫 `GameEntryService.session_summary`，`NotFound` 轉 404 頁）；`/game/start/<版本識別碼>` 的路由先註冊成會渲染 3.1 的樣板（此組先回極簡外殼）。Controller 不寫權限判斷。驗證：新增 `tests/test_game_pages.py` 通過——未登入導向 `/login?next=…`、受限登入狀態各導向自己的頁面、一般玩家 200、初始狀態是已跳脫的 JSON 區塊且不含清單內容、管理員未確認年齡時 `gate` 為 `age_confirmation_required`、`lang="zh-Hant-TW"` 與 UTF-8、資源都用 `url_for`；存檔頁：自己的 200 且含標題與主角姓名、別人的與不存在的得到相同 404、`/game/start/<x>` 不被當成存檔。
+- [ ] 2.2 `app/templates/game/index.html`、`app/templates/game/session.html`、`app/static/css/game.css`、`app/static/js/game/{game-api,game-labels,entry}.js`：兩個分頁（`v-show`／`v-if` 接管）、卡片、載入更多、空狀態、錯誤與重試、內容模式與閘門提示、導覽（客服、創作、帳號）；所有文字純文字渲染；樣式沿用深色琥珀配色與 360px 不溢出。驗證：`node --test` 新增 `tests/js/game-labels.test.js`（所有列舉值都有繁體中文對照、未知值退回安全的預設文字）與 `tests/js/entry.test.js`（以 `vm` 沙盒執行 `entry.js` 的 `setup()`：預設分頁、載入更多只送一次且 `finally` 恢復、`has_more` 為假時不顯示按鈕、失敗保留已載入卡片與重試、閘門非空時「開始」禁用、未成年顯示原因、401 導向登入）；`tests/test_game_pages.py` 加樣板守門（標題以 `{{ }}` 插值、沒有 `v-html`、含兩個分頁與導覽連結）；`tests/architecture/test_frontend_rules.py`、`tests/test_theme_css.py`、`tests/test_fonts_and_static.py` 通過。
+- [ ] 2.3 同步文件：`docs/前端結構-frontend.md`（新增「RPG 入口」一節：頁面、模組、測試清單）與 `docs/系統架構-architecture.md`（頁面控制器與路由表）。驗證：`tests/test_design_docs.py` 通過。
+
+## 3. 開存檔精靈：純函式與樣板
+
+- [ ] 3.1 新增 `app/static/js/game/wizard-state.js`（UMD 純函式）：`blankDraft()`、`fieldCounts(draft, limits)`、`overLimit(draft, limits)`、`canAdvance(step, draft, anchor)`、`demoBubbles(draft)`（固定句型加姓名與說話風格，無網路）、`applySuggestion(draft, anchor, suggestion)`（覆蓋角色卡與錨定事實、保留玩家選的來歷）、`buildStartPayload(versionId, draft, anchor)`（略過時帶 `skip_anchor: true` 而不帶 `anchor`）、`describeStartFailure(info)` 與 `describeSuggestFailure(info)`（依狀態碼與代碼對照，審查類別只用列舉識別字）、`stepOfField(path)`（`protagonist.*`／`anchor.*` 欄位對應回哪一步）。驗證：新增 `tests/js/wizard-state.test.js` 通過——每個函式的正常與邊界案例、`buildStartPayload` 的兩種形狀、覆蓋後來歷不變、錯誤對照涵蓋規格列出的每個狀態碼與代碼（400、422 兩種、503 兩種、403 數種、429、網路、逾時、取消）、**錯誤訊息不含任何傳入的玩家文字**（用帶標記字串的輸入斷言）。
+- [ ] 3.2 `app/templates/game/start.html` 與 `game-api.js` 的 `setup`／`suggest`／`start`（逾時與 `AbortController` 的 `signal` 由呼叫端傳入）：序章、聯繫、創角三步驟的版面與進度、欄位與字數、來歷單選、示範氣泡、自我介紹與「請 AI 生成」、略過聯繫的確認、覆蓋確認與離開確認用自製 Modal；頁面初始狀態含 `gate`、`member_tier`、`suggest_timeout_ms` 與 `start_timeout_ms`（`2 × 後端單次請求總預算 + 5 秒`，Controller 由設定算出，**先確認算法與 `session_api_controller` 說明的 65 秒一致**）。驗證：`tests/test_game_pages.py` 新增精靈頁案例通過——初始狀態含兩個逾時且不含劇本內容、兩個逾時數值與設定一致（預設 65000、suggest 為後端預算加 5 秒）、樣板沒有頭像上傳與性別欄位、人物選項只綁姓名與職業、沒有 `v-html` 與 `data-bs-*`；`tests/architecture/test_frontend_rules.py` 通過。
+- [ ] 3.3 同步文件：`docs/前端結構-frontend.md` 補精靈的模組與資料流（`wizard-state.js`）。驗證：`tests/test_design_docs.py` 通過。
+
+## 4. 開存檔精靈：掛載、整合與導覽
+
+- [ ] 4.1 新增 `app/static/js/game/wizard.js`（Vue 掛載）：載入 `setup`（404、403 `content_tier_restricted`、失敗重試各自的畫面）、步驟切換與前進條件、AI 生成（今日剩餘、禁用、覆蓋前 Modal、失敗保留內容、離開時中止）、開始冒險（單一請求、全按鈕禁用、`finally` 恢復、201 導向 `/game/<id>`、各種失敗保留內容並跳回對應步驟）；**不寫 `localStorage`／`sessionStorage`／IndexedDB／cookie、不放網址、不 `console.log` 內容**。驗證：新增 `tests/js/wizard.test.js`（`vm` 沙盒執行 `setup()`，axios 與 Modal 為替身）通過——規格 `rpg-creation-wizard` 的每個情境（載入成功與三種失敗、聯繫選擇與略過與「選了沒寫」、示範氣泡不送請求、欄位超過上限禁用、生成成功只填表不建存檔、覆蓋確認、次數用完禁用、503／429／422 的處理與已填內容保留、離開頁面時兩種請求都被中止、開始冒險成功導向、400 跳回對應步驟、422 只顯示類別、重複點擊只送一次、`finally` 恢復），並以**沙盒的儲存物件斷言整個流程沒有任何寫入**。
+- [ ] 4.2 導覽互通：`/scripts`（`workshop.html`）、`/account`（`account.html`）與 `/cs`（`chat.html`）的頁首各加「冒險」連結到 `/game`；`/game` 頁頂列放「客服」「創作」「帳號」。驗證：`tests/test_script_page.py`、`tests/test_account_page.py`、`tests/test_cs_pages.py`、`tests/test_game_pages.py` 各加一個案例斷言連結存在、為一般站內連結且沒有 `data-bs-*`；`tests/js/script-workshop-template.test.js` 與 `tests/architecture/test_frontend_rules.py` 通過。
+- [ ] 4.3 後端對前端契約的整合測試：新增 `tests/test_game_entry_flow.py`（假模型，沿用 `test_protagonist_flow.py` 的夾具）——玩家登入 → `GET /api/sessions/catalog` 取得內建劇本的 `id` → `GET /api/sessions/setup/<id>` → `POST /api/sessions/protagonist/suggest` → `POST /api/sessions`（用預覽的角色卡與錨定事實）→ `GET /api/sessions` 看到新存檔 → `/game/<新存檔>` 為 200，並斷言：全程日誌沒有劇本文字、角色卡、自我介紹與暱稱（`tests/test_log_scan_full_flow.py` 風格）、遊戲幣餘額在開存檔後沒有被扣、換一個玩家看不到也開不了這個存檔。驗證：測試通過（SQLite 與 `project_test`）；`tests/test_log_scan_full_flow.py` 與 `test_log_scan_protagonist.py` 通過。
+- [ ] 4.4 同步文件：README（`/game`、`/game/start/<id>`、`/game/<id>` 三列頁面說明、端點表、驗收紀錄的骨架）。驗證：`tests/test_readme.py` 通過。
+
+## 5. 整合與收尾
+
+- [ ] 5.1 在瀏覽器實際操作一次（驗收環境 `..\newprojet-acceptance\start-acceptance.ps1`，**不要加 `-Reset`**，埠避開 5000）：①登入後直接落在 `/game`、「選劇本」有內建劇本卡片、依故事偏好切換女頻／男頻後順序改變；②卡片「開始」→ 序章 → 聯繫（選人物寫一句、再試略過）→ 創角（示範氣泡隨姓名變動、字數超過會禁用）→「請 AI 生成」（假模型）填表 → 修改後「開始冒險」→ 導向存檔空殼頁；③「我的存檔」出現該存檔，輪數為 0；④安全模式帳號看不到一般模式的劇本且顯示原因，未成年帳號顯示固定安全模式的說明；⑤重新整理精靈頁回到序章且表單為空、瀏覽器開發者工具的儲存區（Local／Session／IndexedDB）沒有創角內容；⑥360px 寬度下三個頁面都不橫向溢出。驗證：把觀察結果（文字描述，能截圖則附路徑）記入 README 驗收紀錄；做不到的項目明講「未驗證」。
+- [ ] 5.2 破壞驗證（每項驗證後以 `git checkout`／備份還原）：①`catalog` 不套用內容模式篩選 → 範圍與模式測試失敗；②`catalog` 不套用 `preference` → 排序測試失敗；③`my_sessions` 去掉 `user_id` 條件 → 隔離測試失敗；④`session_summary` 對非擁有者不拋 `NotFound` → 404 測試失敗；⑤清單卡片多回 `content_hash` 或內部編號 → 欄位白名單測試失敗；⑥`wizard-state.js` 的 `buildStartPayload` 略過時仍帶 `anchor` → 純函式與掛載測試失敗；⑦`wizard.js` 把草稿寫進 `sessionStorage` → 「沒有任何儲存寫入」的測試失敗；⑧`DEFAULT_AFTER_LOGIN` 改回 `/cs` → 預設頁面測試失敗。驗證：八項都至少有一個測試失敗，結果記入 README 驗收紀錄；若某項沒有測試失敗，先補強測試再重跑。
+- [ ] 5.3 全套驗證：`pytest -q`（SQL Server 服務 `MSSQLSERVER` 執行中、同時只能一個 pytest 行程、輸出導到檔案）、`node --test "tests/js/**/*.test.js"`、`openspec validate rpg-entry-ui --strict`。驗證：全部通過，筆數記入 README 驗收紀錄；有失敗先修再重跑（若失敗無法重現，如實記錄，不當成通過的依據）。
+- [ ] 5.4 更新設計文件並讓測試通過：`docs/RPG.md` 7.17（`rpg-entry-ui` 已立案／已實作，記實作時決定：`/game` 網址設計、清單端點不過年齡閘門的理由、`DEFAULT_AFTER_LOGIN` 改動、RC-3b 接手的項目）、`docs/路線圖-roadmap.md`（`rpg-entry-ui` 節點與狀態表、日期）、`docs/README.md` 對照表如有需要。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py`、`tests/architecture` 通過。
+
+## Workflow follow-up
+
+- 使用者驗收（含 5.1 的瀏覽器操作）後，新對話 `/openspec-archive-change rpg-entry-ui`（封存前先同步四份 delta 到主規格：新增 `rpg-entry-api`、`rpg-entry-pages`、`rpg-creation-wizard`，修改 `auth-pages`；封存後更新路線圖的狀態與日期，並複查各設計文件標頭的「對應 change」）。
+- 之後是 RC-3b `rpg-game-ui`：`/game/<存檔識別碼>` 的空殼由遊戲畫面取代；餘額與簽到入口、IndexedDB 的角色與記事簿面板在它自己的 propose 時帶建議一次確認。
+- 沒有部署前置步驟（無遷移、無新設定）。
