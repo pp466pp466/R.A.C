@@ -452,7 +452,13 @@ def test_no_game_template_or_script_uses_forbidden_patterns():
     for forbidden in ("v-html", "innerHTML", "outerHTML", "insertAdjacentHTML", "eval(", "document.write", "console.log"):
         assert forbidden not in js, forbidden
     assert not re.search(r"\b(alert|confirm|prompt)\s*\(", js)
-    assert "fetch(" not in js                                                    # 一般 API 一律走離線 axios
+    # 一般 API 一律走離線 axios。原生 fetch 只屬於 RPG 劇情的串流客戶端（AGENTS.md 第 5 節：fetch 搭配 ReadableStream）——
+    # rpg-game-ui 之前整個目錄都不得出現 `fetch(`，這是**刻意的放寬**：只有 `turn-stream.js` 可以，而且只能呼叫端注入的 `env.fetch`（不碰全域的 window.fetch）。
+    outside_stream = "\n".join(strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js")) if path.name != "turn-stream.js")
+    assert "fetch(" not in outside_stream
+    stream = strip_js_comments(read(JS_DIR / "turn-stream.js"))
+    assert "env.fetch(" in stream
+    assert not re.search(r"(?<![\w.])fetch\(", stream) and "window.fetch" not in stream
     assert "bootstrap" not in js.lower()
 
 
@@ -500,6 +506,18 @@ def test_the_label_tables_cover_exactly_the_enums_the_backend_uses():
     assert sorted(labels_in(source, "ORIGIN_LABELS")) == sorted(ORIGINS)
     assert sorted(labels_in(source, "STATUS_LABELS")) == ["active", "ended"]
     assert sorted(labels_in(source, "CATEGORY_LABELS")) == sorted(REVIEW_CATEGORIES)
+
+
+def test_the_game_screen_label_tables_cover_exactly_the_backend_turn_statuses_done_statuses_and_stream_error_codes():
+    """rpg-game-ui 1.4：回合狀態（`turn_view.status`）、串流 `done` 的結束狀態、串流 `error` 事件的代碼都要有繁體中文對照；
+    後端新增或改名時這裡會失敗，提醒同步 `game-labels.js`（否則畫面會退回通用文字）。"""
+    from app.models.rpg_session import TURN_STATUSES
+    from app.services.rpg_runner_base import DONE_BLOCKED, DONE_COMPLETE, DONE_ENDED, ERROR_MESSAGES
+
+    source = read(JS_DIR / "game-labels.js")
+    assert sorted(labels_in(source, "TURN_STATUS_LABELS")) == sorted(TURN_STATUSES)
+    assert sorted(labels_in(source, "DONE_STATUS_LABELS")) == sorted([DONE_COMPLETE, DONE_BLOCKED, DONE_ENDED])
+    assert sorted(labels_in(source, "STREAM_ERROR_MESSAGES")) == sorted(ERROR_MESSAGES)
 
 
 # ---- 與其他區域的導覽互通 ----------------------------------------------------------------------------------------

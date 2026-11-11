@@ -141,6 +141,147 @@ test('a missing or unreadable time shows nothing', () => {
   }
 });
 
+// ---- 遊戲主畫面：串流結束、轉場與中斷、記事簿與簽到（rpg-game-ui 1.4）---------------------------------
+
+const GAME_SCREEN_TABLES = [
+  ['TURN_STATUS_LABELS', ['streaming', 'complete', 'blocked', 'interrupted'], 'turnStatusLabel'],
+  ['DONE_STATUS_LABELS', ['complete', 'blocked', 'ended'], 'doneStatusLabel'],
+  ['STREAM_OUTCOME_LABELS', ['done', 'error_event', 'interrupted', 'timeout_idle', 'timeout_total', 'aborted', 'rejected'], 'streamOutcomeLabel'],
+];
+
+for (const [table, values, fn] of GAME_SCREEN_TABLES) {
+  test(`${table} labels every value in Traditional Chinese and unknown values fall back to one fixed text`, () => {
+    assert.deepEqual(Object.keys(Game[table]).sort(), [...values].sort());
+    for (const value of values) {
+      const label = Game[fn](value);
+      assert.equal(label, Game[table][value]);
+      assert.ok(HAN.test(label) && !/[A-Za-z_]/.test(label), `${value} -> ${label}`);
+    }
+    const fallback = Game[fn](undefined);
+    assert.ok(HAN.test(fallback) && !/[A-Za-z_]/.test(fallback));
+    for (const junk of JUNK) {
+      if (typeof junk === 'string' && values.includes(junk)) { continue; }
+      assert.equal(Game[fn](junk), fallback, JSON.stringify(junk));
+    }
+  });
+}
+
+test('an unknown turn status is treated as interrupted: never as a turn that has content', () => {
+  assert.equal(Game.turnStatusLabel('mystery'), Game.TURN_STATUS_LABELS.interrupted);
+  assert.equal(Game.historyLine('mystery'), Game.HISTORY_LINES.interrupted);
+  assert.equal(Game.historyLine('complete'), Game.HISTORY_LINES.interrupted);   // complete 的回合有內容，不走這一行；萬一誤用也不顯示內容
+});
+
+test('the history lines for blocked, interrupted and streaming turns are fixed Chinese sentences without any placeholder', () => {
+  assert.deepEqual(Object.keys(Game.HISTORY_LINES).sort(), ['blocked', 'interrupted', 'streaming']);
+  for (const key of Object.keys(Game.HISTORY_LINES)) {
+    const line = Game.historyLine(key);
+    assert.ok(HAN.test(line) && !/[A-Za-z_{}$]/.test(line), line);
+  }
+  assert.equal(new Set(Object.values(Game.HISTORY_LINES)).size, 3);
+});
+
+test('every connection-ended notice says the turn may already be finished on the server (a frontend abort is not a backend abort)', () => {
+  assert.deepEqual(Object.keys(Game.STREAM_OUTCOME_NOTICES).sort(), ['aborted', 'interrupted', 'timeout_idle', 'timeout_total']);
+  for (const outcome of Object.keys(Game.STREAM_OUTCOME_NOTICES)) {
+    const notice = Game.streamOutcomeNotice(outcome);
+    assert.ok(notice.includes('可能已在伺服器完成') && notice.includes('以伺服器為準'), `${outcome}: ${notice}`);
+    assert.ok(!/[A-Za-z_]/.test(notice), notice);
+  }
+  assert.equal(new Set(['interrupted', 'timeout_idle', 'timeout_total', 'aborted'].map(Game.streamOutcomeNotice)).size, 4);
+});
+
+test('a finished turn has no notice; any other unknown outcome gets the same general notice with the same reminder', () => {
+  assert.equal(Game.streamOutcomeNotice('done'), '');
+  const general = Game.streamOutcomeNotice('something_new');
+  assert.ok(HAN.test(general) && general.includes('可能已在伺服器完成'));
+  for (const junk of JUNK) {
+    if (junk === 'done' || (typeof junk === 'string' && Object.keys(Game.STREAM_OUTCOME_NOTICES).includes(junk))) { continue; }
+    assert.equal(Game.streamOutcomeNotice(junk), general, JSON.stringify(junk));
+  }
+});
+
+test('stream error codes map to the fixed message; unknown codes never echo the server text or the code', () => {
+  assert.deepEqual(Object.keys(Game.STREAM_ERROR_MESSAGES).sort(), ['generation_failed', 'generation_timeout', 'internal_error', 'opening_superseded', 'turn_superseded']);
+  for (const code of Object.keys(Game.STREAM_ERROR_MESSAGES)) { assert.ok(HAN.test(Game.streamErrorMessage(code)) && !/[A-Za-z_]/.test(Game.streamErrorMessage(code)), code); }
+  const fallback = Game.streamErrorMessage('brand_new_code');
+  assert.ok(HAN.test(fallback) && !fallback.includes('brand_new_code'));
+  for (const junk of JUNK) {
+    if (typeof junk === 'string' && junk in Game.STREAM_ERROR_MESSAGES && Object.prototype.hasOwnProperty.call(Game.STREAM_ERROR_MESSAGES, junk)) { continue; }
+    assert.equal(Game.streamErrorMessage(junk), fallback, JSON.stringify(junk));
+  }
+});
+
+test('the failures that happened before the charge say no coins were taken', () => {
+  for (const code of ['generation_timeout', 'generation_failed', 'internal_error']) { assert.ok(Game.streamErrorMessage(code).includes('沒有扣除遊戲幣'), code); }
+  assert.ok(Game.blockedHint().includes('沒有扣除遊戲幣') && Game.blockedHint().includes('換個行動'));
+});
+
+test('notebook texts are fixed Chinese sentences; an unknown key falls back to one general sentence', () => {
+  for (const key of Object.keys(Game.NOTEBOOK_TEXTS)) {
+    const text = Game.notebookText(key);
+    assert.ok(HAN.test(text) && !/[A-Za-z_{}$<>]/.test(text.replace(/AI/g, '')), `${key}: ${text}`);       // 「AI」是專案慣用字，其餘不含英文
+  }
+  assert.ok(Game.notebookText('empty').includes('10 輪'));
+  assert.ok(Game.notebookText('full').includes('AI 可能會遺忘') && Game.notebookText('full').includes('之後的設定不再被記住'));
+  assert.ok(Game.notebookText('full_edit').includes('一次刪到容量以內'));
+  assert.ok(Game.notebookText('conflict').includes('保留'));
+  const fallback = Game.notebookText('nope');
+  assert.ok(HAN.test(fallback));
+  for (const junk of JUNK) {
+    if (typeof junk === 'string' && Object.prototype.hasOwnProperty.call(Game.NOTEBOOK_TEXTS, junk)) { continue; }
+    assert.equal(Game.notebookText(junk), fallback, JSON.stringify(junk));
+  }
+});
+
+test('notebook usage shows "used / capacity" and a dash when a number is not a count', () => {
+  assert.equal(Game.notebookUsage(1800, 2000), '1800 / 2000');
+  assert.equal(Game.notebookUsage(0, 2000), '0 / 2000');
+  assert.equal(Game.notebookUsage(2240, 2000), '2240 / 2000');
+  for (const junk of [undefined, null, '5', -1, 1.5, NaN, Infinity, {}, []]) {
+    assert.equal(Game.notebookUsage(junk, 2000), '—', JSON.stringify(junk));
+    assert.equal(Game.notebookUsage(5, junk), '—', JSON.stringify(junk));
+  }
+});
+
+test('the too-long notice has only integers in it, and no number means no numbers shown', () => {
+  assert.equal(Game.notebookTooLongNotice(2010, 2000), '記事簿超過容量（2010 / 2000 字），請刪減到容量以內再儲存。');
+  for (const junk of [undefined, '2010', -1, 2.5, NaN]) {
+    const text = Game.notebookTooLongNotice(junk, 2000);
+    assert.ok(HAN.test(text) && !/\d/.test(text), `${JSON.stringify(junk)}: ${text}`);
+  }
+});
+
+test('the check-in overflow notice shows what would be credited and what would be lost, as integers only', () => {
+  const notice = Game.checkinOverflowNotice(120, 80);
+  assert.ok(notice.includes('120') && notice.includes('80') && notice.includes('作廢') && notice.includes('要繼續領取嗎'));
+  for (const junk of [undefined, null, '80', -3, 1.2, NaN]) {
+    assert.ok(!/\d/.test(Game.checkinOverflowNotice(junk, 80)), JSON.stringify(junk));
+    assert.ok(!/\d/.test(Game.checkinOverflowNotice(120, junk)), JSON.stringify(junk));
+  }
+});
+
+test('"already checked in" shows the next time in Taiwan time, or the fixed sentence when the time is missing or unreadable', () => {
+  const withTime = Game.checkinAlreadyNotice('2026-11-11T16:00:00Z');
+  assert.ok(withTime.includes('2026-11-12 00:00') && withTime.includes('台灣時間'));
+  for (const junk of [undefined, null, '', 'not a date', 5, {}]) {
+    assert.equal(Game.checkinAlreadyNotice(junk), Game.CHECKIN_TEXTS.already_default, JSON.stringify(junk));
+  }
+});
+
+test('check-in texts fall back to one general sentence for an unknown key', () => {
+  assert.ok(Game.checkinText('done').includes('簽到成功'));
+  const fallback = Game.checkinText('nope');
+  assert.ok(HAN.test(fallback));
+  assert.equal(Game.checkinText(undefined), fallback);
+  assert.equal(Game.checkinText('__proto__'), fallback);
+});
+
+test('none of the new fixed texts contain a placeholder, markup or a template leftover', () => {
+  const pools = [Game.TURN_STATUS_LABELS, Game.DONE_STATUS_LABELS, Game.STREAM_OUTCOME_LABELS, Game.STREAM_OUTCOME_NOTICES, Game.HISTORY_LINES, Game.STREAM_ERROR_MESSAGES, Game.NOTEBOOK_TEXTS, Game.CHECKIN_TEXTS];
+  for (const pool of pools) { for (const text of Object.values(pool)) { assert.ok(!/[<>{}$]|undefined|null|NaN/.test(text), text); } }
+});
+
 // ---- 在瀏覽器載入 ---------------------------------------------------------------------------------
 
 test('in the browser the helpers join the shared Game namespace and keep what another script already put there', () => {
