@@ -113,7 +113,7 @@ def test_after_the_unlock_the_same_session_is_whole_again_without_signing_in_onc
     assert client.get("/api/auth/me").get_json()["user"]["restriction"] is None
     assert client.get("/api/cs/conversations").status_code == 200
     assert client.get("/cs").status_code == 200
-    assert client.get("/appeal").headers["Location"] == "/cs"                    # 申訴頁只對被鎖定的人有內容
+    assert client.get("/appeal").headers["Location"] == "/game"                  # 申訴頁只對被鎖定的人有內容；沒有內容的人回預設頁面
     assert client.post("/api/appeals", json={"content": "x"}).status_code == 404
 
 
@@ -121,7 +121,7 @@ def test_after_the_unlock_the_next_google_sign_in_goes_to_the_default_page(app):
     sign_in(app)
     unlock(app)
     _, response = sign_in(app)
-    assert response.headers["Location"] == "/cs"
+    assert response.headers["Location"] == "/game"
 
 
 def test_a_locked_account_found_through_a_changed_google_email_cannot_slip_past(app, provider):

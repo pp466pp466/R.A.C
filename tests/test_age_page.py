@@ -53,6 +53,16 @@ def test_a_player_who_already_confirmed_is_sent_to_the_default_page(app):
     assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN
 
 
+def test_a_player_who_already_confirmed_is_sent_to_the_game_entry_not_the_chat(app):
+    response = client_with(app, age=30).get("/age")
+    assert response.status_code == 302 and response.headers["Location"] == "/game"
+
+
+def test_the_age_step_without_a_destination_leads_to_the_game_entry_afterwards(app):
+    """完成年齡確認之後沒有指定返回位置：前端依初始狀態的 `next` 導向 /game（rpg-entry-ui）。"""
+    assert state_of(client_with(app, age=None).get("/age"))["next"] == "/game"
+
+
 def test_an_admin_without_age_data_is_sent_to_the_default_page_because_the_admin_fills_it_in_the_account_settings(app):
     response = client_with(app, age=None, role="admin").get("/age")
     assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN

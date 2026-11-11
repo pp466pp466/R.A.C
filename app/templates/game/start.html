@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{# 開存檔精靈的外殼（精靈本體在後續批次）：目前只是說明與回到入口的連結，沒有腳本與請求。
+   版本識別碼只在網址裡，不在頁面內容中。 #}
+{% block title %}開始冒險{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+{% endblock %}
+{% block content %}
+<div class="ge-shell">
+  <header class="ge-topbar">
+    <h1 class="ge-topbar__title">開始冒險</h1>
+    <a class="ge-topbar__link" href="/game">回到冒險</a>
+  </header>
+  <main class="ge-main">
+    <section class="ge-panel">
+      <p class="ge-banner" role="status">建立主角的畫面建置中，暫時還不能從這裡開始冒險。</p>
+      <p class="ge-card__actions"><a class="ui-btn ui-btn--primary" href="/game">回到冒險</a></p>
+    </section>
+  </main>
+</div>
+{% endblock %}

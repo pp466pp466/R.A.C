@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 from app.security.session import AGE_PATH, RESTRICTION_PAGES
 from app.services.current_user import RESTRICTION_AGE_PENDING, CurrentUser
 
-DEFAULT_AFTER_LOGIN = "/cs"        # RPG 上線後改成選擇劇本的首頁（單一常數；不直接進入聊天）
+DEFAULT_AFTER_LOGIN = "/game"      # RPG 的入口：選擇劇本與我的存檔（單一常數；不直接進入聊天，客服 `/cs` 改由導覽列進入，仍可直接開啟）
 MAX_NEXT_LENGTH = 200
 
 

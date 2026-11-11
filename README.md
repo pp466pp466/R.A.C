@@ -171,7 +171,7 @@ Google 登入、管理員的二階段登入與重設密碼、帳號設定。玩�
     - `flask --app wsgi age-stats`：各年齡區間的人數（供定期察看用戶群），沒有任何個別使用者的資料。
     - 使用者自助刪除的 `execute-account-deletions` 與各類資料的 `purge-expired-data` 見「個資生命週期（C-4c）」；閒置清除現在與它們共用同一個抹除出口，也會先把帳本的對話編號清為空值。
     - 之後（C-3、C-4）新增指向 `users.id` 的資料表，外鍵必須是 `ON DELETE CASCADE` 或 `SET NULL`，否則 `tests/architecture/test_user_foreign_keys.py` 會失敗。
-- **預設登入後頁面**是 `/cs`（`app/security/redirects.py` 的單一常數 `DEFAULT_AFTER_LOGIN`；RPG 上線後改為選擇劇本的首頁）。首頁、登入頁與 Google 回呼共用 `landing_for`：已登入者開首頁或登入頁會被導向預設頁面，受限登入狀態各導向自己的頁面（待確認年齡 `/age`、被鎖定 `/appeal`、等待刪除 `/account`）。
+- **預設登入後頁面**是 `/game`（`app/security/redirects.py` 的單一常數 `DEFAULT_AFTER_LOGIN`；RPG 的入口：選劇本與我的存檔，rpg-entry-ui 由 `/cs` 改過來；客服 `/cs` 仍可直接開啟，`/game` 頂列有連結）。首頁、登入頁與 Google 回呼共用 `landing_for`：已登入者開首頁或登入頁會被導向預設頁面，受限登入狀態各導向自己的頁面（待確認年齡 `/age`、被鎖定 `/appeal`、等待刪除 `/account`）。
 - **登入鎖定可被用於阻斷特定帳號**：管理員密碼連續失敗 5 次鎖定 15 分鐘（到期自動解除）；玩家帳號則是 15 分鐘內 5 次「已辨識出帳號卻被拒絕」（Google 登入被拒、補填年齡不一致）或 10 次被每分鐘訊息數上限擋下就**自動鎖定，只有管理員能解除**（被鎖定者仍可登入，但只能申訴）。攻擊者無法替別人的 Google 身分製造計次（辨識出帳號需要通過 Google 驗證）；緩解其餘濫用靠入口層的 IP 限流（尚未做，見未滿足項目）。
 - **開發資料庫不可啟用 SQL Server 的帳本（Ledger）**：帳本會把資料列的更新與刪除永久保留在歷史表，讓「刪除帳號時真的刪除個資」（C-4）無法成立，也會讓失敗次數這類頻繁更新的欄位累積大量歷史列，而且建立後無法關閉。本機原本的 `project` 就是啟用帳本建立的，已在 2026-10-28 重建：舊的改名保留為 `project_old_ledger`（沒有任何資料，確認不需要後可自行刪除），新的 `project` 以 `Chinese_Taiwan_Stroke_CI_AS` 定序、不啟用帳本，並已升級到最新 migration。新建資料庫時請**不要**勾選「啟用帳本」（`CREATE DATABASE` 預設不啟用）。Cloud SQL 是否支援或預設啟用帳本，C-5 要確認。
 

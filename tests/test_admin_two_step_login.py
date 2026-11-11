@@ -84,7 +84,7 @@ def test_google_alone_does_not_open_the_console_or_any_api(app):
 def test_google_and_the_right_password_open_the_console(app):
     client, _ = through_google(app)
     response = enter_password(client)
-    assert response.status_code == 200 and response.get_json() == {"ok": True, "next": "/cs"}
+    assert response.status_code == 200 and response.get_json() == {"ok": True, "next": "/game"}
     assert client.get_cookie(ADMIN_STEP_COOKIE) is None                           # 中間狀態用完即清除
     me = client.get("/api/auth/me").get_json()["user"]
     assert me["role"] == "admin" and me["email"] == ADMIN_EMAIL
@@ -106,7 +106,7 @@ def test_the_destination_chosen_before_google_survives_to_the_end_of_the_passwor
 
 def test_an_unsafe_destination_never_gets_through_the_step(app):
     client, _ = through_google(app, next="https://evil.example/")
-    assert enter_password(client).get_json()["next"] == "/cs"
+    assert enter_password(client).get_json()["next"] == "/game"
 
 
 def test_the_first_google_sign_in_of_the_admin_binds_the_identity_and_the_password_is_still_required(app):
@@ -122,7 +122,7 @@ def test_the_first_google_sign_in_of_the_admin_binds_the_identity_and_the_passwo
 def test_a_player_signing_in_with_google_is_unaffected_and_gets_a_session_straight_away(app, provider):
     provider.profile = GoogleProfile("sub-player", "user2@example.com", True, "玩家")
     client, response = through_google(app)
-    assert response.headers["Location"] == "/cs" and client.get_cookie(ADMIN_STEP_COOKIE) is None
+    assert response.headers["Location"] == "/game" and client.get_cookie(ADMIN_STEP_COOKIE) is None
     assert client.get("/api/auth/me").status_code == 200
 
 

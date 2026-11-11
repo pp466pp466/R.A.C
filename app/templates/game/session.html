@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{# 存檔頁的空殼（遊戲主畫面屬 RC-3b）：由伺服器直接渲染，沒有任何腳本與請求，所以不會產生內容、不會扣遊戲幣。
+   標題、主角姓名來自玩家與作者的文字，一律由 Jinja 自動跳脫輸出（純文字），不使用 safe 過濾器。 #}
+{% block title %}冒險存檔{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+{% endblock %}
+{% block content %}
+{% set tier_labels = {'safe': '安全模式', 'standard': '一般模式', 'adult': '成人模式'} %}
+<div class="ge-shell">
+  <header class="ge-topbar">
+    <h1 class="ge-topbar__title">{{ save.title or '未命名的劇本' }}</h1>
+    <a class="ge-topbar__link" href="/game">回到冒險</a>
+  </header>
+  <main class="ge-main">
+    <section class="ge-panel">
+      <p class="ge-card__meta">
+        <span class="ge-chip{% if save.ended %} ge-chip--ended{% endif %}">{{ '已完結' if save.ended else '進行中' }}</span>
+        <span class="ge-chip">{{ tier_labels.get(save.content_tier, '未標示') }}</span>
+      </p>
+      <p class="ge-card__by">
+        {% if save.player_name %}<span>主角：{{ save.player_name }}</span>{% endif %}
+      </p>
+      <p class="ge-banner" role="status">劇情畫面建置中。存檔已經建立好了，等畫面上線後就能從這裡接著玩。</p>
+      <p class="ge-card__actions"><a class="ui-btn ui-btn--primary" href="/game">回到冒險</a></p>
+    </section>
+  </main>
+</div>
+{% endblock %}

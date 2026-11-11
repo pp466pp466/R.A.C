@@ -1,0 +1,122 @@
+@charset "UTF-8";
+/* RPG 入口頁與存檔頁外殼的樣式。顏色一律使用 theme.css 的變數（Cinematic Dark Minimalist，嚴禁純白）。
+   版面以 flex 與 CSS 網格排列：手機寬度（360px）卡片單欄、不橫向溢出；桌面寬度兩欄。 */
+
+[v-cloak] { display: none; }
+
+.ge-shell {
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: 0 16px 4rem;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+/* ---- 頂欄與提示 ------------------------------------------------------------ */
+.ge-topbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem 0.75rem;
+  max-width: 960px;
+  margin: 0 auto;
+  padding: 1rem 0;
+  border-bottom: var(--border-hairline);
+}
+
+.ge-topbar__title { margin: 0 auto 0 0; min-width: 0; font-size: 1.25rem; font-weight: 500; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.ge-topbar__link { color: var(--color-text-muted); text-decoration: none; }
+.ge-topbar__link:hover { color: var(--color-accent); }
+
+.ge-shell > .ui-restriction,
+.ge-shell > .ge-banner,
+.ge-main { max-width: 960px; margin-left: auto; margin-right: auto; }
+
+.ge-shell > .ui-restriction { margin-top: 1rem; }
+
+.ge-banner {
+  margin-top: 1rem;
+  margin-bottom: 0;
+  padding: 0.6rem 0.9rem;
+  background: var(--color-surface);
+  border: var(--border-hairline);
+  border-left: 2px solid var(--color-accent);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.ge-banner--quiet { border-left-color: var(--color-border); color: var(--color-text-muted); }
+
+.ge-chip {
+  display: inline-block;
+  max-width: 100%;
+  padding: 0.1rem 0.6rem;
+  border: var(--border-hairline);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.ge-chip--tag { border-style: dashed; }
+.ge-chip--ended { color: var(--color-accent); border-color: var(--color-accent); }
+
+/* ---- 分頁 ------------------------------------------------------------------ */
+.ge-main { padding-top: 1.25rem; }
+
+.ge-tabs { display: flex; gap: 0.25rem; margin-bottom: 1rem; border-bottom: var(--border-hairline); }
+
+.ge-tab {
+  appearance: none;
+  padding: 0.55rem 1.1rem;
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--color-text-muted);
+  font: inherit;
+  cursor: pointer;
+}
+
+.ge-tab:hover, .ge-tab:focus-visible { color: var(--color-accent); }
+.ge-tab--active { color: var(--color-text); border-bottom-color: var(--color-accent); }
+
+.ge-hint { margin: 0.35rem 0 0.75rem; color: var(--color-text-muted); font-size: 0.9rem; line-height: 1.7; }
+.ge-error { margin: 0.75rem 0 0; padding: 0.5rem 0.8rem; border-left: 2px solid var(--color-accent); background: var(--color-surface); color: var(--color-accent); font-size: 0.9rem; }
+.ge-more { margin: 1rem 0 0; text-align: center; }
+.ge-empty { margin-bottom: 1rem; }
+
+/* ---- 卡片 ------------------------------------------------------------------ */
+.ge-cards {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 1rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ge-card {
+  min-width: 0;
+  padding: 0.9rem 1rem;
+  background: var(--color-surface);
+  border: var(--border-hairline);
+}
+
+.ge-card__title { margin: 0 0 0.4rem; font-size: 1.05rem; font-weight: 500; overflow-wrap: anywhere; }
+.ge-card__summary { margin: 0 0 0.6rem; color: var(--color-text); font-size: 0.9rem; line-height: 1.7; overflow-wrap: anywhere; }
+.ge-card__meta { display: flex; flex-wrap: wrap; gap: 0.4rem; margin: 0 0 0.6rem; }
+.ge-card__by { display: flex; flex-wrap: wrap; gap: 0.25rem 1rem; margin: 0 0 0.6rem; color: var(--color-text-muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+.ge-card__actions { margin: 0.6rem 0 0; }
+
+/* 存檔頁與精靈外殼的容器 */
+.ge-panel { min-width: 0; }
+
+@media (min-width: 768px) {
+  .ge-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+@media (max-width: 575.98px) {
+  .ge-tab { flex: 1 1 0; padding-left: 0.5rem; padding-right: 0.5rem; }
+  .ge-card__actions .ui-btn { width: 100%; text-align: center; }
+}

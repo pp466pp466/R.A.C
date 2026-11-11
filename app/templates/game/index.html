@@ -1,0 +1,115 @@
+{% extends "base.html" %}
+{# RPG 入口頁：Vue 3 全域變數模式。分頁、提示與按鈕的顯示與禁用完全由 Vue 的響應式變數接管（v-if／v-show），
+   所有來自作者與玩家的文字以 {{ }} 插值顯示（純文字），不解析任何標記語言。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。
+   清單內容不在初始狀態裡，由 /api/sessions/catalog 與 /api/sessions 取得。 #}
+{% block title %}冒險{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+{% endblock %}
+{% block content %}
+<div id="game-app" class="ge-shell" v-cloak>
+{% raw %}
+  <header class="ge-topbar">
+    <h1 class="ge-topbar__title">冒險</h1>
+    <span class="ge-chip" :title="'會員等級：' + memberText">{{ memberText }}會員</span>
+    <a class="ge-topbar__link" href="/cs">客服</a>
+    <a class="ge-topbar__link" href="/scripts">創作</a>
+    <a class="ge-topbar__link" href="/account">帳號</a>
+  </header>
+
+  <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
+  <p v-if="gateNotice" class="ge-banner" role="alert">
+    {{ gateNotice.text }}
+    <a v-if="gateNotice.link" :href="gateNotice.link">{{ gateNotice.linkText }}</a>
+  </p>
+  <p v-if="modeNotice" class="ge-banner ge-banner--quiet" role="status">
+    {{ modeNotice.text }}
+    <a v-if="modeNotice.link" :href="modeNotice.link">{{ modeNotice.linkText }}</a>
+  </p>
+
+  <main class="ge-main">
+    <div class="ge-tabs" role="tablist" aria-label="入口分頁">
+      <button type="button" class="ge-tab" role="tab" id="ge-tab-scripts" aria-controls="ge-panel-scripts"
+              :class="{ 'ge-tab--active': tab === 'scripts' }" :aria-selected="tab === 'scripts' ? 'true' : 'false'" @click="selectTab('scripts')">選劇本</button>
+      <button type="button" class="ge-tab" role="tab" id="ge-tab-saves" aria-controls="ge-panel-saves"
+              :class="{ 'ge-tab--active': tab === 'saves' }" :aria-selected="tab === 'saves' ? 'true' : 'false'" @click="selectTab('saves')">我的存檔</button>
+    </div>
+
+    <!-- ===== 選劇本 ===== -->
+    <section v-show="tab === 'scripts'" class="ge-panel" id="ge-panel-scripts" role="tabpanel" aria-labelledby="ge-tab-scripts">
+      <p v-if="preferenceText" class="ge-hint">排序依您的故事偏好（{{ preferenceText }}），符合偏好的劇本會排在前面；可以到<a href="/account">帳號設定</a>調整，不會影響能玩的劇本。</p>
+      <p v-if="catalog.loading && catalog.items.length === 0" class="ge-hint" role="status">載入中…</p>
+      <p v-else-if="catalog.loaded && catalog.items.length === 0 && !catalog.error" class="ge-hint">目前沒有可玩的劇本，晚點再來看看。</p>
+
+      <ul v-if="catalog.items.length" class="ge-cards">
+        <li v-for="card in catalog.items" :key="card.id" class="ge-card">
+          <h2 class="ge-card__title">{{ card.title }}</h2>
+          <p v-if="card.summary" class="ge-card__summary">{{ card.summary }}</p>
+          <p class="ge-card__meta">
+            <span class="ge-chip">{{ tierLabel(card.content_tier) }}</span>
+            <span class="ge-chip">{{ audienceLabel(card.audience) }}</span>
+            <span v-for="(tag, index) in card.tags" :key="index" class="ge-chip ge-chip--tag">{{ tag }}</span>
+          </p>
+          <p class="ge-card__by">
+            <span v-if="card.world_name">{{ card.world_name }}</span>
+            <span v-if="card.author_name">作者：{{ card.author_name }}<template v-if="card.author_code">#{{ card.author_code }}</template></span>
+          </p>
+          <p class="ge-card__actions">
+            <button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start(card)">開始</button>
+          </p>
+        </li>
+      </ul>
+
+      <p v-if="catalog.error" class="ge-error" role="alert">{{ catalog.error }}</p>
+      <p v-if="catalog.error || catalog.hasMore" class="ge-more">
+        <button v-if="catalog.error" type="button" class="ui-btn" :disabled="catalog.loading" @click="loadCatalog">重試</button>
+        <button v-else type="button" class="ui-btn" :disabled="catalog.loading" :aria-busy="catalog.loading ? 'true' : 'false'" @click="loadCatalog">{{ catalog.loading ? '載入中…' : '載入更多' }}</button>
+      </p>
+    </section>
+
+    <!-- ===== 我的存檔 ===== -->
+    <section v-show="tab === 'saves'" class="ge-panel" id="ge-panel-saves" role="tabpanel" aria-labelledby="ge-tab-saves">
+      <p v-if="saves.loading && saves.items.length === 0" class="ge-hint" role="status">載入中…</p>
+      <div v-else-if="saves.loaded && saves.items.length === 0 && !saves.error" class="ge-empty">
+        <p class="ge-hint">還沒有存檔。到「選劇本」挑一個劇本，建立主角後就會有第一個存檔。</p>
+        <button type="button" class="ui-btn ui-btn--primary" @click="selectTab('scripts')">去選劇本</button>
+      </div>
+
+      <ul v-if="saves.items.length" class="ge-cards">
+        <li v-for="save in saves.items" :key="save.id" class="ge-card">
+          <h2 class="ge-card__title">{{ save.title || '未命名的劇本' }}</h2>
+          <p class="ge-card__meta">
+            <span class="ge-chip" :class="{ 'ge-chip--ended': save.status === 'ended' }">{{ statusLabel(save.status) }}</span>
+            <span class="ge-chip">{{ tierLabel(save.content_tier) }}</span>
+            <span class="ge-chip">已完成 {{ save.completed_turns }} 輪</span>
+          </p>
+          <p class="ge-card__by">
+            <span v-if="save.player_name">主角：{{ save.player_name }}</span>
+            <span v-if="formatTime(save.last_active_at)">最後活動：{{ formatTime(save.last_active_at) }}</span>
+          </p>
+          <p class="ge-card__actions">
+            <a class="ui-btn ui-btn--primary" :href="sessionPath(save.id)">{{ save.status === 'ended' ? '查看' : '繼續' }}</a>
+          </p>
+        </li>
+      </ul>
+
+      <p v-if="saves.error" class="ge-error" role="alert">{{ saves.error }}</p>
+      <p v-if="saves.error || saves.hasMore" class="ge-more">
+        <button v-if="saves.error" type="button" class="ui-btn" :disabled="saves.loading" @click="loadSaves">重試</button>
+        <button v-else type="button" class="ui-btn" :disabled="saves.loading" :aria-busy="saves.loading ? 'true' : 'false'" @click="loadSaves">{{ saves.loading ? '載入中…' : '載入更多' }}</button>
+      </p>
+    </section>
+  </main>
+
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
+</div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取。只有會員等級、故事偏好與閘門結果，沒有清單內容 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/entry.js') }}"></script>
+{% endblock %}

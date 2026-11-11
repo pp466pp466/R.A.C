@@ -90,7 +90,7 @@ sequenceDiagram
     alt 管理員
         C-->>B: 302 /login/password，核發 10 分鐘的中間狀態 cookie（第 7c 節），沒有登入 session
     else 玩家
-        C-->>B: 登入並導向 landing_for(user, next)：待確認年齡 → /age（帶 next）、被鎖定 → /appeal、等待刪除 → /account、否則 next 或預設頁面 /cs
+        C-->>B: 登入並導向 landing_for(user, next)：待確認年齡 → /age（帶 next）、被鎖定 → /appeal、等待刪除 → /account、否則 next 或預設頁面 /game
     end
 ```
 
@@ -98,7 +98,7 @@ sequenceDiagram
 - 已存在的帳號（已綁定或以信箱合併）登入時**不會**被順便標記為已確認年齡。
 - 已辨識出帳號卻被拒絕（帳號停用、已綁定另一個 Google 身分）會計入帳號鎖定的計次（第 7b 節）；無法辨識身分的失敗與還沒有帳號的 Google 身分不計。
 - 開發與正式環境使用不同的 OAuth 用戶端；失敗一律導回 `/login?error=<固定代碼>`，Google 回傳的任何文字都不會進入網址或頁面。
-- 登入後的預設頁面是單一常數 `DEFAULT_AFTER_LOGIN`（`app/security/redirects.py`，目前 `/cs`；change `rpg-entry-ui` 的最後一個後端任務（1.5）會在 `/game` 入口頁上線之後把它改為 `/game`，在那之前不改，避免登入後導向還不存在的頁面）；`landing_for` 由首頁、登入頁與回呼共用。**預設頁面改成 `/game` 不改變任何人能做什麼**：入口頁用到的兩個清單端點只要求已登入，受限登入狀態與年齡確認的導向規則（第 7b 節）完全不變；尚未完成年齡確認的玩家一律先導向 `/age`，不會落在入口頁。
+- 登入後的預設頁面是單一常數 `DEFAULT_AFTER_LOGIN`（`app/security/redirects.py`，目前 `/game`，也就是 RPG 的入口（選劇本與我的存檔）；change `rpg-entry-ui` 在 `/game` 入口頁上線之後才把它從 `/cs` 改過來，避免登入後導向還不存在的頁面；客服 `/cs` 不受影響，仍可直接開啟）；`landing_for` 由首頁、登入頁與回呼共用。**預設頁面改成 `/game` 不改變任何人能做什麼**：入口頁用到的兩個清單端點只要求已登入，受限登入狀態與年齡確認的導向規則（第 7b 節）完全不變；尚未完成年齡確認的玩家一律先導向 `/age`，不會落在入口頁。
 
 ## 5. 年齡閘門與內容模式
 
@@ -321,7 +321,7 @@ flowchart TD
 | `deletion_pending` | 申請刪除後的寬限期內 | `account_deletion_pending` | `/account` | `/api/auth/me`、`GET /account`、`POST /api/account/cancel-deletion` |
 
 - **允許清單不變**：`/api/account/story-preference` 與其他需要登入的端點一樣被三種受限登入狀態預設拒絕（`locked` 回 `account_locked`、`age_pending` 回 `age_confirmation_required`、`deletion_pending` 回 `account_deletion_pending`），不在任何狀態的允許清單內；`tests/test_restricted_session.py` 的全路由掃描自動涵蓋，`tests/test_story_preference_api.py` 另逐一證明三種狀態的代碼且偏好不變。
-- **入口清單端點同樣不在允許清單內**（change `rpg-entry-ui`）：`GET /api/sessions/catalog` 與 `GET /api/sessions` 用 `require_login()`，三種受限登入狀態各回自己的 403 代碼（`tests/test_session_api.py` 逐一證明，`test_restricted_session.py` 的 `REQUIRED_TO_BE_FOUND` 也列入它們，確保掃描真的看得到）。**它們不過年齡閘門 `require_chat_access`**，原因是 `/game` 將成為登入後的預設頁面，而未確認年齡的**管理員**（不是 `age_pending`）也會落在那裡：清單不花成本，內容模式對未確認年齡者本來就是安全模式，所以回安全模式的清單而不是 403；真正會花成本的開存檔、AI 生成與回合仍由既有的閘門拒絕（`tests/test_session_api.py` 證明未確認年齡的管理員讀得到清單、開存檔得 403 `age_confirmation_required`）。
+- **入口清單端點同樣不在允許清單內**（change `rpg-entry-ui`）：`GET /api/sessions/catalog` 與 `GET /api/sessions` 用 `require_login()`，三種受限登入狀態各回自己的 403 代碼（`tests/test_session_api.py` 逐一證明，`test_restricted_session.py` 的 `REQUIRED_TO_BE_FOUND` 也列入它們，確保掃描真的看得到）。**它們不過年齡閘門 `require_chat_access`**，原因是 `/game` 是登入後的預設頁面，而未確認年齡的**管理員**（不是 `age_pending`）也會落在那裡：清單不花成本，內容模式對未確認年齡者本來就是安全模式，所以回安全模式的清單而不是 403；真正會花成本的開存檔、AI 生成與回合仍由既有的閘門拒絕（`tests/test_session_api.py` 證明未確認年齡的管理員讀得到清單、開存檔得 403 `age_confirmation_required`）。
 - **年齡確認**：玩家首次以 Google 登入只建立帳號（沒有生日，`age_deadline_at` = 建立後 24 小時），登入後被導向 `/age`；`POST /api/auth/verify-age` 驗證生日與區間：未滿 13 歲立即抹除（`AccountErasureService.erase_underage`，不保存生日）、不一致回通用訊息並計入鎖定計次、成功則寫入並清空期限。逾時由 `purge-unconfirmed-accounts` 每小時清除。
 - **帳號鎖定**：`AccountLockService.register_strike` 把兩類計次寫入 `lock_strikes`——`identity_rejected`（已辨識出帳號卻被拒絕的 Google 登入、補填年齡不一致；15 分鐘內 5 次）與 `rate_limited`（被每分鐘訊息數上限擋下；15 分鐘內 10 次）；達門檻時以條件式 UPDATE 鎖定並寫 `account.lock` 稽核（管理員欄位為空）。計次發生在會以 4xx 結束的請求裡，所以寫入後呼叫 `keep_changes_on_error`。無法辨識出帳號的失敗不計次。
 - **申訴**：`/api/appeals` 對被鎖定或被暫停發佈的玩家有效（兩者皆非則 404，管理員也一樣），1000 字、每小時 3 則、同時 1 則待處理，兩種狀態共用同一套上限；內容是個資，日誌與稽核只有字數（`appeal.submit`）。`/appeal` 頁面由 `CurrentUser.appeal_kind`（`locked` 優先、`suspended`）決定說明文字，兩者皆非時導向預設頁面。

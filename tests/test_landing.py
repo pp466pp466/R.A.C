@@ -38,8 +38,8 @@ def current(member_session, **overrides) -> CurrentUser:
 
 # ---- landing_for ------------------------------------------------------------------------------------
 
-def test_the_default_page_is_the_customer_service_chat_for_now():
-    assert DEFAULT_AFTER_LOGIN == "/cs"
+def test_the_default_page_is_the_game_entry_not_the_chat():
+    assert DEFAULT_AFTER_LOGIN == "/game"
 
 
 def test_an_unrestricted_member_goes_to_next_when_it_is_safe_and_to_the_default_page_otherwise(member_session):
@@ -127,6 +127,14 @@ def test_a_revoked_cookie_gets_the_home_page_and_is_cleared(app):
 
 
 # ---- /register ---------------------------------------------------------------------------------------
+
+def test_opening_the_chat_directly_is_not_redirected_to_the_game_entry(app):
+    """rpg-entry-ui：預設頁面改成 /game，但客服 /cs 仍可直接開啟（改由導覽列進入）；只有首頁與登入頁才導向預設頁面。"""
+    client = client_with(app)
+    response = client.get("/cs")
+    assert response.status_code == 200
+    assert client.get("/").headers["Location"] == "/game"                      # 對照：首頁才導向 /game
+
 
 def test_the_register_page_is_gone_and_always_leads_to_the_login_page(app):
     for client in (app.test_client(), client_with(app)):

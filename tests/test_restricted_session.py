@@ -64,6 +64,7 @@ REQUIRED_TO_BE_FOUND = {
     ("GET", "/api/admin/overview"), ("POST", "/api/auth/verify-age"), ("POST", "/api/account/delete"),
     ("POST", "/api/account/cancel-deletion"),
     ("GET", "/api/sessions/catalog"), ("GET", "/api/sessions"),     # RC-3a 的兩個入口清單：不寫進允許清單，三種受限狀態都必須被擋
+    ("GET", "/game"), ("GET", "/game/<session_public_id>"), ("GET", "/game/start/<version_public_id>"),     # RC-3a 的三個頁面：同樣不在允許清單內
 }
 # 登入之前的端點：管理員的密碼驗證步驟只認簽章的中間狀態 cookie，完全不看登入 session（也不被登入 session 接受），
 # 沒有中間狀態就是 401。它們不是「需要登入的端點」，不在掃描的範圍；專屬測試見 test_admin_two_step_login.py。
