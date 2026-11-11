@@ -12,6 +12,7 @@
     <h1 class="sw-topbar__title">劇本創作</h1>
     <span v-if="limits" class="sw-chip" title="你目前擁有的劇本數與上限">劇本 {{ limits.scripts.used }} / {{ limits.scripts.limit }}</span>
     <span v-if="limits" class="sw-chip" title="今日（台灣時間）的送審次數與上限">今日送審 {{ limits.submissions_today.used }} / {{ limits.submissions_today.limit }}</span>
+    <a class="sw-topbar__link" href="/game">冒險</a>
     <a class="sw-topbar__link" href="/cs">客服</a>
     <a class="sw-topbar__link" href="/account">帳號</a>
   </header>

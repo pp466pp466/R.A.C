@@ -224,3 +224,17 @@ def test_account_page_loads_every_script_that_account_js_depends_on(app):
     )
     missing = sorted(name for name in used if not re.search(rf"\b{name}\b\s*[:=(]", provided))
     assert not missing, f"account.js 用到但頁面沒有載入的 Auth 函式：{missing}"
+
+
+# ---- 導覽 ------------------------------------------------------------------------------------------------------
+
+
+def test_the_account_page_links_to_the_adventure_home_as_a_plain_site_link(app):
+    html = page_for(app).get_data(as_text=True)
+    assert re.search(r'<a class="account-nav__link" href="/game">冒險</a>', html)
+    assert re.findall(r"data-bs-[\w-]+", html) == ["data-bs-theme"]            # 只有深色模式開關；連結不靠 Bootstrap 的互動屬性
+
+
+def test_a_member_awaiting_deletion_gets_no_adventure_link_since_only_cancel_and_logout_are_possible(app):
+    html = page_for(app, status=STATUS_DELETION_PENDING, deletion_requested_at=START, status_before_deletion="active").get_data(as_text=True)
+    assert "account-nav" not in html and 'href="/game"' not in html

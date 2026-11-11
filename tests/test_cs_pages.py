@@ -184,3 +184,9 @@ def test_the_rendered_page_loads_only_local_scripts_in_the_right_order(world):
 def test_the_page_html_contains_no_private_text_only_the_initial_state(world):
     html = logged_in_client(world, account(world, "usable")).get("/cs").get_data(as_text=True)
     assert "user1@example.com" not in html and "birth" not in html.lower()
+
+
+def test_the_topbar_links_to_the_adventure_home_as_a_plain_site_link(world):
+    html = logged_in_client(world, account(world, "usable")).get("/cs").get_data(as_text=True)
+    assert re.search(r'<a class="cs-topbar__link" href="/game">冒險</a>', html)
+    assert re.findall(r"data-bs-[\w-]+", html) == ["data-bs-theme"]            # 只有深色模式開關；連結不靠 Bootstrap 的互動屬性

@@ -2,13 +2,14 @@
 /* 開存檔精靈的樣板（app/templates/game/start.html）：
  *  1. 能用專案自己離線引入的 Vue 編譯 raw 區塊（沒有瀏覽器可以掛載，但運算式的語法錯誤在編譯時就會拋出）。
  *  2. 樣板用到的每個名稱，都在「與 wizard.js 的約定」清單內，反過來清單的每個名稱也都被樣板用到，且都寫在樣板的標頭說明裡。
- *     wizard.js（tasks 4.1）的 setup() 要回傳的就是這份清單；4.1 的測試會改為檢查 setup() 實際回傳了每一個名稱。
+ *     wizard.js 的 setup() 要回傳的就是這份清單，下方有一項測試以 `vm` 沙盒（tests/js/support/wizard-sandbox.js）執行 setup()，檢查它實際回傳了每一個名稱。
  * 正式版的編譯器對沒關閉的標籤不會拋錯，標籤是否成對由 tests/test_game_pages.py 檢查。 */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
+const { setupWizard } = require('./support/wizard-sandbox.js');
 
 const ROOT = path.join(__dirname, '..', '..');
 const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
@@ -107,6 +108,23 @@ test('every name of the contract is written in the header comment of the templat
 
 test('the contract has no duplicate names', () => {
   assert.equal(new Set(CONTRACT_NAMES).size, CONTRACT_NAMES.length);
+});
+
+test('wizard.js setup() really returns every name of the contract, with the kind the template needs', () => {
+  const { page } = setupWizard();
+  const missing = CONTRACT_NAMES.filter((name) => !(name in page));
+  assert.deepEqual(missing, [], `樣板用到但 setup() 沒有回傳：${missing}`);
+  for (const name of CONTRACT.methods) { assert.equal(typeof page[name], 'function', `${name} 應該是函式`); }
+  for (const name of [...CONTRACT.state, ...CONTRACT.computed]) {
+    assert.notEqual(typeof page[name], 'function', `${name} 應該是資料，不是函式`);
+    assert.ok(page[name] !== undefined, name);
+  }
+});
+
+test('the wizard script stays within the contract: it returns nothing the template does not use, except what the contract names', () => {
+  const { page } = setupWizard();
+  const extra = Object.keys(page).filter((name) => !CONTRACT_NAMES.includes(name));
+  assert.deepEqual(extra, [], `setup() 多回傳了約定清單沒有的名稱：${extra}`);
 });
 
 test('the template has no inline handler that would write the draft anywhere, and no storage or network call', () => {

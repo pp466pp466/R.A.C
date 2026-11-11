@@ -18,9 +18,6 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
 {% endblock %}
 {% block content %}
-{# 過渡用的說明：wizard.js（tasks 4.1）加入之後移除這一段；在那之前下方的精靈沒有腳本，v-cloak 會把它藏起來。 #}
-<p id="wizard-pending-note" class="ge-banner gw-pending" role="status">建立主角的畫面建置中，暫時還不能從這裡開始冒險。<a href="/game">回到冒險</a></p>
-
 <div id="wizard-app" class="ge-shell" v-cloak>
 {% raw %}
   <header class="ge-topbar">
@@ -202,5 +199,5 @@
   <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/wizard-state.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
-  {# tasks 4.1 加入：wizard.js（Vue 掛載，必須是最後一個） #}
+  <script src="{{ url_for('static', filename='js/game/wizard.js') }}"></script>
 {% endblock %}

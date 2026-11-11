@@ -41,6 +41,7 @@
       <button type="button" class="cs-icon-btn" @click="toggleSidebar" :aria-expanded="sidebar.open ? 'true' : 'false'" aria-controls="cs-sidebar" aria-label="開關側邊欄">☰</button>
       <h1 class="cs-topbar__title">{{ activeTitle }}</h1>
       <span class="cs-tier" :title="'會員等級：' + tierLabel">{{ tierLabel }}</span>
+      <a class="cs-topbar__link" href="/game">冒險</a>
       <a class="cs-topbar__link" href="/account">帳號</a>
     </header>
 

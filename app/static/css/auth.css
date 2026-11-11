@@ -211,6 +211,20 @@ a.ui-btn {
 }
 
 /* ---- 帳號頁與條款頁 ------------------------------------------------------- */
+.account-nav {
+  margin: 0 0 1rem;
+  font-size: 0.875rem;
+}
+
+.account-nav__link {
+  color: var(--color-text-muted);
+  text-decoration: none;
+}
+
+.account-nav__link:hover {
+  color: var(--color-accent);
+}
+
 .account-list {
   margin: 0 0 1.25rem;
   padding: 0;

@@ -426,3 +426,23 @@ def test_readme_states_that_env_must_never_be_committed():
     section = readme_section("環境變數與機密")
     assert "絕不可提交" in section
     assert "沒有預設值" in section
+
+
+def test_readme_rpg_entry_section_lists_exactly_the_three_game_pages_and_documents_the_privacy_and_timeout_rules():
+    """RPG 入口一節的頁面表必須與實際註冊的 `/game` 一族路由完全一致（共 3 條）；創角內容不落地、逾時與中止、預設頁面與未驗證項目都要記載。"""
+    from app import create_app
+    from app.config import load_config
+
+    section = readme_section("RPG 入口與開存檔畫面（rpg-entry-ui）")
+    documented: set[str] = set()
+    for line in section.splitlines():
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) >= 2 and re.fullmatch(r"`/game[^`]*`", cells[0]):
+            documented.add(cells[0].strip("`"))
+
+    app = create_app(load_config(environ={"APP_ENV": "testing"}))
+    actual = {rule.rule for rule in app.url_map.iter_rules() if rule.rule.startswith("/game")}
+    assert len(actual) == 3, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
+    for needed in ("不寫入任何瀏覽器儲存", "pagehide", "AbortController", "DEFAULT_AFTER_LOGIN", "沒有資料庫遷移", "未驗證"):
+        assert needed in section, needed

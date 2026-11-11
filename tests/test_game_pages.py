@@ -326,10 +326,13 @@ def test_the_wizard_loads_its_scripts_in_dependency_order_and_hard_codes_no_time
     client, _ = client_for(app)
     html = client.get(f"/game/start/{GHOST}").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
-    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "wizard-state.js", "game-api.js"):
+    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "wizard-state.js", "game-api.js", "wizard.js"):
         assert needed in names, needed
+    assert names[-1] == "wizard.js"                                              # 掛載腳本必須是最後一個（它用到前面所有模組）
     assert names.index("auth-common.js") < names.index("game-labels.js") < names.index("wizard-state.js")     # wizard-state 要用 game-labels 的對照表
-    assert names.index("auth-common.js") < names.index("game-api.js")
+    assert names.index("auth-common.js") < names.index("game-api.js") < names.index("wizard.js")
+    assert names.index("wizard-state.js") < names.index("wizard.js")
+    assert 'id="wizard-pending-note"' not in html and "建置中" not in html           # 過渡用的說明隨 wizard.js 一起移除
     assert not re.search(r"\b(35000|65000|45000|85000)\b", read(TEMPLATES / "start.html"))
     api = strip_js_comments(read(JS_DIR / "game-api.js"))
     assert not re.search(r"timeout\w*\s*[:=]\s*\d", api, re.I)                   # 逾時與中止訊號由呼叫端傳入，這裡不寫死
@@ -497,3 +500,18 @@ def test_the_label_tables_cover_exactly_the_enums_the_backend_uses():
     assert sorted(labels_in(source, "ORIGIN_LABELS")) == sorted(ORIGINS)
     assert sorted(labels_in(source, "STATUS_LABELS")) == ["active", "ended"]
     assert sorted(labels_in(source, "CATEGORY_LABELS")) == sorted(REVIEW_CATEGORIES)
+
+
+# ---- 與其他區域的導覽互通 ----------------------------------------------------------------------------------------
+
+
+def test_the_game_home_and_the_other_areas_link_to_each_other_as_plain_site_links(app):
+    client, _ = client_for(app)
+    home = collect(client.get("/game").get_data(as_text=True))
+    for target in ("/cs", "/scripts", "/account"):
+        assert target in home.hrefs, target                                      # /game 的頂列：客服、創作、帳號
+    assert home.data_bs == [("data-bs-theme", "dark")]
+    for page in ("/cs", "/scripts", "/account"):
+        html = client.get(page).get_data(as_text=True)
+        assert 'href="/game"' in html and ">冒險<" in html, page                  # 各頁的頁首都有回到 /game 的「冒險」
+        assert collect(html).data_bs == [("data-bs-theme", "dark")], page

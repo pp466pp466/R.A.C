@@ -113,9 +113,6 @@
 .ge-panel { min-width: 0; }
 
 /* ---- 開存檔精靈（/game/start/<版本>）-------------------------------------------- */
-/* 過渡用說明（wizard.js 加入之後連同樣板中的那一行一起移除）：不在 .ge-shell 內，所以自己置中 */
-.gw-pending { width: calc(100% - 32px); max-width: 960px; margin: 1rem auto 0; }
-
 .gw-steps { display: flex; flex-wrap: wrap; gap: 0.4rem 1.25rem; margin: 0 0 1rem; padding: 0; list-style: none; }
 .gw-step { color: var(--color-text-muted); font-size: 0.9rem; }
 .gw-step__no { display: inline-block; min-width: 1.5rem; margin-right: 0.4rem; border: var(--border-hairline); border-radius: 999px; font-size: 0.8rem; text-align: center; }

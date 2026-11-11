@@ -1,6 +1,6 @@
 # 前端架構
 
-> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈的樣板、純函式與 API 封裝已完成，Vue 掛載的 `wizard.js` 與遊戲主畫面為規劃中） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面為規劃中） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
@@ -19,7 +19,7 @@ flowchart TD
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
     Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
     Page -->|"/game"| Gm["auth-common.js → game-labels.js → game-api.js → entry.js（另載入 game.css）"]
-    Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js（規劃中）"]
+    Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js"]
 ```
 
 - 第三方資產（Vue、Bootstrap CSS、axios、字型）全部在 `static/vendor`、`static/fonts`，**不使用 CDN**；字型為 Noto Sans TC（108 個 `unicode-range` 切片的 woff2）。
@@ -176,14 +176,14 @@ flowchart LR
 - **提示**（`game-labels.js`）：後端只回列舉值，中文對照集中在這裡；未知值一律退回固定的預設文字，不顯示原始值（分級退回「未標示」，不把未知的分級當成安全或成人）。`gateNotice` 對未知的非空閘門代碼也當成「不可開始」（失敗時關閉）；閘門非空時「開始」按鈕禁用，但清單仍可瀏覽。`contentModeNotice` 只負責說明「為什麼沒看到某些劇本」：未滿成年門檻者固定為安全模式，只說明原因、沒有連結；成年但選了安全模式者提示可到帳號設定調整。**頁面上沒有任何改變內容模式的動作，也不自動調高**。後端列舉值與對照表是否一致，由 `tests/test_game_pages.py` 以後端常數比對（後端新增列舉值時會失敗）。
 - **只讀與個資**：入口頁只呼叫兩個 GET 端點，不碰遊戲幣；作者與玩家的文字一律以 `{{ }}` 純文字顯示；不寫入 `localStorage`、`sessionStorage`、IndexedDB 或 cookie，也沒有 `console.log`（`tests/test_game_pages.py` 掃描）。
 - **版面**：`game.css` 預設單欄，768px 以上兩欄；沒有固定寬度，長文字以 `overflow-wrap` 折行，360px 不橫向溢出；沿用深色琥珀配色，沒有純白。
-- **導覽**：`/game` 頂列有「客服」「創作」「帳號」；其他頁面回 `/game` 的「冒險」連結尚未加入（rpg-entry-ui 的 4.2，後續批次）。
+- **導覽**：`/game` 頂列有「客服」「創作」「帳號」；`/scripts` 與 `/cs` 的頁首、`/account`（卡片頂端的小導覽；等待刪除者的版本沒有）各有一個回 `/game` 的「冒險」連結，都是一般站內連結、沒有 `data-bs-*`（各頁的測試與 `tests/test_game_pages.py` 檢查）。
 
 ### 開存檔精靈（`/game/start/<版本識別碼>`，rpg-entry-ui）
 
 ```mermaid
 flowchart LR
     Html["templates/game/start.html<br/>初始狀態：member_tier、gate、suggest_timeout_ms、start_timeout_ms（沒有劇本內容）"] --> Wz
-    Wz["wizard.js（規劃中，tasks 4.1）<br/>Vue 3 應用：步驟、三個自製 Modal、AbortController"] --> St["wizard-state.js<br/>純函式：草稿、字數、前進條件、示範氣泡、套用預覽、組開存檔本文、失敗訊息"]
+    Wz["wizard.js<br/>Vue 3 應用：步驟、三個自製 Modal、AbortController"] --> St["wizard-state.js<br/>純函式：草稿、字數、前進條件、示範氣泡、套用預覽、組開存檔本文、失敗訊息"]
     St --> Labels["game-labels.js<br/>審查類別的中文對照"]
     Wz --> Api["game-api.js<br/>setup、suggest、start：timeout 與 signal 由呼叫端傳入"]
     Api -->|"GET setup/版本"| S1["序章與創角資料"]
@@ -195,7 +195,8 @@ flowchart LR
 - **初始狀態只有 `member_tier`、`gate` 與兩個逾時**：`gate` 與 `/game` 相同（`AccessPolicy.chat_gate`，前端不自行判斷）。`suggest_timeout_ms` = 後端單次請求總預算 + 5 秒（與 `/scripts` 的送審相同的算法，預設 35 秒）；`start_timeout_ms` = `2 × 後端單次請求總預算 + 5 秒`（預設 65 秒，與 `session_api_controller` 說明的一致）：開存檔最壞是「劇本審查（必要時）＋主角模型審查」兩次呼叫各用滿一份預算。兩者由 `game_page_controller` 從設定算出，前端與樣板都不寫死（`test_game_pages.py` 以不同的預算設定驗證）。**劇本內容不在初始狀態裡**，由 `GET /api/sessions/setup/<id>` 取得。
 - **`wizard-state.js`（UMD 純函式，沒有請求、儲存、日誌與 DOM）**：草稿是一組字串欄位（角色卡七欄、來歷、選填的自我介紹）；聯繫有三態：未設定、已設定（`kind`、`ref`、`text`）、略過，另分出「選了一半」（選了對象沒寫、或寫了沒選對象）。`blockers`／`canAdvance` 只做「必要欄位已填、沒有超過長度」的即時回饋（上限取自 `setup` 的 `limits`，不寫死），**合規與審查全由伺服器判斷**；自我介紹超長只擋「請 AI 生成」，不擋開始（它不會隨開存檔送出）。`applySuggestion` 回傳新的 `{ draft, anchor }`：AI 預覽覆蓋角色卡與聯繫，保留玩家選的來歷與自我介紹，預覽殘缺時不用空白蓋掉玩家的內容。`buildStartPayload` 只搬運與去頭尾空白（看不懂的年齡原樣送出，讓伺服器指出欄位），略過聯繫時帶 `skip_anchor: true` 而不帶 `anchor`；沒有頭像與性別。`targetGroups` 的人物選項只取姓名與職業。
 - **失敗訊息只來自固定文字與列舉對照，不含玩家文字**：`describeSetupFailure`、`describeSuggestFailure`、`describeStartFailure` 依狀態碼與代碼回傳 `{ kind, code, message, step, fields, link, retry }`；422 只列出認得的審查類別（不認得的識別字略過，不顯示原始值）；唯一原樣放進 `fields` 的是 400 的逐欄位規則說明（伺服器保證不回顯輸入），`stepOfField` 與 `fieldKeyOf` 把欄位路徑對應回步驟（`protagonist.*`、`intro` 在創角，`anchor.*` 在聯繫；兩步都有錯誤時回到較前面的步驟）。開始冒險逾時或斷線時說明伺服器可能已經完成，請玩家先到「我的存檔」確認再重送。所有失敗都保留玩家已填的內容。
-- **樣板與 `wizard.js` 的約定**：樣板標頭列出 `wizard.js` 的 `setup()` 要回傳的名稱（狀態、計算、方法），`tests/js/wizard-template.test.js` 以離線 Vue 編譯樣板，並檢查樣板用到的名稱與這份清單完全一致（多一個或少一個都會失敗）。`wizard.js` 加入之前，頁面只顯示「建置中」的過渡說明與回到入口的連結（Vue 的內容被 `v-cloak` 藏起來）。
+- **樣板與 `wizard.js` 的約定**：樣板標頭列出 `wizard.js` 的 `setup()` 要回傳的名稱（狀態、計算、方法），`tests/js/wizard-template.test.js` 以離線 Vue 編譯樣板，並檢查樣板用到的名稱與這份清單完全一致（多一個或少一個都會失敗）。`wizard-template.test.js` 另以 `vm` 沙盒執行 `wizard.js` 的 `setup()`，檢查它實際回傳了清單的每一個名稱、不多不少；過渡用的「建置中」說明已隨 `wizard.js` 移除。
+- **`wizard.js`（Vue 掛載）**：只負責狀態、請求的時機與 `finally` 的恢復，邏輯都在 `wizard-state.js`。掛載時才呼叫 `setup`（版本識別碼從網址最後一段讀，讀不出來就是「找不到」，不送請求）；載入有 404、403（分級高於目前模式、年齡確認、鎖定）與可重試失敗各自的畫面，看不懂的成功回應也當成可重試的失敗。往後的步驟要通過前進條件，往前（`back`、`goTo`）不受限；「請 AI 生成」在已有手動內容時先開覆蓋確認 Modal，成功只填表、更新今日剩餘並出 Toast；「開始冒險」同一時間只送一個請求，送出期間所有按鈕禁用，成功後導向 `/game/<存檔>`，**導向之前仍保持禁用**（開存檔沒有冪等鍵，連點會開出兩個存檔）；400 依欄位路徑跳回較前面的那一步，422 與其他失敗只顯示固定文字；`pagehide` 時三種請求（載入、生成、開存檔）的 `AbortController` 都中止，被中止的請求不顯示錯誤。沒有任何瀏覽器儲存、主控台輸出與網址參數；`tests/js/wizard.test.js` 在 `vm` 沙盒用儲存物件與主控台的陷阱斷言這一點。
 
 ## 4. 暫存、待送與同步
 
@@ -249,7 +250,7 @@ sequenceDiagram
 
 | 層級 | 內容 |
 |---|---|
-| Node 單元測試 | `tests/js/*.test.js`（劇本創作頁另有 `script-draft`、`milestone-preview`、`restriction` 與 Vue 範本編譯 `script-workshop-template`；帳號頁的故事偏好有 `account-story-preference`：以真的 Vue 與 `Auth.useForm` 在 `vm` 沙盒執行 `account.js` 的 `setup()`，axios、Toast 與 mount 為替身；RPG 入口有 `game-labels`〔對照表、未知值、閘門與內容模式的提示、路徑、台灣時間〕與 `entry`〔同樣以 `vm` 沙盒執行 `entry.js` 的 `setup()`：預設分頁、載入更多、失敗保留與重試、閘門禁用開始、401、樣板用到的名稱都由 `setup()` 回傳；每個測試都有逾時，被破壞的程式讓 Promise 永遠不完成時會失敗而不是掛住〕；開存檔精靈有 `wizard-state`〔純函式：草稿與聯繫三態、字數與前進條件、示範氣泡、套用預覽、開存檔本文的兩種形狀、欄位路徑對應步驟、各種失敗的固定訊息且不含玩家文字〕與 `wizard-template`〔樣板以離線 Vue 編譯，用到的名稱與 `wizard.js` 的約定清單一致〕）：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式、後台的顯示邏輯（`admin-format.test.js`：每個列舉值都有標籤、日界、比例邊界）；`tests/test_admin_format_labels.py` 比對前端標籤與後端的列舉 |
+| Node 單元測試 | `tests/js/*.test.js`（劇本創作頁另有 `script-draft`、`milestone-preview`、`restriction` 與 Vue 範本編譯 `script-workshop-template`；帳號頁的故事偏好有 `account-story-preference`：以真的 Vue 與 `Auth.useForm` 在 `vm` 沙盒執行 `account.js` 的 `setup()`，axios、Toast 與 mount 為替身；RPG 入口有 `game-labels`〔對照表、未知值、閘門與內容模式的提示、路徑、台灣時間〕與 `entry`〔同樣以 `vm` 沙盒執行 `entry.js` 的 `setup()`：預設分頁、載入更多、失敗保留與重試、閘門禁用開始、401、樣板用到的名稱都由 `setup()` 回傳；每個測試都有逾時，被破壞的程式讓 Promise 永遠不完成時會失敗而不是掛住〕；開存檔精靈有 `wizard-state`〔純函式：草稿與聯繫三態、字數與前進條件、示範氣泡、套用預覽、開存檔本文的兩種形狀、欄位路徑對應步驟、各種失敗的固定訊息且不含玩家文字〕、`wizard-template`〔樣板以離線 Vue 編譯，用到的名稱與 `wizard.js` 的約定清單一致，`setup()` 實際回傳每一個名稱〕與 `wizard`〔以 `vm` 沙盒執行 `wizard.js`，沙盒在 `tests/js/support/wizard-sandbox.js`：載入的三種失敗與重試、聯繫的選擇與略過、示範氣泡不送請求、欄位上限禁用、生成預覽只填表與覆蓋確認、各種失敗保留內容、離開頁面時中止、重複點擊只送一次、導向前保持禁用、整個流程沒有儲存寫入與主控台輸出〕）：Sidebar 規則、暫存（記憶體與假 IndexedDB、開啟失敗退回記憶體）、同步引擎（假伺服器、重送不重複、退避、停止條件、用量代碼的歸類）、用量顯示（`cs-usage.test.js`）、打字機、Toast、共用函式、後台的顯示邏輯（`admin-format.test.js`：每個列舉值都有標籤、日界、比例邊界）；`tests/test_admin_format_labels.py` 比對前端標籤與後端的列舉 |
 | 架構掃描 | `tests/architecture/test_frontend_rules.py`、`tests/test_cs_pages.py`、`tests/test_admin_page.py`、`tests/test_script_page.py`、`tests/test_game_pages.py`、`tests/test_appeal_shortcut.py`：離線規則、逾時不寫死、`v-cloak`、純文字、自製 Modal 與 Toast；`/admin` 只有外殼與管理員的顯示名稱 |
 | 瀏覽器驗收 | Edge 無頭模式（CDP）的整頁驗收，結果與截圖摘要記在 README 的「瀏覽器驗收」與「管理員後台（C-4b）」 |
 

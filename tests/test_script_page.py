@@ -228,3 +228,13 @@ def test_the_audience_section_says_it_only_orders_the_list_and_never_restricts_w
     assert "只影響劇本在清單中的排序" in section and "不限制誰能玩" in section
     assert "err('audience')" in section and 'class="sw-error" role="alert"' in section                # 伺服器的欄位錯誤顯示在欄位旁
     assert "v-html" not in section and "data-bs-" not in section
+
+
+# ---- 導覽 ------------------------------------------------------------------------------------------------------
+
+
+def test_the_topbar_links_to_the_adventure_home_as_a_plain_site_link(app):
+    client, _ = client_for(app)
+    html = client.get("/scripts").get_data(as_text=True)
+    assert re.search(r'<a class="sw-topbar__link" href="/game">冒險</a>', html)
+    assert re.findall(r"data-bs-[\w-]+", html) == ["data-bs-theme"]            # 只有深色模式開關；連結不靠 Bootstrap 的互動屬性
