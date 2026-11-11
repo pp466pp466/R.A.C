@@ -1229,14 +1229,14 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 
 ### 部署順序
 
-備份 → `alembic upgrade head`（`0016` → `0017`）→ 部署新版程式 → `flask --app wsgi seed-scripts --dry-run` 確認內建劇本為「未變更」。本機 SQL Server `project` 與 Azure 在撰寫時都仍在 `0016`，上線前須各自備份後升級。
+備份 → `alembic upgrade head`（`0016` → `0017`）→ 部署新版程式 → `flask --app wsgi seed-scripts --dry-run` 確認內建劇本為「未變更」。本機 SQL Server `project` 已於 2026-11-11 備份後升級到 `0017`（見 `docs/project資料結構文件.md` 第 14 節）；Azure 仍在 `0016`，新程式上線前須由使用者自行備份後升級。
 
 ### 已知限制
 
 - 排序的 Repository 方法（`list_published`、`list_published_by_tag` 的 `preference` 參數）目前**沒有任何玩家端點使用**，只由 Repository 測試（SQLite 與真實 SQL Server）證明；端到端的效果在 `rpg-entry-ui` 接上清單之後才看得到。
 - `/age` 年齡確認頁沒有偏好步驟（屬 `onboarding-polish`）；偏好與頻道沒有統計、審查或依頻道篩選的功能。
 
-### 驗收紀錄（story-preference，A、B、C、D 批已實作，待使用者驗收 4.3 後封存）
+### 驗收紀錄（story-preference，A、B、C、D 批已實作，20／20 項完成，待封存）
 
 **前端（C 批，任務 4.1、4.2，2026-11-11）**：
 
@@ -1246,7 +1246,7 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 | 頁面與前端規則（`test_script_page`、`test_account_page`、`tests/architecture/test_frontend_rules.py`） | **53 項通過**（新增 11 項：版面順序、三個單選的值與綁定、唯讀禁用、說明文字、初始狀態沒有生日與年齡區間、等待刪除的頁面沒有此區塊、腳本以 `Auth.useForm` 送出且失敗時不改選取） |
 | 破壞檢查 | 暫時把 `account.js` 的請求網址改錯 → 1 項失敗；暫時讓初始選取一律為 `all` → 1 項失敗；皆已還原（與備份逐位元相同） |
 
-**瀏覽器操作（任務 4.3）**：**未驗證**——由使用者親自操作，結果待記入此處（要看的項目：`/account` 切換三種偏好並重新整理仍保留；`/scripts` 儲存男頻草稿後重新載入仍是男頻；唯讀版本的單選為禁用；360px 手機寬度版面不溢出）。
+**瀏覽器操作（任務 4.3，2026-11-11，使用者親自操作驗收環境）**：使用者回報**五個項目都正常**——①`/account` 切換三種偏好並重新整理仍保留；②`/scripts` 儲存男頻草稿後重新載入仍是男頻（含「帶入範例」回到全讀者）；③待審的唯讀版本，讀者頻道單選為禁用；④360px 手機寬度，`/account` 與 `/scripts` 兩處不橫向溢出；⑤暫停發佈身分的 `/account`，申訴按鈕與故事偏好區塊都正常。**這是使用者口頭回報的整體結果，沒有逐項細節與截圖**；我只從驗收資料庫（唯讀）看到操作的痕跡（一個帳號的偏好存為 `male`、一個新的待審版本），看不出畫面、Toast、摺疊與手機寬度，這些以使用者的回報為準。
 
 **破壞驗證（任務 5.1，D 批，2026-11-11）**：專案外的暫時腳本逐項對程式做單行破壞、跑相關測試檔、用 `git checkout` 還原（最後 `git diff -- app` 乾淨）；未破壞時同一組 11 個測試檔為 924 項全過。**10 組變體全部至少有一個測試失敗**（任務列的五項，其中 ②、③、⑤ 各拆成更細的變體）：
 
@@ -1277,6 +1277,7 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 | 警告 | 1 個：`test_assets_manifest` 的子行程輸出解碼執行緒警告（既有，與本 change 無關） |
 
 - **第 2 次全套發現 3 項真實失敗，已修**：`test_auth_pages::test_the_account_page_state_holds_the_members_own_profile_only` 與 `test_auth_session_service::test_the_profile_has_the_members_own_data_and_nothing_internal`（SQLite 與 SQL Server 各一）。B 批讓 `/api/auth/me` 的 `user`（個人資料）多了 `story_preference` 鍵（刻意，見設計 D5），這兩個鍵集合測試不在 B 批的測試清單內，到全套才發現。已把期望值更新為多一個鍵（預設 `all`）；這是行為的刻意改變，不是放寬斷言。
+- **本機 SQL Server `project` 的升級（2026-11-11，Claude 依使用者要求執行）**：先備份到 SQL Server 預設備份目錄（`COPY_ONLY`、`CHECKSUM`，`project_pre_0017_20261111_102044.bak`），`RESTORE VERIFYONLY` 通過、`RESTORE HEADERONLY` 確認為 `project` 的完整備份、伺服器確認檔案存在；`alembic upgrade head` 由 `0016` 升到 `0017`，`alembic current` 為 `0017_story_preference (head)`，`alembic check` 沒有差異；唯讀查詢確認兩個新欄位的型別、可空與預設值正確，既有使用者的 `story_preference` 為 `all`、既有版本的 `audience` 為空（不回填），四張主要資料表的列數不變；**`flask seed-scripts --dry-run` 回報內建劇本「沒有變動 1（共 1 份）」**（升級前由舊程式存入的真實雜湊在新程式下仍相同，設計 D1 的真實資料證明）。第一次備份嘗試沒有真的寫出檔案（`BACKUP` 結果集沒讀完），當時沒有升級，已重做並驗證後才升級（細節在結構文件第 14 節）。**Azure 仍在 `0016`，沒有動。**
 - **第 1 次全套的結果不採信**：36 失敗、7 error（9601 通過，1185 秒）；我用 `| tail` 截斷了輸出，只看得到最後 14 項（都在 `test_seed_scripts`），這些測試單獨重跑 61 項全過，之後兩次完整重跑（第 2 次的 3 項是上一點，第 3 次 0 失敗）都沒有重現。**原因未查明**；不把它當成通過的依據，只記錄有過這次異常。
 
 ## 撰寫新端點：權限與 IDOR 測試

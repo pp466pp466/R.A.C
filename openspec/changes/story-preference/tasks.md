@@ -29,7 +29,7 @@
 
 - [x] 4.1 `app/static/js/scripts/script-draft.js`：`toDraft` 讀 `audience`（只認 `male`／`female`，其餘 `all`）、`toContent` 永遠送出 `audience`、`blankDraft` 預設 `all`、`FIELD_LABELS` 加 `audience: '讀者頻道'`；`workshop.html` 在「結局」區塊之後新增「讀者頻道」單選區塊（男頻、女頻、全讀者，`:disabled="!canEdit"`，一句說明只影響清單排序、不限制誰能玩，錯誤以 `err('audience')` 顯示）。驗證：`node --test` 新增 `tests/js` 案例通過（缺值、`male`、`female`、不合法值轉 `all`、`toContent` 往返、錄製空白草稿預設值、帶入範例後為 `all`）；`tests/test_script_page.py` 與 `tests/architecture/test_frontend_rules.py`（無 CDN、無 `v-html`、無 Bootstrap JS）通過。 （實作：「讀者頻道」做成與其他區塊相同的可摺疊 `sw-section`，`open.audience` 預設展開，所以唯讀版本的禁用單選一眼可見；`toContent` 與 `toDraft` 共用 `audienceOf`，任何不是三個列舉值的輸入一律變 `all`——`toContent` 永遠送出該鍵，全讀者時由伺服器決定不保存；多匯出 `AUDIENCE_LABELS`；`tests/test_script_page.py` 加三項版面守門〔區塊在結局之後、字數統計之前，三個單選值與綁定，`fieldset` 隨 `canEdit` 禁用，說明只影響排序〕。）
 - [x] 4.2 `app/templates/auth/account.html` 與 `app/static/js/auth/account.js`：新增「故事偏好」區塊（`v-if="ageConfirmed"`，三個單選、說明一句、儲存按鈕；用 `Auth.useForm` 的忙碌與 `finally` 恢復，`axios.put('/api/account/story-preference', …)`，成功 Toast、失敗 Toast 且保留選取），初始值取自 `user.story_preference`。驗證：`tests/test_account_page.py` 新增案例通過（偏好 `female` 時「女頻」被選取、等待刪除的樣板沒有此區塊、初始狀態沒有生日與年齡區間）；`node --test` 與 `tests/architecture/test_frontend_rules.py` 通過。 （實作：沒有瀏覽器可以掛載，所以「女頻被選取」由兩層證明——頁面測試證明初始狀態的 `user.story_preference` 與樣板的 `v-model` 綁定，新的 `tests/js/account-story-preference.test.js` 以真的 Vue 與真的 `Auth.useForm` 在 `vm` 沙盒執行 `account.js` 的 `setup()`〔axios、Toast、`mount` 為替身〕，驗證初始選取、PUT 的網址與本文、成功與失敗的 Toast、失敗時保留選取、重複點擊只送一次、401 導向登入、鎖定時顯示申訴捷徑、`finally` 恢復按鈕，以及樣板用到的名稱都由 `setup()` 回傳；新增 `.account-radios`／`.account-radio` 樣式於 `auth.css`。）
-- [ ] 4.3 在瀏覽器實際操作一次（`.\start-acceptance.ps1` 的驗收環境，埠避開 5000）：`/account` 切換三種偏好並重新整理、`/scripts` 的編輯器儲存男頻草稿後重新載入仍為男頻、唯讀版本的單選為禁用、手機寬度下版面不溢出。驗證：把觀察結果（含截圖路徑或文字描述）記入 README 的驗收紀錄；做不到的項目明講「未驗證」。
+- [x] 4.3 在瀏覽器實際操作一次（`.\start-acceptance.ps1` 的驗收環境，埠避開 5000）：`/account` 切換三種偏好並重新整理、`/scripts` 的編輯器儲存男頻草稿後重新載入仍為男頻、唯讀版本的單選為禁用、手機寬度下版面不溢出。驗證：把觀察結果（含截圖路徑或文字描述）記入 README 的驗收紀錄；做不到的項目明講「未驗證」。
 - [x] 4.4 同步文件：README（`/account` 與 `/scripts` 功能說明、端點表、驗收紀錄）。驗證：`tests/test_readme.py` 通過。 （實作：README 的 `/account` 與 `/scripts` 兩列補上新區塊，新增「故事偏好與讀者頻道（story-preference）」一節〔頁面與端點、排序規則表、雜湊相容、部署順序、已知限制、驗收紀錄〕；端點表兩列 B 批已做；驗收紀錄目前有 C 批的前端結果，**4.3 標「未驗證」待使用者操作**，5.1、5.2 標「尚未執行」。另同步 `docs/前端結構-frontend.md`〔標頭、3b 帳號頁、3c 劇本創作頁、第 5 節測試清單〕，因為前端模組與測試的事實有變——`tests/test_design_docs.py` 通過。）
 
 ## 5. 整合與收尾
@@ -41,5 +41,5 @@
 ## Workflow follow-up
 
 - 使用者驗收後，新對話 `/openspec-archive-change story-preference`（封存前先同步 5 份 delta 到主規格；封存後更新路線圖的狀態與日期，並複查各設計文件標頭的「對應 change」）。
-- **部署前必做（由使用者執行，不屬於任何任務）**：本機 SQL Server `project` 與 Azure 都在 0016；新程式上線前先備份，再 `alembic upgrade head` 到 `0017_story_preference`，並在 `docs/project資料結構文件.md` 第 14 節追加「套用」紀錄。
+- **部署前必做（由使用者執行，不屬於任何任務）**：本機 SQL Server `project` 與 Azure 都在 0016；新程式上線前先備份，再 `alembic upgrade head` 到 `0017_story_preference`，並在 `docs/project資料結構文件.md` 第 14 節追加「套用」紀錄。 （**本機 `project` 已於 2026-11-11 升到 0017**，已追加「套用」紀錄；**Azure 仍在 0016**，待使用者自行升級。）
 - 之後是 `rpg-entry-ui`（RC-3a）：可玩劇本清單端點呼叫 `list_published(..., preference=current.story_preference)`。

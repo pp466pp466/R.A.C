@@ -1282,7 +1282,7 @@ flowchart LR
 
 #### 7.17.5 `story-preference` 的實作結果（2026-11-11）
 
-> 狀態：**已實作，待驗收**。立案 `a98b6a5`，實作 A 批 `6e309da`、B 批 `a675454`、C 批 `f6b6d05`，D 批（破壞驗證、全套測試與本節）為最後一批；任務 20 項中 4.3（瀏覽器實測）由使用者親自看，結果待回報後記入 README。**尚未封存。**細節與驗收紀錄在 `openspec/changes/story-preference/` 與 README「故事偏好與讀者頻道（story-preference）」。
+> 狀態：**已實作並經使用者驗收（20／20 項），待封存**。立案 `a98b6a5`，實作 A 批 `6e309da`、B 批 `a675454`、C 批 `f6b6d05`，D 批（破壞驗證、全套測試與本節）為最後一批；任務 4.3（瀏覽器實測）由使用者親自操作，回報五項都正常，已記入 README。**尚未封存。**細節與驗收紀錄在 `openspec/changes/story-preference/` 與 README「故事偏好與讀者頻道（story-preference）」。
 
 | # | 實作時的決定（7.17.4 的待處理項目都已有結論） | 理由與備選 |
 |---|---|---|
@@ -1295,5 +1295,5 @@ flowchart LR
 | 7 | 偏好與頻道**不影響**內容分級、可看或可玩的劇本、敘事、遊戲幣與額度，也不進任何傳給模型的內容 | AGENTS.md 第 7 節「故事偏好」 |
 
 - **目前玩家看不到排序的效果**：`list_published` 與 `list_published_by_tag` 的 `preference` 參數沒有玩家端點使用，只由 Repository 測試（SQLite 與真實 SQL Server）證明。RC-3a 接上可玩劇本清單時，傳入 `current.story_preference` 即可。
-- **部署**：備份 → `alembic upgrade head`（`0016` → `0017`）→ 部署新版程式 → `flask --app wsgi seed-scripts --dry-run` 確認內建劇本為「未變更」。本機 SQL Server `project` 與 Azure 在撰寫時都仍在 `0016`。
+- **部署**：備份 → `alembic upgrade head`（`0016` → `0017`）→ 部署新版程式 → `flask --app wsgi seed-scripts --dry-run` 確認內建劇本為「未變更」。本機 SQL Server `project` 已於 2026-11-11 備份後升級到 `0017`（`flask seed-scripts --dry-run` 內建劇本為「沒有變動」）；Azure 仍在 `0016`，由使用者自行升級。
 - **不做**（沿用 7.17.1 的 5）：偏好的統計、依頻道篩選與審查；`/age` 的偏好步驟屬 `onboarding-polish`。
