@@ -859,3 +859,75 @@ def test_the_savepoint_undoes_a_new_turn_row_when_the_block_raises(repo, member_
     with repo.savepoint():
         start(repo, alice, save)
     assert len(repo.list_turns(alice.id, save.public_id)) == 1
+
+
+# ---- 各存檔已完成的輪數（rpg-entry-ui 1.2）-----------------------------------------------------
+
+def test_complete_turn_counts_counts_only_complete_turns(repo, member_session):
+    alice = make_user(member_session)
+    save = open_save(repo, alice)
+    finish_n(repo, alice, save, 2)
+    start(repo, alice, save, client_msg_id="x-blocked", action="被擋")
+    repo.block_turn(alice.id, save.public_id, "x-blocked")
+    start(repo, alice, save, client_msg_id="x-cut", action="中斷")
+    repo.interrupt_turn(alice.id, save.public_id, "x-cut", partial_response="半截")
+    start(repo, alice, save, client_msg_id="x-live", action="生成中")
+    assert repo.complete_turn_counts(alice.id, [save.id]) == {save.id: 2}
+    assert repo.complete_turn_counts(alice.id, [save.id]) == {save.id: repo.count_complete_turns(alice.id, save.public_id)}
+
+
+def test_a_save_without_complete_turns_counts_zero_and_the_opening_is_not_a_turn(repo, member_session):
+    alice = make_user(member_session)
+    empty, with_opening = open_save(repo, alice), open_save(repo, alice)
+    with_opening.opening_state, with_opening.opening_text = OPENING_READY, "第 0 幕的內容"
+    member_session.commit()
+    assert repo.complete_turn_counts(alice.id, [empty.id, with_opening.id]) == {empty.id: 0, with_opening.id: 0}
+
+
+def test_complete_turn_counts_gives_each_save_its_own_number_in_one_call(repo, member_session):
+    alice = make_user(member_session)
+    first, second, third = open_save(repo, alice), open_save(repo, alice), open_save(repo, alice)
+    finish_n(repo, alice, first, 3)
+    finish_n(repo, alice, third, 1)
+    assert repo.complete_turn_counts(alice.id, [first.id, second.id, third.id]) == {first.id: 3, second.id: 0, third.id: 1}
+    assert repo.complete_turn_counts(alice.id, [third.id, third.id]) == {third.id: 1}          # 重複的編號只算一次
+
+
+def test_complete_turn_counts_never_counts_or_reveals_another_players_save(repo, member_session):
+    alice, bob = make_user(member_session, 1), make_user(member_session, 2)
+    alices, bobs = open_save(repo, alice), open_save(repo, bob)
+    finish_n(repo, alice, alices, 4)
+    finish_n(repo, bob, bobs, 1)
+    assert repo.complete_turn_counts(bob.id, [alices.id, bobs.id]) == {bobs.id: 1}              # 別人的存檔編號沒有鍵
+    assert repo.complete_turn_counts(bob.id, [alices.id]) == {}
+    assert repo.complete_turn_counts(bob.id, [0, -1]) == {}                                    # 不存在的編號與別人的看不出差別
+    admin = make_user(member_session, 3, role="admin")
+    assert repo.complete_turn_counts(admin.id, [alices.id, bobs.id]) == {}
+
+
+def test_complete_turn_counts_for_no_ids_is_empty_and_issues_no_query(repo, member_session):
+    from tests.support.query_counter import count_statements
+
+    alice = make_user(member_session)
+    open_save(repo, alice)
+    member_session.commit()
+    alice_id = alice.id                                    # 先取出：已過期的物件在計數區塊內重新載入也是一筆查詢
+    member_session.expire_all()
+    with count_statements(member_session) as statements:
+        assert repo.complete_turn_counts(alice_id, []) == {}
+    assert statements == []
+
+
+def test_complete_turn_counts_is_one_query_however_many_saves_are_asked_for(repo, member_session):
+    from tests.support.query_counter import count_statements
+
+    alice = make_user(member_session)
+    saves = [open_save(repo, alice) for _ in range(6)]
+    for index, save in enumerate(saves):
+        finish_n(repo, alice, save, index % 3)
+    member_session.commit()
+    ids, alice_id = [save.id for save in saves], alice.id
+    member_session.expire_all()
+    with count_statements(member_session) as statements:
+        counts = repo.complete_turn_counts(alice_id, ids)
+    assert len(statements) == 1 and counts == {save_id: index % 3 for index, save_id in enumerate(ids)}

@@ -750,3 +750,156 @@ def test_a_listing_without_a_usable_preference_is_identical_to_the_previous_beha
     made, newest_first = published_catalog(repo, member_session)
     assert labels(made, repo.list_published("adult")) == newest_first
     assert labels(made, repo.list_published("adult", preference="boys")) == newest_first      # 無法辨識的偏好不重排
+
+
+# ---- 入口畫面的劇本卡片與批次標籤（rpg-entry-ui 1.1）-------------------------------------------------
+
+CARD_PLAN = [        # 由舊到新：(標記, 內容模式, 讀者頻道（None＝遷移之前的空值）, 標籤)
+    ("s-m", "safe", "male", ["甲", "乙"]), ("s-a", "safe", "all", []), ("s-f", "safe", "female", ["丙"]),
+    ("t-m", "standard", "male", ["甲"]), ("t-f", "standard", "female", ["乙", "丙", "丁"]),
+    ("t-n", "standard", None, ["丁"]), ("a-a", "adult", "all", ["甲"]), ("a-m", "adult", "male", ["戊"]),
+]
+CEILINGS = ("safe", "standard", "adult", "mature")           # mature 是無法判定的上限，視為最保守
+PREFERENCES = (None, "all", "male", "female")
+
+
+def card_catalog(repo, member_session):
+    """八個上架版本（內容模式、頻道與標籤各種組合），回傳 {標記: 版本}。"""
+    alice = make_user(member_session)
+    made = {}
+    for index, (label, tier, channel, tags) in enumerate(CARD_PLAN):
+        extra = {"audience": channel} if channel in ("male", "female") else {}
+        version = new_script(repo, alice, title=f"劇本{label}", content_tier=tier, tags=tags, **extra)
+        publish(repo, alice, version, now=NOW + timedelta(seconds=index))
+        if channel is None:
+            version.audience = None
+        made[label] = version
+    member_session.commit()
+    return made
+
+
+@pytest.mark.parametrize("preference", PREFERENCES)
+@pytest.mark.parametrize("ceiling", CEILINGS)
+def test_the_card_listing_has_exactly_the_set_and_order_of_the_plain_listing(repo, member_session, ceiling, preference):
+    card_catalog(repo, member_session)
+    plain = repo.list_published(ceiling, preference=preference)
+    cards = repo.list_published_cards(ceiling, preference=preference)
+    assert plain and [version.id for version, _ in cards] == [version.id for version in plain]
+    assert all(script.id == version.script_id for version, script in cards)
+
+
+def test_the_card_listing_applies_the_content_mode_ceiling_and_newest_first_order(repo, member_session):
+    made = card_catalog(repo, member_session)
+    by_id = {version.id: label for label, version in made.items()}
+
+    def shown(ceiling, **options):
+        return [by_id[version.id] for version, _ in repo.list_published_cards(ceiling, **options)]
+
+    assert shown("safe") == ["s-f", "s-a", "s-m"]
+    assert shown("standard") == ["t-n", "t-f", "t-m", "s-f", "s-a", "s-m"]
+    assert shown("adult") == ["a-m", "a-a", "t-n", "t-f", "t-m", "s-f", "s-a", "s-m"]
+    assert shown("mature") == ["s-f", "s-a", "s-m"]
+    assert shown("adult", limit=2, offset=1) == ["a-a", "t-n"]
+
+
+def test_the_card_listing_puts_the_preferred_channel_first_and_never_changes_the_set(repo, member_session):
+    made = card_catalog(repo, member_session)
+    by_id = {version.id: label for label, version in made.items()}
+
+    def shown(preference):
+        return [by_id[version.id] for version, _ in repo.list_published_cards("adult", preference=preference)]
+
+    assert shown("male") == ["a-m", "t-m", "s-m", "a-a", "t-n", "s-a", "t-f", "s-f"]
+    assert shown("female") == ["t-f", "s-f", "a-a", "t-n", "s-a", "a-m", "t-m", "s-m"]
+    assert shown("all") == shown(None) == ["a-m", "a-a", "t-n", "t-f", "t-m", "s-f", "s-a", "s-m"]
+    assert {frozenset(shown(preference)) for preference in PREFERENCES} == {frozenset(by_id.values())}
+
+
+@pytest.mark.parametrize("preference", PREFERENCES)
+def test_chained_card_pages_equal_one_full_card_listing(repo, member_session, preference):
+    card_catalog(repo, member_session)
+    whole = [version.id for version, _ in repo.list_published_cards("adult", preference=preference)]
+    paged = [
+        version.id
+        for offset in (0, 3, 6)
+        for version, _ in repo.list_published_cards("adult", limit=3, offset=offset, preference=preference)
+    ]
+    assert paged == whole and len(whole) == 8
+
+
+def test_only_published_versions_appear_among_the_cards(repo, member_session):
+    alice = make_user(member_session)
+    draft = put_in_status(repo, member_session, alice, VERSION_DRAFT)
+    pending = put_in_status(repo, member_session, alice, VERSION_PENDING)
+    rejected = put_in_status(repo, member_session, alice, VERSION_REJECTED)
+    live = put_in_status(repo, member_session, alice, VERSION_PUBLISHED)
+    superseded = put_in_status(repo, member_session, alice, VERSION_SUPERSEDED)       # 它的第 2 版是上架的
+    member_session.commit()
+    cards = repo.list_published_cards("adult")
+    shown = {version.id for version, _ in cards}
+    assert live.id in shown and not shown & {draft.id, pending.id, rejected.id, superseded.id}
+    assert len(cards) == 2 and all(version.status == VERSION_PUBLISHED for version, _ in cards)
+
+
+def test_a_card_carries_its_script_with_the_pen_name_and_code_and_a_builtin_has_no_code(repo, member_session):
+    alice = make_user(member_session)
+    mine = publish(repo, alice, new_script(repo, alice, title="玩家劇本"), now=NOW)
+    seed = validated(title="內建劇本")
+    builtin, _ = repo.publish_builtin("card-seed", content=seed.content, content_hash=seed.content_hash, total_chars=seed.total_chars, now=NOW + timedelta(seconds=1))
+    member_session.commit()
+    by_title = {version.title: script for version, script in repo.list_published_cards("adult")}
+    assert (by_title["玩家劇本"].author_name, by_title["玩家劇本"].author_code) == (f"筆名{alice.id}", "a1b2c3")
+    assert (by_title["內建劇本"].author_name, by_title["內建劇本"].author_code) == (OFFICIAL_AUTHOR_NAME, None)
+    assert mine.id != builtin.id
+
+
+def test_the_batch_tags_equal_the_per_version_tags_and_keep_their_order(repo, member_session):
+    made = card_catalog(repo, member_session)
+    versions = list(made.values())
+    batch = repo.tags_of_versions([version.id for version in versions])
+    assert set(batch) == {version.id for version in versions}
+    for version in versions:
+        assert batch[version.id] == repo.tags_of(version)
+    assert batch[made["t-f"].id] == ["乙", "丙", "丁"] and batch[made["s-a"].id] == []         # 沒有標籤的版本也有鍵
+
+
+def test_the_batch_tags_cover_only_the_requested_ids_and_a_repeated_id_counts_once(repo, member_session):
+    made = card_catalog(repo, member_session)
+    wanted = made["s-m"].id
+    assert repo.tags_of_versions([wanted, wanted]) == {wanted: ["甲", "乙"]}
+    assert repo.tags_of_versions([wanted, 0]) == {wanted: ["甲", "乙"], 0: []}                    # 不存在的編號只是沒有標籤
+
+
+def test_the_batch_tags_for_an_empty_list_are_empty_and_issue_no_query(repo, member_session):
+    from tests.support.query_counter import count_statements
+
+    card_catalog(repo, member_session)
+    member_session.expire_all()
+    with count_statements(member_session) as statements:
+        assert repo.tags_of_versions([]) == {}
+    assert statements == []
+
+
+def test_the_cost_of_a_card_page_is_two_queries_whether_it_holds_one_card_or_twelve(repo, member_session):
+    from tests.support.query_counter import count_statements
+
+    alice = make_user(member_session)
+
+    def page_statements() -> int:
+        member_session.expire_all()
+        with count_statements(member_session) as statements:
+            rows = repo.list_published_cards("adult", limit=24)
+            tags = repo.tags_of_versions([version.id for version, _ in rows])
+            for version, script in rows:                                  # 卡片需要的欄位全部讀一遍：沒有任何延遲載入的查詢
+                _ = (version.public_id, version.title, version.summary, version.world_name, version.content_tier, version.audience,
+                     script.author_name, script.author_code, tags[version.id])
+        return len(statements)
+
+    publish(repo, alice, new_script(repo, alice, title="只有一個", tags=["甲", "乙", "丙"]), now=NOW)
+    member_session.commit()
+    one = page_statements()
+    for index in range(11):
+        publish(repo, alice, new_script(repo, alice, title=f"另外{index}", tags=["甲", "乙", "丙"]), now=NOW + timedelta(seconds=index + 1))
+    member_session.commit()
+    assert len(repo.list_published_cards("adult", limit=24)) == 12
+    assert one == page_statements() == 2

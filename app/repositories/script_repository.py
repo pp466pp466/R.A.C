@@ -117,6 +117,18 @@ def _tiers_up_to(max_tier: str) -> tuple[str, ...]:
     return CONTENT_TIERS[: CONTENT_TIERS.index(max_tier) + 1]
 
 
+def _published_window(statement: Any, max_tier: str, *, limit: int, offset: int, preference: str | None) -> Any:
+    """上架清單的條件與排序，`list_published` 與 `list_published_cards` 共用，兩者的集合與順序因此不會分歧：
+    只含 `published`、宣告的內容模式不高於 `max_tier`；先依偏好分層、再由新到舊（發佈時間，同時間依編號），最後才分頁。"""
+    return (
+        statement
+        .where(ScriptVersion.status == VERSION_PUBLISHED, ScriptVersion.content_tier.in_(_tiers_up_to(max_tier)))
+        .order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+
+
 class ScriptRepository(BaseRepository[Script]):
     model = Script
 
@@ -445,14 +457,19 @@ class ScriptRepository(BaseRepository[Script]):
         `preference`（故事偏好：`male`／`female`）只影響順序：符合偏好的頻道排最前，其次全讀者，其餘仍在清單內；同一層維持由新到舊。
         排序在 LIMIT／OFFSET 之前完成，所以分頁之間的順序一致。空值、`all` 或無法辨識時與不帶偏好的查詢完全相同。
         """
-        statement = (
-            select(ScriptVersion)
-            .where(ScriptVersion.status == VERSION_PUBLISHED, ScriptVersion.content_tier.in_(_tiers_up_to(max_tier)))
-            .order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
-            .limit(limit)
-            .offset(offset)
-        )
+        statement = _published_window(select(ScriptVersion), max_tier, limit=limit, offset=offset, preference=preference)
         return list(self._session.scalars(statement))
+
+    def list_published_cards(
+        self, max_tier: str, *, limit: int = 12, offset: int = 0, preference: str | None = None,
+    ) -> list[tuple[ScriptVersion, Script]]:
+        """入口畫面的劇本卡片：與 `list_published` 完全相同的集合與順序，但**一次查詢**連同劇本（筆名與短代號）取回，
+        回傳 `(版本, 劇本)`。呼叫端要標籤時另用 `tags_of_versions` 一次取回整頁，所以整頁的查詢次數固定、不隨筆數增加。"""
+        statement = _published_window(
+            select(ScriptVersion, Script).join(Script, Script.id == ScriptVersion.script_id),
+            max_tier, limit=limit, offset=offset, preference=preference,
+        )
+        return [(version, script) for version, script in self._session.execute(statement).all()]
 
     def list_published_by_tag(
         self, tag: str, max_tier: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,
@@ -551,6 +568,19 @@ class ScriptRepository(BaseRepository[Script]):
 
     def tags_of(self, version: ScriptVersion) -> list[str]:
         return list(self._session.scalars(select(ScriptVersionTag.tag).where(ScriptVersionTag.version_id == version.id).order_by(ScriptVersionTag.id)))
+
+    def tags_of_versions(self, version_ids: Sequence[int]) -> dict[int, list[str]]:
+        """多個版本的標籤，一次 `IN` 查詢取回（順序規則同 `tags_of`）。每個傳入的版本都有一個鍵，沒有標籤的為空串列；
+        傳入空清單回傳空字典、不查詢。呼叫端傳入一頁的版本編號（至多數十個），不是全部版本。"""
+        ids = list(dict.fromkeys(version_ids))
+        if not ids:
+            return {}
+        grouped: dict[int, list[str]] = {version_id: [] for version_id in ids}
+        for version_id, tag in self._session.execute(
+            select(ScriptVersionTag.version_id, ScriptVersionTag.tag).where(ScriptVersionTag.version_id.in_(ids)).order_by(ScriptVersionTag.id)
+        ).all():
+            grouped[version_id].append(tag)
+        return grouped
 
     def content_of(self, version: ScriptVersion) -> dict[str, Any]:
         """由欄位還原標準化內容（與 `validate_script` 的輸出相同，雜湊也相同）：存檔開局時複製的就是它。"""

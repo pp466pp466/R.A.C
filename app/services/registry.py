@@ -72,6 +72,7 @@ from app.services.protagonist_prompt import protagonist_marker
 from app.services.protagonist_review_service import ProtagonistReviewService
 from app.services.protagonist_service import ProtagonistService
 from app.services.wallet_service import WalletService
+from app.services.game_entry_service import GameEntryService
 from app.services.game_service import GameService
 from app.services.notebook_service import NotebookService
 from app.services.rpg_notebook_capture import NotebookCapturer
@@ -423,6 +424,12 @@ def get_session_service() -> SessionService:
         reviews=get_script_review_service(), protagonist_reviews=get_protagonist_review_service(),
         protagonist_marker=protagonist_marker(config.secret_key.reveal()), clock=get_clock(),
     )
+
+
+def get_game_entry_service() -> GameEntryService:
+    """目前請求的 RPG 入口服務：可玩劇本清單、自己的存檔清單與存檔摘要（唯讀；不呼叫模型、不碰錢包，所以不需要模型供應商）。"""
+    session = get_session()
+    return GameEntryService(scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy())
 
 
 def _rpg_llm_settings() -> LlmSettings:

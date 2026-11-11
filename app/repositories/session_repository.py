@@ -36,7 +36,7 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Iterator, Mapping
+from typing import Any, Iterator, Mapping, Sequence
 
 import sqlalchemy as sa
 from sqlalchemy import func, select, update
@@ -142,6 +142,23 @@ class SessionRepository(BaseRepository[RpgSession]):
             statement = statement.where(RpgSession.is_archived == sa.false())          # SQL Server 沒有 `IS 0`
         statement = statement.order_by(RpgSession.last_active_at.desc(), RpgSession.id.desc()).limit(limit).offset(offset)
         return list(self._session.scalars(statement))
+
+    def complete_turn_counts(self, user_id: int, session_ids: Sequence[int]) -> dict[int, int]:
+        """自己的各存檔已完成的輪數（只計 `complete` 的回合；被擋、中斷、生成中的不計，第 0 幕不是回合所以也不計），一次查詢。
+
+        以 `sessions.user_id` 為條件（外部連接 `memory_logs`），所以**只有呼叫者自己的存檔**會出現在結果裡：別人的與不存在的
+        存檔編號沒有鍵，不會被計入也不會因此洩漏什麼；自己的存檔沒有完整回合時為 0。傳入空清單回傳空字典、不查詢。
+        """
+        ids = list(dict.fromkeys(session_ids))
+        if not ids:
+            return {}
+        statement = (
+            select(RpgSession.id, func.count(MemoryLog.id))
+            .outerjoin(MemoryLog, sa.and_(MemoryLog.session_id == RpgSession.id, MemoryLog.turn_status == TURN_COMPLETE))
+            .where(RpgSession.user_id == user_id, RpgSession.id.in_(ids))
+            .group_by(RpgSession.id)
+        )
+        return {session_id: count for session_id, count in self._session.execute(statement).all()}
 
     def _update_owned(self, save: RpgSession, *conditions, **values: Any) -> int:
         """對自己的存檔做條件式 UPDATE，之後讓已載入的物件重新讀取。回傳影響的列數。"""
