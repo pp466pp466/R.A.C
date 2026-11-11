@@ -904,10 +904,12 @@ change `rpg-character-creation`（RC-9）。玩家依「劇本角色規格」自
 
 ### 端點
 
-全部需要登入（管理員與各會員等級都一樣，要先完成年齡確認）；非 GET 須通過 CSRF；回應 `Cache-Control: no-store`。別人的草稿與不存在的版本一律 404（逐字相同）。
+全部需要登入（管理員與各會員等級都一樣；被鎖定、等待刪除與待確認年齡的帳號依既有規則回 403 與各自的代碼）；非 GET 須通過 CSRF；回應 `Cache-Control: no-store`。別人的草稿與不存在的版本一律 404（逐字相同）。**要先完成年齡確認的是 `setup`、`suggest` 與開存檔**；`catalog` 與 `GET /api/sessions` 兩個清單端點（RC-3a `rpg-entry-ui`）**不過年齡閘門**（`/game` 是登入後的預設頁面，尚未確認年齡的管理員也會落在那裡；他們的內容模式本來就是安全模式，清單不花成本），開存檔仍由既有的閘門拒絕。
 
 | 端點 | 方法 | 說明 |
 |---|---|---|
+| `/api/sessions/catalog` | GET | 玩家可以開存檔的**上架劇本**一頁（RC-3a，唯讀）。查詢參數 `limit`（預設 12、至多 24）、`offset`（預設 0、至多 10000），不合法回 400 並指出欄位；回傳 `{scripts, has_more, content_mode}`。範圍：只含上架版本、宣告的內容模式不高於玩家**生效**的模式；依玩家的故事偏好排序（只影響順序，不增減集合）；每張卡片只有 `id`（版本的對外識別碼，可直接用於 `setup` 與開存檔）、`title`、`summary`、`world_name`、`tags`、`author_name`、`author_code`（內建劇本署名「官方」、短代號為空）、`content_tier`、`audience`（空值為 `all`）；沒有劇本內文、內容雜湊、審查結果與任何內部編號。`content_mode` 為 `{effective, is_adult}`，讓畫面說明「為什麼沒看到某些劇本」，不含生日、年齡與年齡區間。不呼叫模型、不動遊戲幣 |
+| `/api/sessions` | GET | 呼叫者**自己的存檔**一頁（RC-3a，唯讀，不含已封存者）。查詢參數 `limit`（預設 20、至多 50）、`offset`，不合法回 400；回傳 `{sessions, has_more}`，依最後活動由新到舊；每筆只有 `id`、`title`、`content_tier`、`status`（`active` 或 `ended`，已完結的仍在清單內）、`player_name`、`completed_turns`（只計完整的回合，不含第 0 幕、被擋與中斷者）、`last_active_at`；沒有劇本複本、角色卡細節、記事簿與世界狀態。不呼叫模型、不動遊戲幣 |
 | `/api/sessions/setup/<version_id>` | GET | 序章與創角畫面需要的資料：劇本標題、背景故事、可聯繫的人物（只有姓名與職業，沒有年齡與隱藏特質）、地點、里程碑（編號與標題）、欄位上限、今日剩餘的生成次數、AI 生成是否可用。劇本宣告的內容模式高於玩家生效的模式回 403 `content_tier_restricted` |
 | `/api/sessions/protagonist/suggest` | POST | AI 生成主角的**預覽**（無狀態，不寫存檔）。本文 `{"version_id", "intro"（選填，至多 300 字）}`；回傳 `{protagonist, anchor, remaining}`。自我介紹被規則層拒絕回 422 `protagonist_rejected`（不計次）；今日次數用盡回 429 `suggestion_limit`（附 `Retry-After`）；模型沒有設定、全站預算用盡、輸出兩次都不合格或被供應商過濾回 503 `suggestion_unavailable`，前端據此改走自創 |
 | `/api/sessions` | POST | 開存檔。本文 `{"version_id", "protagonist": {…角色卡…}, "anchor": {kind, ref, text} 或 null, "skip_anchor": true 或省略}`（錨定事實與略過二選一）。欄位錯誤回 400（`fields` 以 `protagonist.`、`anchor.` 開頭，一次回報）；規則層或模型層拒絕回 422 `protagonist_rejected`（只有類別）；審查不可用回 503 `review_unavailable`；成功回 201 與存檔摘要 |

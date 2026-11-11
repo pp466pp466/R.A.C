@@ -1,10 +1,11 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-10 ｜ 對應 change：story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
 > 注意（2026-11-04）：change `rpg-character-creation`（RC-9）加入玩家主角與開存檔 API：`ProtagonistService`（創角資料與 AI 生成預覽）、`ProtagonistReviewService`（開存檔時主角的模型層審查）、`StartableVersions`（開存檔、創角資料與生成預覽共用的版本可見性與內容模式判定），以及純運算的 `protagonist`、`protagonist_prompt`；`SessionService.start_session` 改為接收主角角色卡與錨定事實（見下方「玩家主角與開存檔」）。
+> 注意（2026-11-11）：change `rpg-entry-ui`（RC-3a）的後端部分（批次 A、B）加入 RPG 入口的唯讀資料：`GameEntryService`（可玩劇本清單、我的存檔清單、存檔摘要）、`ScriptRepository.list_published_cards`／`tags_of_versions`、`SessionRepository.complete_turn_counts`，以及 `GET /api/sessions/catalog`、`GET /api/sessions` 兩個端點（見下方「RPG 入口清單」）。頁面（`/game`、`/game/<存檔>`）與開存檔精靈尚未實作。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -44,7 +45,7 @@ flowchart TD
     Pages["controllers：MVC 頁面<br/>只回 HTML 外殼與初始狀態"]
     Api["controllers：Web API<br/>只回 JSON"]
     Sec["security：HTTP 安全輔助<br/>session、CSRF、cookie、重新導向"]
-    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、SessionService、ProtagonistService、UsageService、LlmService、AdminService…"]
+    Svc["services：業務邏輯<br/>AccessPolicy、ChatService、SessionService、ProtagonistService、GameEntryService、UsageService、LlmService、AdminService…"]
     Llm["llm：供應商中立型別與轉接器"]
     Repo["repositories：ORM 存取<br/>條件式 UPDATE、擁有者條件"]
     Model["models：SQLAlchemy 資料模型"]
@@ -132,8 +133,8 @@ flowchart TD
 | `ContentModeService` | 玩家查詢與切換自己的內容模式、成年確認；`GET`／`PUT /api/account/content-mode` |
 | `story_preference.py`（純邏輯） | 故事偏好與讀者頻道共用的值域（`all`／`male`／`female`）、`parse_audience`（嚴格解析）、`normalize_audience`（缺值視為全讀者）與清單排序層級 `rank`；值域常數放在 `app/models/user.py`（資料模型不得匯入 Service），這裡自模型匯入，所以與 `content_tier.py` 一樣不在 `PURE_MODULES` 清單內 |
 | `StoryPreferenceService` | 玩家查詢與設定自己的故事偏好：輸入必須完全等於列舉值，否則 `ValidationError`（欄位 `story_preference`）；只讀寫呼叫者本人的資料列；`GET`／`PUT /api/account/story-preference`。偏好只影響劇本清單排序，不碰 `AccessPolicy`，也不過年齡閘門 |
-| `ScriptRepository` | 劇本與版本：擁有者範圍的方法都接收 `user_id`，公開讀取只回傳上架版本；狀態轉移集中在少數方法，核可時取代舊版與鎖定筆名在同一個 SAVEPOINT |
-| `SessionRepository`／`SessionService` | 存檔與回合：所有方法接收 `user_id`；開始回合先對存檔列做條件式 UPDATE 取鎖（串行化並行請求）；開存檔先過年齡閘門、檢查來源版本與劇本宣告的內容模式，再複製完整內容 |
+| `ScriptRepository` | 劇本與版本：擁有者範圍的方法都接收 `user_id`，公開讀取只回傳上架版本；狀態轉移集中在少數方法，核可時取代舊版與鎖定筆名在同一個 SAVEPOINT；`list_published_cards`／`tags_of_versions` 以固定次數的查詢取回一頁入口卡片（見「RPG 入口清單」） |
+| `SessionRepository`／`SessionService` | 存檔與回合：所有方法接收 `user_id`；開始回合先對存檔列做條件式 UPDATE 取鎖（串行化並行請求）；開存檔先過年齡閘門、檢查來源版本與劇本宣告的內容模式，再複製完整內容；`complete_turn_counts` 以一次 `GROUP BY` 取回一頁存檔的已完成輪數（見「RPG 入口清單」） |
 | `ScriptSeedService` | 內建劇本的種子（`flask seed-scripts`）：全部驗證通過才在單一交易內寫入，冪等 |
 
 - 開存檔時複製劇本內容，之後存檔不再讀取劇本；`sessions.source_version_id` 是無動作的外鍵，刪除版本與抹除帳號的流程先清為空值。
@@ -196,7 +197,7 @@ flowchart TD
 
 | 元件 | 責任 |
 |---|---|
-| `session_api_controller.py` | `GET /api/sessions/setup/<id>`、`POST /api/sessions/protagonist/suggest`、`POST /api/sessions`；只讀請求、呼叫 Service、回應；沒有權限判斷，也不匯入資料層；回應禁止快取 |
+| `session_api_controller.py` | `GET /api/sessions/setup/<id>`、`POST /api/sessions/protagonist/suggest`、`POST /api/sessions`，以及 RPG 入口的 `GET /api/sessions/catalog`、`GET /api/sessions`（見下一節）；只讀請求、呼叫 Service、回應；沒有權限判斷，也不匯入資料層；回應禁止快取 |
 | `ProtagonistService` | `setup`：序章與創角資料（人物只給姓名與職業）；`suggest`：年齡閘門 → 版本 → 自我介紹標準化 → 自我介紹的規則層（拒絕不呼叫模型、不計次）→ 每日次數 → 模型未設定或預算用盡（不計次）→ 呼叫模型 → 再標準化。**無狀態**：唯一的資料庫寫入是用量帳本；自我介紹不落地 |
 | `SessionService.start_session` | 年齡閘門 → 版本（404）→ 內容模式（403）→ 主角與錨定事實驗證（400，一次回報）→ 主角規則層（422）→ 劇本審查把關 → 主角模型層審查 → `SessionRepository.create`；任何一步失敗都不留存檔。便宜的檢查在前 |
 | `protagonist.py`／`protagonist_prompt.py`（純運算） | 角色卡（沿用劇本角色規格）、錨定事實（指向劇本中存在的人物、地點、里程碑，文字 60 字）、聯繫的關係規則（性與性奴等禁斷關係一律不行；戀愛、婚姻與婚約不論年齡一律開放）（詞表群組 `sexual_violence` 與性用語，欄位錯誤；NPC 的錨定事實同規則，見 `rpg_world`）；生成與審查的提示詞、結構描述與語意規則（標記字串與劇本審查分開；給模型的人物資料不含隱藏特質） |
@@ -205,6 +206,33 @@ flowchart TD
 
 - **依賴方向**：`SessionService` 依賴 `ProtagonistReviewGate`（Protocol）與 `ReviewGate`，測試以替身注入；`ProtagonistService`、`SessionService` 的公開方法第一個陳述式都是 `self._policy.require_chat_access(<呼叫者>)`（`tests/architecture/test_protagonist_boundaries.py` 以 AST 守住，附反向驗證）。主角姓名、角色年齡與主角資料只由 `SessionRepository.create` 寫入（`test_protagonist_writes.py`）。
 - 組裝在 `registry.py`（`get_protagonist_service()`、`get_protagonist_review_service()`、`get_session_service()`）；兩個主角服務與開存檔共用同一個標記字串（`protagonist_marker`，由 `SECRET_KEY` 導出）。
+
+### RPG 入口清單（rpg-entry-ui）
+
+```mermaid
+flowchart TD
+    Ctl["session_api_controller<br/>GET catalog 與 GET 我的存檔"] --> GSvc["GameEntryService<br/>唯讀 不呼叫模型 不碰錢包"]
+    GSvc --> Pol["AccessPolicy.content_access<br/>生效模式 不過年齡閘門"]
+    GSvc --> SR["ScriptRepository<br/>list_published_cards 與 tags_of_versions"]
+    GSvc --> SessR["SessionRepository<br/>list_owned 與 complete_turn_counts"]
+    GSvc --> Pref["story_preference<br/>normalize_audience"]
+    SR --> Win["_published_window<br/>上架 內容模式上限 偏好分層 由新到舊 分頁"]
+    Ctl --> Cur["require_login<br/>受限登入狀態 403"]
+```
+
+| 元件 | 責任 |
+|---|---|
+| `GameEntryService.catalog` | 上架中的版本，宣告的內容模式不高於玩家**生效**的模式；依玩家的故事偏好排序（只影響順序，不增減集合）；`limit + 1` 取回，多出的一筆只決定 `has_more`；回應含 `content_mode`（生效模式與是否已滿成年門檻，不含生日與年齡）。卡片只有白名單欄位 `CARD_FIELDS`，沒有劇本內文、內容雜湊、審查結果與內部編號 |
+| `GameEntryService.my_sessions` | 只有呼叫者自己的存檔、不含已封存者，由新到舊；每筆只有白名單欄位 `SAVE_FIELDS`；已完成輪數只計完整的回合，由 `complete_turn_counts` 一次取回 |
+| `GameEntryService.session_summary` | 存檔頁外殼要顯示的摘要；非擁有者、不存在與格式不對的識別碼得到相同的 `NotFound`（`/game/<存檔>` 頁面用，C 批接上） |
+| `ScriptRepository.list_published_cards` | 一次 `select(ScriptVersion, Script)` 加 join 取回一頁；與 `list_published` 共用 `_published_window`，兩者的條件與排序逐項相同；`tags_of_versions` 以一次 `IN` 取回整頁的標籤 |
+| `SessionRepository.complete_turn_counts` | ORM `GROUP BY` 加 outer join `memory_logs`（只計 `complete`），以 `sessions.user_id` 為條件，所以別人的存檔編號不會有鍵；第 0 幕存在 `sessions.opening_text`，天然不計 |
+
+- **不過年齡閘門**：端點用 `require_login()`（受限登入狀態各回自己的 403），不呼叫 `require_chat_access`——`/game` 將是登入後的預設頁面，未確認年齡的管理員也會落在那裡，清單不花成本，內容模式對他們本來就是安全模式。開存檔、生成與回合仍由既有的閘門擋下。理由與矩陣見 [帳號與安全](帳號與安全-auth-security.md) 第 7b 節。
+- **固定的查詢次數**：一頁劇本是 2 次（版本與劇本一次、標籤一次），一頁存檔是 2 次（存檔一次、輪數一次），不隨筆數增加（`tests/test_game_entry_service.py` 以 `tests/support/query_counter.py` 比對 1 筆與 12 筆）。
+- **分頁**：`limit`（劇本預設 12、至多 24；存檔預設 20、至多 50）與 `offset`（至多 10000）在 Service 驗證，Controller 只把查詢字串轉成整數（不是整數回 400 並指出欄位）；不合法時一次回報所有不合法的欄位。
+- **沒有寫入也沒有日誌**：標題、筆名與主角姓名都是玩家文字衍生的內容，Service 連日誌都不寫；兩個端點呼叫前後遊戲幣餘額、帳本與模型呼叫帳本都不變（`tests/test_session_api.py`）。
+- 組裝在 `registry.py` 的 `get_game_entry_service()`（只注入兩個 Repository 與 `AccessPolicy`，沒有任何模型供應商）。
 
 ### 遊戲幣錢包（game-wallet）
 

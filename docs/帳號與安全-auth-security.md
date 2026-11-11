@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-10 ｜ 對應 change：story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -98,7 +98,7 @@ sequenceDiagram
 - 已存在的帳號（已綁定或以信箱合併）登入時**不會**被順便標記為已確認年齡。
 - 已辨識出帳號卻被拒絕（帳號停用、已綁定另一個 Google 身分）會計入帳號鎖定的計次（第 7b 節）；無法辨識身分的失敗與還沒有帳號的 Google 身分不計。
 - 開發與正式環境使用不同的 OAuth 用戶端；失敗一律導回 `/login?error=<固定代碼>`，Google 回傳的任何文字都不會進入網址或頁面。
-- 登入後的預設頁面是單一常數 `DEFAULT_AFTER_LOGIN`（`app/security/redirects.py`，目前 `/cs`，RPG 上線後改為選擇劇本的首頁）；`landing_for` 由首頁、登入頁與回呼共用。
+- 登入後的預設頁面是單一常數 `DEFAULT_AFTER_LOGIN`（`app/security/redirects.py`，目前 `/cs`；change `rpg-entry-ui` 的最後一個後端任務（1.5）會在 `/game` 入口頁上線之後把它改為 `/game`，在那之前不改，避免登入後導向還不存在的頁面）；`landing_for` 由首頁、登入頁與回呼共用。**預設頁面改成 `/game` 不改變任何人能做什麼**：入口頁用到的兩個清單端點只要求已登入，受限登入狀態與年齡確認的導向規則（第 7b 節）完全不變；尚未完成年齡確認的玩家一律先導向 `/age`，不會落在入口頁。
 
 ## 5. 年齡閘門與內容模式
 
@@ -192,6 +192,8 @@ flowchart TD
 | `/api/wallet` | GET | 是 | 遊戲幣餘額與簽到狀態（第 7f 節）；先完成年齡確認，否則 403 `age_confirmation_required` |
 | `/api/wallet/checkin` | POST | 是 | 每日簽到；會有幣作廢時須帶 `confirm_overflow` |
 | `/api/wallet/entries` | GET | 是 | 遊戲幣記錄（游標分頁） |
+| `/api/sessions/catalog` | GET | 是 | RPG 入口的可玩劇本清單（上架版本、不高於玩家生效模式、依故事偏好排序、分頁）；只要求已登入，受限登入狀態一律 403，**不過年齡閘門**（尚未確認年齡的管理員讀到安全模式的清單）；唯讀，不呼叫模型、不動遊戲幣；回應含 `content_mode`（生效模式與是否已滿成年門檻，不含生日與年齡） |
+| `/api/sessions` | GET | 是 | 自己的存檔清單（不含已封存者；只含白名單欄位與已完成輪數）；存取規則與 `catalog` 相同；只有擁有者看得到自己的存檔 |
 | `/api/sessions/setup/<version_id>` | GET | 是 | 序章與創角所需的資料（背景故事、可聯繫的人物／地點／里程碑、欄位上限、今日剩餘的生成次數）；可見性與內容模式與開存檔相同 |
 | `/api/sessions/protagonist/suggest` | POST | 是 | AI 生成主角的預覽（無狀態；自我介紹不保存）；每日次數有上限，失敗回 503 讓前端改走自創 |
 | `/api/sessions` | POST | 是 | 開存檔：主角與錨定事實的驗證、規則層與模型層審查通過才寫入；管理員與各會員等級不豁免年齡閘門 |
@@ -319,6 +321,7 @@ flowchart TD
 | `deletion_pending` | 申請刪除後的寬限期內 | `account_deletion_pending` | `/account` | `/api/auth/me`、`GET /account`、`POST /api/account/cancel-deletion` |
 
 - **允許清單不變**：`/api/account/story-preference` 與其他需要登入的端點一樣被三種受限登入狀態預設拒絕（`locked` 回 `account_locked`、`age_pending` 回 `age_confirmation_required`、`deletion_pending` 回 `account_deletion_pending`），不在任何狀態的允許清單內；`tests/test_restricted_session.py` 的全路由掃描自動涵蓋，`tests/test_story_preference_api.py` 另逐一證明三種狀態的代碼且偏好不變。
+- **入口清單端點同樣不在允許清單內**（change `rpg-entry-ui`）：`GET /api/sessions/catalog` 與 `GET /api/sessions` 用 `require_login()`，三種受限登入狀態各回自己的 403 代碼（`tests/test_session_api.py` 逐一證明，`test_restricted_session.py` 的 `REQUIRED_TO_BE_FOUND` 也列入它們，確保掃描真的看得到）。**它們不過年齡閘門 `require_chat_access`**，原因是 `/game` 將成為登入後的預設頁面，而未確認年齡的**管理員**（不是 `age_pending`）也會落在那裡：清單不花成本，內容模式對未確認年齡者本來就是安全模式，所以回安全模式的清單而不是 403；真正會花成本的開存檔、AI 生成與回合仍由既有的閘門拒絕（`tests/test_session_api.py` 證明未確認年齡的管理員讀得到清單、開存檔得 403 `age_confirmation_required`）。
 - **年齡確認**：玩家首次以 Google 登入只建立帳號（沒有生日，`age_deadline_at` = 建立後 24 小時），登入後被導向 `/age`；`POST /api/auth/verify-age` 驗證生日與區間：未滿 13 歲立即抹除（`AccountErasureService.erase_underage`，不保存生日）、不一致回通用訊息並計入鎖定計次、成功則寫入並清空期限。逾時由 `purge-unconfirmed-accounts` 每小時清除。
 - **帳號鎖定**：`AccountLockService.register_strike` 把兩類計次寫入 `lock_strikes`——`identity_rejected`（已辨識出帳號卻被拒絕的 Google 登入、補填年齡不一致；15 分鐘內 5 次）與 `rate_limited`（被每分鐘訊息數上限擋下；15 分鐘內 10 次）；達門檻時以條件式 UPDATE 鎖定並寫 `account.lock` 稽核（管理員欄位為空）。計次發生在會以 4xx 結束的請求裡，所以寫入後呼叫 `keep_changes_on_error`。無法辨識出帳號的失敗不計次。
 - **申訴**：`/api/appeals` 對被鎖定或被暫停發佈的玩家有效（兩者皆非則 404，管理員也一樣），1000 字、每小時 3 則、同時 1 則待處理，兩種狀態共用同一套上限；內容是個資，日誌與稽核只有字數（`appeal.submit`）。`/appeal` 頁面由 `CurrentUser.appeal_kind`（`locked` 優先、`suspended`）決定說明文字，兩者皆非時導向預設頁面。
@@ -392,7 +395,7 @@ flowchart TD
 - **錨定事實**：每位主角一個，必須指向該存檔劇本內容中存在的人物、地點或里程碑，由 Service 驗證；模型只提議，玩家接受或自行撰寫後才由 Service 寫入。錨定事實不得為性的關係，也不得為性奴等禁斷關係；戀愛、婚姻與婚約類的關係不論年齡一律開放（例如青梅竹馬，須用符合劇本世界觀的說法，仍不得涉及性）。
 - **用量**：生成與重新生成有次數上限（存資料庫的設定表，每次使用時現讀，以 flask 指令修改並寫稽核）；其 token 計入全站每日上限，不計入每日對話輪數。
 - **管理員的可讀範圍**：不變。主角的角色卡、錨定事實不在管理員預設可檢視的範圍內（`tests/test_protagonist_lifecycle.py` 守住：管理員沒有任何路徑讀到玩家的存檔與主角，後台的 Repository 與 Service 從不提到主角）。
-- **實作現況**：三支端點在 `/api/sessions/*`，每個公開方法先過 `AccessPolicy.require_chat_access`；別人的草稿與不存在的版本逐字相同的 404；劇本宣告的內容模式高於玩家生效的模式回 403 `content_tier_restricted`。審查不可用一律擋下（503 `review_unavailable`），`flag` 放行；規則層比劇本更嚴的一點是，未成年主角自己的文字出現露骨用語即直接拒絕。
+- **實作現況**：`/api/sessions/*` 有五支端點：`setup`、`suggest`、開存檔三支涉及主角與開存檔，每個公開方法先過 `AccessPolicy.require_chat_access`；另兩支是 RPG 入口的唯讀清單（`GET /api/sessions/catalog`、`GET /api/sessions`，由 `GameEntryService` 提供，**不過** `require_chat_access`，見第 7b 節）。別人的草稿與不存在的版本逐字相同的 404；劇本宣告的內容模式高於玩家生效的模式回 403 `content_tier_restricted`。審查不可用一律擋下（503 `review_unavailable`），`flag` 放行；規則層比劇本更嚴的一點是，未成年主角自己的文字出現露骨用語即直接拒絕。
 
 ## 7f. 遊戲幣的存取與稽核（game-wallet）
 

@@ -1,7 +1,9 @@
-"""`/api/sessions/*`（rpg-protagonist、protagonist-suggestion 規格）：三支端點的成功與各種錯誤代碼與狀態碼、閘門、CSRF、不可快取、
-擁有者隔離（他人的草稿一律 404，且與不存在的逐字相同），以及回應不含內部欄位。
+"""`/api/sessions/*`（rpg-protagonist、protagonist-suggestion、rpg-entry-api 規格）：三支寫入或生成端點的成功與各種錯誤代碼與狀態碼、
+閘門、CSRF、不可快取、擁有者隔離（他人的草稿一律 404，且與不存在的逐字相同），以及回應不含內部欄位；檔案後段是 RPG 入口的兩個
+唯讀端點（`GET /api/sessions/catalog`、`GET /api/sessions`）：閘門與受限登入狀態、分頁參數、回應形狀、不改動錢包也不呼叫模型。
 
 用測試應用程式、直接寫入的登入狀態與假的 RPG 供應商（不打真實 API）；內建劇本視為已審查，所以開存檔只多一次主角審查。
+清單的查詢與欄位細節在 `test_game_entry_service.py`（含 SQL Server），這裡只驗 HTTP 層。
 """
 import json
 
@@ -10,11 +12,15 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.llm.types import LLMTransientError
-from app.models import RpgSession, RuntimeLimit, User
+from app.models import LlmCallLog, RpgSession, RuntimeLimit, User, Wallet, WalletEntry
+from app.models.user import STATUS_DELETION_PENDING
 from app.repositories.script_repository import ScriptRepository
-from tests.support.auth import FakeClock, add_user, sign_in_as
+from app.repositories.session_repository import SessionRepository
+from app.services.game_entry_service import CARD_FIELDS, SAVE_FIELDS
+from tests.support.auth import START, FakeClock, add_user, sign_in_as
 from tests.support.client import raw_client
 from tests.support.llm import FakeLLMProvider, Step
+from tests.support.protagonist import protagonist as stored_protagonist
 from tests.support.script_data import validated
 from tests.test_llm_providers_by_purpose import BOTH, make_app
 
@@ -337,3 +343,287 @@ def test_no_response_carries_internal_ids_hashes_or_review_fields(app, provider)
     for text in texts:
         for forbidden in ("content_hash", "review_", "user_id", "source_version_id", "script_snapshot"):
             assert forbidden not in text
+
+
+
+# ---- RPG 入口的兩個唯讀端點：GET /api/sessions/catalog 與 GET /api/sessions（rpg-entry-api 規格）--------------------------------
+
+CATALOG = "/api/sessions/catalog"
+MINE = "/api/sessions"
+ENTRY_PATHS = (CATALOG, MINE)
+SECRET_HIDDEN_TRAIT = "暗中守護青雲宗"                                 # 劇本內文裡的標記字串：清單不得帶出
+
+
+def open_save(app, n=1, title="青雲問道", **changes):
+    """直接寫入一個存檔（不經開存檔的審查）；回傳存檔的對外識別碼。"""
+    with db(app) as s:
+        owner = s.scalar(select(User).where(User.email == f"user{n}@example.com"))
+        save = SessionRepository(s).create(
+            owner.id, source_version_id=None, snapshot=validated(title=title).content, snapshot_spec_version=1,
+            protagonist=stored_protagonist("林初", personality="獨特性格標記"), content_tier="safe", now=FakeClock()(), **changes,
+        )
+        s.commit()
+        return save.public_id
+
+
+def finish_turns(app, n, save_id, count):
+    with db(app) as s:
+        owner = s.scalar(select(User).where(User.email == f"user{n}@example.com"))
+        repo = SessionRepository(s)
+        for index in range(1, count + 1):
+            repo.start_turn(owner.id, save_id, client_msg_id=f"t-{index}", user_action=f"行動{index}", now=FakeClock()())
+            repo.complete_turn(owner.id, save_id, f"t-{index}", llm_raw_response=f"劇情{index}", structured_result=None, now=FakeClock()())
+        s.commit()
+
+
+def ledger_state(app):
+    """錢包、帳本與模型呼叫帳本的完整狀態；兩個清單端點呼叫前後必須相同。"""
+    with db(app) as s:
+        wallets = [(w.user_id, w.free_balance, w.paid_balance, w.version) for w in s.scalars(select(Wallet).order_by(Wallet.id))]
+        entries = s.scalar(select(func.count()).select_from(WalletEntry))
+        model_calls = s.scalar(select(func.count()).select_from(LlmCallLog))
+    return wallets, entries, model_calls
+
+
+def page_ids(client, path, key, limit):
+    """依序讀取每一頁直到 `has_more` 為假，回傳各頁串起來的 `id`。"""
+    collected, offset = [], 0
+    for _ in range(50):                                                    # 有上限：被破壞成永遠 has_more 時要失敗，不要卡住
+        body = client.get(f"{path}?limit={limit}&offset={offset}").get_json()
+        collected += [item["id"] for item in body[key]]
+        if not body["has_more"]:
+            return collected
+        offset += limit
+    raise AssertionError("has_more 一直為真：分頁沒有走到盡頭")
+
+
+@pytest.mark.parametrize("path", ENTRY_PATHS)
+def test_the_entry_lists_are_401_without_a_login(app, path):
+    response = app.test_client().get(path)
+    assert response.status_code == 401 and response.get_json()["error"]["code"] == "unauthorized"
+
+
+@pytest.mark.parametrize(("overrides", "code"), [
+    ({"locked_at": START, "lock_reason": "rate_limited"}, "account_locked"),
+    ({"age": None}, "age_confirmation_required"),
+    ({"status": STATUS_DELETION_PENDING, "deletion_requested_at": START, "status_before_deletion": "active"}, "account_deletion_pending"),
+], ids=["locked", "age_pending", "deletion_pending"])
+@pytest.mark.parametrize("path", ENTRY_PATHS)
+def test_a_restricted_login_gets_its_own_403_code_on_both_lists(app, path, overrides, code):
+    response = signed_in(app, **overrides).get(path)
+    assert response.status_code == 403 and response.get_json()["error"]["code"] == code
+    assert "scripts" not in response.get_json() and "sessions" not in response.get_json()
+
+
+def test_an_admin_who_has_not_confirmed_the_age_reads_a_safe_list_but_still_cannot_start_a_save(app, provider):
+    safe = builtin(app, title="安全")
+    builtin(app, title="一般", content_tier="standard")
+    client = signed_in(app, role="admin", age=None)
+    body = client.get(CATALOG).get_json()
+    assert [card["id"] for card in body["scripts"]] == [safe]
+    assert body["content_mode"] == {"effective": "safe", "is_adult": False}
+    assert client.get(MINE).get_json()["sessions"] == []
+    start = client.post(MINE, json=start_body(safe))
+    assert start.status_code == 403 and start.get_json()["error"]["code"] == "age_confirmation_required"
+    assert saves(app) == 0 and provider.calls == []
+
+
+def test_a_minor_is_told_why_the_catalog_is_safe_and_the_response_has_no_age_data(app):
+    builtin(app, title="安全")
+    builtin(app, title="一般", content_tier="standard")
+    response = signed_in(app, age=15).get(CATALOG)
+    body = response.get_json()
+    assert [card["title"] for card in body["scripts"]] == ["安全"]
+    assert body["content_mode"] == {"effective": "safe", "is_adult": False}
+    text = response.get_data(as_text=True)
+    for forbidden in ("birth", "age_range", "age_policy", "\"age\""):
+        assert forbidden not in text
+
+
+def test_an_adult_with_the_default_settings_reads_the_standard_catalog(app):
+    safe, standard = builtin(app, title="安全"), builtin(app, title="一般", content_tier="standard")
+    builtin(app, title="成人", content_tier="adult")
+    body = signed_in(app).get(CATALOG).get_json()
+    assert sorted(card["id"] for card in body["scripts"]) == sorted([safe, standard])
+    assert body["content_mode"] == {"effective": "standard", "is_adult": True}
+
+
+def test_only_published_versions_are_listed_never_the_owners_own_draft(app):
+    owner = signed_in(app, 1)
+    published = builtin(app, title="公開")
+    draft(app, 1, title="我的草稿")
+    assert [card["id"] for card in owner.get(CATALOG).get_json()["scripts"]] == [published]
+
+
+@pytest.mark.parametrize(("path", "query", "fields"), [
+    (CATALOG, "limit=0", ["limit"]), (CATALOG, "limit=25", ["limit"]), (CATALOG, "limit=-3", ["limit"]), (CATALOG, "limit=abc", ["limit"]),
+    (CATALOG, "limit=1.5", ["limit"]), (CATALOG, "offset=-1", ["offset"]), (CATALOG, "offset=10001", ["offset"]), (CATALOG, "offset=x", ["offset"]),
+    (CATALOG, "limit=0&offset=-1", ["limit", "offset"]),
+    (MINE, "limit=0", ["limit"]), (MINE, "limit=51", ["limit"]), (MINE, "limit=abc", ["limit"]), (MINE, "offset=-1", ["offset"]),
+    (MINE, "offset=abc", ["offset"]), (MINE, "limit=0&offset=-1", ["limit", "offset"]),
+])
+def test_an_invalid_page_is_a_400_that_names_the_field_and_returns_no_list(app, path, query, fields):
+    client = signed_in(app)
+    builtin(app)
+    open_save(app)
+    response = client.get(f"{path}?{query}")
+    body = response.get_json()
+    assert response.status_code == 400 and sorted(body["error"]["fields"]) == sorted(fields)
+    assert "scripts" not in body and "sessions" not in body
+
+
+@pytest.mark.parametrize(("path", "query"), [
+    (CATALOG, ""), (CATALOG, "limit="), (CATALOG, "limit=1"), (CATALOG, "limit=24"), (CATALOG, "offset=0"), (CATALOG, "offset=10000"),
+    (MINE, ""), (MINE, "offset="), (MINE, "limit=1"), (MINE, "limit=50"), (MINE, "offset=10000"),
+])
+def test_the_boundary_and_omitted_values_are_accepted(app, path, query):
+    client = signed_in(app)
+    builtin(app)
+    open_save(app)
+    assert client.get(f"{path}?{query}").status_code == 200
+
+
+def test_catalog_pages_read_over_http_chain_into_one_full_read_without_repeats(app):
+    client = signed_in(app)
+    for title in ("甲", "乙", "丙", "丁", "戊"):
+        builtin(app, title=title)
+    full = client.get(f"{CATALOG}?limit=24").get_json()
+    assert len(full["scripts"]) == 5 and full["has_more"] is False
+    chained = page_ids(client, CATALOG, "scripts", 2)
+    assert chained == [card["id"] for card in full["scripts"]] and len(set(chained)) == 5
+    assert client.get(f"{CATALOG}?limit=5").get_json()["has_more"] is False
+    assert client.get(f"{CATALOG}?limit=4").get_json()["has_more"] is True
+
+
+def test_the_story_preference_reorders_the_catalog_over_http_without_changing_the_set(app):
+    client = signed_in(app)
+    for title, channel in (("男", "male"), ("全", "all"), ("女", "female")):
+        builtin(app, title=title, audience=channel)
+    order = {}
+    for preference in ("male", "female", "all"):
+        assert client.put("/api/account/story-preference", json={"story_preference": preference}).status_code == 200
+        order[preference] = [card["title"] for card in client.get(CATALOG).get_json()["scripts"]]
+    assert order["male"] == ["男", "全", "女"] and order["female"] == ["女", "全", "男"]
+    assert sorted(order["male"]) == sorted(order["female"]) == sorted(order["all"])
+
+
+def test_the_catalog_response_has_exactly_the_documented_keys_and_no_script_body(app):
+    builtin(app, title="內建")
+    with db(app) as s:
+        add_user(s, 2)
+    draft(app, 2, title="別人的草稿")
+    client = signed_in(app, 1)
+    response = client.get(CATALOG)
+    body = response.get_json()
+    assert set(body) == {"ok", "scripts", "has_more", "content_mode"} and body["ok"] is True
+    assert set(body["content_mode"]) == {"effective", "is_adult"}
+    card = body["scripts"][0]
+    assert set(card) == set(CARD_FIELDS) and card["author_name"] == "官方" and card["audience"] == "all"
+    assert isinstance(card["id"], str) and len(card["id"]) == 36 and isinstance(card["tags"], list)
+    text = response.get_data(as_text=True)
+    for forbidden in (SECRET_HIDDEN_TRAIT, "content_hash", "review_", "user_id", "author_id", "source_version", "milestones", "別人的草稿"):
+        assert forbidden not in text
+
+
+def test_the_setup_endpoint_accepts_the_id_a_card_carries(app):
+    client = signed_in(app)
+    builtin(app)
+    card = client.get(CATALOG).get_json()["scripts"][0]
+    setup_response = client.get(f"/api/sessions/setup/{card['id']}")
+    assert setup_response.status_code == 200 and setup_response.get_json()["title"] == card["title"]
+
+
+def test_my_sessions_holds_only_the_callers_saves_newest_first_with_complete_turn_counts(app):
+    mine, other = signed_in(app, 1), signed_in(app, 2)
+    first, second = open_save(app, 1, title="第一個"), open_save(app, 1, title="第二個")
+    open_save(app, 2, title="別人的")
+    finish_turns(app, 1, first, 2)
+    body = mine.get(MINE).get_json()
+    assert set(body) == {"ok", "sessions", "has_more"} and body["ok"] is True and body["has_more"] is False
+    assert [item["title"] for item in body["sessions"]] == ["第二個", "第一個"]
+    assert {item["title"]: item["completed_turns"] for item in body["sessions"]} == {"第一個": 2, "第二個": 0}
+    assert [item["title"] for item in other.get(MINE).get_json()["sessions"]] == ["別人的"]
+
+
+def test_a_save_item_has_exactly_the_documented_keys_and_none_of_the_save_contents(app):
+    client = signed_in(app)
+    save_id = open_save(app, 1)
+    response = client.get(MINE)
+    item = response.get_json()["sessions"][0]
+    assert set(item) == set(SAVE_FIELDS) and item["id"] == save_id and item["status"] == "active" and item["player_name"] == "林初"
+    assert item["content_tier"] == "safe" and item["completed_turns"] == 0 and item["last_active_at"].endswith("Z")
+    text = response.get_data(as_text=True)
+    for forbidden in ("獨特性格標記", SECRET_HIDDEN_TRAIT, "script_snapshot", "notebook", "world_state", "protagonist", "user_id", "opening"):
+        assert forbidden not in text
+
+
+def test_an_empty_save_list_is_a_200_with_no_more(app):
+    body = signed_in(app).get(MINE).get_json()
+    assert body["sessions"] == [] and body["has_more"] is False
+
+
+def test_save_pages_chain_into_the_full_list_over_http(app):
+    client = signed_in(app)
+    expected = [open_save(app, 1, title=f"存檔{index}") for index in range(5)]
+    chained = page_ids(client, MINE, "sessions", 2)
+    assert sorted(chained) == sorted(expected) and len(set(chained)) == 5
+    assert client.get(f"{MINE}?limit=5").get_json()["has_more"] is False
+
+
+@pytest.mark.parametrize("path", ENTRY_PATHS)
+def test_neither_list_touches_the_wallet_or_calls_a_model_for_a_player_who_never_opened_the_wallet(app, provider, path):
+    client = signed_in(app)
+    builtin(app)
+    open_save(app)
+    assert ledger_state(app) == ([], 0, 0)
+    assert client.get(path).status_code == 200
+    assert ledger_state(app) == ([], 0, 0) and provider.calls == []
+
+
+def test_neither_list_changes_an_existing_wallet_or_its_ledger(app, provider):
+    client = signed_in(app)
+    builtin(app)
+    open_save(app)
+    assert client.get("/api/wallet").status_code == 200                    # 先讓註冊贈幣發放、帳本有內容
+    before = ledger_state(app)
+    assert before[0] and before[1] >= 1
+    for _ in range(3):
+        assert client.get(CATALOG).status_code == 200 and client.get(MINE).status_code == 200
+    assert ledger_state(app) == before and provider.calls == []
+
+
+def test_every_response_of_both_lists_is_not_cacheable_including_errors(app):
+    client = signed_in(app)
+    builtin(app)
+    responses = [
+        client.get(CATALOG), client.get(MINE), client.get(f"{CATALOG}?limit=0"), client.get(f"{MINE}?limit=abc"),
+        app.test_client().get(CATALOG), app.test_client().get(MINE),
+        signed_in(app, 2, age=None).get(CATALOG), signed_in(app, 3, locked_at=START, lock_reason="rate_limited").get(MINE),
+    ]
+    assert [r.status_code for r in responses] == [200, 200, 400, 400, 401, 401, 403, 403]
+    assert [r.headers.get("Cache-Control") for r in responses] == ["no-store"] * len(responses)
+
+
+def test_the_lists_live_next_to_the_other_session_endpoints_and_the_whole_flow_hangs_together(app, provider):
+    client = signed_in(app)
+    builtin(app)
+    card = client.get(CATALOG).get_json()["scripts"][0]
+    assert client.get(f"/api/sessions/setup/{card['id']}").status_code == 200
+    provider.script(verdict())
+    created = client.post(MINE, json=start_body(card["id"]))
+    assert created.status_code == 201
+    listed = client.get(MINE).get_json()["sessions"]
+    assert [(item["id"], item["completed_turns"], item["status"], item["title"]) for item in listed] == [
+        (created.get_json()["session"]["id"], 0, "active", card["title"]),
+    ]
+    for method in ("POST", "PUT", "DELETE"):
+        assert client.open(CATALOG, method=method, json={}).status_code == 405, method
+    assert client.put(MINE, json={}).status_code == 405 and client.delete(MINE).status_code == 405
+
+
+def test_one_player_never_sees_another_players_save_in_their_list(app):
+    owner, intruder = signed_in(app, 1), signed_in(app, 2)
+    save_id = open_save(app, 1)
+    assert [item["id"] for item in owner.get(MINE).get_json()["sessions"]] == [save_id]
+    assert intruder.get(MINE).get_json()["sessions"] == []
+    assert save_id not in intruder.get(MINE).get_data(as_text=True)
