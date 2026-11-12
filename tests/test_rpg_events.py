@@ -28,9 +28,9 @@ STATE = json.dumps({"elapsed_months": 2, "current_location": "祕密山谷", "np
 
 # ---- 事件模組本身 -----------------------------------------------------------------------------
 
-def test_there_are_eighteen_unique_events():
+def test_there_are_twenty_one_unique_events():
     names = [value for key, value in vars(rpg_events).items() if key.startswith("EVENT_") and isinstance(value, str)]
-    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 18          # 12 個回合與第 0 幕事件 + 6 個記事簿事件
+    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 21          # 12 個回合與第 0 幕事件 + 6 個記事簿事件 + 3 個修訂事件
 
 
 def test_no_logging_function_takes_a_free_text_parameter():
@@ -39,6 +39,8 @@ def test_no_logging_function_takes_a_free_text_parameter():
         "dropped", "state_ok", "world_updated", "ended", "categories", "auto_retry", "final", "reason",
         # 記事簿：全是整數（或 None）；沒有任何文字參數
         "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars", "calls",
+        # 修訂：種類（列舉）、是否免費（布林）、預扣的幣數（整數）；沒有理由、分類、行動與劇情的參數
+        "kind", "is_free", "cost",
     }
     for name, function in inspect.getmembers(rpg_events, inspect.isfunction):
         if name.startswith("log_"):
@@ -73,11 +75,15 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         rpg_events.log_notebook_failed(user_id=1, session_id=2, boundary=10, reason="transient", calls=2, latency_ms=9000, model="m")
         rpg_events.log_notebook_saved(user_id=1, session_id=2, version=3, total=1800)
         rpg_events.log_notebook_save_rejected(user_id=1, session_id=2, reason="blocked", total=1800, categories=("minor_sexual",))
+        rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=2, is_free=False, cost=30)
+        rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=3, chars=480, latency_ms=4200, world_updated=True, ended=False)
+        rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=2, reason="blocked")
     records = [r for r in caplog.records if r.name == "app.rpg"]
     assert {r.event for r in records} == set(rpg_events.EVENT_NAMES)
     extra_keys = {"event", "user_id", "session_id", "turn_number", "attempt", "outcome", "reason", "model", "chars", "latency_ms",
                   "first_chunk_ms", "finish_reason", "dropped", "categories",
-                  "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars"}
+                  "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars",
+                  "kind", "coins"}
     for record in records:
         emitted = {key for key in record.__dict__ if key in ALLOWED_FIELDS or key == "event"}
         assert emitted <= extra_keys | set(ALLOWED_FIELDS)
@@ -120,6 +126,19 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         user_id=1, session_id=2, boundary=10, entries=1, longest=1, added=1, total=1, version=1, over_entries=0, over_chars=0, calls=1,
         latency_ms=1, model=None, categories=("自由文字",),
     ),
+    # 修訂：種類與原因必須是列舉；數字必須是整數；布林必須是布林（理由或行動文字放不進任何欄位）
+    lambda: rpg_events.log_revision_started(user_id=1, session_id=2, kind="想換個結局", attempt=1, is_free=True, cost=0),
+    lambda: rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt="第二次", is_free=True, cost=0),
+    lambda: rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=1, is_free="免費", cost=0),
+    lambda: rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=1, is_free=True, cost="三十幣"),
+    lambda: rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=1, is_free=True, cost=True),
+    lambda: rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=1, chars="很多", latency_ms=1, world_updated=True, ended=False),
+    lambda: rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=1, chars=1, latency_ms=1, world_updated="是", ended=False),
+    lambda: rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=1, chars=1, latency_ms=1, world_updated=True, ended="結局"),
+    lambda: rpg_events.log_revision_completed(user_id=1, session_id=2, kind="rewrite", attempt=1, chars=1, latency_ms=1, world_updated=True, ended=False),
+    lambda: rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=1, reason="這一輪的劇情寫了什麼"),
+    lambda: rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=1, reason="blocked_by_provider"),
+    lambda: rpg_events.log_revision_failed(user_id=1, session_id=2, kind="unknown", attempt=1, reason="blocked"),
 ])
 def test_values_outside_the_enumerations_are_refused(call):
     with pytest.raises(ValueError):
@@ -314,3 +333,61 @@ class _StubOpeningPlan:
     tier = "safe"
     characters = ()
     adult_age = 18
+
+
+# ---- 修訂事件（rpg-turn-revision 的 design D10）-----------------------------------------------------
+
+def test_the_revision_events_carry_only_ids_integers_and_enumerations(caplog):
+    with caplog.at_level(logging.INFO, logger="app.rpg"):
+        rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=3, is_free=False, cost=30)
+        rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=2, is_free=True, cost=0)
+        rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=4, chars=480, latency_ms=4200, world_updated=True, ended=True)
+        rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=5, chars=90, latency_ms=100, world_updated=False, ended=False)
+        rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=3, reason="state_failed")
+    records = [r for r in caplog.records if r.name == "app.rpg"]
+    assert [r.event for r in records] == [
+        "rpg.revision_started", "rpg.revision_started", "rpg.revision_completed", "rpg.revision_completed", "rpg.revision_failed",
+    ]
+    paid, free, ended, plain, failed = records
+    assert (paid.kind, paid.attempt, paid.coins, paid.outcome) == ("regenerate", 3, 30, "paid")
+    assert (free.coins, free.outcome) == (0, "free")
+    assert (ended.kind, ended.attempt, ended.chars, ended.latency_ms, ended.outcome, ended.reason) == ("edit", 4, 480, 4200, "ended", "world_updated")
+    assert (plain.outcome, plain.reason) == ("complete", "world_unchanged")
+    assert (failed.kind, failed.reason, failed.outcome, failed.levelno) == ("regenerate", "state_failed", "failed", logging.WARNING)
+    for record in records:
+        assert record.session_id == 2 and record.user_id == 1
+        for name in ("kind", "attempt", "coins", "chars", "latency_ms", "outcome", "reason", "session_id", "user_id"):
+            value = getattr(record, name, None)
+            assert value is None or isinstance(value, (int, str)), (record.event, name)      # 沒有 dict、list 或任何自由文字結構
+
+
+def test_the_revision_logging_functions_take_no_player_text_parameter():
+    functions = {name: function for name, function in inspect.getmembers(rpg_events, inspect.isfunction) if name.startswith("log_revision_")}
+    assert set(functions) == {"log_revision_started", "log_revision_completed", "log_revision_failed"}
+    forbidden = {"reason_text", "category", "action", "text", "narration", "snapshot", "world", "message", "feedback", "content"}
+    for name, function in functions.items():
+        parameters = set(inspect.signature(function).parameters)
+        assert not parameters & forbidden, name
+        assert parameters <= {"user_id", "session_id", "kind", "attempt", "is_free", "cost", "chars", "latency_ms", "world_updated", "ended", "reason"}, name
+
+
+def test_the_revision_enumerations_match_the_design():
+    assert rpg_events.REVISION_FAIL_REASONS == ("blocked", "timeout", "model_failed", "state_failed", "superseded", "disconnected", "internal")
+    assert {rpg_events.EVENT_REVISION_STARTED, rpg_events.EVENT_REVISION_COMPLETED, rpg_events.EVENT_REVISION_FAILED} == {
+        "rpg.revision_started", "rpg.revision_completed", "rpg.revision_failed",
+    }
+    for reason in rpg_events.REVISION_FAIL_REASONS:                                             # 每個原因都能記錄（兩種種類）
+        for kind in ("regenerate", "edit"):
+            rpg_events.log_revision_failed(user_id=1, session_id=2, kind=kind, attempt=1, reason=reason)
+
+
+def test_a_revision_event_never_carries_free_text(caplog):
+    marker = "獨特理由字樣甲乙丙"
+    with caplog.at_level(logging.INFO, logger="app.rpg"):
+        rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=2, is_free=False, cost=30)
+        rpg_events.log_revision_completed(user_id=1, session_id=2, kind="regenerate", attempt=2, chars=300, latency_ms=900, world_updated=True, ended=False)
+        rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=2, reason="timeout")
+        with pytest.raises(ValueError):
+            rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=2, reason=marker)       # 自由文字進不來
+    lines = [json.dumps({k: str(v) for k, v in r.__dict__.items() if k in ALLOWED_FIELDS or k in ("event", "message")}, ensure_ascii=False) for r in caplog.records]
+    assert lines and not any(marker in line for line in lines)

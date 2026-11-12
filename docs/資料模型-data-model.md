@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-10 ｜ 對應 change：story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0017_story_preference` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-12 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0018_rpg_turn_revision` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -29,6 +29,7 @@ erDiagram
     script_versions ||--o{ script_version_tags : "標籤 CASCADE"
     users ||--o{ sessions : "存檔 CASCADE"
     sessions ||--o{ memory_logs : "回合 CASCADE"
+    sessions ||--o{ turn_regenerations : "重新生成與編輯的回饋 CASCADE"
     script_versions |o..o{ sessions : "來源參照 無動作 抹除前清為空值"
     users |o--o{ admin_audit_logs : "管理員操作 SET NULL 紀錄保留"
     users ||..o{ admin_audit_logs : "目標只存對外識別碼 無外鍵"
@@ -146,6 +147,21 @@ erDiagram
         int attempt "嘗試序號 預扣冪等鍵的一部分 預設 1"
         text user_action "個資"
         text llm_raw_response "劇情原文 中斷或被擋超過 14 天清為空字串"
+        int revision "修訂版本 每次成功重新生成或編輯加 1 預設 1"
+        int regen_count "這份輸入已成功重新生成幾次 編輯歸零 預設 0"
+        datetime revising_started_at "修訂的認領時間 空值或逾時表示沒有人在修訂 可為空"
+        json state_before_json "回合前的世界快照 下一輪完成時清為空值 個資 可為空"
+    }
+    turn_regenerations {
+        int id PK
+        int session_id FK "CASCADE"
+        int turn_seq "被修訂的回合序號 與存檔和嘗試序號唯一"
+        int attempt "認領後的嘗試序號 預扣冪等鍵的一部分"
+        string kind "regenerate 或 edit"
+        string category "五類之一 編輯為空 可為空"
+        text reason "玩家填的理由 個資 只供營運檢視 編輯為空 可為空"
+        bool is_free "是否免費重新生成"
+        string result "pending applied failed blocked"
     }
     lock_strikes {
         int id PK
@@ -379,6 +395,7 @@ flowchart LR
     M14 --> M15["0015 game_wallet<br/>wallets、wallet_entries、runtime_limits 補五個遊戲幣設定的初始值"]
     M15 --> M16["0016 rpg_turn_engine<br/>memory_logs.attempt、sessions 的第 0 幕三欄、llm_call_logs.first_chunk_ms、runtime_limits 補每回合月數上限"]
     M16 --> M17["0017 story_preference<br/>users.story_preference、script_versions.audience"]
+    M17 --> M18["0018 rpg_turn_revision<br/>memory_logs 的四個修訂欄位、turn_regenerations、runtime_limits 補免費重新生成次數"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -388,7 +405,8 @@ flowchart LR
 - `0014_rpg_character_creation` 只新增一個可為空的欄位並補三個限制鍵（先查再插，已有的鍵不蓋掉、不重複）；舊版程式在新結構上可運作，降級對 `sessions` 同樣用 `recreate="never"`。
 - `0015_game_wallet` 只新增兩張表並補五個設定鍵（先查再插，已有的鍵不蓋掉、不重複）；沒有資料回填，既有玩家的贈幣在第一次存取錢包時補發；降級會刪除兩張表（錢包資料一併消失），只在還沒有真實資料時使用。
 - `0016_rpg_turn_engine` 只新增五個欄位（一個有預設值的 `attempt`、四個可為空）並補一個設定鍵（先查再插）；既有回合的嘗試序號為 1，既有存檔的第 0 幕欄位為空（程式視同 fallback，不生成也不阻擋回合），沒有資料回填；舊版程式在新結構上可運作。降級對三張表都用 `recreate="never"`，`attempt` 另需 `mssql_drop_default`（SQL Server 的預設值約束要先移除才能刪欄位）。
-- `0017_story_preference` 只新增兩個欄位（`users.story_preference` 有預設值 `all`、`script_versions.audience` 可為空且不回填）；沒有新資料表與資料回填，降級用 `recreate="never"` 並移除 SQL Server 的預設值約束；實際資料庫尚在 `0016`，新程式上線前要先備份再升級。
+- `0017_story_preference` 只新增兩個欄位（`users.story_preference` 有預設值 `all`、`script_versions.audience` 可為空且不回填）；沒有新資料表與資料回填，降級用 `recreate="never"` 並移除 SQL Server 的預設值約束；本機開發的 `project` 已於 2026-11-11 升級到這一版。
+- `0018_rpg_turn_revision` 只新增四個 `memory_logs` 欄位（`revision`、`regen_count` 有預設值，`revising_started_at`、`state_before_json` 可為空且不回填，所以遷移之前建立的回合沒有快照、不可修訂）、一張新表 `turn_regenerations`（隨存檔串聯刪除；`(session_id, turn_seq, attempt)` 唯一）並補一個設定鍵 `rpg.free_regenerations`（先查再插）；舊版程式在新結構上可運作。降級先刪新表再用 `recreate="never"` 移除欄位，`revision`、`regen_count` 另需 `mssql_drop_default`，只在還沒有真實資料時使用；本機開發的 `project` 尚在 `0017`，新程式上線前要先備份再升級。
 - SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。

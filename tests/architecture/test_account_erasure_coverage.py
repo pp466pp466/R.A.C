@@ -21,7 +21,7 @@ CASCADED_FROM_USERS = {
 }
 CASCADED_FROM_CONVERSATIONS = {"chat_messages.conversation_id"}
 # rpg-data-and-script：往下的串聯層。每一層都要登記，新增的子表才不會變成沒人負責的個資
-CASCADED_FROM_SESSIONS = {"memory_logs.session_id"}
+CASCADED_FROM_SESSIONS = {"memory_logs.session_id", "turn_regenerations.session_id"}     # 回饋含玩家填的理由（個資），隨存檔與帳號一併抹除
 CASCADED_FROM_SCRIPTS = {"script_versions.script_id"}
 CASCADED_FROM_VERSIONS = {"script_version_tags.version_id"}
 # 無動作的外鍵（不是 SET NULL 也不是串聯）：SQL Server 不允許刪除使用者時有多重串聯路徑（錯誤 1785），

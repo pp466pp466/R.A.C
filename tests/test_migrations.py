@@ -31,6 +31,8 @@ RPG_TABLES = ("scripts", "script_versions", "script_version_tags", "sessions", "
 CONTENT_MODE_COLUMNS = ("content_tier_preference", "adult_confirmed_at", "adult_rules_version", "adult_confirm_method")
 AUTHORING_TABLES = ("script_submissions", "runtime_limits")
 WALLET_TABLES = ("wallets", "wallet_entries")
+REVISION_TABLES = ("turn_regenerations",)
+REVISION_COLUMNS = ("revision", "regen_count", "revising_started_at", "state_before_json")
 AUTHORING_USER_COLUMNS = ("nickname", "nickname_code", "publish_suspended_at")
 REVIEW_COLUMNS = ("review_hash", "review_verdict", "review_categories_json", "reviewed_at")
 INITIAL_LIMITS = (
@@ -46,7 +48,9 @@ WALLET_LIMITS = (
     ("coin.hold_timeout_seconds", 180),
 )
 RPG_LIMITS = (("rpg.max_months_per_turn", 24),)
-HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS
+REVISION_LIMITS = (("rpg.free_regenerations", 2),)
+HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS + REVISION_LIMITS
+TURN_ENGINE_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS       # 0016、0017 當時的十六個
 WALLET_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS       # 0015 當時的十五個
 CHARACTER_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS       # 0014 當時的十個
 
@@ -70,7 +74,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES, *REVISION_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -782,7 +786,7 @@ def test_0016_adds_the_turn_engine_columns_and_the_month_limit_and_keeps_every_r
     assert all(c["nullable"] for c in added["sessions"].values())
     assert set(added["memory_logs"]) == {"attempt"} and not added["memory_logs"]["attempt"]["nullable"]
     assert set(added["llm_call_logs"]) == {"first_chunk_ms"} and added["llm_call_logs"]["first_chunk_ms"]["nullable"]
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}                    # 新增一個，調整過的值沒被蓋掉
+    assert limits_now() == {**dict(TURN_ENGINE_HEAD_LIMITS), "script_limit.free": 9}        # 新增一個，調整過的值沒被蓋掉
     with engine.connect() as conn:                                                           # 既有資料不變，新欄位的預設值正確
         save = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().one()
         assert (save["player_name"], save["opening_text"], save["opening_state"], save["opening_started_at"]) == ("舊存檔", None, None, None)
@@ -800,7 +804,7 @@ def test_0016_adds_the_turn_engine_columns_and_the_month_limit_and_keeps_every_r
             assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 1, name
 
     command.upgrade(cfg, "0016_rpg_turn_engine")                                            # 再升級一次，不重複
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    assert limits_now() == {**dict(TURN_ENGINE_HEAD_LIMITS), "script_limit.free": 9}
     with engine.connect() as conn:
         assert conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn).c.attempt)).scalar_one() == 1
     engine.dispose()
@@ -978,7 +982,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES, *REVISION_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):
@@ -1224,3 +1228,114 @@ def test_tools_bootstrap_never_overrides_the_process_environment(tmp_path, monke
     import os
 
     assert os.environ["APP_ENV"] == "production"
+
+
+def _insert_old_complete_turn(conn) -> None:
+    """0018 之前的結構上的一位使用者、一個存檔與一個已完成的回合（欄位只含當時存在的）。"""
+    _insert_old_save_and_turn(conn)
+
+
+def test_0018_adds_the_revision_columns_the_feedback_table_and_the_free_regeneration_setting_and_keeps_every_row(tmp_path):
+    """rpg-turn-revision：memory_logs 的四個修訂欄位（revision 為 1、regen_count 為 0、其餘為空）、turn_regenerations（串聯刪除、
+    唯一約束）與 runtime_limits 的 rpg.free_regenerations（只插入缺少的，不蓋掉部署者調整過的值）；既有資料一列不少；回復只移除新增的
+    東西；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'turn_revision.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0018_rpg_turn_revision")
+    assert revision.down_revision == "0017_story_preference" and len(revision.revision) <= 32
+    assert ScriptDirectory.from_config(cfg).get_current_head() == "0018_rpg_turn_revision"
+
+    command.upgrade(cfg, "0017_story_preference")
+    with engine.begin() as conn:
+        _insert_old_complete_turn(conn)
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.update().where(limits.c.key == "script_limit.free").values(int_value=9))     # 部署者調整過
+    before_tables = set(inspect(engine).get_table_names())
+    before_columns = {c["name"] for c in inspect(engine).get_columns("memory_logs")}
+
+    def limits_now() -> dict[str, int]:
+        with engine.connect() as conn:
+            table = Table("runtime_limits", MetaData(), autoload_with=conn)
+            return {row["key"]: row["int_value"] for row in conn.execute(select(table)).mappings()}
+
+    command.upgrade(cfg, "0018_rpg_turn_revision")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) - before_tables == set(REVISION_TABLES)
+    added = {c["name"]: c for c in inspector.get_columns("memory_logs") if c["name"] not in before_columns}
+    assert set(added) == set(REVISION_COLUMNS)
+    assert {name for name, c in added.items() if c["nullable"]} == {"revising_started_at", "state_before_json"}         # 另外兩欄有預設值，NOT NULL
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}                    # 新增一個，調整過的值沒被蓋掉
+    with engine.connect() as conn:                                                           # 既有回合不變，新欄位的預設值正確，沒有快照
+        turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
+    assert (turn["user_action"], turn["llm_raw_response"], turn["turn_number"], turn["attempt"]) == ("舊行動", "舊劇情", 1, 1)
+    assert (turn["revision"], turn["regen_count"], turn["revising_started_at"], turn["state_before_json"]) == (1, 0, None, None)
+
+    feedback = {c["name"]: c for c in inspector.get_columns("turn_regenerations")}
+    assert set(feedback) == {"id", "session_id", "turn_seq", "attempt", "kind", "category", "reason", "is_free", "result", "created_at", "updated_at"}
+    assert {name for name, c in feedback.items() if c["nullable"]} == {"category", "reason"}
+    assert [sorted(u["column_names"]) for u in inspector.get_unique_constraints("turn_regenerations")] == [["attempt", "session_id", "turn_seq"]]
+    (foreign_key,) = inspector.get_foreign_keys("turn_regenerations")
+    assert foreign_key["referred_table"] == "sessions" and foreign_key["options"].get("ondelete") == "CASCADE"
+
+    command.downgrade(cfg, "0017_story_preference")
+    assert set(inspect(engine).get_table_names()) == before_tables
+    assert {c["name"] for c in inspect(engine).get_columns("memory_logs")} == before_columns
+    assert limits_now() == {**dict(TURN_ENGINE_HEAD_LIMITS), "script_limit.free": 9}
+    with engine.connect() as conn:                                                           # 回復後既有的存檔與回合仍在，沒有被串聯刪除
+        for name in ("users", "sessions", "memory_logs", "llm_call_logs"):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 1, name
+
+    command.upgrade(cfg, "0018_rpg_turn_revision")                                          # 再升級一次，不重複
+    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    with engine.connect() as conn:
+        turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
+    assert (turn["revision"], turn["regen_count"]) == (1, 0)
+    engine.dispose()
+
+
+def test_0018_does_not_overwrite_a_free_regeneration_setting_that_already_exists(tmp_path):
+    """資料庫在升級前已經有新鍵（例如先手動寫入）：保留原值，不產生重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'turn_revision_existing.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    command.upgrade(cfg, "0017_story_preference")
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.insert().values(key="rpg.free_regenerations", int_value=5, updated_at=utcnow().replace(tzinfo=None)))
+    command.upgrade(cfg, "0018_rpg_turn_revision")
+    with engine.connect() as conn:
+        table = Table("runtime_limits", MetaData(), autoload_with=conn)
+        assert conn.execute(select(table.c.key, table.c.int_value).where(table.c.key.like("rpg.free%"))).all() == [("rpg.free_regenerations", 5)]
+    engine.dispose()
+
+
+def test_migrated_revision_columns_and_feedback_table_work_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：升級後有十七個設定（鍵唯一）；舊版程式形狀的回合 INSERT（不含新欄位）取得 revision 1、regen_count 0，
+    沒有快照；回饋表的 (存檔, 回合序號, 嘗試序號) 唯一，且隨存檔串聯刪除。"""
+    engine = migrated_database
+    now = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(HEAD_LIMITS)
+        _insert_old_complete_turn(conn)
+    feedback = Table("turn_regenerations", MetaData(), autoload_with=engine)
+    with engine.connect() as conn:
+        turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
+        session_id = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn).c.id)).scalar_one()
+    assert (turn["revision"], turn["regen_count"], turn["revising_started_at"], turn["state_before_json"]) == (1, 0, None, None)
+
+    row = dict(session_id=session_id, turn_seq=1, attempt=2, kind="regenerate", category="other", reason="想要不同的發展", is_free=True,
+               result="pending", created_at=now, updated_at=now)
+    with engine.begin() as conn:
+        conn.execute(feedback.insert().values(**row))
+    with pytest.raises(IntegrityError):                                     # (存檔, 回合序號, 嘗試序號) 唯一
+        with engine.begin() as conn:
+            conn.execute(feedback.insert().values(**row))
+    with engine.begin() as conn:
+        conn.execute(feedback.insert().values(**{**row, "attempt": 3, "kind": "edit", "category": None, "reason": None, "is_free": False}))
+        assert conn.execute(select(func.count()).select_from(feedback)).scalar_one() == 2
+        conn.execute(Table("memory_logs", MetaData(), autoload_with=conn).delete())          # 回合列與回饋表沒有外鍵關聯：刪回合不影響回饋
+        assert conn.execute(select(func.count()).select_from(feedback)).scalar_one() == 2
+        conn.execute(Table("sessions", MetaData(), autoload_with=conn).delete())             # 刪除存檔：回饋串聯刪除
+        assert conn.execute(select(func.count()).select_from(feedback)).scalar_one() == 0

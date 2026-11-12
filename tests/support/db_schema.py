@@ -25,7 +25,7 @@ DOMAIN_ORDER: dict[str, tuple[str, ...]] = {
     "客服對話": ("chat_conversations", "chat_messages"),
     "模型用量與營運": ("llm_call_logs", "admin_audit_logs", "alert_states", "runtime_limits"),
     "RPG 劇本": ("scripts", "script_versions", "script_version_tags", "script_submissions"),
-    "RPG 存檔": ("sessions", "memory_logs"),
+    "RPG 存檔": ("sessions", "memory_logs", "turn_regenerations"),
     "遊戲幣": ("wallets", "wallet_entries"),
 }
 ORDERED_TABLES: tuple[str, ...] = tuple(name for names in DOMAIN_ORDER.values() for name in names)
@@ -202,6 +202,9 @@ def enumerations() -> dict[str, tuple[str, ...]]:
         "sessions.status": rpg_session.SESSION_STATUSES,
         "sessions.opening_state": rpg_session.OPENING_STATES,
         "memory_logs.turn_status": rpg_session.TURN_STATUSES,
+        "turn_regenerations.kind": rpg_session.REGEN_KINDS,
+        "turn_regenerations.category": rpg_session.REGEN_CATEGORIES,
+        "turn_regenerations.result": rpg_session.REGEN_RESULTS,
         "wallet_entries.kind": wallet.ENTRY_KINDS,
         "wallet_entries.resolution": wallet.RESOLUTIONS,
     }

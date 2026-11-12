@@ -25,7 +25,7 @@ SCRIPT_KEYS = (
     "script_reject_streak",
 )
 WALLET_KEYS = ("coin.turn_cost.standard", "coin.signup_grant", "coin.checkin_grant", "coin.free_cap", "coin.hold_timeout_seconds")
-RPG_KEYS = ("rpg.max_months_per_turn",)
+RPG_KEYS = ("rpg.max_months_per_turn", "rpg.free_regenerations")
 ALL_KEYS = SCRIPT_KEYS + WALLET_KEYS + RPG_KEYS
 
 
@@ -39,11 +39,12 @@ def put(session, key, value):
 
 
 def migration_initial_limits() -> dict[str, int]:
-    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個、0015 的五個加上 0016 的一個）。"""
+    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個、0015 的五個、0016 與 0018 各一個）。"""
     limits: dict[str, int] = {}
     for filename, name in (
         ("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014"),
         ("20261105_0015_game_wallet.py", "migration_0015"), ("20261109_0016_rpg_turn_engine.py", "migration_0016"),
+        ("20261112_0018_rpg_turn_revision.py", "migration_0018"),
     ):
         spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / "migrations" / "versions" / filename)
         module = importlib.util.module_from_spec(spec)
@@ -56,7 +57,7 @@ def migration_initial_limits() -> dict[str, int]:
 # ---- 鍵、範圍與初始值 -----------------------------------------------------------------
 
 
-def test_the_sixteen_keys_are_fixed_in_three_groups():
+def test_the_seventeen_keys_are_fixed_in_three_groups():
     assert LIMIT_KEYS == ALL_KEYS and set(LIMIT_SPECS) == set(ALL_KEYS)
     assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "script"} == set(SCRIPT_KEYS)
     assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "wallet"} == set(WALLET_KEYS)
@@ -82,6 +83,30 @@ def test_the_rpg_max_months_is_read_each_time_and_falls_back_to_the_default(memb
     assert any(line.get("event") == "limits.invalid" and line["reason"] == "rpg.max_months_per_turn" for line in log_lines())
 
 
+def test_the_rpg_free_regenerations_setting_ranges_from_0_to_20_with_a_default_of_2():
+    spec = LIMIT_SPECS["rpg.free_regenerations"]
+    assert (spec.default, spec.minimum, spec.maximum, spec.group) == (2, 0, 20, "rpg")
+
+
+def test_the_rpg_free_regenerations_is_read_each_time_and_falls_back_to_the_default(member_session, log_lines):
+    limits = make_limits(member_session)
+    assert limits.rpg_free_regenerations() == 2                                         # 缺值：保底預設
+    put(member_session, "rpg.free_regenerations", 5)
+    assert make_limits(member_session).rpg_free_regenerations() == 5                    # 下一次使用就是新值，沒有行程快取
+    assert limits.rpg_free_regenerations() == 5                                         # 同一個實例也不快取
+    for invalid in (-1, 21):
+        member_session.query(RuntimeLimit).filter_by(key="rpg.free_regenerations").one().int_value = invalid
+        member_session.flush()
+        assert make_limits(member_session).rpg_free_regenerations() == 2                # 範圍外：保底預設，不是無上限
+    member_session.query(RuntimeLimit).filter_by(key="rpg.free_regenerations").one().int_value = 0
+    member_session.flush()
+    assert make_limits(member_session).rpg_free_regenerations() == 0                    # 0 合法：每一次重新生成都收費
+    member_session.query(RuntimeLimit).filter_by(key="rpg.free_regenerations").one().int_value = 20
+    member_session.flush()
+    assert make_limits(member_session).rpg_free_regenerations() == 20                   # 上限合法
+    assert any(line.get("event") == "limits.invalid" and line["reason"] == "rpg.free_regenerations" for line in log_lines())
+
+
 def test_the_protagonist_suggestion_keys_range_from_0_to_100():
     for tier in ("free", "plus", "vip"):
         spec = LIMIT_SPECS[f"protagonist_suggest_daily.{tier}"]
@@ -98,7 +123,7 @@ def test_the_fallback_defaults_equal_the_values_the_migration_writes():
         "script_reject_streak": 3,
         "coin.turn_cost.standard": 30, "coin.signup_grant": 200, "coin.checkin_grant": 200, "coin.free_cap": 1000,
         "coin.hold_timeout_seconds": 180,
-        "rpg.max_months_per_turn": 24,
+        "rpg.max_months_per_turn": 24, "rpg.free_regenerations": 2,
     }
 
 

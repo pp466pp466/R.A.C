@@ -7,9 +7,11 @@ import pytest
 from sqlalchemy import JSON, Unicode, UnicodeText, delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.models import Base, MemoryLog, RpgSession, Script, ScriptVersion, ScriptVersionTag, User
+from app.models import Base, MemoryLog, RpgSession, Script, ScriptVersion, ScriptVersionTag, TurnRegeneration, User
 from app.models.base import UTCDateTime
-from app.models.rpg_session import SESSION_ACTIVE, TURN_STREAMING
+from app.models.rpg_session import (
+    REGEN_APPLIED, REGEN_BLOCKED, REGEN_CATEGORIES, REGEN_FAILED, REGEN_KINDS, REGEN_PENDING, REGEN_RESULTS, SESSION_ACTIVE, TURN_STREAMING,
+)
 from app.models.script import ENDING_NONE, VERSION_DRAFT, VERSION_PUBLISHED
 
 
@@ -215,3 +217,88 @@ def test_another_players_save_must_have_its_source_reference_cleared_before_the_
     kept = member_session.get(RpgSession, save_id)
     assert kept is not None and kept.source_version_id is None and kept.script_snapshot_json == {"title": "劇本"}
     assert count(member_session, Script) == 0 and count(member_session, ScriptVersion) == 0
+
+
+# ---- 重新生成與編輯最後一輪（rpg-turn-revision）-------------------------------------------------
+
+def test_the_revision_columns_have_the_documented_types_defaults_and_nullability():
+    turns = table("memory_logs")
+    assert isinstance(turns.c.revising_started_at.type, UTCDateTime) and isinstance(turns.c.state_before_json.type, JSON)
+    assert turns.c.revising_started_at.nullable and turns.c.state_before_json.nullable                 # expand：新欄位可為空
+    for name, default in (("revision", "1"), ("regen_count", "0")):                                     # 舊程式的 INSERT 不含這兩欄也要成立
+        assert not turns.c[name].nullable and turns.c[name].server_default.arg == default, name
+
+
+def test_the_regeneration_feedback_table_has_the_documented_columns_and_types():
+    feedback = table("turn_regenerations")
+    assert {c.name for c in feedback.columns} == {
+        "id", "created_at", "updated_at", "session_id", "turn_seq", "attempt", "kind", "category", "reason", "is_free", "result",
+    }
+    for name in ("kind", "category", "result"):
+        assert isinstance(feedback.c[name].type, Unicode), name
+    assert isinstance(feedback.c.reason.type, UnicodeText)
+    assert feedback.c.category.nullable and feedback.c.reason.nullable                                   # 編輯沒有分類與理由
+    for name in ("session_id", "turn_seq", "attempt", "kind", "is_free", "result"):
+        assert not feedback.c[name].nullable, name
+    foreign_key = next(iter(feedback.c.session_id.foreign_keys))
+    assert (foreign_key.column.table.name, foreign_key.ondelete) == ("sessions", "CASCADE")
+
+
+def test_the_regeneration_enumerations_match_the_design():
+    assert REGEN_KINDS == ("regenerate", "edit")
+    assert len(REGEN_CATEGORIES) == 5 and len(set(REGEN_CATEGORIES)) == 5 and "other" in REGEN_CATEGORIES
+    assert REGEN_RESULTS == (REGEN_PENDING, REGEN_APPLIED, REGEN_FAILED, REGEN_BLOCKED) == ("pending", "applied", "failed", "blocked")
+    feedback = table("turn_regenerations")
+    for name, values in (("kind", REGEN_KINDS), ("category", REGEN_CATEGORIES), ("result", REGEN_RESULTS)):
+        assert feedback.c[name].type.length >= max(len(value) for value in values), name
+
+
+def test_a_new_turn_starts_at_revision_one_with_no_regenerations_claim_or_snapshot(member_session):
+    save = make_rpg_session(member_session, make_user(member_session, 1))
+    turn = MemoryLog(session_id=save.id, client_msg_id="m-1", seq=1)
+    member_session.add(turn)
+    member_session.commit()
+    assert (turn.revision, turn.regen_count, turn.revising_started_at, turn.state_before_json) == (1, 0, None, None)
+
+
+def test_a_new_feedback_row_is_pending_and_paid_unless_stated(member_session):
+    save = make_rpg_session(member_session, make_user(member_session, 1))
+    row = TurnRegeneration(session_id=save.id, turn_seq=3, attempt=2, kind="regenerate", category="other", reason="劇情和設定不符")
+    member_session.add(row)
+    member_session.commit()
+    assert (row.result, row.is_free, row.created_at is not None, row.updated_at is not None) == (REGEN_PENDING, False, True, True)
+
+
+def test_feedback_rows_are_unique_per_session_turn_and_attempt(member_session):
+    user = make_user(member_session, 1)
+    first, second = make_rpg_session(member_session, user), make_rpg_session(member_session, user)
+    member_session.add_all([
+        TurnRegeneration(session_id=first.id, turn_seq=1, attempt=1, kind="edit", is_free=False),
+        TurnRegeneration(session_id=second.id, turn_seq=1, attempt=1, kind="edit", is_free=False),         # 不同存檔可以重複
+        TurnRegeneration(session_id=first.id, turn_seq=1, attempt=2, kind="regenerate", is_free=True),     # 同一回合不同嘗試
+        TurnRegeneration(session_id=first.id, turn_seq=2, attempt=1, kind="regenerate", is_free=True),     # 不同回合
+    ])
+    member_session.commit()
+    expect_integrity_error(
+        member_session, lambda: member_session.add(TurnRegeneration(session_id=first.id, turn_seq=1, attempt=2, kind="edit", is_free=False)),
+    )
+    assert count(member_session, TurnRegeneration) == 4
+
+
+def test_deleting_a_save_or_its_player_removes_the_feedback_rows(member_session):
+    player, bystander = make_user(member_session, 1), make_user(member_session, 2)
+    gone, kept = make_rpg_session(member_session, player), make_rpg_session(member_session, bystander)
+    own = make_rpg_session(member_session, player)
+    member_session.add_all([
+        TurnRegeneration(session_id=gone.id, turn_seq=1, attempt=1, kind="regenerate", category="other", reason="想要不同的發展", is_free=True),
+        TurnRegeneration(session_id=own.id, turn_seq=1, attempt=1, kind="edit", is_free=False),
+        TurnRegeneration(session_id=kept.id, turn_seq=1, attempt=1, kind="edit", is_free=False),
+    ])
+    member_session.commit()
+
+    member_session.execute(delete(RpgSession).where(RpgSession.id == gone.id))          # 資料庫層的串聯，不經 ORM
+    member_session.commit()
+    assert count(member_session, TurnRegeneration) == 2                                   # 只剩另一個存檔與旁人的
+    member_session.execute(delete(User).where(User.id == player.id))
+    member_session.commit()
+    assert [row.session_id for row in member_session.scalars(select(TurnRegeneration))] == [kept.id]

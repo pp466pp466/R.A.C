@@ -8,6 +8,10 @@
   只在回合完成時才指派，所以中斷與被擋的回合不計輪。
 - JSON 欄位（劇本複本、NPC 狀態、目標、里程碑進度、回合的結構化結果）由 Repository 序列化，**不得依其內容做篩選查詢**。
 - 存檔與回合的內容（行動、劇情原文、記事簿、世界狀態、劇本文字）是個資：不進日誌、不進管理員預設可檢視的範圍。
+- 重新生成與編輯最後一輪（rpg-turn-revision）：回合列在修訂期間仍是 `complete`，以 `revising_started_at`（認領時間，逾時視同沒有人在修訂）
+  表示修訂中；`revision` 每次成功修訂加 1，`regen_count` 是目前這份輸入已成功重新生成幾次（編輯歸零）；`state_before_json` 是回合前的世界快照，
+  下一輪完成時清為空。回饋表 `turn_regenerations` 存玩家填的分類與理由（供營運檢視）。
+  **理由、快照與被取代的輸入屬玩家文字衍生的個資**：不進日誌、不進模型呼叫、不進管理員預設可檢視的範圍；回饋表隨存檔與帳號刪除、納入匯出。
 """
 from __future__ import annotations
 
@@ -36,6 +40,18 @@ OPENING_GENERATING = "generating"          # 有一個請求正在生成（逾�
 OPENING_READY = "ready"                    # 已生成並保存
 OPENING_FALLBACK = "fallback"              # 生成失敗或被擋，改用劇本的初始對話（沒有則只顯示背景故事）
 OPENING_STATES = (OPENING_PENDING, OPENING_GENERATING, OPENING_READY, OPENING_FALLBACK)
+
+# 重新生成與編輯的回饋（turn_regenerations）。值域由 Service 驗證，資料庫不加 CHECK 約束（方言差異，同其他列舉欄位）。
+REGEN_KIND_REGENERATE = "regenerate"       # 重新生成最後一輪的 AI 回應
+REGEN_KIND_EDIT = "edit"                   # 編輯最後一輪的玩家輸入後重送
+REGEN_KINDS = (REGEN_KIND_REGENERATE, REGEN_KIND_EDIT)
+# 重新生成時玩家選的分類（docs/RPG.md 7.8 暫定的五類；這裡是識別字串，繁體中文文案在前端的 game-labels.js）
+REGEN_CATEGORIES = ("setting_mismatch", "repetitive_or_dull", "typo_or_quality", "blocked_transition", "other")
+REGEN_PENDING = "pending"                  # 已認領、尚未收尾
+REGEN_APPLIED = "applied"                  # 新回應已替換舊回應
+REGEN_FAILED = "failed"                    # 失敗、中斷或被接手：保留舊內容
+REGEN_BLOCKED = "blocked"                  # 新回應被審查擋下：保留舊內容
+REGEN_RESULTS = (REGEN_PENDING, REGEN_APPLIED, REGEN_FAILED, REGEN_BLOCKED)
 
 
 class RpgSession(Base, PublicIdMixin, TimestampMixin):
@@ -111,3 +127,33 @@ class MemoryLog(Base, TimestampMixin):
     user_action: Mapped[str] = mapped_column(UnicodeText, default="")
     llm_raw_response: Mapped[str] = mapped_column(UnicodeText, default="")      # 中斷時保留已收到的片段；超過 14 天清為空字串
     structured_result: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+    # 重新生成與編輯（rpg-turn-revision）：expand 階段新增，舊版程式不認識它們也照常運作
+    revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")             # 每次成功修訂加 1；前端用來偵測並行與覆寫快取
+    regen_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")          # 這份輸入已成功重新生成幾次；成功的編輯歸零
+    revising_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # 認領時間：空或逾時＝沒有人在修訂
+    # 回合前的世界快照（WorldState.to_fields() 的六欄）：最多一個回合有；下一輪完成時清為空。玩家文字衍生的個資，不得依內容篩選查詢
+    state_before_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+
+
+class TurnRegeneration(Base, TimestampMixin):
+    """重新生成與編輯的回饋：分類與理由供營運檢視（管理員的檢視頁不在 rpg-turn-revision 範圍）。
+
+    認領的同一個交易內插入（`pending`），收尾時標結果；被取代的行動與劇情**不保存**（資料最小化）。
+    `turn_seq` 是回合序號而不是內部回合編號（回合列不對外）。理由是玩家文字，視為個資：不進日誌與模型，隨存檔與帳號刪除、納入匯出。
+    """
+
+    __tablename__ = "turn_regenerations"
+    __table_args__ = (
+        UniqueConstraint("session_id", "turn_seq", "attempt", name="uq_turn_regenerations_session_turn_attempt"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    session_id: Mapped[int] = mapped_column(ForeignKey("sessions.id", ondelete="CASCADE"))
+    turn_seq: Mapped[int] = mapped_column(Integer)
+    attempt: Mapped[int] = mapped_column(Integer)                                  # 認領後的嘗試序號（預扣鍵的一部分）
+    kind: Mapped[str] = mapped_column(Unicode(10))                                 # REGEN_KINDS
+    category: Mapped[str | None] = mapped_column(Unicode(30), nullable=True)       # REGEN_CATEGORIES；編輯為空
+    reason: Mapped[str | None] = mapped_column(UnicodeText, nullable=True)         # 5 至 50 字；編輯為空
+    is_free: Mapped[bool] = mapped_column(Boolean, default=False)
+    result: Mapped[str] = mapped_column(Unicode(10), default=REGEN_PENDING)        # REGEN_RESULTS

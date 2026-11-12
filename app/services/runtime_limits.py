@@ -39,6 +39,7 @@ COIN_CHECKIN_GRANT_KEY = "coin.checkin_grant"        # 每日簽到（免費幣�
 COIN_FREE_CAP_KEY = "coin.free_cap"                  # 免費幣上限（只限制新發放）
 COIN_HOLD_TIMEOUT_KEY = "coin.hold_timeout_seconds"  # 預扣逾時秒數：超過仍未結算者在下次存取錢包時退回
 RPG_MAX_MONTHS_KEY = "rpg.max_months_per_turn"       # 單一回合最多推進幾個遊戲內月份（模型提議的 elapsed_months 超過時以此為上限）
+RPG_FREE_REGENERATIONS_KEY = "rpg.free_regenerations"  # 每個回合前幾次重新生成免費（第 N+1 次起每次消耗一輪的幣價；編輯使次數歸零）
 # 可以計價的模型鍵（常數，不是設定：新增模型是程式與設定表一起新增的事件，見 W3）
 WALLET_MODEL_KEYS = ("standard",)
 
@@ -70,6 +71,7 @@ LIMIT_SPECS: dict[str, LimitSpec] = {
     COIN_FREE_CAP_KEY: LimitSpec(COIN_FREE_CAP_KEY, 1000, 0, 1_000_000, GROUP_WALLET),
     COIN_HOLD_TIMEOUT_KEY: LimitSpec(COIN_HOLD_TIMEOUT_KEY, 180, 60, 1800, GROUP_WALLET),
     RPG_MAX_MONTHS_KEY: LimitSpec(RPG_MAX_MONTHS_KEY, 24, 0, 240, GROUP_RPG),
+    RPG_FREE_REGENERATIONS_KEY: LimitSpec(RPG_FREE_REGENERATIONS_KEY, 2, 0, 20, GROUP_RPG),
 }
 LIMIT_KEYS = tuple(LIMIT_SPECS)
 SCRIPT_LIMIT_KEYS = tuple(key for key, spec in LIMIT_SPECS.items() if spec.group == GROUP_SCRIPT)
@@ -150,6 +152,10 @@ class RuntimeLimits:
     def rpg_max_months_per_turn(self) -> int:
         """單一回合最多推進幾個遊戲內月份；模型提議的月數超過時以此為上限（0 表示不允許時間流逝）。"""
         return self.get(RPG_MAX_MONTHS_KEY)
+
+    def rpg_free_regenerations(self) -> int:
+        """每個回合前幾次重新生成免費（0 表示每一次都收費）；缺值或不合法時用保底預設 2。"""
+        return self.get(RPG_FREE_REGENERATIONS_KEY)
 
     def rows(self, group: str | None = None) -> list[LimitRow]:
         """目前的限制狀態（一次查詢）；`group` 為 None 列全部，否則只列該組（`show-script-limits`、`show-wallet-settings`、`show-rpg-settings` 使用）。"""

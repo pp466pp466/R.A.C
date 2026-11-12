@@ -12,7 +12,7 @@ from app.config import load_config
 from app.models import AdminAuditLog, Base, RuntimeLimit
 from tests.support.auth import FakeClock
 
-RPG_KEYS = ("rpg.max_months_per_turn",)
+RPG_KEYS = ("rpg.max_months_per_turn", "rpg.free_regenerations")
 
 
 @pytest.fixture()
@@ -57,7 +57,10 @@ def test_the_set_command_changes_the_value_prints_the_old_and_new_and_audits_onl
 
 @pytest.mark.parametrize(
     "key, value",
-    [("rpg.max_months_per_turn", "241"), ("rpg.max_months_per_turn", "-1"), ("rpg.max_turns", "5")],
+    [
+        ("rpg.max_months_per_turn", "241"), ("rpg.max_months_per_turn", "-1"), ("rpg.max_turns", "5"),
+        ("rpg.free_regenerations", "21"), ("rpg.free_regenerations", "-1"),
+    ],
 )
 def test_out_of_range_values_and_unknown_keys_are_refused_without_changing_anything(app, runner, key, value):
     result = runner.invoke(args=["set-rpg-setting", "--", key, value])           # `--`：負數不會被當成選項
@@ -88,10 +91,35 @@ def test_the_show_command_lists_exactly_the_rpg_keys_and_marks_the_fallback_defa
     lines = [line for line in before.output.splitlines() if line.strip()]
     assert [line.split()[0] for line in lines] == list(RPG_KEYS)
     assert "rpg.max_months_per_turn = 24" in lines[0] and "保底預設" in lines[0] and "範圍 0 至 240" in lines[0]
+    assert "rpg.free_regenerations = 2" in lines[1] and "保底預設" in lines[1] and "範圍 0 至 20" in lines[1]
 
     runner.invoke(args=["set-rpg-setting", "rpg.max_months_per_turn", "36"])
     after = [line for line in runner.invoke(args=["show-rpg-settings"]).output.splitlines() if line.strip()]
     assert "rpg.max_months_per_turn = 36" in after[0] and "保底預設" not in after[0]
+    assert "保底預設" in after[1]                                                      # 只改了一個，另一個仍是保底預設
+
+
+def test_the_free_regenerations_setting_is_changed_audited_and_read_on_the_next_use(app, runner):
+    """每個回合前幾次重新生成免費：部署者以指令修改並留下稽核，下一次使用就是新值（rpg-turn-revision）。"""
+    from app.repositories.runtime_limit_repository import RuntimeLimitRepository
+    from app.services.runtime_limits import RuntimeLimits
+
+    result = runner.invoke(args=["set-rpg-setting", "rpg.free_regenerations", "5"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "rpg.free_regenerations：2 → 5"                    # 資料庫沒有那一列：舊值是保底預設
+    assert stored(app) == {"rpg.free_regenerations": 5}
+    (row,) = audit_rows(app)
+    assert (row.action, row.admin_user_id, row.target_user_public_id) == ("limit.set", None, None)
+    assert row.detail_json == {"limit_key": "rpg.free_regenerations", "old_value": 2, "new_value": 5}
+    with Session(app.extensions["db_engine"]) as s:
+        assert RuntimeLimits(limits=RuntimeLimitRepository(s), clock=FakeClock()).rpg_free_regenerations() == 5
+    assert runner.invoke(args=["set-rpg-setting", "rpg.free_regenerations", "0"]).output.strip() == "rpg.free_regenerations：5 → 0"     # 0 合法
+    with Session(app.extensions["db_engine"]) as s:
+        assert RuntimeLimits(limits=RuntimeLimitRepository(s), clock=FakeClock()).rpg_free_regenerations() == 0
+    for wrong in (["set-wallet-setting", "rpg.free_regenerations", "3"], ["set-script-limit", "rpg.free_regenerations", "3"]):
+        refused = runner.invoke(args=wrong)
+        assert refused.exit_code != 0 and "set-rpg-setting" in refused.output
+    assert stored(app) == {"rpg.free_regenerations": 0}
 
 
 def test_the_other_show_commands_do_not_list_the_rpg_keys(app, runner):

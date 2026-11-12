@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
+from app.models.rpg_session import REGEN_KINDS
 from app.models.script import REVIEW_CATEGORIES
 from app.models.user import CONTENT_TIERS
 
@@ -33,6 +34,9 @@ EVENT_NOTEBOOK_ABANDONED = "rpg.notebook_abandoned"
 EVENT_NOTEBOOK_FAILED = "rpg.notebook_failed"
 EVENT_NOTEBOOK_SAVED = "rpg.notebook_saved"
 EVENT_NOTEBOOK_SAVE_REJECTED = "rpg.notebook_save_rejected"
+EVENT_REVISION_STARTED = "rpg.revision_started"
+EVENT_REVISION_COMPLETED = "rpg.revision_completed"
+EVENT_REVISION_FAILED = "rpg.revision_failed"
 
 EVENT_NAMES = frozenset(
     value for name, value in dict(globals()).items() if name.startswith("EVENT_") and isinstance(value, str)
@@ -64,6 +68,9 @@ NOTEBOOK_SKIP_REASONS = ("full", "empty", "budget")                  # 已滿（
 NOTEBOOK_ABANDON_REASONS = ("blocked", "too_long", "stale")          # 規則層／洩漏未通過、精簡後仍超過上限、鎖內發現超過上限（皆推進標記）
 NOTEBOOK_FAIL_REASONS = ("transient", "timeout", "config", "unavailable", "validation", "blocked")    # 皆不推進標記，由後續回合補做
 NOTEBOOK_REJECT_REASONS = ("too_long", "blocked", "conflict", "ended")                                  # 玩家儲存被拒
+
+# 重新生成與編輯最後一輪（rpg-turn-revision 的 design D10）。**不記錄**理由、分類、行動、劇情與快照：函式沒有接收它們的參數
+REVISION_FAIL_REASONS = ("blocked", "timeout", "model_failed", "state_failed", "superseded", "disconnected", "internal")
 
 
 def _integer(name: str, value: object) -> int:
@@ -285,4 +292,41 @@ def log_notebook_save_rejected(
     _info(
         EVENT_NOTEBOOK_SAVE_REJECTED, "RPG 記事簿玩家儲存被拒", user_id=user_id, session_id=_integer("session_id", session_id),
         reason=_choice("原因", reason, NOTEBOOK_REJECT_REASONS), total=_optional_integer("total", total), outcome="rejected", **fields,
+    )
+
+
+# ---- 重新生成與編輯最後一輪 -----------------------------------------------------------------------------
+
+
+def log_revision_started(*, user_id: int, session_id: int, kind: str, attempt: int, is_free: bool, cost: int) -> None:
+    """修訂已認領（付費者已預扣）：種類（重新生成或編輯）、認領後的嘗試序號、是否免費、預扣的幣數（免費為 0）。沒有理由與行動。"""
+    if not isinstance(is_free, bool):
+        raise ValueError(f"is_free 必須是布林：{is_free!r}")
+    _info(
+        EVENT_REVISION_STARTED, "RPG 修訂開始", user_id=user_id, session_id=_integer("session_id", session_id),
+        kind=_choice("種類", kind, REGEN_KINDS), attempt=_integer("attempt", attempt), coins=_integer("cost", cost),
+        outcome="free" if is_free else "paid",
+    )
+
+
+def log_revision_completed(
+    *, user_id: int, session_id: int, kind: str, attempt: int, chars: int, latency_ms: int, world_updated: bool, ended: bool,
+) -> None:
+    """修訂成功（新回應已替換舊回應並結算）：字數、延遲、世界狀態是否有變更、存檔是否因此完結。"""
+    if not isinstance(world_updated, bool) or not isinstance(ended, bool):
+        raise ValueError("world_updated 與 ended 必須是布林")
+    _info(
+        EVENT_REVISION_COMPLETED, "RPG 修訂完成", user_id=user_id, session_id=_integer("session_id", session_id),
+        kind=_choice("種類", kind, REGEN_KINDS), attempt=_integer("attempt", attempt), chars=_integer("chars", chars),
+        latency_ms=_integer("latency_ms", latency_ms), outcome="ended" if ended else "complete",
+        reason="world_updated" if world_updated else "world_unchanged",
+    )
+
+
+def log_revision_failed(*, user_id: int, session_id: int, kind: str, attempt: int, reason: str) -> None:
+    """修訂沒有完成（被擋、逾時、模型失敗、狀態呼叫失敗或世界版本改變、被接手、斷線、非預期錯誤）：保留舊內容、已退款或釋放認領。"""
+    _warning(
+        EVENT_REVISION_FAILED, "RPG 修訂失敗", user_id=user_id, session_id=_integer("session_id", session_id),
+        kind=_choice("種類", kind, REGEN_KINDS), attempt=_integer("attempt", attempt), reason=_choice("原因", reason, REVISION_FAIL_REASONS),
+        outcome="failed",
     )

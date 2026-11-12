@@ -1,8 +1,8 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-11 ｜ 對應 change：story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0017_story_preference`（實際的 `project` 已於 2026-11-11 由 `0016_rpg_turn_engine` 升級到這個版本，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-12 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0018_rpg_turn_revision`（實際的 `project` 目前為 `0017_story_preference`，0018 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
-本文件是 SQL Server `project` 資料庫的**結構參考**：共 **20 張資料表、234 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、249 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
 與其他文件的分工：本文件回答「資料庫裡**有什麼**」（結構、型別、鍵、固定值、保存期限的對照）；為什麼這樣設計、跨資料庫（SQLite 與 SQL Server）的取捨與決策理由，在 [資料模型-data-model.md](資料模型-data-model.md)；各資料的保存與刪除指令在 [營運與部署-operations.md](營運與部署-operations.md)；程式分層與依賴方向在 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -14,11 +14,13 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0017_story_preference`；實際的 `project` 目前為 `0016_rpg_turn_engine`（`alembic_version` 只有一列；0016 已於 2026-11-09 套用，0017 尚未套用，見第 14 節） |
-| 資料表與欄位 | 20 張業務資料表、234 個欄位、50 個索引與唯一約束、17 個外鍵 |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0018_rpg_turn_revision`；實際的 `project` 目前為 `0017_story_preference`（`alembic_version` 只有一列；0017 已於 2026-11-11 套用，0018 尚未套用，見第 14 節） |
+| 資料表與欄位 | 21 張業務資料表、249 個欄位、51 個索引與唯一約束、18 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
+
+**`0018_rpg_turn_revision`（`memory_logs` 的四個修訂欄位、新表 `turn_regenerations`、設定鍵 `rpg.free_regenerations`）尚未套用到實際的 `project`**：本文第 5 節以 ORM 以 SQL Server 方言編譯的結構為準，已由 `tests/test_project_db_schema_doc.py` 逐項比對，並在整合測試資料庫 `project_test` 上完成 upgrade → downgrade → upgrade；套用到 `project` 時依第 14 節的做法先備份、再升級並追加「套用」列。
 
 **`0016_rpg_turn_engine`（`memory_logs.attempt`、`sessions` 的第 0 幕三欄、`llm_call_logs.first_chunk_ms`、設定鍵 `rpg.max_months_per_turn`）已於 2026-11-09 套用到實際的 `project`**：`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 回報 `No new upgrade operations detected.`，`flask show-rpg-settings` 列出 `rpg.max_months_per_turn = 24`（來自資料庫，不是保底預設），唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，與本文一致。
 
@@ -35,7 +37,7 @@ flowchart LR
     C["客服對話<br/>chat_conversations<br/>chat_messages"]
     O["模型用量與營運<br/>llm_call_logs、admin_audit_logs<br/>alert_states、runtime_limits"]
     S["RPG 劇本<br/>scripts、script_versions<br/>script_version_tags、script_submissions"]
-    G["RPG 存檔<br/>sessions、memory_logs"]
+    G["RPG 存檔<br/>sessions、memory_logs<br/>turn_regenerations"]
     W["遊戲幣<br/>wallets、wallet_entries"]
     U -->|"擁有 CASCADE"| L
     U -->|"擁有 CASCADE"| C
@@ -62,13 +64,14 @@ flowchart LR
 | `llm_call_logs` | 模型呼叫用量帳本 | 模型用量與營運 | 每次模型呼叫一筆（含重試與備援）：用量、額度、斷路與全站每日 token 的唯一來源；不含對話全文。 | LlmCallLogRepository（與回覆同一交易） | 建立後 365 天刪除；失敗原文（error_detail）14 天清為空值；帳號刪除時 user_id 變空值（匿名化） | 17 |
 | `admin_audit_logs` | 管理稽核紀錄 | 模型用量與營運 | 管理員操作與系統自動動作（鎖定、暫停發佈、修改營運限制）的稽核；只新增、不可修改。 | AdminAuditRepository（只有新增與讀取） | 建立後 730 天由 purge-expired-data 刪除（唯一的清除途徑在 RetentionRepository） | 8 |
 | `alert_states` | 營運告警狀態 | 模型用量與營運 | 五項營運告警各一列（至多 5 列）：目前是否告警中、嚴重度與最近一次通知。 | AlertStateRepository（條件式更新搶佔通知） | 不設期限；不指向使用者，不含個資 | 8 |
-| `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻、遊戲幣的五個設定，以及 RPG 回合引擎的每回合月數上限）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入 | 4 |
+| `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻、遊戲幣的五個設定，以及 RPG 回合引擎的每回合月數上限、每個回合前幾次重新生成免費）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入 | 4 |
 | `scripts` | 劇本 | RPG 劇本 | 劇本的身分：作者、內建劇本的種子鍵、筆名與短代號的快照；內容與狀態在 script_versions。 | ScriptRepository | 隨作者的帳號抹除（CASCADE）；內建劇本沒有作者，不隨帳號刪除 | 9 |
 | `script_versions` | 劇本版本 | RPG 劇本 | 劇本的每個版本：固定規格的全部欄位、狀態、內容雜湊與審查結果。已發佈的版本不可變，修改一律新增版本。 | ScriptRepository（狀態只在此寫入，有架構測試擋住別處） | 隨劇本刪除（CASCADE）；刪除草稿時直接刪除 | 33 |
 | `script_version_tags` | 劇本版本標籤 | RPG 劇本 | 版本的標籤（以顯示形式儲存，查詢以小寫比對），讓目錄日後可以篩選。 | ScriptRepository | 隨版本刪除（CASCADE） | 3 |
 | `script_submissions` | 劇本送審紀錄 | RPG 劇本 | 每次成功送審、被自動拒絕與管理員解除暫停各一筆，用來算每日送審次數與連續被拒；不含任何劇本文字。 | ScriptSubmissionRepository | 建立後 365 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 5 |
 | `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 29 |
-| `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串 | 12 |
+| `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出；最後一輪可被重新生成或編輯（修訂版本、免費次數、認領時間與回合前快照）。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串；回合前快照在下一輪完成時清為空值 | 16 |
+| `turn_regenerations` | 重新生成與編輯的回饋 | RPG 存檔 | 玩家重新生成時選的分類與填的理由（供營運檢視），與每次修訂的結果；不存被取代的行動與劇情。 | 儲存庫層（rpg-turn-revision 的後續批次加入寫入方法） | 隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出 | 11 |
 | `wallets` | 遊戲幣錢包 | 遊戲幣 | 每位玩家至多一個：免費與付費兩個餘額（不得為負）與每次異動加 1 的版本號（樂觀鎖）。 | WalletRepository（餘額只由它寫入，架構測試守住） | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 7 |
 | `wallet_entries` | 遊戲幣帳本 | 遊戲幣 | 只增不改的帳本：每次餘額異動一筆（註冊贈送、每日簽到、冒險回合預扣與退回、管理員調整）；只放固定列舉與整數，不放玩家文字。 | WalletRepository | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 13 |
 
@@ -95,6 +98,7 @@ erDiagram
     users ||--o{ sessions : "user_id CASCADE"
     script_versions |o--o{ sessions : "source_version_id NO ACTION"
     sessions ||--o{ memory_logs : "session_id CASCADE"
+    sessions ||--o{ turn_regenerations : "session_id CASCADE"
     users ||--o| wallets : "user_id CASCADE"
     users ||--o{ wallet_entries : "user_id CASCADE"
     sessions ||..o{ wallet_entries : "session_public_id 只存對外識別碼 無外鍵"
@@ -168,6 +172,10 @@ erDiagram
         int source_version_id FK
     }
     memory_logs {
+        int id PK
+        int session_id FK
+    }
+    turn_regenerations {
         int id PK
         int session_id FK
     }
@@ -339,6 +347,7 @@ erDiagram
     users ||--o{ sessions : "user_id CASCADE"
     script_versions |o--o{ sessions : "source_version_id NO ACTION"
     sessions ||--o{ memory_logs : "session_id CASCADE"
+    sessions ||--o{ turn_regenerations : "session_id CASCADE"
 
     scripts {
         int id PK "內部主鍵"
@@ -440,6 +449,23 @@ erDiagram
         text user_action "玩家的行動"
         text llm_raw_response "劇情原文"
         json structured_result "模型的結構化輸出"
+        int revision "修訂版本 每次成功修訂加 1"
+        int regen_count "這份輸入已成功重新生成幾次"
+        datetime revising_started_at "修訂的認領時間 可為空"
+        json state_before_json "回合前的世界快照 可為空"
+        datetime created_at "建立時間"
+        datetime updated_at "最後更新時間"
+    }
+    turn_regenerations {
+        int id PK "內部主鍵"
+        int session_id FK "所屬存檔"
+        int turn_seq "被修訂的回合序號"
+        int attempt "認領後的嘗試序號"
+        string kind "種類 regenerate 或 edit"
+        string category "玩家選的分類 編輯為空"
+        text reason "玩家填的理由 編輯為空"
+        bool is_free "是否免費重新生成"
+        string result "結果"
         datetime created_at "建立時間"
         datetime updated_at "最後更新時間"
     }
@@ -551,6 +577,7 @@ erDiagram
 | `sessions.user_id` | `users.id` | CASCADE | 否 |  |
 | `sessions.source_version_id` | `script_versions.id` | NO ACTION | 是 | 無動作：刪除使用者有兩條路徑到達 sessions（users→sessions 與 users→scripts→script_versions→sessions），SQL Server 不允許多重串聯路徑（錯誤 1785）。刪除版本與抹除帳號的流程先把參照清為空值，忘了清除時刪除會直接失敗。 |
 | `memory_logs.session_id` | `sessions.id` | CASCADE | 否 |  |
+| `turn_regenerations.session_id` | `sessions.id` | CASCADE | 否 | 回饋含玩家填的理由（個資），隨存檔與帳號一併抹除；刻意不連到 `memory_logs`（以回合序號對應），避免回合被清除或重送時牽動回饋。 |
 | `wallets.user_id` | `users.id` | CASCADE | 否 | 錢包是個資，隨帳號抹除，不匿名化保留；一人至多一個（唯一約束）。 |
 | `wallet_entries.user_id` | `users.id` | CASCADE | 否 | 帳本是個資，隨帳號抹除，不匿名化保留。 |
 
@@ -562,7 +589,7 @@ flowchart TD
     A["user_identities、auth_tokens<br/>lock_strikes、lock_appeals<br/>script_submissions"]
     B["chat_conversations → chat_messages"]
     C["scripts → script_versions<br/>→ script_version_tags"]
-    D["sessions → memory_logs"]
+    D["sessions → memory_logs<br/>→ turn_regenerations"]
     W["wallets、wallet_entries"]
     E["llm_call_logs.user_id<br/>admin_audit_logs.admin_user_id<br/>變空值，紀錄保留"]
     F["deletion_tombstones<br/>新增一列（不含個資）"]
@@ -1086,9 +1113,9 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 
 ### 5.18 `memory_logs`（RPG 回合紀錄）
 
-存檔中的每一個回合：玩家行動、劇情原文與結構化輸出。
+存檔中的每一個回合：玩家行動、劇情原文與結構化輸出。最後一輪可被重新生成或編輯（rpg-turn-revision）：期間回合仍是 complete（舊內容一直可讀），以 `revising_started_at` 表示有人在修訂；成功時 `revision` 加 1，序號與輪數不變。
 
-- 領域：RPG 存檔　｜　主要寫入者：SessionRepository　｜　保存與刪除：隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串
+- 領域：RPG 存檔　｜　主要寫入者：SessionRepository　｜　保存與刪除：隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串；回合前快照在下一輪完成時清為空值
 
 | # | 欄位 | 型別 | 可空 | 資料庫預設 | 鍵 | 說明 |
 |---|---|---|---|---|---|---|
@@ -1102,8 +1129,12 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 8 | `user_action` | NVARCHAR(max) | 否 | — | — | 玩家的行動（個資）。 |
 | 9 | `llm_raw_response` | NVARCHAR(max) | 否 | — | — | 劇情原文；中斷時保留已收到的片段；被擋的回合存最後一次被擋時已收到的文字（含命中的那句）；中斷或被擋的回合超過 14 天清為空字串。 |
 | 10 | `structured_result` | NVARCHAR(max)（JSON） | 是 | — | — | 回合的結構化結果（結構見第 7 節）；被擋的回合存被擋的類別。 |
-| 11 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 12 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；中斷或被擋回合的 14 天清除以它計算。 |
+| 11 | `revision` | INTEGER | 否 | `'1'` | — | 修訂版本（從 1 起）：每次成功重新生成或編輯加 1；前端用它偵測並行修訂並覆寫本機暫存。0018 新增，既有回合為 1。 |
+| 12 | `regen_count` | INTEGER | 否 | `'0'` | — | 這份輸入已成功重新生成幾次，決定下一次是否免費（前 `rpg.free_regenerations` 次免費）：成功的重新生成加 1，成功的編輯歸零；失敗、被擋與中斷不動它。0018 新增，既有回合為 0。 |
+| 13 | `revising_started_at` | DATETIME2(6) | 是 | — | — | 修訂的認領時間（UTC）：空值或已逾時（同 `coin.hold_timeout_seconds`）＝沒有人在修訂；認領時 `attempt` 同時加 1。0018 新增，不回填。 |
+| 14 | `state_before_json` | NVARCHAR(max)（JSON） | 是 | — | — | 回合前的世界快照（結構見第 7 節）：開始回合時寫入，下一輪完成時清為空值，所以全存檔最多一個回合有；遷移之前建立的回合沒有（不可修訂）。個資（玩家文字衍生）。0018 新增。 |
+| 15 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 16 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；中斷或被擋回合的 14 天清除以它計算。 |
 
 索引與約束：
 
@@ -1114,7 +1145,33 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `ix_memory_logs_session_id_turn_number` | 索引 | `session_id`、`turn_number` | — | 依輪數讀取存檔的回合（上下文取最近 10 輪原文）。 |
 | `ix_memory_logs_turn_status_updated_at` | 索引 | `turn_status`、`updated_at` | — | 期限清除：找出超過 14 天的中斷或被擋回合。 |
 
-### 5.19 `wallets`（遊戲幣錢包）
+### 5.19 `turn_regenerations`（重新生成與編輯的回饋）
+
+玩家對最後一輪重新生成或編輯時留下的回饋：重新生成要選分類並填理由（5 至 50 字，只供營運檢視）；每次認領都在同一個交易內新增一列（結果為 pending），收尾時標為 applied、failed 或 blocked，被接手的舊認領標為 failed。**不存**被取代的行動與劇情（資料最小化）；管理員的檢視頁不在 rpg-turn-revision 範圍，因此目前沒有任何管理員讀取路徑。
+
+- 領域：RPG 存檔　｜　主要寫入者：儲存庫層（rpg-turn-revision 的後續批次加入寫入方法）　｜　保存與刪除：隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出
+
+| # | 欄位 | 型別 | 可空 | 資料庫預設 | 鍵 | 說明 |
+|---|---|---|---|---|---|---|
+| 1 | `id` | INTEGER IDENTITY(1,1) | 否 | — | PK | 內部主鍵（自動遞增）；不對外暴露。 |
+| 2 | `session_id` | INTEGER | 否 | — | FK→sessions.id | 所屬存檔；隨存檔刪除。 |
+| 3 | `turn_seq` | INTEGER | 否 | — | — | 被修訂的回合序號（對應 `memory_logs.seq`）；不存內部回合編號，因為回合列不對外。 |
+| 4 | `attempt` | INTEGER | 否 | — | — | 認領後的嘗試序號（`memory_logs.attempt` 的新值），也是修訂預扣鍵的一部分；與存檔、回合序號唯一。 |
+| 5 | `kind` | NVARCHAR(10) | 否 | — | — | 種類：regenerate（重新生成）｜edit（編輯輸入後重送）。 |
+| 6 | `category` | NVARCHAR(30) | 是 | — | — | 玩家選的分類（五類之一，見第 6 節）；編輯沒有分類，為空值。 |
+| 7 | `reason` | NVARCHAR(max) | 是 | — | — | 玩家填的理由（個資；NFC 並去除控制字元後 5 至 50 字）；編輯沒有，為空值。只供營運檢視，不進模型呼叫、system_instruction 與日誌。 |
+| 8 | `is_free` | BIT | 否 | — | — | 是否為免費的重新生成（沒有預扣遊戲幣）；編輯一律為否。 |
+| 9 | `result` | NVARCHAR(10) | 否 | — | — | 結果：pending（已認領、尚未收尾）｜applied（新回應已替換舊回應）｜failed（失敗、中斷或被接手，保留舊內容）｜blocked（新回應被審查擋下，保留舊內容）；理由先寫入，失敗的理由也保留。 |
+| 10 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）；與認領同一個交易寫入。 |
+| 11 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；標記結果時更新。 |
+
+索引與約束：
+
+| 名稱 | 種類 | 欄位 | 篩選條件 | 用途 |
+|---|---|---|---|---|
+| `uq_turn_regenerations_session_turn_attempt` | 唯一約束 | `session_id`、`turn_seq`、`attempt` | — | 同一存檔的同一回合，每個嘗試序號至多一列回饋；認領是互斥的，同一嘗試不會寫兩次。 |
+
+### 5.20 `wallets`（遊戲幣錢包）
 
 每位玩家至多一個錢包：免費與付費兩個餘額，以及每次餘額異動加 1 的版本號。所有異動都以版本做條件式更新並重試，不使用資料庫專屬的鎖。
 
@@ -1138,7 +1195,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 
 另有一個 `CHECK` 約束 `ck_wallets_balances_non_negative`：`free_balance` 與 `paid_balance` 任何時候都不小於 0。
 
-### 5.20 `wallet_entries`（遊戲幣帳本）
+### 5.21 `wallet_entries`（遊戲幣帳本）
 
 只增不改的帳本：每次餘額異動在同一個交易寫一筆。**唯一的例外**：預扣列的 `resolution` 從空值被條件式更新一次為 settled 或 refunded（結算與退回因此互斥）。只放固定列舉與整數，不放任何玩家輸入的文字。
 
@@ -1196,7 +1253,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `alert_states.alert_key` | `usage_budget`｜`llm_error_rate`｜`llm_config_error`｜`llm_latency_p95`｜`login_lockouts` | 見下方「營運告警」。 |
 | `alert_states.state` | `ok`｜`firing` | ok＝正常；firing＝告警中。 |
 | `alert_states.severity` | `warning`｜`critical` | warning＝警告；critical＝嚴重；只有告警中才有值。 |
-| `runtime_limits.key` | `script_limit.free`｜`script_limit.plus`｜`script_limit.vip`｜`script_submit_daily.free`｜`script_submit_daily.plus`｜`script_submit_daily.vip`｜`protagonist_suggest_daily.free`｜`protagonist_suggest_daily.plus`｜`protagonist_suggest_daily.vip`｜`script_reject_streak`｜`coin.turn_cost.standard`｜`coin.signup_grant`｜`coin.checkin_grant`｜`coin.free_cap`｜`coin.hold_timeout_seconds`｜`rpg.max_months_per_turn` | 見下方「營運限制」。 |
+| `runtime_limits.key` | `script_limit.free`｜`script_limit.plus`｜`script_limit.vip`｜`script_submit_daily.free`｜`script_submit_daily.plus`｜`script_submit_daily.vip`｜`protagonist_suggest_daily.free`｜`protagonist_suggest_daily.plus`｜`protagonist_suggest_daily.vip`｜`script_reject_streak`｜`coin.turn_cost.standard`｜`coin.signup_grant`｜`coin.checkin_grant`｜`coin.free_cap`｜`coin.hold_timeout_seconds`｜`rpg.max_months_per_turn`｜`rpg.free_regenerations` | 見下方「營運限制」。 |
 | `script_versions.status` | `draft`｜`pending_review`｜`published`｜`rejected`｜`superseded` | 見下方「劇本版本狀態」。 |
 | `script_versions.content_tier` | `safe`｜`standard`｜`adult` | 作者宣告的內容模式；未滿 18 歲的作者只能宣告 safe。玩家只能遊玩不高於自己生效模式的劇本。 |
 | `script_versions.audience` | `all`｜`male`｜`female` | 讀者頻道；空值（0017 之前的版本）視同 all。標準化內容只在 male 或 female 時帶 audience 鍵，all 不進內容雜湊，所以既有內容的雜湊不變。 |
@@ -1211,6 +1268,9 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `wallet_entries.resolution` | `settled`｜`refunded` | 只有預扣列使用，只能從空值設定一次：settled＝已結算；refunded＝已退回。 |
 | `sessions.opening_state` | `pending`｜`generating`｜`ready`｜`fallback` | pending＝尚未生成（或客戶端斷線後退回）；generating＝有一個請求正在生成（超過 90 秒可被接手）；ready＝已生成並保存；fallback＝生成失敗或被擋，改用劇本的初始對話（沒有則只顯示背景故事）。空值（遷移之前建立的存檔）視同 fallback。 |
 | `memory_logs.turn_status` | `streaming`｜`complete`｜`interrupted`｜`blocked` | 見下方「回合狀態」。 |
+| `turn_regenerations.kind` | `regenerate`｜`edit` | regenerate＝重新生成最後一輪的 AI 回應（前幾次免費，之後每次消耗一輪的幣價）；edit＝編輯最後一輪的玩家輸入後重送（消耗一輪的幣價，並使免費次數歸零）。 |
+| `turn_regenerations.category` | `setting_mismatch`｜`repetitive_or_dull`｜`typo_or_quality`｜`blocked_transition`｜`other` | 重新生成時玩家選的分類：setting_mismatch＝不符設定；repetitive_or_dull＝劇情重複或無趣；typo_or_quality＝錯字或文字品質；blocked_transition＝被轉場擋掉；other＝其他。對應 `docs/RPG.md` 7.8 暫定的五類，繁體中文文案在前端；編輯沒有分類。 |
+| `turn_regenerations.result` | `pending`｜`applied`｜`failed`｜`blocked` | pending＝已認領、尚未收尾；applied＝新回應已替換舊回應；failed＝失敗、中斷或被接手，保留舊內容；blocked＝新回應被審查擋下，保留舊內容。 |
 
 ### 6.1 客服意圖（`chat_messages.intent`）
 
@@ -1288,6 +1348,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `coin.free_cap` | 免費幣上限（只限制新發放）；預設 1000，範圍 0 至 1000000 |
 | `coin.hold_timeout_seconds` | 預扣逾時秒數（超過仍未結算者在該玩家下一次存取錢包時退回）；預設 180，範圍 60 至 1800 |
 | `rpg.max_months_per_turn` | RPG 回合引擎：單一回合最多推進幾個遊戲內月份（模型提議的月數超過時以此為上限）；預設 24，範圍 0 至 240；以 `flask set-rpg-setting` 修改 |
+| `rpg.free_regenerations` | RPG 回合引擎：每個回合前幾次重新生成免費（第 N+1 次起每次消耗一輪的幣價；編輯使次數歸零）；預設 2，範圍 0 至 20；以 `flask set-rpg-setting` 修改 |
 
 ### 6.6 刪除原因（`deletion_tombstones.reason`）
 
@@ -1352,6 +1413,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 | `sessions.goals_json` | `{"active": […], "archived": […]}` | LLM 動態延伸的目標；完成後歸檔；行為屬回合引擎（RC-2）。 |
 | `sessions.milestone_progress_json` | 里程碑的觸發與完成進度 | 由 Service 依玩家年齡或遊戲內年份判斷；行為屬回合引擎（RC-2）。 |
 | `memory_logs.structured_result` | 依回合結局而定的小物件 | 完成的回合存狀態呼叫的處理摘要（只有整數與列舉，例如丟棄的項目數）；被擋的回合存 `{"blocked": {"categories": […], "auto_retry": true 或 false}}`（類別為固定列舉）。不放模型原始 JSON。 |
+| `memory_logs.state_before_json` | `{"entities_json": …, "goals_json": …, "milestone_progress_json": …, "elapsed_months": 整數, "current_location": 字串, "status_summary": 字串}` | 回合前的世界快照（`WorldState.to_fields()` 的六個值，與 `sessions` 同名欄位同形）；重新生成或編輯時以它為基礎重建上下文，使原本那一輪造成的地點、目標與 NPC 弧線變化自然被覆蓋。開始回合時寫入、下一輪完成時清為空值；個資（玩家文字衍生），不依內容篩選查詢。 |
 
 ## 8. 型別、命名與設計慣例
 
@@ -1404,6 +1466,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 | `wallets`、`wallet_entries` | 遊戲幣餘額與帳本（每筆的種類、金額與關聯存檔的對外識別碼）；日誌只記內部編號與整數，匯出不含冪等鍵 |
 | `lock_appeals.content` | 申訴內容；只有管理員能在被鎖定或被暫停發佈的帳號下檢視 |
 | `sessions.notebook_text`、`protagonist_json`、`opening_text`、`entities_json`、`memory_logs.user_action`、`llm_raw_response`、`script_snapshot_json` | RPG 的記事簿、玩家主角（角色卡與錨定事實）、第 0 幕的文字、NPC 與地點的世界狀態、玩家行動、劇情原文與劇本複本；不在管理員預設可檢視的範圍 |
+| `turn_regenerations.reason`、`memory_logs.state_before_json` | 玩家重新生成時填的理由（只供營運檢視，不進模型呼叫與日誌）與回合前的世界快照（玩家文字衍生）；隨存檔與帳號刪除，理由納入個人資料匯出；目前沒有任何管理員讀取路徑 |
 | `script_versions` 的文字欄位與 JSON 欄位 | 玩家創作的劇本設定（含草稿、待審與舊版本）；只有送審公開或被檢舉的劇本例外 |
 | `llm_call_logs.error_detail` | 驗證失敗的模型原文（截斷 2000 字）；僅管理員可讀，14 天後清為空值 |
 
@@ -1423,7 +1486,7 @@ flowchart TD
 |---|---|---|---|
 | 帳號（含生日與年齡區間） | 連續 12 個月未登入；使用者申請刪除（7 天寬限）；建立後 24 小時未完成年齡確認；發現未滿 13 歲（立即） | purge-inactive-accounts、execute-account-deletions、purge-unconfirmed-accounts；未滿 13 歲於補填時立即處理 | 全部走 AccountErasureService 單一出口，並寫入 deletion_tombstones；管理員不納入 |
 | 對話與訊息 | 最後活動後 365 天；或使用者主動刪除 | purge-expired-data | 帳本的對話編號先清為空值，再刪對話，訊息靠 CASCADE |
-| RPG 存檔與回合 | 最後活動後 365 天 | purge-expired-data | 回合與記事簿一併消失；中斷或被擋回合的劇情內容 14 天清為空字串 |
+| RPG 存檔與回合 | 最後活動後 365 天 | purge-expired-data | 回合、記事簿與重新生成回饋（`turn_regenerations`）一併消失；中斷或被擋回合的劇情內容 14 天清為空字串 |
 | 模型呼叫帳本 | 建立後 365 天；失敗原文 14 天 | purge-expired-data | 失敗原文清為空值，帳本那一筆保留；帳號刪除時 user_id 變空值 |
 | 管理稽核紀錄 | 建立後 730 天 | purge-expired-data | 唯一的清除途徑在 RetentionRepository |
 | 管理員重設權杖 | 到期後 7 天 | purge-expired-data | 不論是否已使用 |
@@ -1444,7 +1507,7 @@ flowchart TD
 flowchart LR
     Ctl["Controller<br/>頁面與 JSON API"] --> Svc["Service<br/>業務邏輯與 AccessPolicy"]
     Svc --> Repo["Repository<br/>ORM 與序列化"]
-    Repo --> Db[("SQL Server project<br/>20 張資料表")]
+    Repo --> Db[("SQL Server project<br/>21 張資料表")]
     Mig["Alembic migration"] -->|"唯一能改結構的途徑"| Db
 ```
 
@@ -1474,7 +1537,7 @@ flowchart LR
 | 資料表 | 內容 | 來源 | 重複執行 |
 |---|---|---|---|
 | `alembic_version` | 一列：目前的 migration 版本 | Alembic（`alembic upgrade head`） | 由 Alembic 維護 |
-| `runtime_limits` | 十六列初始限制（鍵見第 6 節） | migration `0013`（七列）、`0014`（三列）、`0015`（五列）與 `0016`（一列；後三者只插入缺少的鍵），皆以 ORM 的批次寫入，沒有原生 SQL | 遷移只執行一次；之後只能以 `flask set-script-limit`、`set-wallet-setting`、`set-rpg-setting`（各管自己那一組）修改並寫稽核 |
+| `runtime_limits` | 十七列初始限制（鍵見第 6 節） | migration `0013`（七列）、`0014`（三列）、`0015`（五列）、`0016`（一列）與 `0018`（一列；後四者只插入缺少的鍵），皆以 ORM 的批次寫入，沒有原生 SQL | 遷移只執行一次；之後只能以 `flask set-script-limit`、`set-wallet-setting`、`set-rpg-setting`（各管自己那一組）修改並寫稽核 |
 | `scripts`、`script_versions`、`script_version_tags` | 內建首發劇本 `xianxia-qingyun`（沒有作者、筆名「官方」、已發佈的第 1 版） | `flask seed-scripts`（讀取隨映像封裝的 `app/data/scripts/*.json`） | 以種子鍵與內容雜湊冪等：沒變動就略過，內容改變則新增版本並取代舊版 |
 | `users` | 首位管理員 | `flask create-admin`（一次性，密碼只能互動輸入或從標準輸入讀取） | 信箱已存在時拒絕 |
 
@@ -1501,6 +1564,7 @@ flowchart LR
 | `0015_game_wallet` | 2026-11-05 | 遊戲幣：新增 wallets、wallet_entries；runtime_limits 補五個遊戲幣設定鍵（只插入缺少的） | 新增資料表，寫入初始資料 |
 | `0016_rpg_turn_engine` | 2026-11-09 | RPG 回合引擎：memory_logs 新增 attempt（NOT NULL、預設 1）；sessions 新增 opening_text、opening_state、opening_started_at（可為空）；llm_call_logs 新增 first_chunk_ms（可為空）；runtime_limits 補 rpg.max_months_per_turn（只插入缺少的） | 新增欄位，寫入初始資料 |
 | `0017_story_preference` | 2026-11-10 | 故事偏好與劇本讀者頻道：users 新增 story_preference（NOT NULL、預設 'all'）；script_versions 新增 audience（可為空，既有版本不回填） | 新增欄位 |
+| `0018_rpg_turn_revision` | 2026-11-12 | 重新生成與編輯最後一輪：memory_logs 新增 revision（NOT NULL、預設 1）、regen_count（NOT NULL、預設 0）、revising_started_at 與 state_before_json（可為空，不回填）；新增 turn_regenerations；runtime_limits 補 rpg.free_regenerations（只插入缺少的） | 新增欄位與資料表，寫入初始資料 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1599,3 +1663,6 @@ flowchart TD
 | 2026-11-10 | 文件 | 本文件 | 同步 rpg-notebook（RC-2b）：`llm_call_logs.kind` 的允許值新增 `rpg_notebook`（第 5 節的欄位說明與第 7 節的固定值字典），並補寫 `sessions.notebook_text`／`notebook_version`／`notebook_upto_turn` 三欄現在的行為。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：`kind` 為 `NVARCHAR(20)`，新值 12 字放得下；三個記事簿欄位早在 `0012_rpg_data_and_script` 建立 | 本文件 |
 | 2026-11-10 | 新增 | 欄位 `users.story_preference`（NVARCHAR(10)，NOT NULL，資料庫預設 'all'）、`script_versions.audience`（NVARCHAR(10)，可為空） | 故事偏好（只影響劇本清單排序）與劇本讀者頻道（版本內容）；既有帳號取得 all，既有版本的 audience 為空（視同全讀者，不回填，已發佈的版本不可變）；新增兩個欄位，沒有新資料表與新外鍵 | `0017_story_preference` |
 | 2026-11-11 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0017_20261111_102044.bak`，`RESTORE VERIFYONLY` 通過，`RESTORE HEADERONLY` 確認為 `project` 的完整備份、含 CHECKSUM、未損毀，伺服器確認檔案存在）後，由 `0016_rpg_turn_engine` 升級到 `0017_story_preference`；`alembic current` 為 `0017_story_preference (head)`，`alembic check` 沒有差異，`flask seed-scripts --dry-run` 內建劇本「沒有變動 1（共 1 份）」（升級前由舊程式存入的雜湊在新程式下仍相同）；唯讀查詢確認 20 張資料表、234 個欄位（皆不含 `alembic_version`；含它為 21 與 235）、17 個外鍵不變；`users.story_preference` 為 NVARCHAR(10)、NOT NULL、預設 'all'，既有 1 位使用者為 all；`script_versions.audience` 為 NVARCHAR(10)、可為空，既有 1 個版本為空；`users`、`scripts`、`script_versions`、`sessions` 的列數升級前後相同（1、1、1、0）。**第一次備份嘗試沒有真的寫出檔案**（pyodbc 執行 `BACKUP` 後沒有讀完結果集，`RESTORE VERIFYONLY` 回報找不到檔案），當時沒有升級；改以讀完結果集的方式重做並驗證後才升級。由 Claude 依使用者要求執行 | `0017_story_preference` |
+| 2026-11-12 | 新增 | 欄位 `memory_logs.revision`（INTEGER，NOT NULL，資料庫預設 1）、`memory_logs.regen_count`（INTEGER，NOT NULL，資料庫預設 0）、`memory_logs.revising_started_at`（DATETIME2(6)，可為空）、`memory_logs.state_before_json`（NVARCHAR(max)，可為空） | 重新生成與編輯最後一輪：修訂版本、已成功重新生成的次數（決定是否免費）、修訂的認領時間（逾時可被接手）與回合前的世界快照（下一輪完成時清除）；既有回合的 revision 為 1、regen_count 為 0、其餘為空（快照不回填，所以遷移之前建立的回合不可修訂） | `0018_rpg_turn_revision` |
+| 2026-11-12 | 新增 | 資料表 `turn_regenerations`（11 欄，1 個唯一約束 `uq_turn_regenerations_session_turn_attempt`，1 個外鍵 `session_id`→`sessions.id` CASCADE） | 玩家重新生成時選的分類與填的理由（供營運檢視）與每次修訂的結果；不存被取代的行動與劇情；隨存檔與帳號抹除、納入個人資料匯出；新表 21 張、欄位共 249 個 | `0018_rpg_turn_revision` |
+| 2026-11-12 | 新增 | `runtime_limits` 的一列初始資料（`rpg.free_regenerations` = 2） | 每個回合前幾次重新生成免費；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋；`runtime_limits` 由 16 列變 17 列 | `0018_rpg_turn_revision` |
