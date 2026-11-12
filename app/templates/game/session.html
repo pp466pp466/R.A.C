@@ -17,7 +17,7 @@
    - 遊戲幣 Modal：coinModalOpen、coinModalText、checkinBusy、checkinPreview（{ wouldGain, wouldLose }｜null）、checkinMessage、checkinFinished。
    - 記事簿面板（game-notebook.js）：notebook（{ text, version, length, capacity, reserve, full }｜null）、notebookLoading、notebookError（{ message, link, retry }｜null）、
      notebookEmpty、notebookUsage（「1800 / 2000」）、notebookReserveNote、notebookFull（入口與面板共用）、notebookFullText、notebookEmptyText、notebookStale、
-     notebookEditing、notebookDraft、notebookDraftCount、notebookOver、notebookOverNote、notebookEditHint、notebookCanEdit、notebookCanSave、notebookLocked、
+     notebookEditing、notebookDraft、notebookDraftCount、notebookOver、notebookOverNote、notebookEditHint、notebookSaveHint（儲存鈕因為還沒修改而灰色時的說明）、notebookCanEdit、notebookCanSave、notebookLocked、
      notebookSaving、notebookNotice（{ tone, text }｜null）、notebookConflict（後端最新的記事簿｜null）、notebookDiscardOpen（「放棄未儲存的變更」Modal）。
    - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、resendInflight、askAbandon、confirmAbandon、
      leaveClick、confirmLeave、toggleSidebar、closeSidebar、selectSideTab、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal、
@@ -207,11 +207,6 @@
 
           <template v-else>
             <p v-if="notebookEditHint" class="ge-hint" role="status">{{ notebookEditHint }}</p>
-            <p v-if="notebookNotice" class="gm-notice" :class="'gm-notice--' + notebookNotice.tone" role="alert">{{ notebookNotice.text }}</p>
-            <template v-if="notebookConflict">
-              <span class="gm-eyebrow">後端最新的內容（供對照，你的編輯仍保留在下方）</span>
-              <div class="gm-notebook__text gm-notebook__text--compare">{{ notebookConflict.text }}</div>
-            </template>
             <label class="gm-sr" for="gm-notebook-draft">編輯記事簿</label>
             <textarea id="gm-notebook-draft" class="gw-input gm-notebook__input" rows="12" v-model="notebookDraft" :readonly="notebookLocked"
                       autocomplete="off" spellcheck="false"></textarea>
@@ -221,7 +216,13 @@
               <button type="button" class="ui-btn" :disabled="notebookSaving" @click="cancelNotebookEdit">取消</button>
               <button type="button" class="ui-btn ui-btn--primary" :disabled="!notebookCanSave" :aria-busy="notebookSaving ? 'true' : 'false'" @click="saveNotebook">{{ notebookSaving ? '儲存中…' : '儲存' }}</button>
             </div>
+            <p v-if="notebookNotice" class="gm-notice" :class="'gm-notice--' + notebookNotice.tone" role="alert">{{ notebookNotice.text }}</p>
             <p v-if="notebookOverNote" class="gw-field-error" role="alert">{{ notebookOverNote }}</p>
+            <p v-else-if="notebookSaveHint" class="ge-hint" role="status">{{ notebookSaveHint }}</p>
+            <template v-if="notebookConflict">
+              <span class="gm-eyebrow">後端最新的內容（供對照，你的編輯仍保留在上方的編輯框）</span>
+              <div class="gm-notebook__text gm-notebook__text--compare">{{ notebookConflict.text }}</div>
+            </template>
           </template>
         </template>
       </section>

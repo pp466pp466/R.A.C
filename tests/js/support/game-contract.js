@@ -9,7 +9,7 @@ const CONTRACT = {
     'coinModalText', 'checkinBusy', 'checkinPreview', 'checkinMessage', 'checkinFinished',
     // 記事簿面板（game-notebook.js）
     'notebook', 'notebookLoading', 'notebookError', 'notebookEmpty', 'notebookUsage', 'notebookReserveNote', 'notebookFull', 'notebookFullText', 'notebookEmptyText',
-    'notebookStale', 'notebookEditing', 'notebookDraft', 'notebookDraftCount', 'notebookOver', 'notebookOverNote', 'notebookEditHint', 'notebookCanEdit',
+    'notebookStale', 'notebookEditing', 'notebookDraft', 'notebookDraftCount', 'notebookOver', 'notebookOverNote', 'notebookEditHint', 'notebookSaveHint', 'notebookCanEdit',
     'notebookCanSave', 'notebookLocked', 'notebookSaving', 'notebookNotice', 'notebookConflict', 'notebookDiscardOpen',
   ],
   methods: [

@@ -462,13 +462,24 @@ def test_the_game_template_shows_every_player_and_author_text_only_as_plain_inte
     for expression in ("title", "playerName", "item.text", "item.action", "item.story", "line", "world.location", "world.summary", "goal", "place", "notice.text",
                        "loadFailure.message", "coinModalText", "checkinMessage",
                        "notebook.text", "notebookConflict.text", "notebookNotice.text", "notebookError.message", "notebookFullText", "notebookEmptyText",
-                       "notebookReserveNote", "notebookEditHint", "notebookOverNote"):
+                       "notebookReserveNote", "notebookEditHint", "notebookSaveHint", "notebookOverNote"):
         assert re.search(r"\{\{\s*" + re.escape(expression) + r"(\s*\|\|\s*'[^']*')?\s*\}\}", html), expression   # 只允許以固定文字當作空值的備援
     assert 'v-model="draft"' in html
     for forbidden in ("v-html", "innerHTML", "|safe", "<img", "<iframe", "<script src=\"http"):
         assert forbidden not in html, forbidden
     assert not re.search(r"\{\{[^}]*\|\s*safe", html)
     assert "world.places" in html and "world.goals" in html and not re.search(r"world\.(traits|hidden\w*|arc\w*|entities|npc\w*)", html)   # 不洩漏 NPC 的特質、歸屬與弧線階段
+
+
+def test_the_notebook_editor_and_its_buttons_stay_above_every_notice_and_the_comparison_so_a_conflict_cannot_push_them_out_of_view():
+    # 版本衝突時對照區是整本記事簿（上千字）：它與各種說明必須在編輯框與按鈕「之後」，否則編輯框與儲存鈕會被推出視線（6.1 驗收曾發生）
+    html = read(TEMPLATES / "session.html")
+    editor = html.index('<textarea id="gm-notebook-draft"')
+    save = html.index('@click="saveNotebook"')
+    order = [html.index(marker) for marker in ('{{ notebookNotice.text }}', '{{ notebookOverNote }}', '{{ notebookSaveHint }}', '{{ notebookConflict.text }}')]
+    assert editor < save < min(order)
+    assert order == sorted(order)                                            # 說明（儲存結果、超過容量、尚未修改）在對照區之前
+    assert html.count("{{ notebookNotice.text }}") == 1 and html.count("{{ notebookConflict.text }}") == 1
 
 
 def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_timeout_or_limit(app):

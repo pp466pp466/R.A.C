@@ -15,7 +15,10 @@
  * - **編輯**：進入編輯時記下版本；字數即時顯示（NFC 之後以 Unicode 字元計，與後端同一個算法），超過容量時禁用儲存並說明超出多少（玩家編輯沒有預備空間）；
  *   儲存只有玩家按「儲存」才會送出（**從不自動儲存**），進行中再按只會有一個請求，`finally` 恢復。有未儲存的變更時按「取消」會先問（`discardOpen`）。
  * - **版本衝突**（409 `notebook_conflict`）：以後端附上的最新記事簿更新全文、用量與版本，**玩家的草稿原封不動保留**（`conflict` 另外顯示後端最新的內容供對照），
- *   不自動合併；之後的儲存以最新的版本為準，所以是玩家看過之後明確地再按一次。
+ *   不自動合併；之後的儲存以最新的版本為準，所以是玩家看過之後明確地再按一次。說明與對照區都放在編輯框與按鈕的**下方**（編輯框與按鈕不會被推走），並另外用 Toast 提醒。
+ * - **回到前景時先檢查**（`checkFresh()`，game.js 在 visibilitychange／focus 呼叫）：編輯中的分頁回到前景，先問一次最新的版本；另一個分頁或裝置已經儲存的話，
+ *   玩家還沒修改就直接換成最新內容，已修改就保留草稿並顯示對照（同 409）。只在編輯中才問，失敗安靜，不儲存任何東西。
+ * - 儲存鈕灰色的原因都有說明：還沒有修改（`notebookSaveHint`）、超過容量（`notebookOverNote`）、儲存中（按鈕文字）。
  * - **其他失敗**以固定的繁體中文顯示（`Game.describeNotebookFailure`）：太長、規則層命中（只有類別）、已完結（轉唯讀）、找不到存檔、登入過期、網路與逾時；訊息不含記事簿內容；
  *   所有失敗都保留草稿。
  * - 已完結的存檔沒有「編輯」；編輯到一半才完結時，草稿留在唯讀的輸入框裡供複製。
@@ -73,6 +76,8 @@
     var baseVersion = 0;                   // 非響應式：下一次儲存要帶的 expected_version
     var loadingPromise = null;
     var loadController = null;
+    var checkingPromise = null;
+    var checkController = null;
     var saveController = null;
 
     // ---- 計算 ---------------------------------------------------------------------------------------
@@ -99,6 +104,10 @@
     var canSave = computed(function () { return editing.value && !saving.value && !ended.value && !over.value && dirty.value; });
     /* 長度已超過容量：玩家要一次刪到容量以內才能儲存，AI 才會恢復更新。 */
     var editHint = computed(function () { return editing.value && view.value && Game.notebookIsFull(view.value) ? Game.notebookText('full_edit') : ''; });
+    /* 儲存鈕因為「還沒有修改」而是灰的時說明原因（超過容量有自己的說明；儲存中與已完結不需要）。 */
+    var saveHint = computed(function () {
+      return editing.value && !saving.value && !ended.value && !over.value && !dirty.value ? Game.notebookText('unchanged') : '';
+    });
 
     // ---- 小工具 -------------------------------------------------------------------------------------
     function newController() { return typeof deps.AbortController === 'function' ? new deps.AbortController() : null; }
@@ -134,8 +143,10 @@
         var failure = Game.describeNotebookFailure(info);
         if (failure.kind === 'canceled') { return false; }
         if (failure.kind === 'login') { goLogin(); return false; }
+        /* 讀取失敗不是「沒有儲存」：網路與逾時用讀取專用的文字（儲存失敗的那句會說編輯內容還在，讀取時沒有編輯）。 */
+        var readFailedAtTransport = failure.kind === 'network' || failure.kind === 'timeout';
         loadError.value = {
-          message: failure.message, link: failure.link || null,
+          message: readFailedAtTransport ? Game.notebookText('load_network') : failure.message, link: failure.link || null,
           retry: failure.kind !== 'not_found' && failure.kind !== 'gate' && failure.kind !== 'csrf'
         };
         return false;
@@ -202,6 +213,7 @@
       }
       notice.value = { tone: 'error', text: failure.message };
       if (failure.kind === 'conflict') {
+        toast(Game.notebookText('conflict_toast'));                          // 對照區在編輯框下方，說明可能不在視線內：再用 Toast 提醒一次
         if (failure.notebook) {
           view.value = failure.notebook;
           conflict.value = failure.notebook;
@@ -234,9 +246,48 @@
         });
     }
 
-    /* 離開頁面（pagehide）：中止進行中的讀取與儲存請求。不會有任何自動儲存。 */
+    /* 編輯中的分頁回到前景（game.js 在 visibilitychange／focus 呼叫）：另一個分頁或裝置可能已經儲存，先問一次最新的版本，
+     * 不要等玩家按了儲存才知道。只在編輯中才問；失敗一律安靜（這是背景檢查，儲存時仍有版本比對）；同時只有一個請求。
+     * 版本沒有比較新：什麼都不做。比較新：
+     *   - 玩家還沒有修改（草稿＝進入編輯時的內容）：編輯框直接換成最新內容，沒有東西會遺失；
+     *   - 玩家已經修改：草稿原封不動，和儲存回 409 時一樣把最新內容放進對照區，之後的儲存以最新版本為準。
+     * 回傳是否發現較新的版本；永不拋出。 */
+    function checkFresh() {
+      if (!editing.value || saving.value || ended.value || loadingPromise || checkingPromise) { return Promise.resolve(false); }
+      var controller = newController();
+      checkController = controller;
+      checkingPromise = new Promise(function (resolve) { resolve(api.notebook(sessionId, { signal: signalOf(controller) })); }).then(function (data) {
+        var latest = Game.notebookView(isObject(data) ? data.notebook : null);
+        if (!latest || !editing.value || saving.value || latest.version <= baseVersion) { return false; }   // 讀的期間玩家已儲存、離開或有新的儲存在進行：以那邊為準
+        var untouched = !dirty.value;
+        view.value = latest;
+        baseVersion = latest.version;
+        if (untouched) {
+          draft.value = latest.text;
+          editBase.value = latest.text;
+          conflict.value = null;
+          notice.value = { tone: 'info', text: Game.notebookText('refreshed') };
+        } else {
+          conflict.value = latest;
+          notice.value = { tone: 'info', text: Game.notebookText('conflict') };
+        }
+        toast(Game.notebookText('conflict_toast'));
+        return true;
+      }, function (info) {
+        noteFailure(info);
+        if (Game.describeNotebookFailure(info).kind === 'login') { goLogin(); }
+        return false;
+      }).finally(function () {
+        checkingPromise = null;
+        if (checkController === controller) { checkController = null; }
+      });
+      return checkingPromise;
+    }
+
+    /* 離開頁面（pagehide）：中止進行中的讀取、檢查與儲存請求。不會有任何自動儲存。 */
     function dispose() {
       abort(loadController);
+      abort(checkController);
       abort(saveController);
     }
 
@@ -244,9 +295,9 @@
       notebook: view, notebookLoading: loading, notebookError: loadError, notebookEmpty: empty, notebookUsage: usage, notebookReserveNote: reserveNote,
       notebookFull: full, notebookFullText: Game.notebookText('full'), notebookEmptyText: Game.notebookText('empty'), notebookStale: stale,
       notebookEditing: editing, notebookDraft: draft, notebookDraftCount: draftCount, notebookOver: over, notebookOverNote: overNote,
-      notebookEditHint: editHint, notebookCanEdit: canEdit, notebookCanSave: canSave, notebookLocked: locked, notebookSaving: saving,
+      notebookEditHint: editHint, notebookSaveHint: saveHint, notebookCanEdit: canEdit, notebookCanSave: canSave, notebookLocked: locked, notebookSaving: saving,
       notebookNotice: notice, notebookConflict: conflict, notebookDiscardOpen: discardOpen,
-      open: open, startEdit: startEdit, save: save, cancelEdit: cancelEdit, confirmDiscard: confirmDiscard, dispose: dispose
+      open: open, startEdit: startEdit, save: save, cancelEdit: cancelEdit, confirmDiscard: confirmDiscard, checkFresh: checkFresh, dispose: dispose
     };
   }
 

@@ -305,6 +305,56 @@ test('editing through the real API sends exactly one PUT with the draft and the 
   assert.ok(game.requests.every((request) => request.method === 'get' || (request.method === 'put' && NB_PATH.test(request.url))));   // 沒有別的寫入
 });
 
+test('a tab that is editing the notebook checks the version when it comes back to the foreground (visibilitychange or focus); nothing is requested when it is hidden or not editing', async () => {
+  const { game, server, notebookRequests } = await mounted();
+  const { page } = game;
+  game.fireDocument('visibilitychange');
+  game.fire('focus');
+  await settle();
+  assert.deepEqual(notebookRequests(), []);                                    // 還沒開面板：回到前景不請求
+
+  page.openNotebook();
+  await settle();
+  assert.equal(notebookRequests().length, 1);
+  game.fireDocument('visibilitychange');
+  game.fire('focus');
+  await settle();
+  assert.equal(notebookRequests().length, 1);                                  // 開著面板但在檢視：不在背景重讀
+
+  assert.equal(page.startNotebookEdit(), true);
+  game.sandbox.document.visibilityState = 'hidden';
+  game.fireDocument('visibilitychange');                                       // 切走（分頁隱藏）時不檢查
+  await settle();
+  assert.equal(notebookRequests().length, 1);
+
+  game.sandbox.document.visibilityState = 'visible';
+  server.notebook = nbView('另一個分頁存的新設定', { version: 6 });
+  game.fireDocument('visibilitychange');                                       // 只有 visibilitychange（切換分頁）：問一次最新版本
+  await settle();
+  assert.equal(notebookRequests().length, 2);
+  assert.equal(notebookRequests()[1].method, 'get');
+  assert.equal(page.notebook.value.version, 6);
+  assert.equal(page.notebookDraft.value, '另一個分頁存的新設定');                // 玩家沒改過：換成最新內容
+  assert.equal(page.notebookNotice.value.text, '另一個分頁或裝置剛更新了記事簿，編輯框已換成最新內容。');
+  assert.deepEqual(game.toasts, ['記事簿剛在別處更新過，請看編輯框下方的最新內容。']);
+  assert.equal(page.notebookSaveHint.value, '還沒有修改內容，沒有需要儲存的變更。');
+
+  server.notebook = nbView('又被更新了', { version: 7 });
+  game.fire('focus');                                                          // 只有 focus（視窗切換，分頁沒有被隱藏）：也要檢查
+  await settle();
+  assert.equal(notebookRequests().length, 3);
+  assert.equal(page.notebook.value.version, 7);
+  assert.equal(page.notebookDraft.value, '又被更新了');
+
+  server.notebook = nbView('第三次更新', { version: 8 });
+  game.fireDocument('visibilitychange');                                       // 兩個事件同時來：同一時間只有一個檢查
+  game.fire('focus');
+  await settle();
+  assert.equal(notebookRequests().length, 4);
+  assert.equal(page.notebookDraft.value, '第三次更新');
+  assert.ok(game.requests.every((request) => request.method === 'get'));       // 檢查不儲存任何東西
+});
+
 test('failures from the real API: a conflict keeps the draft, a rule hit names only the category, an ended save turns the whole page into read-only', async () => {
   const { game, server } = await mounted();
   const { page } = game;

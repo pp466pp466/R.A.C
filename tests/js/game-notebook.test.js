@@ -343,7 +343,7 @@ test('a throwing API is handled like a failure, and the button is restored', asy
 
 test('a version conflict shows the latest notebook, keeps the draft for comparison, and the next save carries the latest version', async () => {
   const latest = NB('AI 剛寫入的新設定', { version: 6 });
-  const { nb, calls } = await editing('舊的設定', {
+  const { nb, calls, toasts } = await editing('舊的設定', {
     put: [rejects(serverFailure(409, 'notebook_conflict', { notebook: latest })), { notebook: NB(`${MARKER}我的版本`, { version: 7 }) }],
   });
   nb.notebookDraft.value = `${MARKER}我的版本`;
@@ -356,6 +356,7 @@ test('a version conflict shows the latest notebook, keeps the draft for comparis
   assert.equal(nb.notebookEditing.value, true);
   assert.match(nb.notebookNotice.value.text, /AI 或另一個裝置剛更新了記事簿/);
   assert.match(nb.notebookNotice.value.text, /還保留著/);
+  assert.deepEqual(toasts, [Labels.notebookText('conflict_toast')]);                          // 對照區在編輯框下方，說明可能不在視線內：另外用 Toast 提醒
   assert.equal(nb.notebookSaving.value, false);
   assert.equal(calls.get.length, 1);                                                          // 不另外重讀、不自動合併、不自動重送
   assert.equal(calls.put.length, 1);
@@ -540,6 +541,8 @@ test('read failures show a fixed message with retry (or a link to leave), 401 go
   const net = setup({ get: [rejects(transportFailure('network'))] });
   assert.equal(await net.nb.open(), false);
   assert.match(net.nb.notebookError.value.message, /連線不穩/);
+  assert.doesNotMatch(net.nb.notebookError.value.message, /沒有儲存|編輯的內容/);              // 讀取失敗：沒有編輯、也沒有儲存，不能用儲存失敗的那句
+  assert.equal(net.nb.notebookError.value.message, Labels.notebookText('load_network'));
   assert.equal(net.nb.notebookError.value.retry, true);
   assert.equal(net.nb.notebookLoading.value, false);
 
@@ -562,6 +565,7 @@ test('read failures show a fixed message with retry (or a link to leave), 401 go
   const retry = setup({ get: [rejects(transportFailure('timeout')), { notebook: NB('回來了') }] });
   await retry.nb.open();
   assert.ok(retry.nb.notebookError.value);
+  assert.equal(retry.nb.notebookError.value.message, Labels.notebookText('load_network'));       // 逾時也一樣
   assert.equal(await retry.nb.open(), true);
   assert.equal(retry.nb.notebookError.value, null);                                            // 重試成功：錯誤消失
   assert.equal(retry.nb.notebook.value.text, '回來了');
@@ -609,6 +613,201 @@ test('leaving the page aborts a read and a save that are still running', async (
   assert.equal(saving.calls.put[0].options.signal.aborted, true);
   readGate.resolve({ notebook: NB('x') });
   saveGate.resolve({ notebook: NB('x') });
+});
+
+// ---- 儲存鈕灰色的說明、回到前景時的版本檢查 ----------------------------------------------------------------------
+
+test('a grey save button always says why: nothing changed, over the capacity, or (while saving) the button text; nothing is said outside editing', async () => {
+  const { nb } = setup({ get: [{ notebook: NB('舊的設定') }], put: [deferred().promise] });
+  assert.equal(nb.notebookSaveHint.value, '');                                      // 還沒讀到、沒有在編輯
+  await nb.open();
+  assert.equal(nb.notebookSaveHint.value, '');                                      // 檢視中不說
+  nb.startEdit();
+  assert.equal(nb.notebookCanSave.value, false);
+  assert.equal(nb.notebookSaveHint.value, Labels.notebookText('unchanged'));        // 進了編輯但沒改字：灰色，要說明
+  assert.match(nb.notebookSaveHint.value, /還沒有修改/);
+  nb.notebookDraft.value = '改了';
+  assert.equal(nb.notebookCanSave.value, true);
+  assert.equal(nb.notebookSaveHint.value, '');
+  nb.notebookDraft.value = '舊的設定';                                              // 改回原樣：又沒有東西可存
+  assert.equal(nb.notebookSaveHint.value, Labels.notebookText('unchanged'));
+  nb.notebookDraft.value = 'x'.repeat(2001);                                        // 超過容量：有自己的說明，不重複說「沒有修改」
+  assert.equal(nb.notebookCanSave.value, false);
+  assert.equal(nb.notebookSaveHint.value, '');
+  assert.ok(nb.notebookOverNote.value);
+  nb.notebookDraft.value = '又改了';
+  nb.save();                                                                         // 儲存中：按鈕文字是「儲存中…」，不另外說明
+  assert.equal(nb.notebookSaving.value, true);
+  assert.equal(nb.notebookSaveHint.value, '');
+});
+
+test('a notebook that is already over the capacity says to cut it (the over note), not "nothing changed", even before the first keystroke', async () => {
+  const { nb } = await editing('長'.repeat(2240));
+  assert.equal(nb.notebookOver.value, true);
+  assert.equal(nb.notebookCanSave.value, false);
+  assert.ok(nb.notebookOverNote.value);
+  assert.equal(nb.notebookSaveHint.value, '');                                      // 超過容量有自己的說明，不重複說「沒有修改」
+});
+
+test('no hint for an ended save, whose editor is read-only', async () => {
+  const { nb, ended } = await editing('舊的設定');
+  assert.equal(nb.notebookSaveHint.value, Labels.notebookText('unchanged'));
+  ended.value = true;
+  assert.equal(nb.notebookSaveHint.value, '');
+});
+
+test('coming back to a tab that is editing asks for the latest version: unchanged draft is replaced by the newer text, nothing is lost, and the next save carries the new version', async () => {
+  const { nb, calls, toasts } = await editing('舊的設定', {
+    get: [{ notebook: NB('舊的設定', { version: 4 }) }, { notebook: NB('另一個分頁存的新設定', { version: 6 }) }],
+    put: [{ notebook: NB('另一個分頁存的新設定，加上我的', { version: 7 }) }],
+  });
+  assert.equal(await nb.checkFresh(), true);
+  assert.equal(calls.get.length, 2);
+  assert.equal(nb.notebook.value.text, '另一個分頁存的新設定');                       // 檢視與用量更新
+  assert.equal(nb.notebook.value.version, 6);
+  assert.equal(nb.notebookDraft.value, '另一個分頁存的新設定');                       // 玩家沒改過：編輯框直接換成最新內容
+  assert.equal(nb.notebookConflict.value, null);
+  assert.equal(nb.notebookNotice.value.tone, 'info');
+  assert.equal(nb.notebookNotice.value.text, Labels.notebookText('refreshed'));
+  assert.deepEqual(toasts, [Labels.notebookText('conflict_toast')]);
+  assert.equal(nb.notebookCanSave.value, false);                                     // 換成最新內容之後仍是「沒有修改」，而且說明得到
+  assert.equal(nb.notebookSaveHint.value, Labels.notebookText('unchanged'));
+  nb.notebookDraft.value = '另一個分頁存的新設定，加上我的';
+  assert.equal(await nb.save(), true);
+  assert.equal(calls.put.length, 1);
+  assert.equal(calls.put[0].version, 6);                                             // 以最新版本為基準，不會再 409
+});
+
+test('coming back with a modified draft keeps the draft exactly, shows the latest for comparison, and the next save carries the new version', async () => {
+  const latest = NB('另一個分頁存的新設定', { version: 6 });
+  const { nb, calls, toasts } = await editing('舊的設定', {
+    get: [{ notebook: NB('舊的設定', { version: 4 }) }, { notebook: latest }],
+    put: [{ notebook: NB(`${MARKER}我的版本`, { version: 7 }) }],
+  });
+  nb.notebookDraft.value = `${MARKER}我的版本`;
+  assert.equal(await nb.checkFresh(), true);
+  assert.equal(nb.notebookDraft.value, `${MARKER}我的版本`);                          // 草稿原封不動
+  assert.equal(nb.notebookConflict.value.text, '另一個分頁存的新設定');                 // 供對照
+  assert.equal(nb.notebook.value.version, 6);
+  assert.equal(nb.notebookNotice.value.tone, 'info');
+  assert.match(nb.notebookNotice.value.text, /AI 或另一個裝置剛更新了記事簿/);
+  assert.match(nb.notebookNotice.value.text, /還保留著/);
+  assert.deepEqual(toasts, [Labels.notebookText('conflict_toast')]);
+  assert.equal(nb.notebookCanSave.value, true);
+  assert.equal(calls.put.length, 0);                                                  // 只是檢查，沒有儲存、沒有合併
+  assert.equal(await nb.save(), true);                                                // 玩家看過之後明確按儲存
+  assert.equal(calls.put[0].version, 6);
+  assert.equal(calls.put[0].text, `${MARKER}我的版本`);
+});
+
+test('the check does nothing when the version is not newer, and nothing when the tab is not editing', async () => {
+  const idle = setup({ get: [{ notebook: NB('舊的設定', { version: 4 }) }] });
+  assert.equal(await idle.nb.checkFresh(), false);                                    // 還沒讀過、沒有在編輯
+  await idle.nb.open();
+  assert.equal(await idle.nb.checkFresh(), false);                                    // 檢視中：只有開啟面板時才讀，不在背景重讀
+  assert.equal(idle.calls.get.length, 1);
+
+  const same = await editing('舊的設定', { get: [{ notebook: NB('舊的設定', { version: 4 }) }] });
+  same.nb.notebookDraft.value = '我改了';
+  assert.equal(await same.nb.checkFresh(), false);                                    // 版本相同
+  assert.equal(same.calls.get.length, 2);
+  assert.equal(same.nb.notebookNotice.value, null);
+  assert.equal(same.nb.notebookConflict.value, null);
+  assert.deepEqual(same.toasts, []);
+  assert.equal(same.nb.notebookDraft.value, '我改了');
+
+  const older = await editing('舊的設定', { get: [{ notebook: NB('舊的設定', { version: 4 }) }, { notebook: NB('更舊', { version: 3 }) }] });
+  assert.equal(await older.nb.checkFresh(), false);                                   // 版本比較舊也不動
+  assert.equal(older.nb.notebook.value.text, '舊的設定');
+});
+
+test('the background check is quiet when it fails (the save still compares versions), except that an expired login goes to the login page', async () => {
+  for (const kind of ['network', 'timeout']) {
+    const env = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, rejects(transportFailure(kind))] });
+    env.nb.notebookDraft.value = '我改了';
+    assert.equal(await env.nb.checkFresh(), false);
+    assert.equal(env.nb.notebookNotice.value, null);
+    assert.deepEqual(env.toasts, []);
+    assert.equal(env.nb.notebookError.value, null);
+    assert.equal(env.nb.notebookDraft.value, '我改了');
+    assert.equal(env.nb.notebookEditing.value, true);
+  }
+  const gone = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, rejects(serverFailure(404, 'not_found'))] });
+  assert.equal(await gone.nb.checkFresh(), false);
+  assert.equal(gone.nb.notebookNotice.value, null);
+  const expired = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, rejects(serverFailure(401, 'unauthorized'))] });
+  expired.nb.notebookDraft.value = '我改了';
+  assert.equal(await expired.nb.checkFresh(), false);
+  assert.deepEqual(expired.logins, [true]);
+  assert.equal(expired.nb.notebookDraft.value, '我改了');
+  const locked = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, rejects(serverFailure(403, 'account_locked'))] });
+  await locked.nb.checkFresh();
+  assert.deepEqual(plain(locked.noted), [serverFailure(403, 'account_locked')]);        // 受限狀態仍交給 game.js 辨識
+  const garbage = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, { notebook: 'not a notebook' }] });
+  assert.equal(await garbage.nb.checkFresh(), false);
+  assert.equal(garbage.nb.notebookNotice.value, null);
+});
+
+test('the check shares one request, never runs beside a save or a read or for an ended save, and a late answer after the player saved or left is ignored', async () => {
+  const gate = deferred();
+  const shared = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, gate.promise] });
+  const first = shared.nb.checkFresh();
+  const second = shared.nb.checkFresh();
+  assert.equal(await second, false);
+  assert.equal(shared.calls.get.length, 2);                                           // 讀取一次、檢查一次：同時只有一個檢查
+  gate.resolve({ notebook: NB('新的', { version: 6 }) });
+  assert.equal(await first, true);
+
+  const saving = await editing('舊的設定', { put: [deferred().promise] });
+  saving.nb.notebookDraft.value = '改';
+  saving.nb.save();
+  assert.equal(await saving.nb.checkFresh(), false);                                  // 儲存進行中不檢查
+  assert.equal(saving.calls.get.length, 1);
+
+  const readGate = deferred();
+  const reading = setup({ get: [{ notebook: NB('舊的設定') }, readGate.promise] });
+  await reading.nb.open();
+  reading.nb.startEdit();
+  const open = reading.nb.open();
+  assert.equal(await open, false);                                                    // 編輯中的 open() 不讀，所以這裡只剩一個讀取
+  readGate.resolve({ notebook: NB('x') });
+
+  const ended = await editing('舊的設定');
+  ended.ended.value = true;
+  assert.equal(await ended.nb.checkFresh(), false);
+  assert.equal(ended.calls.get.length, 1);
+
+  const lateGate = deferred();
+  const late = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, lateGate.promise], put: [{ notebook: NB('我存的', { version: 5 }) }] });
+  const pending = late.nb.checkFresh();
+  late.nb.notebookDraft.value = '我存的';
+  assert.equal(await late.nb.save(), true);                                           // 檢查還沒回來，玩家先儲存成功並離開編輯
+  lateGate.resolve({ notebook: NB('更晚到的舊答案', { version: 4 }) });
+  assert.equal(await pending, false);
+  assert.equal(late.nb.notebook.value.text, '我存的');                                // 晚到的答案不覆蓋
+  assert.equal(late.nb.notebookNotice.value, null);
+
+  const leftGate = deferred();
+  const left = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, leftGate.promise] });
+  const waiting = left.nb.checkFresh();
+  left.nb.notebookDraft.value = '取消';
+  left.nb.confirmDiscard();                                                           // 玩家放棄編輯離開
+  leftGate.resolve({ notebook: NB('新的', { version: 9 }) });
+  assert.equal(await waiting, false);
+  assert.equal(left.nb.notebookEditing.value, false);
+  assert.equal(left.nb.notebook.value.text, '舊的設定');
+});
+
+test('leaving the page aborts a check that is still running, and the check itself never saves anything', async () => {
+  const gate = deferred();
+  const env = await editing('舊的設定', { get: [{ notebook: NB('舊的設定') }, gate.promise], withAbort: true });
+  env.nb.checkFresh();
+  assert.equal(env.calls.get[1].options.signal.aborted, false);
+  env.nb.dispose();
+  assert.equal(env.calls.get[1].options.signal.aborted, true);
+  gate.resolve({ notebook: NB('新的', { version: 9 }) });
+  await settle();
+  assert.equal(env.calls.put.length, 0);
 });
 
 test('the module touches no browser storage, console, timer or document, and the notebook text never goes anywhere but the two notebook calls', async () => {

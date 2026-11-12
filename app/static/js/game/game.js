@@ -147,6 +147,12 @@
       window.addEventListener('online', function () { session.setOnline(true); });
       window.addEventListener('offline', function () { session.setOnline(false); });
       window.addEventListener('pagehide', function () { session.dispose(); notebook.dispose(); });   // 離開頁面：中止所有進行中的請求（記事簿不會自動儲存）
+      /* 編輯記事簿的分頁回到前景：另一個分頁或裝置可能已經儲存，先檢查版本（沒有在編輯就什麼都不做）。 */
+      function checkNotebookFresh() { notebook.checkFresh(); }
+      document.addEventListener('visibilitychange', function () {
+        if (document.visibilityState !== 'hidden') { checkNotebookFresh(); }
+      });
+      window.addEventListener('focus', checkNotebookFresh);
       document.addEventListener('keydown', function (event) {
         if (event && event.key === 'Escape' && sidebarOpen.value && !anyModalOpen()) { sidebarOpen.value = false; }
       });
@@ -174,7 +180,7 @@
         notebookUsage: notebook.notebookUsage, notebookReserveNote: notebook.notebookReserveNote, notebookFull: notebook.notebookFull,
         notebookFullText: notebook.notebookFullText, notebookEmptyText: notebook.notebookEmptyText, notebookStale: notebook.notebookStale,
         notebookEditing: notebook.notebookEditing, notebookDraft: notebook.notebookDraft, notebookDraftCount: notebook.notebookDraftCount,
-        notebookOver: notebook.notebookOver, notebookOverNote: notebook.notebookOverNote, notebookEditHint: notebook.notebookEditHint,
+        notebookOver: notebook.notebookOver, notebookOverNote: notebook.notebookOverNote, notebookEditHint: notebook.notebookEditHint, notebookSaveHint: notebook.notebookSaveHint,
         notebookCanEdit: notebook.notebookCanEdit, notebookCanSave: notebook.notebookCanSave, notebookLocked: notebook.notebookLocked,
         notebookSaving: notebook.notebookSaving, notebookNotice: notebook.notebookNotice, notebookConflict: notebook.notebookConflict,
         notebookDiscardOpen: notebook.notebookDiscardOpen, startNotebookEdit: notebook.startEdit, saveNotebook: notebook.save,
