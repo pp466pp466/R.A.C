@@ -144,6 +144,41 @@ class RunnerKit(GameKit):
     def run(self, plan, user: CurrentUser, **overrides: Any):
         return list(self.runner(plan, user, **overrides).events())
 
+    # ---- 修訂（RevisionRunner）-------------------------------------------------------------------
+
+    def revise(
+        self, user: CurrentUser, save: RpgSession, *, kind: str = "regenerate", msg: str = "m-1", revision: int = 1, category: str = "other",
+        reason: str = "劇情和設定對不上，想換個寫法", action: str = "我繞到後山，沿著小徑往上走。",
+    ):
+        """修訂的開始階段（像請求一樣在最後提交），回傳 `RevisionPlan`。"""
+        if kind == "edit":
+            plan = self.game.begin_revision(user, save.public_id, msg, kind=kind, expected_revision=revision, action=action)
+        else:
+            plan = self.game.begin_revision(user, save.public_id, msg, kind=kind, expected_revision=revision, category=category, reason=reason)
+        self.session.commit()
+        return plan
+
+    def revision_runner(self, plan, user: CurrentUser, **overrides: Any):
+        from app.services.rpg_revision_runner import RevisionRunner
+        from app.services.rpg_runner_base import RunnerDeps
+
+        deps = RunnerDeps(
+            session_factory=self.factory, wallet_factory=self.wallet_for, llm_factory=self.llm_for if self.state_available else None,
+            provider=self.provider, settings=self.settings, clock=self.clock, monotonic=self.monotonic, **overrides,
+        )
+        return RevisionRunner(plan=plan, current=user, deps=deps, marker=MARKER)
+
+    def run_revision(self, plan, user: CurrentUser, **overrides: Any):
+        return list(self.revision_runner(plan, user, **overrides).events())
+
+    def feedback(self, save: RpgSession):
+        from sqlalchemy import select
+
+        from app.models import TurnRegeneration
+
+        self.session.expire_all()
+        return list(self.session.scalars(select(TurnRegeneration).where(TurnRegeneration.session_id == save.id).order_by(TurnRegeneration.id)))
+
     # ---- 觀察（每次都讀最新的資料）----------------------------------------------------------
 
     def turns(self, save: RpgSession):

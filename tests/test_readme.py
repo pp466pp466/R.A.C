@@ -246,7 +246,7 @@ def test_readme_rpg_turn_engine_section_lists_exactly_the_registered_game_routes
         (rule.rule.replace("<session_id>", "<id>"), method) for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/game")
         for method in rule.methods - {"HEAD", "OPTIONS"}
     }
-    assert len(actual) == 6, "沒有掃到預期數量的路由，比對可能是空洞的"       # 4 個回合與唯讀端點，加上記事簿的 GET 與 PUT（rpg-notebook）
+    assert len(actual) == 8, "沒有掃到預期數量的路由，比對可能是空洞的"       # 4 個回合與唯讀端點，加上記事簿的 GET 與 PUT（rpg-notebook），以及修訂的兩個串流端點（rpg-turn-revision）
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
     for event in ("meta", "token", "ping", "transition", "state", "done", "error"):
         assert f"| `{event}` |" in section, event

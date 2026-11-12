@@ -166,7 +166,7 @@ def test_the_game_pages_accept_only_get(app):
 # 現在是遊戲主畫面的外殼——標題等文字改由 Vue 插值顯示，頁面載入腳本並呼叫既有的端點。不變的是：非擁有者與不存在的存檔逐字相同的 404、
 # 權限判斷全在 Service、頁面外殼本身不含任何劇情，也不建立或改動任何資料。
 
-SESSION_STATE_KEYS = {"session", "user", "gate", "content_mode", "stream", "limits"}
+SESSION_STATE_KEYS = {"session", "user", "gate", "content_mode", "stream", "limits", "revision_limits"}
 
 
 def test_the_owner_gets_the_game_page_with_exactly_the_agreed_initial_state(app):
@@ -181,6 +181,10 @@ def test_the_owner_gets_the_game_page_with_exactly_the_agreed_initial_state(app)
     assert state["gate"] is None
     assert state["stream"] == {"idle_timeout_ms": 45000, "total_timeout_ms": 180000}
     assert state["limits"] == {"action_max": 1000}
+    assert state["revision_limits"] == {                                          # rpg-turn-revision：理由字數與分類列舉（前端不寫死）
+        "reason_min": 5, "reason_max": 50,
+        "categories": ["setting_mismatch", "repetitive_or_dull", "typo_or_quality", "blocked_transition", "other"],
+    }
     assert set(state["content_mode"]) == {"effective", "is_adult"} and state["content_mode"]["is_adult"] is True
     html = response.get_data(as_text=True)
     assert re.search(r'<div id="game-app" class="gm-shell" v-cloak>', html)
@@ -199,6 +203,11 @@ def test_the_two_stream_timeouts_and_the_action_limit_are_the_documented_constan
     assert state["stream"]["idle_timeout_ms"] == game_page_controller.STREAM_IDLE_TIMEOUT_MS
     source = read(PROJECT_ROOT / "app" / "controllers" / "game_page_controller.py")
     assert '"action_max": ACTION_MAX' in source and not re.search(r'"action_max":\s*\d', source)
+    limits = state["revision_limits"]                                              # 修訂的理由字數與分類同樣直接引用後端常數
+    assert (limits["reason_min"], limits["reason_max"], limits["categories"]) == (
+        game_service.REASON_MIN, game_service.REASON_MAX, list(game_service.CATEGORIES),
+    )
+    assert '"reason_min": REASON_MIN' in source and not re.search(r'"reason_(min|max)":\s*\d', source)
 
 
 def test_the_initial_state_and_the_page_never_carry_story_content_the_notebook_the_world_or_personal_data(app):

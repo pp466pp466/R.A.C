@@ -1,6 +1,6 @@
 # 模型呼叫層
 
-> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-10 ｜ 對應 change：rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-12 ｜ 對應 change：rpg-turn-revision、rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
 > 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**已由 change `rpg-script-authoring`（RC-7）實作**（呼叫類別 `script_review`，見第 6a 節），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
 > 注意（2026-11-04）：AGENTS.md 第 5 節的 RPG 用途再新增「玩家主角的生成與審查」；**已由 change `rpg-character-creation`（RC-9）實作**（呼叫類別 `protagonist_gen`、`protagonist_review`，見第 6b 節）。兩者都是非串流的結構化輸出，沿用同一解析函式與重試規則，不使用 Gemini。
 
@@ -266,7 +266,7 @@ flowchart LR
     Th["讀取執行緒<br/>transport._ThreadedLineStream<br/>逐行讀取 → 有上限的佇列（64）"]
     Sse["OpenAIStream<br/>解析 data: 行<br/>StreamText／StreamTick／StreamEnd"]
     Run["StreamRun（rpg_stream.py）<br/>期限、備援、用量、帳本"]
-    Out["外層（TurnRunner／OpeningRunner）<br/>審查、心跳、預扣結算"]
+    Out["外層（TurnRunner／OpeningRunner／RevisionRunner）<br/>審查、心跳、預扣結算"]
     Led[("llm_call_logs")]
 
     Up -->|"位元組"| Th
@@ -313,6 +313,8 @@ flowchart TD
 | 切換條件 | 只有第一個正文片段**之前**的暫時性失敗才切換；已經送出任何正文，使用者已看到的內容不能換模型重來，失敗一律結束。被擋與設定錯誤不切換；備援本身失敗、或第一次就已經用備援，都不再嘗試 |
 | 空回應 | 串流完整結束卻沒有任何正文，視為暫時性失敗（帳本 `server_error`、`empty_response`），可切備援 |
 | 套接字逾時 | 傳給傳輸層的逾時是「剩餘預算」，只是安全網；精確的期限由外層以 tick 檢查 |
+
+**修訂（重新生成與編輯最後一輪，rpg-turn-revision）沿用同一條路徑**：`RevisionRunner` 與 `TurnRunner` 同為 `RunnerBase` 的子類別，串流、期限、備援、逐句審查與帳本都相同（用途仍是 `rpg_stream`），文字完整後的狀態呼叫（`rpg_state`，結構化輸出與驗證）由兩者共用的 `rpg_state_phase.state_phase` 發出。差別只在送進模型的內容與收尾：修訂以**回合前快照**的世界與不含目標回合的歷史重建上下文（重新生成沿用原行動，編輯使用新行動），**重新生成的分類與理由不屬於任何會進模型的內容**（不在 `system_instruction`、不在使用者內容區，由測試以標記字串斷言）；狀態階段失敗在普通回合是「文字照常完成、世界狀態不變」，在修訂是「整個修訂失敗、舊內容保留、預扣退回」。
 
 **帳本（每次嘗試一筆）**：用途 `rpg_stream` 或 `rpg_opening`、實際使用的模型、嘗試序號、結果狀態、輸入與輸出 token、延遲、`first_chunk_ms`、結束原因與列舉式的 `error_detail`。**不含任何劇情、行動或系統指令的文字**（`StreamRunner` 只用它們的字數估算 token）。
 

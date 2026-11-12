@@ -80,6 +80,7 @@ from app.services.rpg_notebook_capture import NotebookCapturer
 from app.services.rpg_prompt import rpg_marker
 from app.services.rpg_runner_base import RunnerDeps
 from app.services.rpg_opening_runner import OpeningRunner
+from app.services.rpg_revision_runner import RevisionRunner
 from app.services.rpg_turn_runner import TurnRunner
 from app.services.session_service import SessionService
 from app.services.startable import StartableVersions
@@ -479,6 +480,11 @@ def build_turn_runner(plan, current) -> TurnRunner:
     return TurnRunner(plan=plan, current=current, deps=build_runner_deps(), marker=rpg_marker(get_config().secret_key.reveal()))
 
 
+def build_revision_runner(plan, current) -> RevisionRunner:
+    """修訂（重新生成與編輯最後一輪）的串流執行者（在請求內建立，產生器稍後才執行）。不掛記事簿抓取：修訂不讀寫記事簿。"""
+    return RevisionRunner(plan=plan, current=current, deps=build_runner_deps(), marker=rpg_marker(get_config().secret_key.reveal()))
+
+
 def build_notebook_capturer() -> NotebookCapturer:
     """回合串流關閉之後的記事簿抓取執行者（**在請求內建立**，回呼稍後才執行，那時請求已結束，不能用 `g`、`current_app` 或請求的工作階段）。
     全站 token 預算以傳入的工作階段查帳本；沒有 RPG 供應商時拋出 `RuntimeError`（Controller 已先擋）。"""
@@ -515,6 +521,7 @@ def get_personal_export_service() -> PersonalExportService:
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
         appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
         submissions=ScriptSubmissionRepository(session), clock=get_clock(), wallets=WalletRepository(session),
+        regenerations=TurnRegenerationRepository(session),
     )
 
 

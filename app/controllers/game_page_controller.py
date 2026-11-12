@@ -18,6 +18,7 @@
     （與 `/api/sessions/catalog` 的 `content_mode` 同一個來源與形狀，沒有生日與年齡），供畫面說明未成年固定為安全模式的原因。
   - `stream`：串流的前端逾時（閒置 `STREAM_IDLE_TIMEOUT_MS`、總計 `STREAM_TOTAL_TIMEOUT_MS`，見 `docs/RPG.md` 7.15、7.17.3；前端不寫死數值）。
   - `limits`：`action_max`，直接引用後端的 `game_service.ACTION_MAX`（後端調整時前端一起變）。
+  - `revision_limits`：`reason_min`、`reason_max`（重新生成理由的字數範圍）與 `categories`（五個分類的識別字串），直接引用 `game_service` 的常數。
   **不含**回合內容、第 0 幕、記事簿與世界狀態：這些一律由前端呼叫既有端點（快照、回合、記事簿、錢包）取得，所以頁面外殼永遠沒有劇情，
   返回上一頁或頁面快取也不會看到舊內容；本頁**不改任何後端端點**。
 
@@ -28,7 +29,7 @@ from flask import Blueprint, render_template
 
 from app.runtime import get_config
 from app.security.session import current_user, login_required_page
-from app.services.game_service import ACTION_MAX
+from app.services.game_service import ACTION_MAX, CATEGORIES, REASON_MAX, REASON_MIN
 from app.services.registry import get_access_policy, get_game_entry_service
 
 game_pages_bp = Blueprint("game_pages", __name__)
@@ -84,5 +85,7 @@ def game_session_page(session_public_id: str):
         "content_mode": {"effective": access.effective, "is_adult": access.is_adult},
         "stream": {"idle_timeout_ms": STREAM_IDLE_TIMEOUT_MS, "total_timeout_ms": STREAM_TOTAL_TIMEOUT_MS},
         "limits": {"action_max": ACTION_MAX},
+        # 重新生成理由的字數範圍與分類列舉（rpg-turn-revision）：直接引用後端常數，前端不寫死；分類的繁體中文文案在前端
+        "revision_limits": {"reason_min": REASON_MIN, "reason_max": REASON_MAX, "categories": list(CATEGORIES)},
     }
     return render_template("game/session.html", initial_state=state, save=summary)

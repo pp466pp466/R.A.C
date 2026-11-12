@@ -10,6 +10,8 @@
   CSV 為 `scripts.csv`，每個版本一列）、**故事偏好**（帳號資料的一個欄位）與**自己的存檔**（含記事簿全文與每個回合的
   玩家行動與劇情原文；CSV 為 `sessions.csv` 與 `turns.csv`；NPC 狀態、目標與里程碑進度等世界狀態只在 JSON）。存檔內的劇本複本不匯出，
   它是來源劇本作者的內容，存檔只帶該劇本的標題。劇本與存檔也以產生器逐筆、逐頁讀取，記憶體用量與總量無關。
+  **自己的重新生成與編輯回饋**（rpg-turn-revision；每個存檔的回合序號、種類、分類、理由、是否免費、結果與時間，含失敗與被擋的嘗試；JSON 在存檔區塊的
+  `regenerations`，CSV 為 `turn_regenerations.csv`）：理由是玩家文字，視為個資；**不含**內部編號、預扣的冪等鍵與回合前快照，也沒有被取代的行動與劇情（本來就不保存）。
   **自己的送審紀錄**（結果、被拒絕的類別、時間；CSV 為 `script_submissions.csv`）：紀錄本來就只有固定列舉與時間，沒有任何劇本文字；
   劇本區塊也**不含**審查結果的欄位（判定、類別、審查時間與內容雜湊）——那是系統的判斷而不是使用者提供的資料。
   **自己的遊戲幣錢包**（game-wallet）：兩個餘額與**全部**帳本列（含已退回的預扣與退回列，與記錄頁不同）；每筆只有種類、免費與付費的增減量、
@@ -36,6 +38,7 @@ from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
+from app.repositories.turn_regeneration_repository import TurnRegenerationRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.wallet_repository import WalletRepository
@@ -73,6 +76,10 @@ SESSION_COLUMNS = (
 PROTAGONIST_CARD_COLUMNS = ("personality", "appearance", "occupation", "speech_style", "hidden_trait")
 PROTAGONIST_ANCHOR_COLUMNS = {"anchor_kind": "kind", "anchor_ref": "ref", "anchor_text": "text"}
 TURN_COLUMNS = ("session_id", "script_title", "seq", "turn_number", "status", "user_action", "story", "created_at")
+# 重新生成與編輯的回饋（rpg-turn-revision）：不含內部編號（列與存檔的整數編號）、預扣的冪等鍵與回合前快照；`session_id` 是存檔的對外識別碼
+REGENERATION_COLUMNS = (
+    "session_id", "script_title", "turn_seq", "kind", "category", "reason", "is_free", "result", "created_at", "updated_at",
+)
 WALLET_ENTRY_COLUMNS = ("kind", "free_delta", "paid_delta", "free_after", "paid_after", "resolution", "session_id", "created_at")
 
 _FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
@@ -107,8 +114,10 @@ class PersonalExportService:
         submissions: ScriptSubmissionRepository,
         clock: Callable[[], datetime],
         wallets: WalletRepository | None = None,
+        regenerations: TurnRegenerationRepository | None = None,
     ) -> None:
         self._wallets = wallets
+        self._regenerations = regenerations
         self._scripts = scripts
         self._submissions = submissions
         self._sessions = sessions
@@ -245,6 +254,17 @@ class PersonalExportService:
                 "created_at": self._when(row.created_at),
             }
 
+    def _regeneration_rows(self, user_id: int, session_public_id: str) -> Iterator[dict[str, Any]]:
+        """一個存檔的重新生成與編輯回饋（含失敗與被擋的嘗試），依建立順序。沒有組裝回饋元件時為空。"""
+        if self._regenerations is None:
+            return
+        for row in self._regenerations.export_for_session(user_id, session_public_id, page_size=PAGE_SIZE):
+            yield {
+                "turn_seq": row["turn_seq"], "kind": row["kind"], "category": row["category"], "reason": row["reason"],
+                "is_free": row["is_free"], "result": row["result"], "created_at": self._when(row["created_at"]),
+                "updated_at": self._when(row["updated_at"]),
+            }
+
     def _turns(self, user_id: int, session_public_id: str):
         for turn in self._sessions.export_turns(user_id, session_public_id):
             yield {**turn, "created_at": self._when(turn["created_at"]), "updated_at": self._when(turn["updated_at"])}
@@ -282,6 +302,9 @@ class PersonalExportService:
             put(("," if index else "") + dump(self._session_head(save, world_state=True))[:-1] + ',"turns":[')
             for position, turn in enumerate(self._turns(user.id, save["id"])):
                 put(("," if position else "") + dump(turn))
+            put('],"regenerations":[')
+            for position, row in enumerate(self._regeneration_rows(user.id, save["id"])):
+                put(("," if position else "") + dump(row))
             put("]}")
         put(']')
         put(',"appeals":' + dump(self._appeal_rows(user.id)))
@@ -355,6 +378,14 @@ class PersonalExportService:
                         for turn in self._turns(user.id, save["id"]):
                             cells = {**turn, "session_id": save["id"], "script_title": save["script_title"]}
                             writer.writerow([csv_safe(cells[name]) for name in TURN_COLUMNS])
+            with archive.open("turn_regenerations.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(REGENERATION_COLUMNS)
+                    for save in self._sessions.export_sessions(user.id):
+                        for row in self._regeneration_rows(user.id, save["id"]):
+                            cells = {**row, "session_id": save["id"], "script_title": save["script_title"]}
+                            writer.writerow([csv_safe(cells[name]) for name in REGENERATION_COLUMNS])
             with archive.open("wallet_entries.csv", "w") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
                     writer = csv.writer(text)

@@ -1305,13 +1305,15 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | 端點 | 方法 | 說明 |
 |---|---|---|
 | `/api/game/sessions/<session_id>/turns/stream` | POST | 一個回合。本文 `{"client_msg_id": "1 至 64 字", "action": "1 至 1000 字"}`，回應 `text/event-stream`。已 `complete` 的 `client_msg_id` 重送回傳既有劇情（不呼叫模型、不碰錢包）；`interrupted`／`blocked` 的編號可重送（嘗試序號加 1，預扣用新的鍵） |
+| `/api/game/sessions/<session_id>/turns/<client_msg_id>/regenerate/stream` | POST | 重新生成**最後一輪**的 AI 回應（rpg-turn-revision）。本文 `{"expected_revision": 1, "category": "五個分類之一", "reason": "5 至 50 字"}`，回應 `text/event-stream`（事件同回合；`meta` 帶 `kind`、`attempt` 與修訂前的 `revision`，`done` 帶修訂後的 `revision` 與 `free_left`）。前 2 次免費（設定表 `rpg.free_regenerations`），之後每次一輪的幣價；失敗、被擋、中斷時舊內容原樣保留並退回預扣、不消耗免費次數。理由只進回饋表，不進模型與日誌 |
+| `/api/game/sessions/<session_id>/turns/<client_msg_id>/edit/stream` | POST | 編輯**最後一輪**的玩家輸入後重送。本文 `{"expected_revision": 1, "action": "1 至 1000 字"}`，回應 `text/event-stream`；一律預扣一輪的幣價，成功後該回合的免費重新生成次數歸零；新行動須不同於原行動（422）並通過規則層（422 `input_blocked`）；`client_msg_id` 不變 |
 | `/api/game/sessions/<session_id>/opening/stream` | POST | 第 0 幕（開場），沒有本文欄位。已 `ready`／`fallback` 回傳既有文字、不重新生成；`pending` 取得生成權；他人正在生成回 409 `opening_in_progress`。不扣遊戲幣、不寫回合 |
 | `/api/game/sessions/<session_id>` | GET | 存檔狀態：狀態與是否已完結、第 0 幕（狀態與文字）、世界狀態的玩家視圖（經過月數、地點、摘要、進行中目標、去過的地點、主角年齡；**不含 NPC 角色卡與隱藏特質**）、已完成輪數、版本、記事簿的用量摘要（`notebook`：版本、字數、容量、是否已滿；**不含全文**）。已完結的存檔仍可讀 |
 | `/api/game/sessions/<session_id>/turns` | GET | 回合清單，依 `seq` 遞增。查詢參數 `since_seq`（預設 0，增量同步）與 `limit`（預設與上限 200）；回應 `{turns, has_more}`。只有 `complete` 的回合含劇情；被擋、中斷與生成中的回合只有狀態（`story: null`），被擋的文字永遠不離開伺服器 |
 | `/api/game/sessions/<session_id>/notebook` | GET | 記事簿（見「RPG 記事簿（rpg-notebook）」）：`{notebook: {text, version, length, capacity, reserve, full}}`。已完結的存檔仍可讀；不呼叫模型，沒有 RPG 供應商也能用 |
 | `/api/game/sessions/<session_id>/notebook` | PUT | 玩家儲存編輯後的記事簿。本文 `{"text": "…", "expected_version": 1}`，成功回傳同形的 `{notebook}`（版本加 1）。`notebook_too_long`（422，附 `length`、`capacity`）、`notebook_blocked`（422，只附 `categories`）、`notebook_conflict`（409，附後端最新的 `notebook`）、`session_ended`（409）、`validation_error`（400） |
 
-開始前的錯誤代碼：`insufficient_coins`（409，附 `balance`、`needed`）、`session_ended`（409）、`opening_pending`（409，第 0 幕尚未完成）、`opening_in_progress`（409）、`turn_in_progress`（409，同一編號仍在處理）、`input_blocked`（422，行動命中必須拒絕的類別，只附類別）、`system_busy`（503，全站今日用量用盡，附 `Retry-After`）、`service_unavailable`（503，沒有設定 RPG 模型供應商：在預扣之前就回應，不扣幣、不搶佔）、`age_confirmation_required`／`account_locked`（403）。
+開始前的錯誤代碼：`insufficient_coins`（409，附 `balance`、`needed`）、`session_ended`（409）、`opening_pending`（409，第 0 幕尚未完成）、`opening_in_progress`（409）、`turn_in_progress`（409，同一編號仍在處理，或最後一輪正在被修訂）、`revision_conflict`（409，修訂的 `expected_revision` 與後端不一致，以後端為準）、`not_revisable`（409，附 `reason`：`ended`、`not_last`、`in_progress`、`no_snapshot`）、`input_blocked`（422，行動命中必須拒絕的類別，只附類別）、`system_busy`（503，全站今日用量用盡，附 `Retry-After`）、`service_unavailable`（503，沒有設定 RPG 模型供應商：在預扣之前就回應，不扣幣、不搶佔）、`age_confirmation_required`／`account_locked`（403）。
 
 ### 事件協定
 

@@ -1,6 +1,10 @@
 """Web API Controller：`/api/game/*`（RPG 回合與第 0 幕的串流，以及唯讀的存檔與回合），見 rpg-turn-stream 規格與 design D1、D2。
 
 - `POST /api/game/sessions/<id>/turns/stream`：本文 `{"client_msg_id": "…", "action": "…"}`，回應 `text/event-stream`。
+- `POST /api/game/sessions/<id>/turns/<client_msg_id>/regenerate/stream`：重新生成最後一輪的 AI 回應，本文 `{"expected_revision": 1, "category": "…", "reason": "…"}`。
+- `POST /api/game/sessions/<id>/turns/<client_msg_id>/edit/stream`：編輯最後一輪的玩家輸入後重送，本文 `{"expected_revision": 1, "action": "…"}`。
+  兩者都是 `text/event-stream`（rpg-turn-revision）：`client_msg_id` 是路徑參數且永遠不變，冪等由 `expected_revision` 與認領保證；
+  不掛記事簿抓取（修訂不讀寫記事簿）。
 - `POST /api/game/sessions/<id>/opening/stream`：第 0 幕（開場），沒有本文欄位；已完成者回傳既有文字，不重新生成。
 - `GET  /api/game/sessions/<id>`：存檔狀態、第 0 幕、世界狀態的玩家視圖與已完成輪數（已完結的存檔仍可讀）。
 - `GET  /api/game/sessions/<id>/turns?since_seq=&limit=`：序號遞增的回合；被擋與中斷的回合不含任何部分內容。
@@ -29,9 +33,10 @@ from app.controllers.request_helpers import int_arg, read_json_object
 from app.observability import rpg_events
 from app.security.session import require_login
 from app.services.errors import ServiceUnavailable
-from app.services.game_service import TURNS_PAGE_MAX
+from app.services.game_service import KIND_EDIT, KIND_REGENERATE, TURNS_PAGE_MAX
 from app.services.registry import (
-    build_notebook_capturer, build_opening_runner, build_turn_runner, get_game_service, get_notebook_service, has_rpg_provider,
+    build_notebook_capturer, build_opening_runner, build_revision_runner, build_turn_runner, get_game_service, get_notebook_service,
+    has_rpg_provider,
 )
 from app.services.rpg_replay import opening_replay_events, turn_replay_events
 from app.services.rpg_runner_base import SseEvent
@@ -106,6 +111,32 @@ def stream_turn(session_id: str):
     assert begun.plan is not None
     runner = build_turn_runner(begun.plan, user)
     return _event_stream(runner.events(), after_close=_notebook_follow_up(runner))
+
+
+@game_api_bp.post("/sessions/<session_id>/turns/<client_msg_id>/regenerate/stream")
+def stream_regenerate(session_id: str, client_msg_id: str):
+    """重新生成最後一輪（本文 `expected_revision`、`category`、`reason`）。開始前的失敗（驗證、404、`revision_conflict`、`not_revisable`、
+    `turn_in_progress`、`insufficient_coins`、`system_busy`、沒有供應商）都是一般 JSON 錯誤；理由與分類只進回饋表，不進模型與日誌。"""
+    user = require_login()
+    body = read_json_object()
+    _require_provider()
+    plan = get_game_service().begin_revision(
+        user, session_id, client_msg_id, kind=KIND_REGENERATE, expected_revision=body.get("expected_revision"),
+        category=body.get("category"), reason=body.get("reason"),
+    )
+    return _event_stream(build_revision_runner(plan, user).events())
+
+
+@game_api_bp.post("/sessions/<session_id>/turns/<client_msg_id>/edit/stream")
+def stream_edit(session_id: str, client_msg_id: str):
+    """編輯最後一輪的玩家輸入後重送（本文 `expected_revision`、`action`；`client_msg_id` 不變）。其餘同重新生成，另有規則層（422 `input_blocked`）。"""
+    user = require_login()
+    body = read_json_object()
+    _require_provider()
+    plan = get_game_service().begin_revision(
+        user, session_id, client_msg_id, kind=KIND_EDIT, expected_revision=body.get("expected_revision"), action=body.get("action"),
+    )
+    return _event_stream(build_revision_runner(plan, user).events())
 
 
 @game_api_bp.post("/sessions/<session_id>/opening/stream")

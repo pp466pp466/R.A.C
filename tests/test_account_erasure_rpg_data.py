@@ -11,12 +11,14 @@ from datetime import timedelta
 
 from sqlalchemy import func, select
 
-from app.models import DeletionTombstone, MemoryLog, RpgSession, Script, ScriptVersion, ScriptVersionTag, User
+from app.models import DeletionTombstone, MemoryLog, RpgSession, Script, ScriptVersion, ScriptVersionTag, TurnRegeneration, User
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
+from app.repositories.turn_regeneration_repository import TurnRegenerationRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
+from app.services.deletion_replay_service import DeletionReplayService
 from tests.support.auth import START, add_user
 from tests.support.script_data import validated
 from tests.support.protagonist import protagonist
@@ -135,3 +137,69 @@ def test_erasing_an_author_with_many_readers_saves_clears_every_reference(member
     remaining = list(s.scalars(select(RpgSession)))
     assert len(remaining) == 4 and all(save.source_version_id is None for save in remaining)
     assert sorted(save.script_snapshot_json["title"] for save in remaining) == ["作者的劇本", "複本3", "複本4", "複本5"]
+
+
+# ---- 重新生成與編輯的回饋（rpg-turn-revision）：隨存檔與帳號串聯刪除 ----------------------------------------
+
+REASON = "劇情和設定對不上，想換個寫法"
+
+
+def add_feedback(session, user: User, save: RpgSession, *, count_rows: int = 2) -> None:
+    """為某個存檔加上幾筆回饋（理由是玩家文字，視為個資）。"""
+    feedback = TurnRegenerationRepository(session)
+    for attempt in range(2, 2 + count_rows):
+        assert feedback.add_pending(
+            user.id, save.public_id, turn_seq=1, attempt=attempt, kind="regenerate", category="other", reason=REASON, is_free=True,
+        )
+    session.commit()
+
+
+def test_erasing_a_player_removes_their_feedback_rows_and_keeps_everyone_elses(member_session):
+    s = member_session
+    author, reader, _published, reader_save, _snapshot = build_world(s)
+    author_save = s.scalar(select(RpgSession).where(RpgSession.user_id == author.id))
+    add_feedback(s, reader, reader_save, count_rows=3)
+    add_feedback(s, author, author_save, count_rows=2)
+    reader_id = reader.id
+    assert count(s, TurnRegeneration) == 5
+
+    assert erase_inactive(s, reader_id) is True
+
+    assert s.get(User, reader_id) is None
+    assert count(s, TurnRegeneration) == 2                                               # 讀者的 3 筆消失
+    assert {row.session_id for row in s.scalars(select(TurnRegeneration))} == {author_save.id}
+
+
+def test_erasing_an_author_removes_their_own_saves_feedback_but_not_a_readers_feedback_on_a_copy_of_their_script(member_session):
+    s = member_session
+    author, reader, _published, reader_save, _snapshot = build_world(s)
+    author_save = s.scalar(select(RpgSession).where(RpgSession.user_id == author.id))
+    add_feedback(s, reader, reader_save, count_rows=2)
+    add_feedback(s, author, author_save, count_rows=2)
+    reader_save_id = reader_save.id
+
+    assert erase_inactive(s, author.id) is True
+
+    assert count(s, TurnRegeneration) == 2
+    assert {row.session_id for row in s.scalars(select(TurnRegeneration))} == {reader_save_id}
+
+
+def test_the_feedback_rows_of_a_restored_account_are_erased_again_by_the_tombstone_replay(member_session):
+    s = member_session
+    author, reader, _published, reader_save, _snapshot = build_world(s)
+    author_save = s.scalar(select(RpgSession).where(RpgSession.user_id == author.id))
+    add_feedback(s, reader, reader_save, count_rows=2)
+    add_feedback(s, author, author_save, count_rows=1)
+    reader_id, author_save_id = reader.id, author_save.id
+    DeletionTombstoneRepository(s).record(user_id=reader_id, reason="user_requested", deleted_at=START + timedelta(days=2))   # 還原後備份裡又出現已刪除的帳號
+    s.commit()
+    users, tombstones = UserRepository(s), DeletionTombstoneRepository(s)
+    erasure = AccountErasureService(users=users, tombstones=tombstones, commit=s.commit, rollback=s.rollback)
+
+    report = DeletionReplayService(users=users, tombstones=tombstones, erasure=erasure).run()
+
+    assert report.erased == 1
+    s.expire_all()
+    assert s.get(User, reader_id) is None
+    assert count(s, TurnRegeneration) == 1
+    assert s.scalar(select(TurnRegeneration.session_id)) == author_save_id
