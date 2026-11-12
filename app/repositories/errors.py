@@ -68,4 +68,14 @@ class TurnInProgressError(Exception):
 
 
 class InvalidTurnTransitionError(Exception):
-    """回合的狀態不允許這個轉移（只有 `streaming` 的回合可以完成、中斷或被擋下）。回合保持原狀態。"""
+    """回合的狀態不允許這個轉移（只有 `streaming` 的回合可以完成、中斷或被擋下）。回合保持原狀態。
+    修訂的替換（`replace_turn`）也用它：回合不是完成的、`revision` 或 `attempt` 不符、或認領已被釋放或接手（過時的執行者）。"""
+
+
+class NotRevisableError(Exception):
+    """這個回合現在不能被重新生成或編輯：`reason` 為 `ended`、`not_last`、`in_progress` 或 `no_snapshot`
+    （rpg-turn-revision 的 design D1）。Service 轉成 409 `not_revisable` 並附上原因；資料不變。"""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason

@@ -71,7 +71,7 @@ flowchart LR
 | `script_submissions` | 劇本送審紀錄 | RPG 劇本 | 每次成功送審、被自動拒絕與管理員解除暫停各一筆，用來算每日送審次數與連續被拒；不含任何劇本文字。 | ScriptSubmissionRepository | 建立後 365 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 5 |
 | `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 29 |
 | `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出；最後一輪可被重新生成或編輯（修訂版本、免費次數、認領時間與回合前快照）。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串；回合前快照在下一輪完成時清為空值 | 16 |
-| `turn_regenerations` | 重新生成與編輯的回饋 | RPG 存檔 | 玩家重新生成時選的分類與填的理由（供營運檢視），與每次修訂的結果；不存被取代的行動與劇情。 | 儲存庫層（rpg-turn-revision 的後續批次加入寫入方法） | 隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出 | 11 |
+| `turn_regenerations` | 重新生成與編輯的回饋 | RPG 存檔 | 玩家重新生成時選的分類與填的理由（供營運檢視），與每次修訂的結果；不存被取代的行動與劇情。 | TurnRegenerationRepository | 隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出 | 11 |
 | `wallets` | 遊戲幣錢包 | 遊戲幣 | 每位玩家至多一個：免費與付費兩個餘額（不得為負）與每次異動加 1 的版本號（樂觀鎖）。 | WalletRepository（餘額只由它寫入，架構測試守住） | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 7 |
 | `wallet_entries` | 遊戲幣帳本 | 遊戲幣 | 只增不改的帳本：每次餘額異動一筆（註冊贈送、每日簽到、冒險回合預扣與退回、管理員調整）；只放固定列舉與整數，不放玩家文字。 | WalletRepository | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 13 |
 
@@ -1149,7 +1149,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 
 玩家對最後一輪重新生成或編輯時留下的回饋：重新生成要選分類並填理由（5 至 50 字，只供營運檢視）；每次認領都在同一個交易內新增一列（結果為 pending），收尾時標為 applied、failed 或 blocked，被接手的舊認領標為 failed。**不存**被取代的行動與劇情（資料最小化）；管理員的檢視頁不在 rpg-turn-revision 範圍，因此目前沒有任何管理員讀取路徑。
 
-- 領域：RPG 存檔　｜　主要寫入者：儲存庫層（rpg-turn-revision 的後續批次加入寫入方法）　｜　保存與刪除：隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出
+- 領域：RPG 存檔　｜　主要寫入者：TurnRegenerationRepository　｜　保存與刪除：隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出
 
 | # | 欄位 | 型別 | 可空 | 資料庫預設 | 鍵 | 說明 |
 |---|---|---|---|---|---|---|
@@ -1527,7 +1527,8 @@ flowchart LR
 | `ScriptRepository` | scripts、script_versions、script_version_tags | 版本狀態與兩個輔助欄位只在此寫入（架構測試擋住別處）；審查結果只經 record_review |
 | `ScriptSubmissionRepository` | script_submissions | — |
 | `WalletRepository` | wallets、wallet_entries | 餘額與帳本的唯一寫入點（架構測試守住）；以 version 做條件式更新；SQLite 的 SAVEPOINT 前先做一次不影響列的條件式 UPDATE |
-| `SessionRepository` | sessions、memory_logs | 所有方法接收 user_id；開始回合先對存檔列做條件式更新取鎖 |
+| `SessionRepository` | sessions、memory_logs | 所有方法接收 user_id；開始回合先對存檔列做條件式更新取鎖；修訂（認領、釋放、替換）也先取同一把鎖，認領與替換都以 `revision` 與 `attempt` 做條件式更新，替換在一個 SAVEPOINT 內完成（失敗整個復原）；回合前快照由開始回合寫入、下一輪完成時清為空值 |
+| `TurnRegenerationRepository` | turn_regenerations | 所有方法接收 user_id；沒有管理員讀取路徑；結果只能從 pending 轉出（條件式更新）；匯出不含內部編號 |
 | `AdminRepository` | 跨表（users、chat_*、llm_call_logs、lock_appeals…） | 後台專用，只能由 /api/admin/* 使用；管理員存取他人資料的稽核由 AdminService 寫入 |
 | `RetentionRepository` | 跨表（期限清除） | 只有 DataRetentionService 使用；每類三個方法：找出、計數、處理一批（500） |
 | `HealthRepository` | （無資料表） | /readyz 的連線檢查 |

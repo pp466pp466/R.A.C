@@ -25,6 +25,13 @@
 只往前；`save_notebook` 是玩家的儲存，以 `notebook_version` 條件式寫入，不碰標記。AI 追加與玩家儲存都使版本加 1，所以任一方都能偵測到對方。
 `turns_in_range` 取抓取視窗的完成回合。記事簿是玩家文字衍生的個資：這裡不記錄任何日誌。
 
+**修訂**（rpg-turn-revision）：重新生成與編輯只針對「最後一輪」（存檔最後一個 `complete` 的回合）。修訂期間回合列仍是 `complete`，
+`revising_started_at`（認領時間，逾時視同沒有人在修訂）表示修訂中。`claim_revision` 先取得存檔那一列的鎖（與 `start_turn` 相同，所以認領與
+開始新回合被串行化），在鎖內判斷 `revision`、可否修訂，再以單一條件式 UPDATE 認領（`attempt` 加 1）；`release_revision` 與 `replace_turn`
+都以 `attempt` 比對，所以被接手的舊執行者什麼都改不了。`replace_turn` 在一個 SAVEPOINT 內替換內容、`revision` 加 1、寫回世界狀態與完結：
+任何一步失敗整個復原（保留舊內容）。回合前的世界快照（`state_before_json`）由 `start_turn` 寫入，下一輪完成（`complete_turn` 指派輪數）時
+清掉前一輪的快照，所以全存檔最多一個回合有快照。快照與回合內容一樣是玩家文字衍生的個資：不記錄日誌。
+
 **已完結的存檔**：`end_session` 之後不得再開始回合或改動世界狀態；沒有任何方法把狀態改回進行中（不可恢復）。
 玩家自行封存（`is_archived`）與劇情完結是兩件事，`set_archived` 對已完結的存檔也有效。
 
@@ -48,7 +55,8 @@ from app.models.rpg_session import (
 )
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
-    InvalidTurnTransitionError, SessionEndedError, StaleNotebookVersionError, StaleSessionVersionError, TurnInProgressError,
+    InvalidTurnTransitionError, NotRevisableError, SessionEndedError, StaleNotebookVersionError, StaleSessionVersionError,
+    TurnInProgressError,
 )
 
 # `start_turn` 的結果
@@ -61,6 +69,19 @@ OPENING_CLAIMED = "claimed"            # 取得生成權（pending → generatin
 OPENING_TAKEN_OVER = "taken_over"      # 接手了停在 generating 太久的生成
 OPENING_BUSY = "busy"                  # 另一個請求正在生成且未逾時
 OPENING_DONE = "done"                  # 已經是 ready 或 fallback（或遷移之前的舊存檔）：不再生成
+
+# `claim_revision` 的結果
+REVISION_CLAIMED = "claimed"           # 取得修訂權（沒有人在修訂）
+REVISION_TAKEN_OVER = "taken_over"     # 接手了逾時未完成的認領（舊執行者之後的替換與釋放都會失敗）
+REVISION_CONFLICT = "conflict"         # `expected_revision` 與後端不一致（回合已被修訂過）
+REVISION_BUSY = "busy"                 # 同一回合已有未逾時的認領
+
+# 不可修訂的原因（`NotRevisableError.reason`、`RevisionState.reason`）；判斷順序即這裡的順序
+NOT_REVISABLE_ENDED = "ended"              # 存檔已完結（含結局那一輪）
+NOT_REVISABLE_NOT_LAST = "not_last"        # 不是最後一個完成的回合（被擋、中斷與生成中的嘗試也不是）
+NOT_REVISABLE_IN_PROGRESS = "in_progress"  # 存檔有未逾時的生成中回合或修訂
+NOT_REVISABLE_NO_SNAPSHOT = "no_snapshot"  # 沒有回合前快照（遷移之前的回合，或已被下一輪清除）
+NOT_REVISABLE_REASONS = (NOT_REVISABLE_ENDED, NOT_REVISABLE_NOT_LAST, NOT_REVISABLE_IN_PROGRESS, NOT_REVISABLE_NO_SNAPSHOT)
 
 # 預設的逾時秒數：與 `coin.hold_timeout_seconds` 的保底預設相同；呼叫端（GameService）每次現讀設定後傳入
 DEFAULT_TURN_STALE_SECONDS = 180
@@ -85,6 +106,28 @@ class TurnFinish:
     turn: MemoryLog
     world_updated: bool
     ended: bool
+
+
+@dataclass(frozen=True)
+class RevisionClaim:
+    """`claim_revision` 的結果：認領後（或未認領時目前）的回合，與 `REVISION_*` 之一。只有 `claimed` 與 `taken_over` 可以開始修訂。"""
+
+    turn: MemoryLog
+    outcome: str
+
+
+@dataclass(frozen=True)
+class RevisionState:
+    """最後一輪的修訂狀態（`revision_state`）。存檔還沒有任何完成的回合時，回合欄位都是 `None`、`revisable` 為假、`reason` 為 `None`。
+    不可修訂時 `reason` 為 `NOT_REVISABLE_REASONS` 之一；未逾時的認領視為 `in_progress`。"""
+
+    client_msg_id: str | None
+    seq: int | None
+    turn_number: int | None
+    revision: int | None
+    regen_count: int | None
+    revisable: bool
+    reason: str | None
 
 
 @dataclass(frozen=True)
@@ -255,14 +298,18 @@ class SessionRepository(BaseRepository[RpgSession]):
 
     def start_turn(
         self, user_id: int, public_id: str, *, client_msg_id: str, user_action: str, now: datetime,
-        stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS,
+        stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS, state_before: Mapping[str, Any] | None = None,
     ) -> TurnStart | None:
         """開始一個回合（冪等）。不是自己的存檔回傳 `None`；存檔已完結拋出 `SessionEndedError`。
 
         - 同一個編號：`complete` 回傳既有回合（`replayed`）；`interrupted`／`blocked` 重設並把 `attempt` 加 1；`streaming` 未逾時拋出
           `TurnInProgressError`，逾時（`updated_at` 早於 `now` 減 `stale_after_seconds`）視同中斷而接手（`attempt` 加 1）。
         - 同一存檔已有「其他編號且未逾時」的 `streaming` 回合：拋出 `TurnInProgressError`（同時只能有一個）；其他編號而逾時者標為 `interrupted`。
-        `stale_after_seconds` 由呼叫端每次現讀（遊戲幣的預扣逾時秒數），這樣預扣與回合同時到期。"""
+        - 同一存檔有未逾時的修訂認領（`claim_revision`）：同樣拋出 `TurnInProgressError`；認領逾時後不再阻擋。
+        `stale_after_seconds` 由呼叫端每次現讀（遊戲幣的預扣逾時秒數），這樣預扣與回合同時到期。
+
+        `state_before` 是回合開始前的世界快照（`WorldState.to_fields()` 的六欄），寫入新回合列的 `state_before_json`，供之後修訂這一輪時
+        還原；重送被擋或中斷的回合時**覆寫**（沒帶就清為空：舊快照對應的是更早的世界）。重送已完成的回合不改動它。"""
         save = self.get_owned(user_id, public_id)
         if save is None:
             return None
@@ -276,7 +323,7 @@ class SessionRepository(BaseRepository[RpgSession]):
                 if existing.turn_status == TURN_COMPLETE:
                     return TurnStart(existing, TURN_REPLAYED)
                 self._ensure_no_other_streaming(save.id, except_turn_id=existing.id, cutoff=cutoff, now=now)
-                return self._resend(existing, user_action, cutoff=cutoff, now=now)
+                return self._resend(existing, user_action, cutoff=cutoff, now=now, state_before=state_before)
             self._ensure_no_other_streaming(save.id, except_turn_id=None, cutoff=cutoff, now=now)
             try:
                 with self._session.begin_nested():
@@ -285,6 +332,8 @@ class SessionRepository(BaseRepository[RpgSession]):
                         turn_status=TURN_STREAMING, user_action=user_action, llm_raw_response="", attempt=1,
                         created_at=now, updated_at=now,
                     )
+                    if state_before is not None:                  # 沒帶就不設定這個屬性：資料庫存 SQL 的 NULL，不是 JSON 的 null
+                        turn.state_before_json = copy.deepcopy(dict(state_before))
                     self._session.add(turn)
                     self._session.flush()
                 return TurnStart(turn, TURN_CREATED)
@@ -297,7 +346,10 @@ class SessionRepository(BaseRepository[RpgSession]):
         self, user_id: int, public_id: str, client_msg_id: str, *, llm_raw_response: str, structured_result: Mapping[str, Any] | None,
         now: datetime, attempt: int | None = None,
     ) -> MemoryLog | None:
-        """回合完成：指派輪數（已完成的回合數加 1）。不是自己的回傳 `None`；不是生成中（或 `attempt` 不符）拋出 `InvalidTurnTransitionError`。"""
+        """回合完成：指派輪數（已完成的回合數加 1）。不是自己的回傳 `None`；不是生成中（或 `attempt` 不符）拋出 `InvalidTurnTransitionError`。
+
+        同一個交易內，前一輪（輪數少 1）的回合前快照被清為空：新的一輪完成後，前一輪不能再被修訂（`finish_turn` 經由這裡完成回合）。
+        被擋與中斷的回合不會走到這裡，所以不清除。"""
         save = self.get_owned(user_id, public_id)
         if save is None:
             return None
@@ -305,10 +357,18 @@ class SessionRepository(BaseRepository[RpgSession]):
         turn = self._turn_by_client_id(save.id, client_msg_id)
         if turn is None:
             return None
+        number = self._complete_count(save.id) + 1
         self._finish_turn(
-            turn, TURN_COMPLETE, attempt=attempt, turn_number=self._complete_count(save.id) + 1, llm_raw_response=llm_raw_response,
+            turn, TURN_COMPLETE, attempt=attempt, turn_number=number, llm_raw_response=llm_raw_response,
             structured_result=dict(structured_result) if structured_result is not None else None,
         )
+        previous = self._session.scalar(select(MemoryLog).where(MemoryLog.session_id == save.id, MemoryLog.turn_number == number - 1))
+        if previous is not None:
+            self._session.execute(                                # 前一輪的快照：SQL 的 NULL（不是 JSON 的 null）
+                update(MemoryLog).where(MemoryLog.id == previous.id).values(state_before_json=sa.null())
+                .execution_options(synchronize_session=False)
+            )
+            self._session.expire(previous)                        # 已載入的物件不留著舊快照
         return turn
 
     def finish_turn(
@@ -493,6 +553,138 @@ class SessionRepository(BaseRepository[RpgSession]):
             raise StaleNotebookVersionError
         return save
 
+    # ---- 修訂：重新生成與編輯最後一輪（認領、釋放、替換；皆為條件式 UPDATE）--------------------------------
+
+    def revision_state(
+        self, user_id: int, public_id: str, *, now: datetime, stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS
+    ) -> RevisionState | None:
+        """最後一輪（存檔最後一個 `complete` 的回合）的修訂狀態；與 `claim_revision` 用同一個判斷，所以畫面與端點不會各說各話。
+        不是自己的存檔回傳 `None`；還沒有完成的回合時回傳各欄為空、`revisable` 為假的狀態。
+        未逾時的認領也算 `in_progress`（`claim_revision` 則回報 `busy`）。`now` 與 `stale_after_seconds` 用來判斷生成中與認領是否逾時。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        last = self._last_complete_turn(save.id)
+        if last is None:
+            return RevisionState(None, None, None, None, None, False, None)
+        reason = self._not_revisable_reason(save.id, last, cutoff=now - timedelta(seconds=stale_after_seconds), include_claim=True)
+        return RevisionState(last.client_msg_id, last.seq, last.turn_number, last.revision, last.regen_count, reason is None, reason)
+
+    def claim_revision(
+        self, user_id: int, public_id: str, client_msg_id: str, *, expected_revision: int, now: datetime,
+        stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS,
+    ) -> RevisionClaim | None:
+        """認領修訂權。不是自己的存檔或回合回傳 `None`；否則回傳（回合, 結果）：
+
+        - 先對存檔那一列做條件式 UPDATE 取得列鎖（與 `start_turn` 相同，並行的認領與新回合因此被串行化），之後的判斷都是對鎖內的最新資料；
+        - `conflict`：`expected_revision` 與後端的 `revision` 不一致（優先於其他判斷）；
+        - 不可修訂拋出 `NotRevisableError`（`ended`、`not_last`、`in_progress`、`no_snapshot`）；
+        - `claimed`／`taken_over`：單一條件式 UPDATE（回合為 `complete`、`revision` 相符、沒有未逾時的認領）成功，`revising_started_at` 設為 `now`、
+          `attempt` 加 1（預扣鍵因此每次不同）；認領早已逾時（`stale_after_seconds`）者是 `taken_over`，舊執行者之後的 `replace_turn` 與
+          `release_revision` 因 `attempt` 不符而失敗；
+        - `busy`：同一回合已有未逾時的認領，沒有任何改動（除了存檔的最後活動時間）。
+        `stale_after_seconds` 由呼叫端每次現讀（遊戲幣的預扣逾時秒數），認領與預扣因此同時到期。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None or self._turn_by_client_id(save.id, client_msg_id) is None:
+            return None
+        self._update_owned(save, RpgSession.status == SESSION_ACTIVE, last_active_at=now)       # 取得列鎖；已完結時不成立，下面回報 ended
+        turn = self._fresh_turn(save.id, client_msg_id)
+        if turn.revision != expected_revision:
+            return RevisionClaim(turn, REVISION_CONFLICT)
+        cutoff = now - timedelta(seconds=stale_after_seconds)
+        reason = self._not_revisable_reason(save.id, turn, cutoff=cutoff, include_claim=False)
+        if reason is not None:
+            raise NotRevisableError(reason)
+        taking_over = turn.revising_started_at is not None            # 走到這裡的非空認領一定已逾時，否則下面的條件不成立
+        result = self._session.execute(
+            update(MemoryLog).where(
+                MemoryLog.id == turn.id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.revision == expected_revision,
+                MemoryLog.revising_started_at.is_(None) | (MemoryLog.revising_started_at < cutoff),
+            ).values(revising_started_at=now, attempt=MemoryLog.attempt + 1).execution_options(synchronize_session=False)
+        )
+        self._session.expire(turn)
+        if result.rowcount != 1:
+            return RevisionClaim(turn, REVISION_BUSY)
+        return RevisionClaim(turn, REVISION_TAKEN_OVER if taking_over else REVISION_CLAIMED)
+
+    def release_revision(self, user_id: int, public_id: str, client_msg_id: str, *, attempt: int) -> bool | None:
+        """修訂失敗、被擋或中斷時釋放自己的認領（舊內容原樣保留）。只有 `attempt` 相符且仍有認領者才生效，所以已被接手而過時的執行者
+        不會清掉新的認領；已經替換成功（認領已清除）者也是 `False`。不是自己的回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        turn = self._turn_by_client_id(save.id, client_msg_id)
+        if turn is None:
+            return None
+        result = self._session.execute(
+            update(MemoryLog).where(
+                MemoryLog.id == turn.id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.attempt == attempt,
+                MemoryLog.revising_started_at.is_not(None),
+            ).values(revising_started_at=None).execution_options(synchronize_session=False)
+        )
+        self._session.expire(turn)
+        return result.rowcount == 1
+
+    def replace_turn(
+        self, user_id: int, public_id: str, client_msg_id: str, *, expected_revision: int, attempt: int, llm_raw_response: str,
+        structured_result: Mapping[str, Any] | None, now: datetime, user_action: str | None = None, reset_regen_count: bool = False,
+        world_changes: Mapping[str, Any] | None = None, expected_version: int | None = None, end_story: bool = False,
+    ) -> TurnFinish | None:
+        """修訂成功：以新的回應替換回合的內容。輪數與序號不變、`revision` 加 1、認領清除；`regen_count` 加 1（編輯時 `reset_regen_count`
+        為真則歸零）；`user_action` 不是 `None` 時一併替換（編輯）；快照不動（這一輪仍是最後一輪，可以再修訂）。
+
+        條件式 UPDATE 要求回合為 `complete`、`revision` 與 `attempt` 相符且仍有認領；不符（過時的執行者、已被接手、已被別人修訂）拋出
+        `InvalidTurnTransitionError`。`world_changes`（`WorldState.to_fields()` 的六欄）以 `expected_version` 比對後寫回，`end_story`
+        為真時再轉為已完結。**全部在一個 SAVEPOINT 內：任何一步失敗（包含世界版本不一致 `StaleSessionVersionError`、存檔已完結
+        `SessionEndedError`）整個復原，舊內容原樣保留**——這與 `finish_turn` 不同（那裡文字已送達，世界狀態寫不進去仍然完成）。
+        不是自己的回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        turn = self._turn_by_client_id(save.id, client_msg_id)
+        if turn is None:
+            return None
+        if world_changes is not None and expected_version is None:
+            raise ValueError("寫入世界狀態必須帶預期的版本號。")
+        values: dict[str, Any] = {
+            "llm_raw_response": llm_raw_response, "structured_result": dict(structured_result) if structured_result is not None else None,
+            "revision": MemoryLog.revision + 1, "revising_started_at": None,
+            "regen_count": 0 if reset_regen_count else MemoryLog.regen_count + 1, "updated_at": now,
+        }
+        if user_action is not None:
+            values["user_action"] = user_action
+        with self.savepoint():
+            if self._update_owned(save, RpgSession.status == SESSION_ACTIVE, last_active_at=now) != 1:
+                raise SessionEndedError
+            result = self._session.execute(
+                update(MemoryLog).where(
+                    MemoryLog.id == turn.id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.revision == expected_revision,
+                    MemoryLog.attempt == attempt, MemoryLog.revising_started_at.is_not(None),
+                ).values(**values).execution_options(synchronize_session=False)
+            )
+            if result.rowcount != 1:
+                raise InvalidTurnTransitionError
+            world_updated = False
+            if world_changes is not None:
+                world_updated = self.update_world_state(user_id, public_id, expected_version=expected_version, **dict(world_changes)) is not None
+            ended = bool(end_story) and self.end_session(user_id, public_id, now=now) is True
+        self._session.expire(turn)
+        return TurnFinish(turn, world_updated, ended)
+
+    def complete_turns_before(self, user_id: int, public_id: str, turn_number: int, limit: int = 10) -> list[MemoryLog] | None:
+        """輪數小於 `turn_number` 的最近 `limit` 個「完成」回合，依輪數由舊到新（修訂的上下文歷史：不含目標回合與其後的回合）。
+        不是自己的存檔回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        statement = (
+            select(MemoryLog).where(
+                MemoryLog.session_id == save.id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.turn_number.is_not(None),
+                MemoryLog.turn_number < turn_number,
+            ).order_by(MemoryLog.turn_number.desc()).limit(limit)
+        )
+        return list(reversed(list(self._session.scalars(statement))))
+
     # ---- 匯出（個人資料匯出用）-------------------------------------------------------------
 
     def export_sessions(self, user_id: int, *, page_size: int = 50) -> Iterator[dict[str, Any]]:
@@ -550,6 +742,43 @@ class SessionRepository(BaseRepository[RpgSession]):
     def _turn_by_client_id(self, session_id: int, client_msg_id: str) -> MemoryLog | None:
         return self._session.scalar(select(MemoryLog).where(MemoryLog.session_id == session_id, MemoryLog.client_msg_id == client_msg_id))
 
+    def _fresh_turn(self, session_id: int, client_msg_id: str) -> MemoryLog:
+        """讀取回合並覆蓋已載入物件的屬性：取得列鎖之後，別的交易剛提交的改動才不會被身分對應表裡的舊值蓋住。"""
+        return self._session.scalar(
+            select(MemoryLog).where(MemoryLog.session_id == session_id, MemoryLog.client_msg_id == client_msg_id)
+            .execution_options(populate_existing=True)
+        )
+
+    def _last_complete_turn(self, session_id: int) -> MemoryLog | None:
+        """存檔最後一個「完成」的回合（輪數最大者；被擋、中斷與生成中的嘗試沒有輪數，不是最後一輪）。"""
+        return self._session.scalar(
+            select(MemoryLog).where(MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.turn_number.is_not(None))
+            .order_by(MemoryLog.turn_number.desc()).limit(1).execution_options(populate_existing=True)
+        )
+
+    def _not_revisable_reason(self, session_id: int, turn: MemoryLog, *, cutoff: datetime, include_claim: bool) -> str | None:
+        """回合不能被修訂的原因（依 `NOT_REVISABLE_REASONS` 的順序），可以修訂則回傳 `None`。`include_claim` 為真時，
+        這個回合未逾時的認領也算 `in_progress`（`revision_state` 用）；`claim_revision` 自己處理認領（回報 `busy`）。"""
+        status = self._session.scalar(select(RpgSession.status).where(RpgSession.id == session_id))
+        if status != SESSION_ACTIVE:
+            return NOT_REVISABLE_ENDED
+        last = self._session.scalar(
+            select(func.max(MemoryLog.turn_number)).where(MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_COMPLETE)
+        )
+        if turn.turn_status != TURN_COMPLETE or turn.turn_number is None or turn.turn_number != last:
+            return NOT_REVISABLE_NOT_LAST
+        if self._session.scalar(
+            select(func.count()).select_from(MemoryLog).where(
+                MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_STREAMING, MemoryLog.updated_at >= cutoff,
+            )
+        ):
+            return NOT_REVISABLE_IN_PROGRESS
+        if include_claim and turn.revising_started_at is not None and turn.revising_started_at >= cutoff:
+            return NOT_REVISABLE_IN_PROGRESS
+        if turn.state_before_json is None:
+            return NOT_REVISABLE_NO_SNAPSHOT
+        return None
+
     def _next_seq(self, session_id: int) -> int:
         return (self._session.scalar(select(func.max(MemoryLog.seq)).where(MemoryLog.session_id == session_id)) or 0) + 1
 
@@ -559,7 +788,14 @@ class SessionRepository(BaseRepository[RpgSession]):
         ) or 0
 
     def _ensure_no_other_streaming(self, session_id: int, *, except_turn_id: int | None, cutoff: datetime, now: datetime) -> None:
-        """同一存檔同時只能有一個未逾時的 `streaming` 回合。其他編號未逾時者拋出 `TurnInProgressError`；已逾時者標為 `interrupted`。"""
+        """同一存檔同時只能有一個未逾時的 `streaming` 回合，且不能與修訂並行。其他編號未逾時者，或有未逾時的修訂認領，拋出
+        `TurnInProgressError`；已逾時的 `streaming` 者標為 `interrupted`（逾時的認領只是不再阻擋，不需要清除）。"""
+        if self._session.scalar(
+            select(func.count()).select_from(MemoryLog).where(
+                MemoryLog.session_id == session_id, MemoryLog.revising_started_at.is_not(None), MemoryLog.revising_started_at >= cutoff,
+            )
+        ):
+            raise TurnInProgressError
         others = [MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_STREAMING]
         if except_turn_id is not None:
             others.append(MemoryLog.id != except_turn_id)
@@ -570,7 +806,9 @@ class SessionRepository(BaseRepository[RpgSession]):
             .values(turn_status=TURN_INTERRUPTED, turn_number=None, updated_at=now).execution_options(synchronize_session=False)
         )
 
-    def _resend(self, existing: MemoryLog, user_action: str, *, cutoff: datetime, now: datetime) -> TurnStart:
+    def _resend(
+        self, existing: MemoryLog, user_action: str, *, cutoff: datetime, now: datetime, state_before: Mapping[str, Any] | None = None
+    ) -> TurnStart:
         # interrupted、blocked，或逾時的 streaming：重新生成並覆蓋該筆（序號與編號不變，輪數仍是空的，嘗試序號加 1）
         reusable = (
             MemoryLog.turn_status.in_((TURN_INTERRUPTED, TURN_BLOCKED))
@@ -581,6 +819,8 @@ class SessionRepository(BaseRepository[RpgSession]):
             .values(
                 turn_status=TURN_STREAMING, user_action=user_action, llm_raw_response="", structured_result=None, turn_number=None,
                 attempt=MemoryLog.attempt + 1, updated_at=now,
+                # 回合前的快照一律以這次為準；沒帶就清為空（SQL 的 NULL），舊快照對應的是更早的世界
+                state_before_json=copy.deepcopy(dict(state_before)) if state_before is not None else sa.null(),
             )
             .execution_options(synchronize_session=False)
         )
