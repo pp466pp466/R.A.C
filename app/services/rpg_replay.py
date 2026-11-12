@@ -18,6 +18,7 @@ def turn_replay_events(replay: TurnReplay, *, coins: int) -> list[SseEvent]:
         SseEvent(EVENT_TOKEN, {"text": replay.story}),
         SseEvent(EVENT_DONE, {
             "status": DONE_ENDED if replay.ended else DONE_COMPLETE, "turn_number": replay.turn_number, "coins": coins,
+            "revision": replay.revision, "free_left": replay.free_left,
         }),
     ]
 

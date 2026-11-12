@@ -13,8 +13,8 @@ from werkzeug.exceptions import HTTPException
 from app.observability.errors import describe_exception
 from app.security.errors import HttpSecurityError
 from app.services.errors import (
-    ChatSuspended, CheckinOverflow, Conflict, Forbidden, InsufficientCoins, NotebookConflict, NotebookTooLong, NotFound, ServiceError,
-    ServiceUnavailable, TooManyRequests, Unauthenticated, Unprocessable, ValidationError, VersionConflict,
+    ChatSuspended, CheckinOverflow, Conflict, Forbidden, InsufficientCoins, NotebookConflict, NotebookTooLong, NotFound, NotRevisable,
+    RevisionInvalid, ServiceError, ServiceUnavailable, TooManyRequests, Unauthenticated, Unprocessable, ValidationError, VersionConflict,
 )
 
 logger = logging.getLogger(__name__)
@@ -92,7 +92,7 @@ def register_error_handlers(app: Flask) -> None:
 
     @app.errorhandler(ServiceError)
     def _service_error(exc: ServiceError):
-        fields = exc.fields if isinstance(exc, ValidationError) else None
+        fields = exc.fields if isinstance(exc, (ValidationError, RevisionInvalid)) else None
         extra: dict[str, object] | None = None
         if isinstance(exc, VersionConflict):
             extra = {"conversation": exc.conversation}
@@ -100,8 +100,12 @@ def register_error_handlers(app: Flask) -> None:
             extra = {"notebook": exc.notebook}                       # 後端目前的記事簿（以後端為準）：前端據此通知並重新載入
         elif isinstance(exc, NotebookTooLong):
             extra = {"length": exc.length, "capacity": exc.capacity}                  # 只有整數：玩家自己的字數與容量，不回顯內容
+        elif isinstance(exc, RevisionInvalid):
+            extra = None                                             # 只有欄位說明（`fields`），沒有審查類別
         elif isinstance(exc, Unprocessable):
             extra = {"categories": list(exc.categories)}             # 只有固定列舉的類別，不含內容的位置或文字
+        elif isinstance(exc, NotRevisable):
+            extra = {"reason": exc.reason}                           # 固定列舉（ended、not_last、in_progress、no_snapshot）
         elif isinstance(exc, InsufficientCoins):
             extra = {"balance": exc.balance, "needed": exc.needed}                    # 只有合計餘額與所需數量，不洩漏兩個餘額的拆分
         elif isinstance(exc, CheckinOverflow):

@@ -29,6 +29,7 @@ from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
+from app.repositories.turn_regeneration_repository import TurnRegenerationRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.wallet_repository import WalletRepository
@@ -444,8 +445,8 @@ def get_game_service() -> GameService:
     session, config, clock = get_session(), get_config(), get_clock()
     usage = build_usage_service(session, settings=config.usage, clock=clock)
     return GameService(
-        sessions=SessionRepository(session), wallet=get_wallet_service(), policy=get_access_policy(), limits=get_runtime_limits(),
-        budget_exhausted=usage.global_budget_exhausted, marker=rpg_marker(config.secret_key.reveal()), model=_rpg_llm_settings().primary_model,
+        sessions=SessionRepository(session), regenerations=TurnRegenerationRepository(session), wallet=get_wallet_service(),
+        policy=get_access_policy(), limits=get_runtime_limits(), budget_exhausted=usage.global_budget_exhausted, marker=rpg_marker(config.secret_key.reveal()), model=_rpg_llm_settings().primary_model,
         clock=clock,
     )
 

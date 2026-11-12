@@ -181,7 +181,7 @@ def test_a_normal_turn_streams_events_in_order_with_the_required_headers(app, pr
     assert set(order) <= EVENT_NAMES and order.count("token") >= 1
     assert text_of(events) == STORY
     assert of(events, "meta")[0]["client_msg_id"] == "m-1" and of(events, "meta")[0]["replayed"] is False
-    assert of(events, "done")[-1] == {"status": "complete", "turn_number": 1, "coins": 170}
+    assert of(events, "done")[-1] == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert total(app, uid) == 170
 
 
@@ -342,7 +342,7 @@ def test_resending_a_completed_turn_replays_the_story_without_a_model_call_or_a_
     assert names(again) == ["meta", "token", "done"]
     assert of(again, "meta")[0]["replayed"] is True and of(again, "meta")[0]["turn_id"] == of(first, "meta")[0]["turn_id"]
     assert of(again, "token")[0]["text"] == STORY
-    assert of(again, "done")[0] == {"status": "complete", "turn_number": 1, "coins": coins}
+    assert of(again, "done")[0] == {"status": "complete", "turn_number": 1, "coins": coins, "revision": 1, "free_left": 2}
     assert len(provider.calls) == calls and total(app, uid) == coins and turn_rows(app) == 1
 
 

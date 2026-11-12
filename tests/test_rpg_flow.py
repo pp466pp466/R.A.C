@@ -139,7 +139,7 @@ def test_a_players_whole_journey_leaves_wallet_ledger_logs_and_data_consistent(w
     stream_and_state(rpg)
     one = parse(play(client, rpg, save_id, 1))
     assert names(one)[0] == "meta" and names(one)[-2:] == ["state", "done"]
-    assert of(one, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170}
+    assert of(one, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert "".join(d["text"] for d in of(one, "token")) == STORY and coins(client) == 170
 
     # ---- 回合 2：被擋一次後自動重生（只扣一次）-----------------------------------------------------
@@ -155,7 +155,7 @@ def test_a_players_whole_journey_leaves_wallet_ledger_logs_and_data_consistent(w
     assert names(broken)[-1] == "error" and "done" not in names(broken) and coins(client) == 140
     stream_and_state(rpg)
     three = parse(play(client, rpg, save_id, 3))
-    assert of(three, "meta")[0]["attempt"] == 2 and of(three, "done")[0] == {"status": "complete", "turn_number": 3, "coins": 110}
+    assert of(three, "meta")[0]["attempt"] == 2 and of(three, "done")[0] == {"status": "complete", "turn_number": 3, "coins": 110, "revision": 1, "free_left": 2}
 
     # ---- 已完成回合的重送：不呼叫模型、不扣幣 ------------------------------------------------------------
     calls = len(rpg.calls)
@@ -177,7 +177,7 @@ def test_a_players_whole_journey_leaves_wallet_ledger_logs_and_data_consistent(w
     assert client.post("/api/wallet/checkin", json={}).status_code == 200 and coins(client) == 220
     stream_and_state(rpg, STATE_ENDING)
     seven = parse(play(client, rpg, save_id, 7))
-    assert of(seven, "done")[0] == {"status": "ended", "turn_number": 7, "coins": 190}
+    assert of(seven, "done")[0] == {"status": "ended", "turn_number": 7, "coins": 190, "revision": 1, "free_left": 2}
     over = play(client, rpg, save_id, 7, msg="after-the-end")
     assert over.status_code == 409 and over.get_json()["error"]["code"] == "session_ended"
     assert of(parse(play(client, rpg, save_id, 7)), "done")[0]["status"] == "ended"      # 結局回合的重送仍拿得到結果

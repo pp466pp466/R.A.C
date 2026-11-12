@@ -17,29 +17,36 @@
    餘額不足時整段復原，**不留下新的回合列**，請求仍可回傳 409。
 
 行動文字、劇情、世界狀態都是個資：這裡只記錄 `rpg_events` 的白名單事件（內部編號、整數與列舉）。
+
+修訂（重新生成與編輯最後一輪，rpg-turn-revision）：`begin_revision` 是同一種「開始階段」——驗證、認領、（付費者）預扣、回饋列都在請求內完成，
+回傳純資料的 `RevisionPlan`（世界狀態是回合前快照）給 `RevisionRunner`。回合開始時 `begin_turn` 把當下的世界狀態存成該回合的回合前快照。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Callable, Mapping
 
 from app.models.rpg_session import (
-    OPENING_FALLBACK, OPENING_PENDING, OPENING_READY, SESSION_ENDED, TURN_COMPLETE, MemoryLog, RpgSession,
+    OPENING_FALLBACK, OPENING_PENDING, OPENING_READY, REGEN_CATEGORIES, REGEN_KIND_EDIT, REGEN_KIND_REGENERATE, SESSION_ENDED, TURN_COMPLETE,
+    MemoryLog, RpgSession,
 )
 from app.models.script import REVIEW_REJECT
 from app.observability import rpg_events, usage_events
-from app.repositories.errors import SessionEndedError, TurnInProgressError
+from app.repositories.errors import NotRevisableError, SessionEndedError, TurnInProgressError
 from app.repositories.session_repository import (
-    OPENING_BUSY, OPENING_CLAIMED, OPENING_DONE, OPENING_TAKEN_OVER, TURN_CREATED, TURN_REPLAYED, SessionRepository,
+    NOT_REVISABLE_ENDED, NOT_REVISABLE_IN_PROGRESS, NOT_REVISABLE_NO_SNAPSHOT, NOT_REVISABLE_NOT_LAST, OPENING_BUSY, OPENING_CLAIMED, OPENING_DONE, OPENING_TAKEN_OVER,
+    REVISION_BUSY, REVISION_CONFLICT, REVISION_TAKEN_OVER, TURN_CREATED, TURN_REPLAYED, SessionRepository,
 )
+from app.repositories.turn_regeneration_repository import TurnRegenerationRepository
 from app.services import notebook_policy, rpg_context, rpg_world
 from app.services.access_policy import AccessPolicy
 from app.services.current_user import CurrentUser
 from app.services.errors import (
-    Conflict, InputBlocked, NotFound, OpeningPending, SessionEnded, SystemBusy, ValidationError,
+    Conflict, InputBlocked, NotFound, NotRevisable, OpeningPending, RevisionConflict, RevisionInvalid, SessionEnded, SystemBusy,
+    ValidationError,
 )
-from app.services.input_cleaning import clean_message
+from app.services.input_cleaning import clean_message, clean_single_line
 from app.services.runtime_limits import RuntimeLimits
 from app.services.script_rules import check_text_rules
 from app.services.wallet_service import DEFAULT_MODEL_KEY, WalletService
@@ -49,6 +56,11 @@ ACTION_MAX = 1000                 # 與客服的單則訊息上限一致（假�
 TURN_IN_PROGRESS_MESSAGE = "這個回合仍在處理中，請稍候。"
 HOLD_KEY_PREFIX = "turn"
 TURNS_PAGE_MAX = 200              # `GET …/turns` 每次最多回傳的筆數（客服的訊息分頁相同）
+REASON_MIN = 5                    # 重新生成的理由：NFC 並去除控制字元之後的 Unicode 字元數（rpg-turn-revision；前端從頁面初始狀態讀，不寫死）
+REASON_MAX = 50
+KIND_REGENERATE = REGEN_KIND_REGENERATE
+KIND_EDIT = REGEN_KIND_EDIT
+CATEGORIES = REGEN_CATEGORIES     # 回饋分類的列舉（識別字串；繁體中文文案在前端）
 
 
 def hold_key(session_public_id: str, client_msg_id: str, attempt: int) -> str:
@@ -85,6 +97,8 @@ class TurnPlan:
     history: tuple[rpg_context.HistoryTurn, ...]           # 最近 10 個完成的回合
     system_instruction: str
     contents: tuple[Any, ...]
+    revision: int                           # 回合目前的修訂序號（新回合為 1）；`done` 事件帶出
+    free_left: int                          # 這個回合還剩幾次免費重新生成（新回合為設定的免費次數）；`done` 事件帶出
 
 
 @dataclass(frozen=True)
@@ -98,6 +112,8 @@ class TurnReplay:
     turn_number: int | None
     story: str
     ended: bool                             # 存檔是否已完結（結局回合）
+    revision: int                           # 回合目前的修訂序號；`done` 事件帶出
+    free_left: int                          # 這個回合還剩幾次免費重新生成；`done` 事件帶出
 
 
 @dataclass(frozen=True)
@@ -144,6 +160,45 @@ class OpeningBegin:
     done: OpeningDone | None = None
 
 
+@dataclass(frozen=True)
+class RevisionPlan:
+    """修訂（重新生成或編輯最後一輪）認領成功之後凍結的一切：`RevisionRunner` 只用它，不再讀取資料庫。內容都是純資料。
+
+    世界狀態 `world` 是**回合前快照**（不是目前存檔），`history` 不含目標回合與其後的回合，`turn_number` 是目標回合原本的輪數。
+    **沒有理由與分類**：它們只存入回饋表，不屬於任何會進模型的內容（也不需要被串流階段使用）；`action` 是這次生成使用的行動
+    （重新生成沿用原行動，編輯使用清理後的新行動），日誌不記錄它。"""
+
+    user_id: int
+    session_id: int                         # 內部整數編號（只給日誌與帳本）
+    session_public_id: str
+    kind: str                               # `KIND_REGENERATE` 或 `KIND_EDIT`
+    seq: int                                # 回合序號（修訂不改變）
+    client_msg_id: str
+    attempt: int                            # 認領後的嘗試序號（預扣鍵、回饋列、替換與釋放的憑證）
+    expected_revision: int                  # 認領時的回合 revision（替換時比對；成功後加 1）
+    regen_count: int                        # 認領時這份輸入已成功重新生成的次數
+    free_limit: int                         # 認領當下設定的免費次數（`done` 的 `free_left` 由它與 `regen_count` 算出）
+    taken_over: bool                        # 這次接手了逾時的舊認領
+    is_free: bool                           # 免費的重新生成（不預扣）
+    hold_key: str | None                    # 預扣鍵；免費者為 `None`
+    cost: int                               # 預扣的幣數（免費為 0）
+    turn_number: int                        # 目標回合的輪數
+    action: str                             # 這次生成使用的行動
+    version: int                            # 認領時的存檔世界版本（寫回時比對）
+    tier: str
+    model: str
+    adult_age: int
+    max_months: int
+    ending_due: bool
+    script: Mapping[str, Any]
+    protagonist: Mapping[str, Any]
+    world: rpg_world.WorldState             # 回合前快照
+    characters: tuple[rpg_world.CharacterAge, ...]
+    history: tuple[rpg_context.HistoryTurn, ...]           # 不含目標回合的最近 10 個完成回合
+    system_instruction: str
+    contents: tuple[Any, ...]
+
+
 OPENING_IN_PROGRESS_MESSAGE = "故事的開場正在準備中，請稍候再看。"
 
 
@@ -165,6 +220,55 @@ def clean_client_msg_id(value: object) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= CLIENT_MSG_ID_MAX:
         raise ValidationError(fields={"client_msg_id": f"必須是 1 至 {CLIENT_MSG_ID_MAX} 字的文字。"})
     return value
+
+
+def clean_expected_revision(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        raise ValidationError(fields={"expected_revision": "必須是不小於 1 的整數。"})
+    return value
+
+
+def revision_field_problems(category: object, reason: object) -> tuple[str | None, str | None, dict[str, str]]:
+    """重新生成的分類與理由的驗證。回傳（分類, 清理後的理由, 欄位問題）；理由以 NFC、去除控制字元與頭尾空白之後的 Unicode 字元數計，
+    須為 `REASON_MIN` 至 `REASON_MAX` 字。有問題的欄位都列出（不回顯玩家填的內容）。"""
+    problems: dict[str, str] = {}
+    chosen = category if isinstance(category, str) and category in CATEGORIES else None
+    if chosen is None:
+        problems["category"] = "請選擇一個分類。"
+    text: str | None = None
+    if not isinstance(reason, str):
+        problems["reason"] = "請簡短說明原因。"
+    else:
+        text = clean_single_line(reason)
+        if text is None:
+            problems["reason"] = "包含無法儲存的字元。"
+        elif len(text) < REASON_MIN:
+            problems["reason"] = f"請簡短說明原因，至少 {REASON_MIN} 字。"
+        elif len(text) > REASON_MAX:
+            problems["reason"] = f"原因最多 {REASON_MAX} 字。"
+    return chosen, text if "reason" not in problems else None, problems
+
+
+def world_of(save: RpgSession) -> rpg_world.WorldState:
+    """存檔目前的世界狀態（六個欄位的互轉由 `WorldState` 負責）。"""
+    return rpg_world.WorldState.from_fields(
+        entities=save.entities_json, goals=save.goals_json, milestone_progress=save.milestone_progress_json,
+        elapsed_months=save.elapsed_months, current_location=save.current_location, status_summary=save.status_summary,
+    )
+
+
+def world_from_snapshot(snapshot: Mapping[str, Any]) -> rpg_world.WorldState:
+    """回合前快照（`WorldState.to_fields()` 的六欄）還原成 `WorldState`。"""
+    return rpg_world.WorldState.from_fields(
+        entities=snapshot.get("entities_json"), goals=snapshot.get("goals_json"), milestone_progress=snapshot.get("milestone_progress_json"),
+        elapsed_months=snapshot.get("elapsed_months", 0), current_location=snapshot.get("current_location", ""),
+        status_summary=snapshot.get("status_summary", ""),
+    )
+
+
+def free_left_of(free_limit: int, regen_count: int) -> int:
+    """這個回合還剩幾次免費重新生成。"""
+    return max(0, int(free_limit) - int(regen_count))
 
 
 def opening_view(save: RpgSession, script: Mapping[str, Any]) -> dict[str, Any]:
@@ -198,7 +302,7 @@ def turn_view(turn: MemoryLog) -> dict[str, Any]:
     complete = turn.turn_status == TURN_COMPLETE
     return {
         "seq": turn.seq, "client_msg_id": turn.client_msg_id, "turn_number": turn.turn_number, "status": turn.turn_status,
-        "action": turn.user_action, "story": turn.llm_raw_response if complete else None,
+        "action": turn.user_action, "story": turn.llm_raw_response if complete else None, "revision": turn.revision,
     }
 
 
@@ -214,6 +318,7 @@ class GameService:
         self,
         *,
         sessions: SessionRepository,
+        regenerations: TurnRegenerationRepository,
         wallet: WalletService,
         policy: AccessPolicy,
         limits: RuntimeLimits,
@@ -223,6 +328,7 @@ class GameService:
         clock: Callable[[], datetime],
     ) -> None:
         self._sessions = sessions
+        self._regenerations = regenerations
         self._wallet = wallet
         self._policy = policy
         self._limits = limits
@@ -266,6 +372,7 @@ class GameService:
             with self._sessions.savepoint():                      # 餘額不足時連同新的回合列一起復原
                 started = self._sessions.start_turn(
                     current.id, session_public_id, client_msg_id=msg_id, user_action=text, now=self._clock(), stale_after_seconds=stale_after,
+                    state_before=lambda: world_of(save).to_fields(),   # 取得存檔列鎖之後才讀：與稍後凍結的 TurnPlan 是同一份世界
                 )
                 if started is None:
                     raise NotFound()
@@ -283,11 +390,117 @@ class GameService:
         plan = self._plan(
             current, save, tier=tier, adult_age=adult_age, max_months=max_months, action=text, client_msg_id=msg_id, attempt=attempt, seq=seq,
             start=rpg_events.START_NEW if started.outcome == TURN_CREATED else rpg_events.START_RESTARTED, key=key, cost=held.cost,
+            revision=turn.revision,
         )
         rpg_events.log_turn_started(
             user_id=current.id, session_id=save.id, turn_number=plan.turn_number, attempt=attempt, start=plan.start, tier=tier, model=self._model,
         )
         return TurnBegin(plan=plan)
+
+    # ---- 修訂：重新生成與編輯最後一輪 -----------------------------------------------------------------
+
+    def begin_revision(
+        self, current: CurrentUser, session_public_id: str, client_msg_id: object, *, kind: str, expected_revision: object,
+        category: object = None, reason: object = None, action: object = None,
+    ) -> RevisionPlan:
+        """開始一次修訂（見 rpg-turn-revision 規格與 design D1、D2、D3、D4、D5）。順序（便宜、沒有副作用的檢查在前）：
+
+        1. 帳號與年齡閘門；2. 驗證本文（`expected_revision`；重新生成的分類與理由，編輯的 `clean_action`）；
+        3. 擁有者與回合（不存在或非擁有者 404）；4. `revision`（`revision_conflict`）；5. 可修訂（`not_revisable` 帶原因；
+           同一回合已有未逾時的認領為 `turn_in_progress`）；6. 編輯：新行動須不同於原行動（422），再過規則層（`input_blocked`）；
+        7. 全站每日 token 上限（`system_busy`）；
+        8. 同一個 SAVEPOINT：認領（條件式 UPDATE，`attempt` 加 1）→ 接手時把舊的 `pending` 回饋標為 `failed` → 回饋列 `pending` →
+           （付費重新生成與所有編輯）`wallet.hold`，鍵含認領後的 `attempt`；餘額不足時整段復原，**不留認領、不留回饋列**。
+
+        回傳純資料的 `RevisionPlan`：世界狀態是回合前快照，歷史不含目標回合。理由與分類只寫入回饋表，不在計畫裡，也不進模型。"""
+        self._policy.require_chat_access(current)
+        if kind not in (KIND_REGENERATE, KIND_EDIT):
+            raise ValueError(f"未知的修訂種類：{kind!r}")
+        msg_id = clean_client_msg_id(client_msg_id)
+        expected = clean_expected_revision(expected_revision)
+        chosen_category: str | None = None
+        reason_text: str | None = None
+        new_action: str | None = None
+        if kind == KIND_REGENERATE:
+            chosen_category, reason_text, problems = revision_field_problems(category, reason)
+            if problems:
+                raise RevisionInvalid(problems)
+        else:
+            new_action = clean_action(action)
+
+        save = self._sessions.get_owned(current.id, session_public_id)
+        if save is None:
+            raise NotFound()
+        original = self._sessions.get_turn(current.id, session_public_id, msg_id)
+        if original is None:
+            raise NotFound()
+        if original.revision != expected:
+            raise RevisionConflict()
+
+        now = self._clock()
+        stale_after = self._limits.coin_hold_timeout()
+        state = self._sessions.revision_state(current.id, session_public_id, now=now, stale_after_seconds=stale_after)
+        if state is None:
+            raise NotFound()
+        if state.client_msg_id != msg_id:                          # 目標不是最後一個完成的回合（被擋、中斷與生成中的嘗試也不是）
+            raise NotRevisable(NOT_REVISABLE_ENDED if save.status == SESSION_ENDED else NOT_REVISABLE_NOT_LAST)
+        if not state.revisable:
+            claimed_at = original.revising_started_at
+            if state.reason == NOT_REVISABLE_IN_PROGRESS and claimed_at is not None and claimed_at >= now - timedelta(seconds=stale_after):
+                raise Conflict(TURN_IN_PROGRESS_MESSAGE, code="turn_in_progress")          # 同一回合已有未逾時的認領
+            raise NotRevisable(state.reason or NOT_REVISABLE_NOT_LAST)
+
+        tier = self._policy.effective_tier(current, save_tier=save.content_tier)
+        if kind == KIND_EDIT:
+            if new_action == original.user_action:
+                raise RevisionInvalid({"action": "新的行動需要和原本的不同。"})
+            rules = check_text_rules([new_action], tier=tier, adult_age=self._policy.adult_age)
+            if rules.verdict == REVIEW_REJECT:
+                raise InputBlocked(rules.categories)
+        if self._budget_exhausted():
+            usage_events.log_denied(user_id=current.id, reason=usage_events.DENIED_GLOBAL_BUDGET)
+            raise SystemBusy()
+
+        free_limit = self._limits.rpg_free_regenerations()
+        try:
+            with self._sessions.savepoint():                      # 餘額不足（或任何失敗）時連同認領與回饋列一起復原
+                claim = self._sessions.claim_revision(
+                    current.id, session_public_id, msg_id, expected_revision=expected, now=now, stale_after_seconds=stale_after,
+                )
+                if claim is None:
+                    raise NotFound()
+                if claim.outcome == REVISION_CONFLICT:
+                    raise RevisionConflict()
+                if claim.outcome == REVISION_BUSY:
+                    raise Conflict(TURN_IN_PROGRESS_MESSAGE, code="turn_in_progress")
+                turn = claim.turn
+                if not isinstance(turn.state_before_json, Mapping):        # 認領已確認有快照；防禦資料損壞（整段復原，不留認領）
+                    raise NotRevisable(NOT_REVISABLE_NO_SNAPSHOT)
+                attempt = turn.attempt
+                taken_over = claim.outcome == REVISION_TAKEN_OVER
+                is_free = kind == KIND_REGENERATE and turn.regen_count < free_limit
+                if taken_over:                                    # 舊執行者的回饋列先標為失敗，新的一列才不會被一起標記
+                    self._regenerations.fail_pending_for_turn(current.id, session_public_id, turn_seq=turn.seq, now=now)
+                self._regenerations.add_pending(
+                    current.id, session_public_id, turn_seq=turn.seq, attempt=attempt, kind=kind, category=chosen_category, reason=reason_text,
+                    is_free=is_free,
+                )
+                key: str | None = None
+                cost = 0
+                if not is_free:
+                    key = hold_key(session_public_id, msg_id, attempt)
+                    cost = self._wallet.hold(current, key=key, session_public_id=session_public_id, model_key=DEFAULT_MODEL_KEY).cost
+        except NotRevisableError as exc:
+            raise NotRevisable(exc.reason) from exc
+        except TurnInProgressError as exc:
+            raise Conflict(TURN_IN_PROGRESS_MESSAGE, code="turn_in_progress") from exc
+
+        plan = self._revision_plan(
+            current, save, turn, tier=tier, action=new_action if kind == KIND_EDIT else turn.user_action, kind=kind, taken_over=taken_over,
+            is_free=is_free, key=key, cost=cost, free_limit=free_limit,
+        )
+        rpg_events.log_revision_started(user_id=current.id, session_id=save.id, kind=kind, attempt=attempt, is_free=is_free, cost=cost)
+        return plan
 
     # ---- 第 0 幕 --------------------------------------------------------------------------------
 
@@ -355,7 +568,8 @@ class GameService:
         """存檔狀態視圖：對外識別碼、狀態、第 0 幕、世界狀態的玩家視圖、記事簿用量摘要與已完成輪數。已完結的存檔也可以讀。
 
         沒有內部編號、來源版本與劇本複本全文（只有標題）；世界狀態只含玩家可以知道的欄位（NPC 的特質與隱藏的歸屬不在其中）；
-        記事簿只有版本、字數、容量與是否已滿，**沒有全文**（全文只走 `NotebookService.view`）。"""
+        記事簿只有版本、字數、容量與是否已滿，**沒有全文**（全文只走 `NotebookService.view`）。
+        `last_turn` 是最後一輪的修訂資訊（沒有完成的回合時為空）：`client_msg_id`、`seq`、`revision`、是否可修訂與原因、剩餘免費次數與兩種操作的幣價。"""
         self._policy.require_chat_access(current)
         save = self._sessions.get_owned(current.id, session_public_id)
         if save is None:
@@ -367,6 +581,7 @@ class GameService:
             "completed_turns": self._sessions.count_complete_turns(current.id, session_public_id) or 0,
             "opening": opening_view(save, script), "world": world_view(save),
             "notebook": notebook_policy.summary_of(save.notebook_text, save.notebook_version, current.member_tier),
+            "last_turn": self._last_turn_view(current, save.public_id),
         }
 
     def turn_views(
@@ -389,21 +604,59 @@ class GameService:
     def _replay(self, save: RpgSession, turn: MemoryLog) -> TurnReplay:
         return TurnReplay(
             session_public_id=save.public_id, seq=turn.seq, client_msg_id=turn.client_msg_id, attempt=turn.attempt,
-            turn_number=turn.turn_number, story=turn.llm_raw_response, ended=save.status == SESSION_ENDED,
+            turn_number=turn.turn_number, story=turn.llm_raw_response, ended=save.status == SESSION_ENDED, revision=turn.revision,
+            free_left=free_left_of(self._limits.rpg_free_regenerations(), turn.regen_count),
         )
+
+    def _revision_plan(
+        self, current: CurrentUser, save: RpgSession, turn: MemoryLog, *, tier: str, action: str, kind: str, taken_over: bool, is_free: bool,
+        key: str | None, cost: int, free_limit: int,
+    ) -> RevisionPlan:
+        """認領之後凍結修訂的上下文：回合前快照的世界、不含目標回合的歷史、目標回合原本的輪數。`save` 與 `turn` 已被認領的條件式
+        UPDATE 標為過期，這裡讀到的是鎖內最新的值（`version` 因此與寫回時比對的版本一致）。"""
+        world = world_from_snapshot(turn.state_before_json)
+        script = save.script_snapshot_json if isinstance(save.script_snapshot_json, dict) else {}
+        protagonist = rpg_world.protagonist_from_session(save.protagonist_json, save.player_name, save.character_age)
+        ending_due = rpg_world.compute_ending_due(script, world, protagonist)
+        history = history_of(self._sessions.complete_turns_before(current.id, save.public_id, turn.turn_number, limit=rpg_context.HISTORY_TURNS) or [])
+        opening = save.opening_text if save.opening_state in (OPENING_READY, OPENING_FALLBACK) else None
+        system, contents = rpg_context.build_turn_context(
+            script=script, world=world, protagonist=protagonist, history=history, opening_text=opening, notebook=save.notebook_text or "",
+            action=action, tier=tier, turn_number=turn.turn_number, ending_due=ending_due, marker=self._marker,
+        )
+        return RevisionPlan(
+            user_id=current.id, session_id=save.id, session_public_id=save.public_id, kind=kind, seq=turn.seq, client_msg_id=turn.client_msg_id,
+            attempt=turn.attempt, expected_revision=turn.revision, regen_count=turn.regen_count, free_limit=free_limit, taken_over=taken_over,
+            is_free=is_free, hold_key=key, cost=cost, turn_number=turn.turn_number, action=action, version=save.version, tier=tier,
+            model=self._model, adult_age=self._policy.adult_age, max_months=self._limits.rpg_max_months_per_turn(), ending_due=ending_due,
+            script=script, protagonist=protagonist, world=world, characters=tuple(rpg_world.known_characters(world, script, protagonist)),
+            history=history, system_instruction=system, contents=tuple(contents),
+        )
+
+    def _last_turn_view(self, current: CurrentUser, session_public_id: str) -> dict[str, Any] | None:
+        """最後一輪的修訂資訊（玩家端 `last_turn`）：與 `begin_revision` 用同一個判斷（`revision_state`），畫面與端點不會各說各話。
+        沒有完成的回合時為 `None`。沒有快照、認領與內部編號。"""
+        state = self._sessions.revision_state(
+            current.id, session_public_id, now=self._clock(), stale_after_seconds=self._limits.coin_hold_timeout(),
+        )
+        if state is None or state.client_msg_id is None:
+            return None
+        free_left = free_left_of(self._limits.rpg_free_regenerations(), state.regen_count or 0)
+        cost = self._limits.coin_turn_cost(DEFAULT_MODEL_KEY)
+        return {
+            "client_msg_id": state.client_msg_id, "seq": state.seq, "revision": state.revision, "revisable": state.revisable,
+            "reason": state.reason, "free_left": free_left, "regenerate_cost": 0 if free_left > 0 else cost, "edit_cost": cost,
+        }
 
     def _plan(
         self, current: CurrentUser, save: RpgSession, *, tier: str, adult_age: int, max_months: int, action: str, client_msg_id: str,
-        attempt: int, seq: int, start: str, key: str, cost: int,
+        attempt: int, seq: int, start: str, key: str, cost: int, revision: int,
     ) -> TurnPlan:
         recent = self._sessions.recent_complete_turns(current.id, save.public_id) or []
         history = history_of(recent)
         completed = self._sessions.count_complete_turns(current.id, save.public_id) or 0
         turn_number = completed + 1
-        world = rpg_world.WorldState.from_fields(
-            entities=save.entities_json, goals=save.goals_json, milestone_progress=save.milestone_progress_json,
-            elapsed_months=save.elapsed_months, current_location=save.current_location, status_summary=save.status_summary,
-        )
+        world = world_of(save)
         script = save.script_snapshot_json if isinstance(save.script_snapshot_json, dict) else {}
         protagonist = rpg_world.protagonist_from_session(save.protagonist_json, save.player_name, save.character_age)
         ending_due = rpg_world.compute_ending_due(script, world, protagonist)
@@ -417,5 +670,5 @@ class GameService:
             start=start, turn_number=turn_number, action=action, hold_key=key, cost=cost, version=save.version, tier=tier, model=self._model,
             adult_age=adult_age, max_months=max_months, ending_due=ending_due, script=script, protagonist=protagonist, world=world,
             characters=tuple(rpg_world.known_characters(world, script, protagonist)), history=history, system_instruction=system,
-            contents=tuple(contents),
+            contents=tuple(contents), revision=revision, free_left=free_left_of(self._limits.rpg_free_regenerations(), 0),
         )

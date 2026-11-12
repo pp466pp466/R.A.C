@@ -53,7 +53,7 @@ def test_a_normal_turn_streams_reviews_updates_state_and_settles(kit):
     assert set(order) <= {"meta", "token", "ping", "state", "done"} and order.count("token") >= 1
     assert text_of(events) == STORY                                         # 審查緩衝釋放後，文字完整
     assert of(events, "meta")[0] == {"turn_id": 1, "client_msg_id": "m-1", "attempt": 1, "replayed": False}
-    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170}
+    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert of(events, "state")[0]["updated"] is True and of(events, "state")[0]["location"] == "山門前"
     (turn,) = kit.turns(save)
     assert (turn.turn_status, turn.turn_number, turn.llm_raw_response) == (TURN_COMPLETE, 1, STORY)
@@ -194,7 +194,7 @@ def test_a_blocked_first_attempt_regenerates_on_the_same_hold(kit):
     transition = of(events, "transition")[0]
     assert transition["will_retry"] is True and transition["text"] and "少女" not in transition["text"]
     assert "少女" not in "".join(event.encode() for event in events)        # 被擋的文字不會送到前端
-    assert events[-1].data == {"status": "complete", "turn_number": 1, "coins": 170}
+    assert events[-1].data == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert text_of(events).endswith(STORY)                                  # 轉場之後的新回應完整
     assert len(kit.provider.handles) == 2 and all(handle.closed for handle in kit.provider.handles)
     (turn,) = kit.turns(save)

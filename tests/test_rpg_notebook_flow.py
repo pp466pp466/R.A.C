@@ -215,6 +215,6 @@ def test_a_capture_failure_never_changes_the_completed_turn_or_the_wallet(world)
         play.turn(n)
     rows = play.wallet_rows()
     events = play.turn(11, Step("這不是 JSON"), Step("這也不是 JSON"))                  # 抓取的 JSON 驗證失敗（重試一次後仍失敗）
-    assert events[-1][1] == {"status": "complete", "turn_number": 11, "coins": events[-1][1]["coins"]}
+    assert events[-1][1] == {"status": "complete", "turn_number": 11, "coins": events[-1][1]["coins"], "revision": 1, "free_left": 2}
     assert play.save() == ("", 1, 0)                                                   # 驗證失敗不推進，由下個回合補做
     assert play.wallet_rows() == rows + 1

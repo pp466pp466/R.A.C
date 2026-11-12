@@ -51,8 +51,8 @@ BASE_KEYS = {"time", "level", "logger", "message"}
 
 # 前端 game-state.js 的 worldView／turn_view 白名單：後端回的欄位必須剛好是這些（多了或少了，前端的對照都會悄悄失效）
 WORLD_KEYS = {"elapsed_months", "location", "summary", "goals", "places", "protagonist_age"}
-TURN_KEYS = {"seq", "client_msg_id", "turn_number", "status", "action", "story"}
-SNAPSHOT_KEYS = {"id", "title", "content_tier", "status", "ended", "protagonist", "version", "completed_turns", "opening", "world", "notebook"}
+TURN_KEYS = {"seq", "client_msg_id", "turn_number", "status", "action", "story", "revision"}
+SNAPSHOT_KEYS = {"id", "title", "content_tier", "status", "ended", "protagonist", "version", "completed_turns", "opening", "world", "notebook", "last_turn"}
 NOTEBOOK_SUMMARY_KEYS = {"version", "length", "capacity", "full"}               # 快照的摘要（全文與預備空間只在 GET …/notebook）
 
 
@@ -265,7 +265,7 @@ def test_the_game_screen_flow_in_the_order_the_frontend_calls_the_backend(world,
     state = of(one, "state")[0]
     assert state["updated"] is True and state["location"] == "藏經閣" and state["elapsed_months"] == 1
     done = of(one, "done")[0]
-    assert done == {"status": "complete", "turn_number": 1, "coins": 170}
+    assert done == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert done["coins"] == wallet_total(client) == 170                           # done.coins 就是 GET /api/wallet 的合計
 
     # ---- 6) 補齊 since_seq：只有 complete 的回合有文字，欄位剛好是前端的白名單 ---------------------------------------------
@@ -273,7 +273,7 @@ def test_the_game_screen_flow_in_the_order_the_frontend_calls_the_backend(world,
     assert caught_up["has_more"] is False and len(caught_up["turns"]) == 1
     turn = caught_up["turns"][0]
     assert set(turn) == TURN_KEYS
-    assert turn == {"seq": 1, "client_msg_id": "msg-1", "turn_number": 1, "status": "complete", "action": ACTION_ONE, "story": STORY}
+    assert turn == {"seq": 1, "client_msg_id": "msg-1", "turn_number": 1, "status": "complete", "action": ACTION_ONE, "story": STORY, "revision": 1}
     assert turns_since(client, save_id, 1) == {"turns": [], "has_more": False}   # 前端以本機最大 seq 補齊：沒有新的就是空
     after = snapshot(client, save_id)
     assert after["world"]["location"] == "藏經閣" and after["completed_turns"] == 1     # done 之後重讀快照：世界狀態已更新
@@ -282,7 +282,7 @@ def test_the_game_screen_flow_in_the_order_the_frontend_calls_the_backend(world,
     calls = len(rpg.calls)
     replay = stream_events(play(client, save_id, "msg-1", ACTION_ONE))
     assert names(replay) == ["meta", "token", "done"] and of(replay, "meta")[0]["replayed"] is True
-    assert text_of(replay) == STORY and of(replay, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170}
+    assert text_of(replay) == STORY and of(replay, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert len(rpg.calls) == calls and wallet_total(client) == 170
     other_text = stream_events(play(client, save_id, "msg-1", "不同的行動內容"))     # 同一個編號、不同的行動：RPG 仍重播原本的結果（以已存的回合為準），不另外扣款
     assert of(other_text, "meta")[0]["replayed"] is True and text_of(other_text) == STORY and wallet_total(client) == 170
@@ -291,7 +291,7 @@ def test_the_game_screen_flow_in_the_order_the_frontend_calls_the_backend(world,
     # ---- 8) 第二輪之後，補齊只回新回合 ---------------------------------------------------------------------------
     rpg.script_stream(*story_script()).script(STATE)
     two = stream_events(play(client, save_id, "msg-2", ACTION_TWO))
-    assert of(two, "done")[0] == {"status": "complete", "turn_number": 2, "coins": 140} and of(two, "meta")[0]["turn_id"] == 2
+    assert of(two, "done")[0] == {"status": "complete", "turn_number": 2, "coins": 140, "revision": 1, "free_left": 2} and of(two, "meta")[0]["turn_id"] == 2
     newer = turns_since(client, save_id, 1)["turns"]
     assert [t["seq"] for t in newer] == [2] and newer[0]["action"] == ACTION_TWO and newer[0]["story"] == STORY
 

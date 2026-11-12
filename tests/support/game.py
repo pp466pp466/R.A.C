@@ -13,6 +13,7 @@ from app.models import RpgSession
 from app.models.rpg_session import OPENING_READY
 from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.repositories.session_repository import SessionRepository
+from app.repositories.turn_regeneration_repository import TurnRegenerationRepository
 from app.repositories.wallet_repository import WalletRepository
 from app.services.access_policy import AccessPolicy
 from app.services.current_user import CurrentUser
@@ -38,7 +39,7 @@ class GameKit:
         self.policy = AccessPolicy(clock=self.clock, adult_mode_enabled=adult_mode)
         self.budget_exhausted = False
         self.game = GameService(
-            sessions=self.sessions, wallet=self.wallet, policy=self.policy, limits=self.limits,
+            sessions=self.sessions, regenerations=TurnRegenerationRepository(session), wallet=self.wallet, policy=self.policy, limits=self.limits,
             budget_exhausted=lambda: self.budget_exhausted, marker=MARKER, model=MODEL, clock=self.clock,
         )
 

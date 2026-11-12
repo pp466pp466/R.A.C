@@ -99,6 +99,29 @@ def test_the_snapshot_is_a_copy_so_later_changes_to_the_argument_do_not_leak_in(
     assert turn_of(repo, alice, save).state_before_json["goals_json"]["active"] == []
 
 
+def test_a_snapshot_function_is_called_once_after_the_row_lock_and_its_result_is_stored(repo, member_session, world):
+    alice, save = world
+    calls = []
+
+    def after_the_lock():
+        # 呼叫時存檔列已被鎖住（`last_active_at` 已在同一個交易內更新）：這裡讀到的世界是鎖內最新的
+        member_session.expire_all()
+        calls.append(member_session.get(RpgSession, save.id).last_active_at)
+        return snap("鎖內的地點", 4)
+
+    started = repo.start_turn(alice.id, save.public_id, client_msg_id="m-1", user_action="行動", now=NOW, state_before=after_the_lock)
+    assert len(calls) == 1 and calls[0] == NOW
+    assert started.turn.state_before_json == snap("鎖內的地點", 4) and turn_of(repo, alice, save).state_before_json == snap("鎖內的地點", 4)
+
+
+def test_a_snapshot_function_overwrites_the_snapshot_when_an_interrupted_turn_is_resent(repo, member_session, world):
+    alice, save = world
+    repo.start_turn(alice.id, save.public_id, client_msg_id="m-1", user_action="行動", now=NOW, state_before=lambda: snap("舊地點"))
+    repo.interrupt_turn(alice.id, save.public_id, "m-1", partial_response="半截", attempt=1)
+    resent = repo.start_turn(alice.id, save.public_id, client_msg_id="m-1", user_action="行動", now=NOW, state_before=lambda: snap("新地點", 2))
+    assert resent.turn.state_before_json == snap("新地點", 2) and turn_of(repo, alice, save).state_before_json == snap("新地點", 2)
+
+
 def test_a_turn_started_without_a_snapshot_has_a_sql_null_not_a_json_null(repo, member_session, world):
     alice, save = world
     start(repo, alice, save)                                      # 既有的呼叫方式：不帶快照

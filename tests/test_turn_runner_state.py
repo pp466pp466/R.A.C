@@ -172,7 +172,7 @@ def test_a_proposed_ending_is_ignored_for_a_script_without_an_ending(kit):
 def test_a_proposed_ending_ends_the_session_for_a_custom_ending_script(kit):
     user, save, plan = setup(kit, content=custom_ending())
     events = play(kit, user, plan, Step(state(ending_proposed=True)))
-    assert events[-1].name == "done" and events[-1].data == {"status": "ended", "turn_number": 1, "coins": 170}
+    assert events[-1].name == "done" and events[-1].data == {"status": "ended", "turn_number": 1, "coins": 170, "revision": 1, "free_left": 2}
     assert "".join(of(events, "token")[i]["text"] for i in range(len(of(events, "token")))) == "".join(NAMED_STORY)       # 結局回合的文字照常送完
     saved = kit.fresh(save)
     assert saved.status == SESSION_ENDED and saved.ended_at is not None

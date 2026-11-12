@@ -468,3 +468,44 @@ class WalletBusy(ServiceUnavailable):
     default_message = "遊戲幣目前較忙碌，請稍後再試。"
     retry_after = 1
 
+
+
+# ---- 重新生成與編輯最後一輪（rpg-turn-revision）-----------------------------------------
+
+
+class RevisionConflict(Conflict):
+    """修訂請求的 `expected_revision` 與後端不一致（409）：這一輪已經在別處被修訂過，以後端為準，前端據此重新載入最後一輪。"""
+
+    code = "revision_conflict"
+    default_message = "這一輪已經在另一個地方被修改過，已為您顯示最新的內容。"
+
+
+NOT_REVISABLE_MESSAGES = {
+    "ended": "這個存檔已經完結，最後一輪不能再重新生成或編輯。",
+    "not_last": "只有最後一輪可以重新生成或編輯。",
+    "in_progress": "故事正在處理中，請稍候再試。",
+    "no_snapshot": "這一輪太久以前建立，已經不能重新生成或編輯。",
+}
+
+
+class NotRevisable(Conflict):
+    """這一輪目前不能被修訂（409）。`reason` 是固定列舉（`ended`、`not_last`、`in_progress`、`no_snapshot`），不帶其他細節。"""
+
+    code = "not_revisable"
+    default_message = "這一輪目前不能重新生成或編輯。"
+
+    def __init__(self, reason: str, message: str | None = None) -> None:
+        super().__init__(message or NOT_REVISABLE_MESSAGES.get(reason))
+        self.reason = reason
+
+
+class RevisionInvalid(Unprocessable):
+    """修訂請求的內容不合規定（422，rpg-turn-revision）：理由太短或太長、分類不在列舉內、編輯的行動與原本相同。
+    `fields` 以欄位名稱對應說明（不回顯玩家填的內容）；沒有審查類別。"""
+
+    code = "validation_error"
+    default_message = "輸入的內容不正確，請檢查後再試。"
+
+    def __init__(self, fields: dict[str, str], message: str | None = None) -> None:
+        super().__init__((), message)
+        self.fields = dict(fields)

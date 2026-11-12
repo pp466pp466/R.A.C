@@ -43,7 +43,7 @@ import copy
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Iterator, Mapping, Sequence
+from typing import Any, Callable, Iterator, Mapping, Sequence
 
 import sqlalchemy as sa
 from sqlalchemy import func, select, update
@@ -298,7 +298,7 @@ class SessionRepository(BaseRepository[RpgSession]):
 
     def start_turn(
         self, user_id: int, public_id: str, *, client_msg_id: str, user_action: str, now: datetime,
-        stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS, state_before: Mapping[str, Any] | None = None,
+        stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS, state_before: Mapping[str, Any] | Callable[[], Mapping[str, Any]] | None = None,
     ) -> TurnStart | None:
         """開始一個回合（冪等）。不是自己的存檔回傳 `None`；存檔已完結拋出 `SessionEndedError`。
 
@@ -309,13 +309,17 @@ class SessionRepository(BaseRepository[RpgSession]):
         `stale_after_seconds` 由呼叫端每次現讀（遊戲幣的預扣逾時秒數），這樣預扣與回合同時到期。
 
         `state_before` 是回合開始前的世界快照（`WorldState.to_fields()` 的六欄），寫入新回合列的 `state_before_json`，供之後修訂這一輪時
-        還原；重送被擋或中斷的回合時**覆寫**（沒帶就清為空：舊快照對應的是更早的世界）。重送已完成的回合不改動它。"""
+        還原；重送被擋或中斷的回合時**覆寫**（沒帶就清為空：舊快照對應的是更早的世界）。重送已完成的回合不改動它。
+        也可以傳入無參數的函式：它在**取得存檔列鎖之後**才被呼叫，快照因此一定是鎖內最新的世界（與同一個交易稍後凍結的 `TurnPlan` 同一份），
+        不會被取鎖之前就讀到的舊存檔物件蓋住。"""
         save = self.get_owned(user_id, public_id)
         if save is None:
             return None
         # 取得存檔那一列的鎖（持有到交易結束）並確認未完結：同一存檔的並行請求從這裡開始被串行化
         if self._update_owned(save, RpgSession.status == SESSION_ACTIVE, last_active_at=now) != 1:
             raise SessionEndedError
+        if callable(state_before):
+            state_before = state_before()
         cutoff = now - timedelta(seconds=stale_after_seconds)
         for attempt in (1, 2):
             existing = self._turn_by_client_id(save.id, client_msg_id)

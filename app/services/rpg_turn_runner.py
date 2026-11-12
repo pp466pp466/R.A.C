@@ -12,7 +12,7 @@
       ├ 模型失敗／逾時 ─► 回合 `interrupted`、退回預扣、`error`
       ├ 客戶端斷線（`GeneratorExit`）─► 上游關閉、回合 `interrupted`、退回預扣
       └ 文字完整且通過 ─► 狀態階段
-    狀態階段 ── 一個 `ping`；`LlmService.run_structured(kind="rpg_state")`；`apply_proposal` 逐項驗證；
+    狀態階段 ── （共用模組 `rpg_state_phase`，修訂的 `RevisionRunner` 也用它）一個 `ping`；`LlmService.run_structured(kind="rpg_state")`；`apply_proposal` 逐項驗證；
                 短交易：完成回合（指派輪數）＋寫入世界狀態（版本比對）＋結算預扣＋必要時完結存檔。
                 狀態呼叫失敗、版本衝突都不影響文字：回合照常完成並結算，世界狀態不變（`state.updated = false`）。
                 文字完整之後客戶端才斷線，收尾照常完成（收尾函式不 `yield`，正常路徑與 `GeneratorExit` 路徑共用）。
@@ -27,11 +27,11 @@ from typing import Any, Callable, Iterator
 
 from sqlalchemy.orm import Session
 
-from app.models.llm_call_log import KIND_RPG_STATE, KIND_RPG_STREAM
+from app.models.llm_call_log import KIND_RPG_STREAM
 from app.observability import rpg_events
 from app.repositories.errors import InvalidTurnTransitionError
 from app.repositories.session_repository import SessionRepository
-from app.services import rpg_context, rpg_prompt, rpg_world
+from app.services import rpg_prompt
 from app.services.current_user import CurrentUser
 from app.services.errors import HoldAlreadyRefunded
 from app.services.game_service import TurnPlan
@@ -40,19 +40,10 @@ from app.services.rpg_runner_base import (
     ATTEMPT_BLOCKED, ATTEMPT_OK, DONE_BLOCKED, DONE_COMPLETE, DONE_ENDED, ERROR_MESSAGES, EVENT_DONE, EVENT_META, EVENT_PING, EVENT_STATE,
     EVENT_TRANSITION, PING_SECONDS, AttemptResult, RunnerBase, RunnerDeps, SseEvent,
 )
+from app.services.rpg_state_phase import state_event, state_phase
 from app.services.rpg_stream import FAILURE_BLOCKED, FAILURE_CONFIG, FAILURE_TIMEOUT, StreamRequest
 
 __all__ = ["TurnRunner", "RunnerDeps", "SseEvent", "ERROR_MESSAGES", "PING_SECONDS"]
-
-
-@dataclass
-class _StateOutcome:
-    ok: bool
-    world: rpg_world.WorldState | None = None
-    notices: tuple[rpg_world.Notice, ...] = ()
-    dropped: int = 0
-    ending: bool = False
-    degraded: str | None = None
 
 
 @dataclass
@@ -62,18 +53,6 @@ class _Final:
     coins: int
     state_event: dict[str, Any]
     superseded: bool = False
-
-
-def _state_event(state: _StateOutcome, updated: bool) -> dict[str, Any]:
-    """`state` 事件：驗證後的玩家可見欄位與通知。沒有寫入世界狀態時只有 `updated: false`。"""
-    if not updated or state.world is None:
-        return {"updated": False, "notices": []}
-    world = state.world
-    return {
-        "updated": True, "elapsed_months": world.elapsed_months, "location": world.current_location, "summary": world.status_summary,
-        "goals": [goal["text"] for goal in world.goals.get("active", []) if isinstance(goal.get("text"), str)],
-        "notices": [notice.to_dict() for notice in state.notices],
-    }
 
 
 class TurnRunner(RunnerBase):
@@ -148,7 +127,9 @@ class TurnRunner(RunnerBase):
             yield self._error("turn_superseded")
             return
         yield self._send(EVENT_STATE, final.state_event)
-        yield self._send(EVENT_DONE, {"status": final.status, "turn_number": final.turn_number, "coins": final.coins})
+        yield self._send(EVENT_DONE, {
+            "status": final.status, "turn_number": final.turn_number, "coins": final.coins, "revision": plan.revision, "free_left": plan.free_left,
+        })
         if final.status == DONE_COMPLETE:                                     # 執行到這裡表示 `done` 已被取走；寫入失敗時是 `GeneratorExit`，到不了這一行
             self._capture_due = True
 
@@ -254,7 +235,7 @@ class TurnRunner(RunnerBase):
         assert self._narration is not None
         plan, narration = self._plan, self._narration
         self._tx(lambda session: None)                                         # 串流的帳本先寫入（狀態呼叫的帳本由 `LlmService` 自己寫，順序才與實際一致）
-        state = self._state_phase(narration)
+        state = state_phase(plan, self._deps, self._marker, narration)
         structured = {"state": {"ok": state.ok, "dropped": state.dropped}}
 
         def work(session: Session):
@@ -294,39 +275,7 @@ class TurnRunner(RunnerBase):
                 reason="age" if plan.ending_due else "proposed",
             )
         self._final = _Final(
-            DONE_ENDED if ended else DONE_COMPLETE, turn_number, coins, _state_event(state, world_updated),
+            DONE_ENDED if ended else DONE_COMPLETE, turn_number, coins, state_event(state, world_updated),
         )
         return self._final
-
-    def _state_phase(self, narration: str) -> _StateOutcome:
-        """狀態呼叫（結構化輸出，`kind=rpg_state`）並逐項驗證。任何失敗都回傳 `ok=False`（文字照常完成，世界狀態不變）。"""
-        plan = self._plan
-        factory = self._deps.llm_factory
-        failed = _StateOutcome(False, ending=plan.ending_due, degraded="unavailable")       # 壽終年齡由 Service 判定，狀態呼叫失敗也照樣完結
-        if factory is None:
-            return failed
-        system, contents = rpg_context.build_state_context(
-            script=plan.script, world=plan.world, protagonist=plan.protagonist, action=plan.action, narration=narration,
-            turn_number=plan.turn_number, ending_due=plan.ending_due, marker=self._marker,
-        )
-        try:
-            with self._deps.session_factory() as session:
-                llm = factory(session)
-                result = llm.run_structured(
-                    kind=KIND_RPG_STATE, user_id=plan.user_id, conversation_id=None, system_instruction=system, contents=contents,
-                    schema=rpg_prompt.STATE_SCHEMA, rules=rpg_prompt.state_rules(self._marker), model=plan.model,
-                )
-                session.commit()
-        except Exception:                                                    # noqa: BLE001 — 狀態呼叫不得拖垮已送達的文字
-            return failed
-        if not result.ok:
-            failed.degraded = result.degraded if result.degraded in rpg_events.STATE_DEGRADED else "unavailable"
-            return failed
-        proposal = rpg_world.apply_proposal(
-            plan.world, result.value, rpg_world.ProposalContext(
-                script=plan.script, protagonist=plan.protagonist, turn_number=plan.turn_number, action=plan.action, narration=narration,
-                tier=plan.tier, max_months=plan.max_months, ending_due=plan.ending_due, adult_age=plan.adult_age, markers=(self._marker,),
-            ),
-        )
-        return _StateOutcome(True, proposal.world, proposal.notices, proposal.dropped, proposal.ending)
 
