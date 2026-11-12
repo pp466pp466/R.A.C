@@ -1,29 +1,212 @@
 {% extends "base.html" %}
-{# 存檔頁的空殼（遊戲主畫面屬 RC-3b）：由伺服器直接渲染，沒有任何腳本與請求，所以不會產生內容、不會扣遊戲幣。
-   標題、主角姓名來自玩家與作者的文字，一律由 Jinja 自動跳脫輸出（純文字），不使用 safe 過濾器。 #}
-{% block title %}冒險存檔{% endblock %}
+{# 遊戲主畫面 `/game/<存檔識別碼>`（rpg-game-ui）：Vue 3 全域變數模式。時間軸、輸入區、側欄、遊戲幣 Modal 與離開確認 Modal 的顯示與禁用完全由 Vue 的響應式變數接管
+   （v-if／v-show），不使用 Bootstrap 的 JavaScript 外掛與任何 Bootstrap 的互動屬性。所有來自玩家與劇本作者的文字（標題、行動、劇情、目標、地點）一律以雙大括號
+   插值顯示（純文字，換行由 CSS 的 pre-wrap 保留），絕不解析任何標記語言。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。
+   頁面外殼只有初始狀態（存檔摘要、會員等級、閘門、內容模式、兩個串流逾時、行動字數上限），**沒有任何劇情、第 0 幕、記事簿與世界狀態**：
+   這些由前端依序呼叫既有端點取得。側欄（世界狀態）在桌面與手機都預設收合，頂列的開關按鈕切換；開關只存在於記憶體，不寫任何瀏覽器儲存。
+   記事簿面板與它的分頁留到第 5 組（game-notebook.js）。
+
+   與 game.js 的約定（game.js 的 setup() 合併 game-session.js、game-wallet.js 的回傳並加上側欄與 Modal，必須回傳的就是下面這份清單）：
+   - 載入與狀態：phase（'loading'｜'ready'｜'gone'｜'failed'）、loadFailure（{ message, link, retry }｜null）、restriction（'locked'｜'suspended'｜null）、
+     title、playerName、tierLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、
+     openingNotice（{ tone, text, retry }｜null）。
+   - 時間軸：items（最近 60 項：opening｜turn｜note｜inflight）、hasEarlier、jumpVisible、scroller（捲動區的元素參照）。
+   - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
+   - 世界與餘額：world（Game.worldView 的形狀）、locationLine、balanceText、lowBalanceText。
+   - 側欄與 Modal：sidebarOpen、sidebarMode（'push'｜'overlay'）、modal（{ leave, abandon }）。
+   - 遊戲幣 Modal：coinModalOpen、coinModalText、checkinBusy、checkinPreview（{ wouldGain, wouldLose }｜null）、checkinMessage、checkinFinished。
+   - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、resendInflight、askAbandon、confirmAbandon、
+     leaveClick、confirmLeave、toggleSidebar、closeSidebar、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal。 #}
+{% block title %}{{ save.title or '冒險' }}{% endblock %}
 {% block head_assets %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
 {% endblock %}
 {% block content %}
-{% set tier_labels = {'safe': '安全模式', 'standard': '一般模式', 'adult': '成人模式'} %}
-<div class="ge-shell">
-  <header class="ge-topbar">
-    <h1 class="ge-topbar__title">{{ save.title or '未命名的劇本' }}</h1>
-    <a class="ge-topbar__link" href="/game">回到冒險</a>
+<div id="game-app" class="gm-shell" v-cloak>
+{% raw %}
+  <header class="gm-topbar">
+    <button type="button" class="gm-iconbtn" aria-controls="gm-sidebar" :aria-expanded="sidebarOpen ? 'true' : 'false'"
+            :aria-label="sidebarOpen ? '收合世界狀態側欄' : '開啟世界狀態側欄'" @click="toggleSidebar">☰</button>
+    <div class="gm-topbar__main">
+      <h1 class="gm-topbar__title">{{ title }}</h1>
+      <p class="gm-topbar__meta">
+        <span class="ge-chip">{{ tierLabel }}</span>
+        <span v-if="ended" class="ge-chip ge-chip--ended">已完結</span>
+        <span v-else-if="offline" class="ge-chip">離線</span>
+        <template v-if="!sidebarOpen"><span v-if="locationLine" class="gm-topbar__where">{{ locationLine }}</span></template>
+      </p>
+    </div>
+    <p class="gm-balance" aria-live="polite">遊戲幣 <strong>{{ balanceText }}</strong></p>
+    <nav class="gm-nav" aria-label="站內連結">
+      <a class="gm-nav__link" href="/game" @click="leaveClick">回到冒險</a>
+      <a class="gm-nav__link" href="/cs">客服</a>
+      <a class="gm-nav__link" href="/account">帳號</a>
+    </nav>
   </header>
-  <main class="ge-main">
-    <section class="ge-panel">
-      <p class="ge-card__meta">
-        <span class="ge-chip{% if save.ended %} ge-chip--ended{% endif %}">{{ '已完結' if save.ended else '進行中' }}</span>
-        <span class="ge-chip">{{ tier_labels.get(save.content_tier, '未標示') }}</span>
-      </p>
-      <p class="ge-card__by">
-        {% if save.player_name %}<span>主角：{{ save.player_name }}</span>{% endif %}
-      </p>
-      <p class="ge-banner" role="status">劇情畫面建置中。存檔已經建立好了，等畫面上線後就能從這裡接著玩。</p>
-      <p class="ge-card__actions"><a class="ui-btn ui-btn--primary" href="/game">回到冒險</a></p>
-    </section>
-  </main>
+
+  <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
+  <p v-if="gateNotice" class="ge-banner gm-banner" role="alert">
+    {{ gateNotice.text }}
+    <a v-if="gateNotice.link" :href="gateNotice.link">{{ gateNotice.linkText }}</a>
+  </p>
+  <p v-if="modeNote" class="ge-banner ge-banner--quiet gm-banner" role="status">{{ modeNote }}</p>
+  <p v-if="offline" class="ge-banner ge-banner--quiet gm-banner" role="status">目前離線，只能閱讀已經載入的內容；需要連線才能送出行動。</p>
+  <p v-if="ended" class="ge-banner gm-banner" role="status">
+    這個存檔已經完結，歷史仍可閱讀，但不能再送出新的行動。
+    <a href="/game">回到冒險，用同一個劇本開新的存檔</a>
+  </p>
+
+  <div class="gm-body">
+    <main class="gm-main">
+      <div ref="scroller" class="gm-scroll" role="log" aria-label="劇情" @scroll="onScroll">
+        <p v-if="phase === 'loading'" class="ge-hint" role="status">載入中…</p>
+
+        <section v-else-if="phase === 'gone'" class="gm-state" role="alert">
+          <p class="ge-banner">找不到這個存檔，它可能已被刪除。</p>
+          <p><a class="ui-btn" href="/game">回到冒險</a></p>
+        </section>
+
+        <section v-else-if="phase === 'failed'" class="gm-state" role="alert">
+          <p class="ge-banner">
+            {{ loadFailure.message }}
+            <a v-if="loadFailure.link" :href="loadFailure.link.href">{{ loadFailure.link.text }}</a>
+          </p>
+          <p v-if="loadFailure.retry"><button type="button" class="ui-btn ui-btn--primary" @click="retryLoad">重試</button></p>
+        </section>
+
+        <template v-else>
+          <p v-if="hasEarlier" class="gm-earlier"><button type="button" class="ui-btn" @click="showEarlier">顯示更早的內容</button></p>
+          <ol class="gm-timeline">
+            <li v-for="item in items" :key="item.key" class="gm-item" :class="'gm-item--' + item.kind">
+              <template v-if="item.kind === 'opening'">
+                <p class="gm-eyebrow">第 0 幕</p>
+                <div class="gm-story">{{ item.text }}</div>
+              </template>
+
+              <template v-else-if="item.kind === 'turn'">
+                <div v-if="item.action" class="gm-action">
+                  <span class="gm-eyebrow">你的行動</span>
+                  <div class="gm-action__text">{{ item.action }}</div>
+                </div>
+                <p v-for="(line, index) in item.notes" :key="index" class="gm-note gm-note--transition">{{ line }}</p>
+                <div v-if="item.story" class="gm-story" :class="{ 'gm-story--streaming': item.streaming }">{{ item.story }}</div>
+                <p v-else-if="item.streaming" class="gm-wait" role="status">故事正在展開…</p>
+              </template>
+
+              <p v-else-if="item.kind === 'note'" class="gm-note" :class="'gm-note--' + item.tone">{{ item.text }}</p>
+
+              <div v-else class="gm-inflight" role="status">
+                <p class="gm-eyebrow">還沒有確認完成的行動</p>
+                <div class="gm-action__text">{{ item.action }}</div>
+                <p class="ge-hint">這個行動可能因為重新整理或斷線而中斷，伺服器端還沒有它的完整結果。「重送」會使用同一個編號：伺服器已經完成的話只會重播、不會再扣遊戲幣。</p>
+                <p class="gm-actions">
+                  <button type="button" class="ui-btn ui-btn--primary" :disabled="sending || offline || ended" @click="resendInflight">重送</button>
+                  <button type="button" class="ui-btn" :disabled="sending" @click="askAbandon">放棄</button>
+                </p>
+              </div>
+            </li>
+          </ol>
+          <p v-if="openingNotice" class="gm-note" :class="'gm-note--' + openingNotice.tone" role="status">
+            {{ openingNotice.text }}
+            <button v-if="openingNotice.retry" type="button" class="gm-linkbtn" @click="retryOpening">重試</button>
+          </p>
+        </template>
+      </div>
+      <button v-if="jumpVisible" type="button" class="gm-jump" @click="jumpToLatest">回到最新</button>
+
+      <section class="gm-composer" aria-label="輸入行動">
+        <p v-if="notice" class="gm-notice" :class="'gm-notice--' + notice.tone" role="alert">
+          {{ notice.text }}
+          <a v-if="notice.link" :href="notice.link.href">{{ notice.link.text }}</a>
+          <button type="button" class="gm-linkbtn" @click="dismissNotice">知道了</button>
+        </p>
+        <p v-if="blockerText" class="ge-hint gm-composer__hint" role="status">{{ blockerText }}</p>
+        <p v-if="lowBalanceText" class="ge-hint gm-composer__hint" role="status">
+          {{ lowBalanceText }}
+          <button type="button" class="gm-linkbtn" :disabled="checkinBusy" @click="claimCheckin">每日簽到</button>
+        </p>
+        <label class="gm-sr" for="gm-action">你的行動</label>
+        <textarea id="gm-action" ref="input" class="gw-input gm-input" rows="3" v-model="draft" :disabled="inputDisabled"
+                  autocomplete="off" placeholder="輸入你的行動（Ctrl＋Enter 送出）"
+                  @keydown.ctrl.enter.prevent="send" @keydown.meta.enter.prevent="send"></textarea>
+        <div class="gm-composer__bar">
+          <small class="gw-count" :class="{ 'gw-count--over': draftOver }">{{ draftCount }} / {{ actionMax }}</small>
+          <span class="gm-composer__spacer"></span>
+          <button v-if="sending" type="button" class="ui-btn" @click="cancel">取消</button>
+          <button type="button" class="ui-btn ui-btn--primary" :disabled="sendDisabled" :aria-busy="sending ? 'true' : 'false'" @click="send">{{ sending ? '進行中…' : '送出' }}</button>
+        </div>
+        <p v-if="actionError" class="gw-field-error" role="alert">{{ actionError }}</p>
+      </section>
+    </main>
+
+    <template v-if="sidebarOpen"><div v-if="sidebarMode === 'overlay'" class="gm-scrim" @click="closeSidebar"></div></template>
+    <aside id="gm-sidebar" v-show="sidebarOpen" class="gm-side" :class="'gm-side--' + sidebarMode" aria-label="世界狀態">
+      <div class="gm-side__head">
+        <h2 class="gm-side__title">世界</h2>
+        <button type="button" class="gm-iconbtn" aria-label="關閉側欄" @click="closeSidebar">×</button>
+      </div>
+      <p v-if="playerName" class="gm-side__line">主角：{{ playerName }}</p>
+      <dl class="gm-world">
+        <dt>目前地點</dt>
+        <dd>{{ world.location || '尚未記錄' }}</dd>
+        <dt>經過時間</dt>
+        <dd>{{ world.elapsed_months }} 個月</dd>
+        <template v-if="world.protagonist_age !== null">
+          <dt>主角年齡</dt>
+          <dd>{{ world.protagonist_age }} 歲</dd>
+        </template>
+      </dl>
+      <p v-if="world.summary" class="gm-world__summary">{{ world.summary }}</p>
+      <h3 class="gm-side__sub">進行中的目標</h3>
+      <ul v-if="world.goals.length" class="gm-list">
+        <li v-for="(goal, index) in world.goals" :key="index">{{ goal }}</li>
+      </ul>
+      <p v-else class="ge-hint">目前沒有進行中的目標。</p>
+      <h3 class="gm-side__sub">去過的地點</h3>
+      <ul v-if="world.places.length" class="gm-list">
+        <li v-for="(place, index) in world.places" :key="index">{{ place }}</li>
+      </ul>
+      <p v-else class="ge-hint">還沒有去過的地點。</p>
+    </aside>
+  </div>
+
+  <ui-modal v-model="coinModalOpen" title="遊戲幣" status-code="COINS" :show-cancel="false">
+    <p class="gm-modal-text">{{ coinModalText }}</p>
+    <p v-if="checkinMessage" class="gm-modal-text" role="status">{{ checkinMessage }}</p>
+    <p v-if="checkinPreview" class="ge-hint">領取會入帳 {{ checkinPreview.wouldGain }} 幣，並作廢超出上限的 {{ checkinPreview.wouldLose }} 幣。選「取消」不會用掉今天的簽到。</p>
+    <template #actions>
+      <template v-if="checkinPreview">
+        <button type="button" class="ui-btn" :disabled="checkinBusy" @click="cancelOverflow">取消</button>
+        <button type="button" class="ui-btn ui-btn--primary" :disabled="checkinBusy" @click="confirmOverflow">領取</button>
+      </template>
+      <template v-else>
+        <button type="button" class="ui-btn" @click="closeCoinModal">關閉</button>
+        <button v-if="!checkinFinished" type="button" class="ui-btn ui-btn--primary" :disabled="checkinBusy" @click="claimCheckin">每日簽到</button>
+      </template>
+    </template>
+  </ui-modal>
+  <ui-modal v-model="modal.leave" title="離開之前" status-code="LEAVE_GAME" confirm-text="離開" cancel-text="留在這裡" @confirm="confirmLeave">
+    <p>這一輪還在進行中。離開之後畫面會中止，但伺服器可能仍會完成這一輪；下次回來時會自動補上結果，遊戲幣以伺服器的結算為準。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.abandon" title="放棄這個行動？" status-code="ABANDON_TURN" confirm-text="放棄" cancel-text="先留著" @confirm="confirmAbandon">
+    <p>放棄之後，這個還沒有確認完成的行動就不再提示重送。伺服器若已經完成它，結果仍會出現在歷史裡，不會再次扣遊戲幣。</p>
+  </ui-modal>
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
 </div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取。只有存檔摘要、會員等級、閘門與內容模式、串流逾時與行動上限，沒有任何劇情與記事簿 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/sse-parser.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/turn-stream.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-state.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-store.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-sync.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-wallet.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-session.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game.js') }}"></script>
 {% endblock %}

@@ -965,7 +965,7 @@ change `rpg-character-creation`（RC-9）。玩家依「劇本角色規格」自
 
 ## RPG 入口與開存檔畫面（rpg-entry-ui）
 
-change `rpg-entry-ui`（RC-3a）。第一批玩家能親手操作的 RPG 畫面：`/game` 入口（選劇本與我的存檔）、開存檔精靈（序章 → 聯繫 → 創角 → 開始冒險）、存檔頁空殼（遊戲主畫面屬 RC-3b）。登入後的預設頁面改成 `/game`。全程只用既有的後端（兩個清單端點見上一節的端點表）；**沒有資料庫遷移、沒有新環境變數、沒有新日誌事件**，不改任何遊戲規則、審查、額度或資料表。
+change `rpg-entry-ui`（RC-3a）。第一批玩家能親手操作的 RPG 畫面：`/game` 入口（選劇本與我的存檔）、開存檔精靈（序章 → 聯繫 → 創角 → 開始冒險）、存檔頁（原本只是空殼，已由 `rpg-game-ui` 換成遊戲主畫面，見「RPG 遊戲主畫面（rpg-game-ui）」一節）。登入後的預設頁面改成 `/game`。全程只用既有的後端（兩個清單端點見上一節的端點表）；**沒有資料庫遷移、沒有新環境變數、沒有新日誌事件**，不改任何遊戲規則、審查、額度或資料表。
 
 ### 頁面
 
@@ -975,7 +975,7 @@ change `rpg-entry-ui`（RC-3a）。第一批玩家能親手操作的 RPG 畫面�
 |---|---|
 | `/game` | RPG 的入口，也是**登入後的預設頁面**。兩個分頁「選劇本」與「我的存檔」；清單內容**不放進**初始狀態，由 `GET /api/sessions/catalog` 與 `GET /api/sessions` 取得（載入更多、載入中、錯誤與重試、空狀態）。顯示內容模式與閘門提示（未滿 18 歲固定安全模式並說明原因；尚未完成年齡確認時「開始」禁用並說明）；頂列連到客服、創作、帳號 |
 | `/game/start/<version_public_id>` | 開存檔精靈。初始狀態只有會員等級、閘門結果與兩個請求逾時（`suggest_timeout_ms` ＝後端單次請求總預算加 5 秒、`start_timeout_ms` ＝ 2 × 預算加 5 秒，預設 35 秒與 65 秒，由設定算出，前端不寫死）；**不含劇本內容，也不輸出版本識別碼**（前端從網址讀取後呼叫 `setup`，版本是否存在、能不能玩由 `setup` 判斷） |
-| `/game/<session_public_id>` | 存檔頁**空殼**：伺服器直接渲染標題、主角姓名、內容模式與是否已完結，沒有腳本也不發任何請求；非擁有者與不存在的存檔得到逐字相同的 404；RC-3b 的遊戲主畫面會取代它 |
+| `/game/<session_public_id>` | 遊戲主畫面的外殼（`rpg-game-ui` 取代了原本的空殼，行為見「RPG 遊戲主畫面（rpg-game-ui）」一節）：初始狀態只有存檔摘要、閘門、內容模式、串流逾時與行動字數上限，沒有劇情；非擁有者與不存在的存檔得到逐字相同的 404 |
 
 兩個路由的路徑段數不同（`/game/start/<x>` 兩段、`/game/<x>` 一段），存檔識別碼是 UUID，不會等於 `start`，由測試固定。`/scripts`、`/cs` 與 `/account` 的頁首各有一個回到 `/game` 的「冒險」連結（一般站內連結，沒有 `data-bs-*`；等待刪除者的 `/account` 沒有）。
 
@@ -1000,7 +1000,7 @@ change `rpg-entry-ui`（RC-3a）。第一批玩家能親手操作的 RPG 畫面�
 
 ### 已知限制
 
-- ①**瀏覽器實測已由使用者做過一次**（見下方驗收紀錄「瀏覽器實測」），但只涵蓋一種瀏覽器（Chrome）與三個身分，**AI 生成預覽沒有驗證**。②**存檔頁只是空殼**：按「開始冒險」之後只看到標題與主角，遊戲主畫面、串流、第 0 幕的顯示、記事簿面板與餘額屬 RC-3b。③清單只含上架的劇本（不含自己的草稿，試玩草稿另行處理）；沒有搜尋、標籤篩選與劇本詳情頁（RC-8）。④精靈沒有瀏覽器原生的離開警告：重新整理或關閉分頁會直接丟掉已填的內容（刻意，個資不落地）。⑤`/age` 的分步精靈與對話人設預填不在這個 change。
+- ①**瀏覽器實測已由使用者做過一次**（見下方驗收紀錄「瀏覽器實測」），但只涵蓋一種瀏覽器（Chrome）與三個身分，**AI 生成預覽沒有驗證**。②**存檔頁在這個 change 結束時只是空殼**（遊戲主畫面屬 RC-3b，現已由 `rpg-game-ui` 取代，記事簿面板仍是之後的批次）。③清單只含上架的劇本（不含自己的草稿，試玩草稿另行處理）；沒有搜尋、標籤篩選與劇本詳情頁（RC-8）。④精靈沒有瀏覽器原生的離開警告：重新整理或關閉分頁會直接丟掉已填的內容（刻意，個資不落地）。⑤`/age` 的分步精靈與對話人設預填不在這個 change。
 
 ### 驗收紀錄（rpg-entry-ui，2026-11-11，已實作並完成瀏覽器實測，已封存）
 
@@ -1054,6 +1054,60 @@ E 批（`wizard.js`、導覽連結、整合測試與本節）完成時的狀態�
 |---|---|
 | **瀏覽器實測中沒做到的項目（5.1）** | ①「請 AI 生成」填表：驗收環境的假模型（`acceptance/fake-review`）只做審查、不會產生角色卡，所以生成回 503 `protagonist.suggest_unavailable`（日誌原因 `schema:$.character:required`），沒有看到預覽填表與「重新生成次數」的畫面；②依故事偏好切換女頻、男頻後卡片順序改變：使用者沒有回報觀察結果（驗收資料庫只有兩份上架劇本，日誌只證明偏好儲存與清單重新載入成功）；③只用 Chrome 一種瀏覽器，沒有測 Safari、Firefox、行動裝置實機 |
 | **真實的 RPG 模型** | 沒有：生成與審查只以假供應商驗證 |
+
+## RPG 遊戲主畫面（rpg-game-ui）
+
+change `rpg-game-ui`（RC-3b）。把 `/game/<存檔識別碼>` 的空殼換成可玩的遊戲主畫面：第 0 幕、串流與打字機、歷史補齊、餘額與簽到入口、世界狀態側欄、離線閱讀。**不改任何後端端點、沒有資料庫遷移、沒有新環境變數、沒有新日誌事件**；後端只改頁面控制器 `game_page_controller.game_session_page` 的初始狀態。記事簿面板與 `/game` 預設分頁屬同一個 change 的第 4 批（見 `openspec/changes/rpg-game-ui/tasks.md`），**尚未實作**。
+
+### 頁面與載入順序
+
+`/game/<session_public_id>`（需要登入；非擁有者與不存在的存檔得到逐字相同的 404，權限判斷全在 `GameEntryService`）。頁面外殼只有初始狀態（`tojson` 已跳脫）：`session`（`id`、`title`、`content_tier`、`ended`、`player_name`）、`user`（`public_id` 與會員等級）、`gate`、`content_mode`（生效模式與是否已滿成年門檻，與目錄同一個來源，供說明未成年固定為安全模式）、`stream`（閒置逾時 45000 ms、總逾時 180000 ms，控制器的具名常數）與 `limits`（`action_max` 引用 `game_service.ACTION_MAX`，目前 1000）。**沒有回合內容、第 0 幕、記事簿、世界狀態、email、生日與年齡**，由前端依序呼叫既有端點：
+
+1. 存檔快照 `GET /api/game/sessions/<id>`（同時存入本機暫存的白名單欄位）；
+2. 第 0 幕：`ready`／`fallback` 直接顯示、不重抽；`pending`／`generating` 呼叫開場串流，409 `opening_in_progress` 時顯示等待說明、每 5 秒重讀快照（最多 24 次，之後提供重試）；
+3. 與 2 並行：以 `since_seq` 補齊歷史、確認在途回合、讀 `GET /api/wallet`。第 0 幕與歷史確認之前，行動輸入與送出禁用。
+
+### 設計重點
+
+- **後端為權威，本機只是閱讀快取**：串流只是暫時的畫面，每一輪的 `done` 之後以 `since_seq` 補齊一次，用後端的內容取代暫存的氣泡；被擋與中斷的回合不保存、不顯示任何部分文字。
+- **串流用原生 `fetch` 搭配 `ReadableStream`**（AGENTS.md 第 5 節）：`done` 是完整接收的唯一依據；任何位元組重設 45 秒閒置計時器，180 秒總逾時；`AbortController` 在取消、逾時與 `pagehide` 時中止；`finally` 一律恢復輸入。前端中止不等於後端中止，所以中斷、逾時與取消之後也補齊。
+- **在途回合**：送出前先把 `client_msg_id` 與行動文字存進本機（每個存檔最多一筆），`done` 或確認後端已有完整回合時移除；重新整理後仍沒有完整回合才顯示「重送」「放棄」，重送使用同一個編號（後端冪等，已完成者重播、不重複扣幣）。**從不自動重送**（每一輪要消耗遊戲幣）。
+- **輸入在 `done` 時就解鎖**，不等打字機與補齊（下一輪等上一輪的補齊做完才開始）；失敗時保留玩家的行動文字；重複點擊只有一個請求；空白與超長（以 NFC 之後的 Unicode 字元計，與後端同一個算法）在前端擋下、不送出。
+- **遊戲幣**：頂列顯示合計餘額，每輪以 `done.coins` 覆寫（不另外請求）；已知餘額不足時只提示並提供簽到入口，**不阻止送出**；409 `insufficient_coins` 開自製 Modal（沒有扣款、行動文字保留）。最小的每日簽到入口：超過免費幣上限時顯示預覽，「取消」不再呼叫（不消耗當日簽到）、「領取」才帶 `confirm_overflow: true`；簽到成功不自動重送。沒有儲值、訂閱與記錄頁。
+- **側欄（世界狀態）在桌面與手機都預設收合**，頂列的開關按鈕切換：桌面（寬度 992px 以上）開啟時推擠本文區，手機與平板以覆蓋方式開啟並附遮罩，Esc 與遮罩可關閉；開關只存在記憶體，**不記住**（不寫任何瀏覽器儲存）。面板只有玩家視圖（地點、經過月數、主角年齡、目標、去過的地點），沒有 NPC 的特質、隱藏的歸屬與弧線階段。
+- **版面**：整頁高度固定為視窗高度，只有時間軸捲動，輸入區固定在底部（不遮住最後一則劇情）；時間軸只渲染最近 60 項（其餘「顯示更早的內容」）；新內容只在讀者位於底部 80px 內時自動捲動，否則顯示「回到最新」。360px 不橫向溢出，顏色只用主題變數。
+- **隱私**：玩家的行動、劇情與第 0 幕只在記憶體與本機暫存（`game-store.js` 是 IndexedDB 的唯一出口，快取不含記事簿、角色卡、email、生日與年齡區間）；不輸出到主控台、不放網址、不寫 `localStorage`／`sessionStorage`；所有文字以 `{{ }}` 插值顯示成純文字並以 `white-space: pre-wrap` 保留換行，沒有 `v-html`。
+
+### 前端檔案與測試
+
+| 檔案 | 內容 |
+|---|---|
+| `app/static/js/game/{sse-parser,turn-stream,game-state,game-labels}.js` | 串流核心與純函式（UMD，Node 直接測）：SSE 解析、串流客戶端、事件到畫面指令的轉換與錯誤對照、固定的繁體中文文字 |
+| `app/static/js/game/{game-store,game-sync}.js`、`game-api.js` | 本機暫存（IndexedDB 退回記憶體）、`since_seq` 補齊與在途回合、axios 封裝 |
+| `app/static/js/game/{game-wallet,game-session}.js` | 錢包與簽到；載入順序、第 0 幕、送出一輪、補齊、在途回合、離線、捲動（`createWallet`／`createSession`，依賴注入，不碰 `window`、`document`、儲存與主控台） |
+| `app/static/js/game/game.js` | Vue 掛載與接線，唯一碰 `document`／`window` 的遊戲腳本：側欄、Modal、Toast、捲動、`pagehide` |
+| `app/templates/game/session.html`、`app/static/css/game.css`（`gm-` 前綴） | 遊戲頁樣板（標頭列出與 `game.js` 的名稱約定）與樣式 |
+| `tests/js/{game-session,game-wallet,game,game-template}.test.js`、`tests/js/support/{game-harness,game-sandbox,game-contract,vue-runtime}.js` | 以真的 Vue、store、sync 與串流客戶端執行，伺服器、打字機與計時器是替身；`game.test.js` 以 `vm` 沙盒執行 `setup()`，`game-template.test.js` 以離線 Vue 編譯樣板並對照名稱約定 |
+| `tests/test_game_pages.py`、`tests/test_game_screen_flow.py` | 頁面外殼、初始狀態、樣板與 `gm-` 樣式守門；後端對前端契約的整合測試（SQLite 與 SQL Server `project_test`：快照、第 0 幕、回合、重送、補齊、被擋、隔離與日誌掃描，串流以 Python 版的前端解析規則讀取） |
+
+### 已知限制
+
+- ①**完全沒有在瀏覽器執行過**：Node 測試用真的 Vue 與串流客戶端，但沒有真實的 DOM、`IndexedDB`、`requestAnimationFrame` 與網路；瀏覽器實測（任務 6.1）尚未做。②IndexedDB 在使用者的裝置上，帳號刪除與登出無法由伺服器清除（與客服的快取同一個限制）；快取只含劇情與行動，不含記事簿與個資。③帳號閘門非空時（例如未確認年齡的管理員），伺服器的快照與回合端點同樣拒絕，所以只能閱讀先前已快取的歷史。④`state` 事件只更新地點、月數、摘要與目標；去過的地點與主角年齡要等 `done` 後重讀快照才更新。⑤轉場文字只在該回合的行動與劇情之間顯示；重新載入後被擋的回合只剩固定的一行說明。⑥時間軸沒有虛擬捲動。⑦重新生成與編輯輸入（RC-2c）、錢包記錄頁與儲值、完整目錄不在這個 change。
+
+### 驗收紀錄（rpg-game-ui 第 3 批，2026-11-11，已實作，尚未瀏覽器驗收、尚未提交）
+
+| 已驗證（第 3 批） | 結果 |
+|---|---|
+| Node 測試 | `node --test "tests/js/**/*.test.js"` **855 項通過**（第 2 批基準 758，新增 97：`game-session` 54、`game-wallet` 23、`game` 13、`game-template` 7） |
+| pytest（相關的一組） | **622 項通過**（`tests/architecture`、`test_game_pages`、`test_game_screen_flow`〔5 項，含 SQL Server〕、`test_game_entry_flow`、`test_game_notebook_length_parity`、`test_design_docs`、`test_theme_css`、`test_fonts_and_static`、`test_readme`、`test_agents_skill_sync`、`test_project_db_schema_doc`、`test_assets_manifest`、`test_restricted_session`、`test_log_scan_full_flow`、`test_log_scan_protagonist`、`test_cs_pages`、`test_script_page`、`test_account_page`、`test_landing`；`openspec validate rpg-game-ui --strict` 通過）。**沒有跑全套 `pytest -q`**（留到任務 6.3） |
+| 整合測試 | `tests/test_game_screen_flow.py`：開存檔 → 頁面外殼 200（沒有劇情）→ 快照 → 第 0 幕串流 → `turns?since_seq=0` → 錢包 → 送一輪（事件順序、`done.coins` 等於錢包合計）→ 以相同 `client_msg_id` 重送得到 `replayed` 且餘額不變、不呼叫模型 → 補齊只回新回合 → 被擋的回合沒有文字 → 另一位玩家得到與不存在逐字相同的 404 → 日誌掃描沒有行動、劇情與第 0 幕 |
+| 快速破壞（暫時改壞一行，每項還原後位元比對相同） | 21 項（在途回合不清除、`done` 後不補齊、轉場不丟棄氣泡、中斷後清掉在途回合、重複點擊、離線仍可送出、閘門仍呼叫伺服器、第 0 幕 ready 仍重抽、失敗時清掉行動文字、`pagehide` 不中止、`done` 不解鎖、簽到預覽未經確認就帶 `confirm_overflow`、沒有預覽也能確認、簽到可重複送出、側欄預設展開、Esc 不關閉、斷點改成 768px、`pagehide` 不呼叫 `dispose`、樣板改用 `v-html`、初始狀態塞進第 0 幕、樣板用到約定沒有的名稱）**全部至少一個測試失敗**；其中 4 項（`done` 不移除在途回合、重複點擊可送出第二次、簽到進行中可重複送出、`pagehide` 不呼叫 `dispose`）第一次沒有測試失敗（前三項是因為有多道防線，破壞時要一併拿掉；最後一項是原本只檢查「不丟出例外」），補強測試或把破壞改成拿掉全部防線之後才失敗。**這不是任務 6.2 的正式十項破壞驗證** |
+
+| 未驗證 | 說明 |
+|---|---|
+| **瀏覽器實測（任務 6.1）** | 沒有做：第 0 幕逐字出現、重新整理不重抽、打字機節奏、被擋一次與兩次、中斷、慢速、結局、餘額不足與簽到、側欄在桌面推擠與手機覆蓋、離線閱讀、在途回合提示、360px 不橫向溢出、儲存區內容 |
+| **正式的十項破壞驗證（任務 6.2）與全套測試（任務 6.3）** | 沒有做 |
+| **真實的 RPG 模型** | 沒有：串流與審查只以假供應商驗證；RC-3a 的 AI 生成預覽仍是「未驗證」 |
 
 ## 遊戲幣錢包（game-wallet）
 

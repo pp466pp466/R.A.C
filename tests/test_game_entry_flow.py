@@ -139,10 +139,11 @@ def test_the_whole_entry_flow_in_the_order_the_pages_call_the_apis(world, log_li
     assert (rows[0]["title"], rows[0]["status"], rows[0]["completed_turns"]) == (SECRETS["title"], "active", 0)
     assert rows[0]["player_name"] == SECRETS["name"]
 
-    page = client.get(f"/game/{session_id}")                                  # 8) 存檔頁是本人的 200，含標題與主角姓名
+    page = client.get(f"/game/{session_id}")                                  # 8) 存檔頁是本人的 200：遊戲主畫面的外殼（rpg-game-ui 之後不再是「建置中」的空殼）
     assert page.status_code == 200
     html = page.get_data(as_text=True)
-    assert SECRETS["title"] in html and SECRETS["name"] in html
+    assert SECRETS["title"] in html and SECRETS["name"] in html               # 標題與主角姓名在初始狀態裡（由 Vue 以插值顯示）
+    assert 'id="game-app"' in html and "game.js" in html and "建置中" not in html
 
     assert wallet_state(app) == wallet_before                                 # 整個入口流程沒有扣遊戲幣、沒有寫帳本
     assert len(provider.calls) == 2                                           # 只有生成預覽與主角審查兩次模型呼叫（內建劇本視為已審查）

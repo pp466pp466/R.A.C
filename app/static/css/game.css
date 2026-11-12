@@ -198,3 +198,173 @@ textarea.gw-input { resize: vertical; }
   .ge-card__actions .ui-btn { width: 100%; text-align: center; }
   .gw-actions .ui-btn { flex: 1 1 100%; text-align: center; }
 }
+
+/* ---- 遊戲主畫面（/game/<存檔>，rpg-game-ui；前綴 gm-）------------------------------------------------------------
+   版面：頂列、（可選的）橫幅、本文區（時間軸＋固定在底部的輸入區）與側欄。側欄**預設收合**（桌面與手機皆然），由頂列的開關按鈕切換：
+   桌面（寬度 992px 以上）開啟時推擠本文區，手機與平板（未滿 992px）以覆蓋方式開啟並附遮罩。收合與否的狀態由 Vue 接管（v-show），不記住。
+   整頁高度固定為視窗高度，只有時間軸在內部捲動，所以輸入區永遠在底部，不會遮住最後一則劇情。360px 不橫向溢出：所有 flex 子元素 min-width: 0，
+   文字一律 overflow-wrap: anywhere。顏色只用主題變數（沒有純白）。 */
+.gm-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
+  background: var(--color-bg);
+  color: var(--color-text);
+}
+
+.gm-topbar {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.75rem;
+  padding: 0.6rem 16px;
+  border-bottom: var(--border-hairline);
+}
+
+.gm-topbar__main { flex: 1 1 8rem; min-width: 0; }
+.gm-topbar__title { margin: 0; font-size: 1.05rem; font-weight: 500; letter-spacing: 0.04em; overflow-wrap: anywhere; }
+.gm-topbar__meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem 0.5rem; margin: 0.2rem 0 0; }
+.gm-topbar__where { color: var(--color-text-muted); font-size: 0.85rem; overflow-wrap: anywhere; }
+
+.gm-balance { flex: 0 0 auto; margin: 0; color: var(--color-text-muted); font-size: 0.9rem; white-space: nowrap; }
+.gm-balance strong { color: var(--color-text); font-weight: 500; }
+
+.gm-nav { display: flex; flex: 0 1 auto; flex-wrap: wrap; gap: 0.25rem 0.9rem; }
+.gm-nav__link { color: var(--color-text-muted); font-size: 0.9rem; text-decoration: none; }
+.gm-nav__link:hover, .gm-nav__link:focus-visible { color: var(--color-accent); }
+
+.gm-iconbtn {
+  appearance: none;
+  flex: 0 0 auto;
+  min-width: 2.25rem;
+  min-height: 2.25rem;
+  padding: 0 0.5rem;
+  background: transparent;
+  border: var(--border-hairline);
+  border-radius: 0;
+  color: var(--color-text-muted);
+  font: inherit;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.gm-iconbtn:hover, .gm-iconbtn:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
+
+.gm-banner { flex: 0 0 auto; margin: 0; padding-left: 16px; padding-right: 16px; border-left-width: 2px; border-top: 0; border-right: 0; }
+.gm-shell > .ui-restriction { flex: 0 0 auto; margin: 0; }
+
+.gm-body { display: flex; flex: 1 1 auto; min-height: 0; }
+.gm-main { position: relative; display: flex; flex: 1 1 auto; flex-direction: column; min-width: 0; min-height: 0; }
+
+/* ---- 時間軸 ---------------------------------------------------------------- */
+.gm-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  padding: 1rem 16px 1.25rem;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.gm-timeline { display: flex; flex-direction: column; gap: 1.1rem; max-width: 46rem; margin: 0 auto; padding: 0; list-style: none; }
+.gm-item { min-width: 0; }
+.gm-earlier { max-width: 46rem; margin: 0 auto 1rem; text-align: center; }
+.gm-state { max-width: 46rem; margin: 0 auto; }
+
+.gm-eyebrow { display: block; margin: 0 0 0.2rem; color: var(--color-text-muted); font-size: 0.78rem; letter-spacing: 0.12em; }
+
+.gm-story, .gm-action__text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.98rem; line-height: 1.95; }
+.gm-item--opening .gm-story { color: var(--color-text); }
+
+.gm-action { margin: 0 0 0.6rem; padding: 0.5rem 0.8rem; background: var(--color-surface); border: var(--border-hairline); border-left: 2px solid var(--color-accent); }
+.gm-action__text { font-size: 0.92rem; line-height: 1.7; }
+
+.gm-story--streaming::after {
+  content: "";
+  display: inline-block;
+  width: 0.5em;
+  height: 1.05em;
+  margin-left: 0.15em;
+  vertical-align: text-bottom;
+  background: var(--color-accent);
+  animation: gm-caret 1s steps(2, start) infinite;
+}
+
+@keyframes gm-caret { to { visibility: hidden; } }
+
+.gm-wait { margin: 0; color: var(--color-text-muted); font-size: 0.9rem; }
+
+.gm-note { margin: 0; padding: 0.15rem 0 0.15rem 0.8rem; border-left: 2px solid var(--color-border); color: var(--color-text-muted); font-size: 0.9rem; line-height: 1.7; overflow-wrap: anywhere; }
+.gm-note--transition { font-style: italic; }
+.gm-note--interrupted { border-left-color: var(--color-accent); }
+.gm-note--info { border-left-color: var(--color-border); }
+
+.gm-inflight { padding: 0.7rem 0.9rem; background: var(--color-surface); border: var(--border-hairline); border-left: 2px solid var(--color-accent); }
+.gm-inflight .gm-action__text { margin: 0 0 0.5rem; }
+.gm-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; margin: 0.6rem 0 0; }
+
+.gm-linkbtn { appearance: none; padding: 0 0.2rem; background: transparent; border: 0; color: var(--color-accent); font: inherit; text-decoration: underline; cursor: pointer; }
+.gm-linkbtn:disabled { opacity: 0.6; cursor: not-allowed; }
+
+.gm-jump {
+  position: absolute;
+  right: 16px;
+  bottom: 0;
+  z-index: 3;
+  transform: translateY(-100%);
+  margin-bottom: 0.5rem;
+  padding: 0.3rem 0.9rem;
+  background: var(--color-modal-surface);
+  border: 1px solid var(--color-accent);
+  border-radius: 999px;
+  color: var(--color-accent);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+/* ---- 輸入區（固定在本文區底部）---------------------------------------------------- */
+.gm-composer { position: relative; flex: 0 0 auto; padding: 0.6rem 16px 0.8rem; background: var(--color-bg); border-top: var(--border-hairline); }
+.gm-composer > * { max-width: 46rem; margin-left: auto; margin-right: auto; }
+.gm-composer__hint { margin: 0 auto 0.4rem; }
+.gm-input { max-height: 8rem; min-height: 3.5rem; resize: none; }
+.gm-composer__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; margin-top: 0.4rem; }
+.gm-composer__bar .gw-count { margin-left: 0; }
+.gm-composer__spacer { flex: 1 1 auto; }
+.gm-notice { margin: 0 auto 0.5rem; padding: 0.45rem 0.8rem; background: var(--color-surface); border: var(--border-hairline); border-left: 2px solid var(--color-accent); font-size: 0.9rem; line-height: 1.7; overflow-wrap: anywhere; }
+.gm-notice--info { border-left-color: var(--color-border); color: var(--color-text-muted); }
+.gm-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+
+/* ---- 側欄（世界狀態）------------------------------------------------------- */
+.gm-side { flex: 0 0 320px; min-width: 0; padding: 0.9rem 1rem 1.25rem; overflow-x: hidden; overflow-y: auto; background: var(--color-modal-surface); border-left: var(--border-hairline); }
+.gm-side--overlay { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40; flex: none; width: min(320px, 86vw); box-shadow: -8px 0 24px rgba(15, 16, 18, 0.6); }
+.gm-scrim { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 39; background: var(--color-modal-overlay); backdrop-filter: blur(8px); }
+.gm-side__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
+.gm-side__title { margin: 0; font-size: 1rem; font-weight: 500; letter-spacing: 0.08em; }
+.gm-side__line { margin: 0 0 0.6rem; color: var(--color-text-muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+.gm-side__sub { margin: 1rem 0 0.3rem; color: var(--color-text-muted); font-size: 0.82rem; font-weight: 400; letter-spacing: 0.1em; }
+.gm-world { margin: 0; }
+.gm-world dt { margin-top: 0.5rem; color: var(--color-text-muted); font-size: 0.8rem; font-weight: 400; }
+.gm-world dd { margin: 0.1rem 0 0; overflow-wrap: anywhere; }
+.gm-world__summary { margin: 0.8rem 0 0; font-size: 0.9rem; line-height: 1.8; overflow-wrap: anywhere; }
+.gm-list { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; line-height: 1.8; overflow-wrap: anywhere; }
+
+.gm-modal-text { margin: 0 0 0.6rem; line-height: 1.8; overflow-wrap: anywhere; }
+
+@media (min-width: 992px) {
+  .gm-topbar { padding-left: 24px; padding-right: 24px; }
+  .gm-scroll { padding-left: 24px; padding-right: 24px; }
+  .gm-composer { padding-left: 24px; padding-right: 24px; }
+}
+
+@media (max-width: 575.98px) {
+  .gm-nav { flex: 1 1 100%; }
+  .gm-composer__bar .ui-btn { flex: 1 1 auto; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gm-story--streaming::after { animation: none; }
+}

@@ -1,7 +1,7 @@
 """rpg-entry-pages 規格：`/game` 一族頁面的外殼、初始狀態、存取規則與前端檔案的規則。
 
 - `/game`：入口頁（選劇本與我的存檔）。初始狀態只有會員等級、故事偏好與閘門結果，**沒有清單內容**。
-- `/game/<存檔>`：存檔頁的空殼。標題與主角姓名由伺服器渲染（自動跳脫），非擁有者與不存在的得到逐字相同的 404。
+- `/game/<存檔>`：遊戲主畫面的外殼。初始狀態只有存檔摘要、會員等級、閘門、內容模式、串流逾時與行動上限（沒有劇情），非擁有者與不存在的得到逐字相同的 404。
 - `/game/start/<版本>`：開存檔精靈（序章、聯繫、創角）的樣板；初始狀態只有會員等級、閘門結果與兩個請求逾時（沒有劇本內容）；與存檔頁的路徑不衝突。
 
 清單端點的資料與規則在 `test_session_api.py`、`test_game_entry_service.py`；前端純函式與掛載邏輯在 `tests/js/game-labels.test.js`、`tests/js/entry.test.js`。
@@ -161,31 +161,116 @@ def test_the_game_pages_accept_only_get(app):
             assert getattr(client, method)(path).status_code in (400, 403, 405), (method, path)   # 沒有 CSRF 權杖時可能先被擋
 
 
-# ---- /game/<存檔>：存檔頁的空殼 --------------------------------------------------------------------------------
+# ---- /game/<存檔>：遊戲主畫面的外殼與初始狀態 ---------------------------------------------------------------------
+# rpg-game-ui 3.1 **有意識地改變**了這一段的契約（不是刪除，也不是掩蓋缺陷）：存檔頁原本是伺服器渲染的空殼（「劇情畫面建置中」，沒有腳本、不發任何請求），
+# 現在是遊戲主畫面的外殼——標題等文字改由 Vue 插值顯示，頁面載入腳本並呼叫既有的端點。不變的是：非擁有者與不存在的存檔逐字相同的 404、
+# 權限判斷全在 Service、頁面外殼本身不含任何劇情，也不建立或改動任何資料。
+
+SESSION_STATE_KEYS = {"session", "user", "gate", "content_mode", "stream", "limits"}
 
 
-def test_the_owner_sees_the_title_the_protagonist_the_building_notice_and_a_way_back(app):
+def test_the_owner_gets_the_game_page_with_exactly_the_agreed_initial_state(app):
     client, user = client_for(app)
     save_id = open_save(app, user, title="青雲問道", name="林初")
     response = client.get(f"/game/{save_id}")
     assert response.status_code == 200
+    state = state_of(response)
+    assert set(state) == SESSION_STATE_KEYS
+    assert state["session"] == {"id": save_id, "title": "青雲問道", "content_tier": "safe", "ended": False, "player_name": "林初"}
+    assert state["user"] == {"public_id": user.public_id, "member_tier": "free"}
+    assert state["gate"] is None
+    assert state["stream"] == {"idle_timeout_ms": 45000, "total_timeout_ms": 180000}
+    assert state["limits"] == {"action_max": 1000}
+    assert set(state["content_mode"]) == {"effective", "is_adult"} and state["content_mode"]["is_adult"] is True
     html = response.get_data(as_text=True)
-    assert "青雲問道" in html and "林初" in html and "劇情畫面建置中" in html
-    assert re.search(r'<a\b[^>]*href="/game"', html)
-    assert "進行中" in html and "安全模式" in html
+    assert re.search(r'<div id="game-app" class="gm-shell" v-cloak>', html)
+    assert re.search(r'<a class="gm-nav__link" href="/game"[^>]*>回到冒險</a>', html)
 
 
-def test_an_ended_save_says_so(app):
+def test_the_two_stream_timeouts_and_the_action_limit_are_the_documented_constants(app):
+    from app.controllers import game_page_controller
+    from app.services import game_service
+
+    assert (game_page_controller.STREAM_IDLE_TIMEOUT_MS, game_page_controller.STREAM_TOTAL_TIMEOUT_MS) == (45000, 180000)
+    assert game_service.ACTION_MAX == 1000
     client, user = client_for(app)
-    html = client.get(f"/game/{open_save(app, user, ended=True)}").get_data(as_text=True)
-    assert "已完結" in html and "進行中" not in html
+    state = state_of(client.get(f"/game/{open_save(app, user)}"))
+    assert state["limits"]["action_max"] == game_service.ACTION_MAX              # 引用後端的常數，不在前端或這個控制器另寫一份
+    assert state["stream"]["idle_timeout_ms"] == game_page_controller.STREAM_IDLE_TIMEOUT_MS
+    source = read(PROJECT_ROOT / "app" / "controllers" / "game_page_controller.py")
+    assert '"action_max": ACTION_MAX' in source and not re.search(r'"action_max":\s*\d', source)
 
 
-def test_markup_in_the_title_and_the_protagonist_name_is_shown_as_text(app):
+def test_the_initial_state_and_the_page_never_carry_story_content_the_notebook_the_world_or_personal_data(app):
     client, user = client_for(app)
-    html = client.get(f"/game/{open_save(app, user, title='<b>粗體</b>劇本', name='<i>斜體</i>')}").get_data(as_text=True)
-    assert "&lt;b&gt;粗體&lt;/b&gt;劇本" in html and "&lt;i&gt;斜體&lt;/i&gt;" in html
+    save_id = open_save(app, user, title="青雲問道", name="林初")
+    with Session(app.extensions["db_engine"]) as s:
+        save = SessionRepository(s).get_owned(user.id, save_id)
+        save.opening_text = "第零幕的獨特文字"
+        save.notebook_text = "記事簿的獨特文字"
+        save.current_location = "獨特的所在地"
+        save.status_summary = "獨特的狀態摘要"
+        s.commit()
+    response = client.get(f"/game/{save_id}")
+    html = response.get_data(as_text=True)
+    for hidden in ("第零幕的獨特文字", "記事簿的獨特文字", "獨特的所在地", "獨特的狀態摘要"):
+        assert hidden not in html, hidden                                        # 劇情、第 0 幕、記事簿與世界狀態一律由前端呼叫既有端點取得
+    state_text = json.dumps(state_of(response), ensure_ascii=False).lower()
+    assert "user1@example.com" not in html and "birth" not in html.lower() and "age_range" not in html.lower()
+    for forbidden in ("turns", "opening", "notebook", "world", "protagonist", "email", "birth", "age_range", "display_name"):
+        assert forbidden not in state_text, forbidden
+
+
+def test_the_page_shell_creates_nothing_and_changes_nothing(app):
+    client, user = client_for(app)
+    save_id = open_save(app, user)
+
+    def snapshot():
+        with Session(app.extensions["db_engine"]) as s:
+            save = s.scalars(select(RpgSession)).one()
+            return (s.scalar(select(func.count()).select_from(Wallet)), s.scalar(select(func.count()).select_from(RpgSession)),
+                    save.version, save.opening_state, save.status)
+
+    before = snapshot()
+    assert client.get(f"/game/{save_id}").status_code == 200
+    assert before == snapshot()                                                  # 沒有開錢包、沒有觸發第 0 幕、沒有改動存檔
+
+
+def test_an_ended_save_says_so_in_the_initial_state(app):
+    client, user = client_for(app)
+    state = state_of(client.get(f"/game/{open_save(app, user, ended=True)}"))
+    assert state["session"]["ended"] is True
+
+
+def test_markup_in_the_title_and_the_protagonist_name_is_never_parsed_as_html(app):
+    client, user = client_for(app)
+    response = client.get(f"/game/{open_save(app, user, title='<b>粗體</b>劇本', name='<i>斜體</i>')}")
+    html = response.get_data(as_text=True)
+    assert "&lt;b&gt;粗體&lt;/b&gt;劇本" in html                                 # 分頁標題由 Jinja 跳脫
     assert "<b>粗體</b>" not in html and "<i>斜體</i>" not in html
+    block = STATE_PATTERN.search(html).group(1)
+    assert "<" not in block and ">" not in block                                 # 初始狀態經 tojson 跳脫：嵌在腳本區塊裡不可能提前結束
+    state = state_of(response)                                                   # 還原後是原文：Vue 以插值顯示成原文字元
+    assert state["session"]["title"] == "<b>粗體</b>劇本" and state["session"]["player_name"] == "<i>斜體</i>"
+    template = read(TEMPLATES / "session.html")
+    assert "{{ title }}" in template and "{{ playerName }}" in template and "v-html" not in template and "|safe" not in template
+
+
+def test_the_game_page_carries_the_gate_the_server_decided(app):
+    client, user = client_for(app, role=ROLE_ADMIN, age=None)
+    response = client.get(f"/game/{open_save(app, user)}")
+    assert response.status_code == 200                                        # 管理員沒有受限登入狀態：頁面可以開，輸入由閘門禁用
+    assert state_of(response)["gate"] == "age_confirmation_required"
+    client, user = client_for(app, 2, age=12)
+    assert state_of(client.get(f"/game/{open_save(app, user)}"))["gate"] == "age_restricted"
+
+
+def test_a_minor_gets_the_age_fixed_content_mode_from_the_server_with_no_birth_date_or_age(app):
+    client, user = client_for(app, age=15)
+    mode = state_of(client.get(f"/game/{open_save(app, user)}"))["content_mode"]
+    assert mode == {"effective": "safe", "is_adult": False}                       # 與 /api/sessions/catalog 的 content_mode 同一個來源與形狀
+    client, user = client_for(app, 2, age=30)
+    assert state_of(client.get(f"/game/{open_save(app, user)}"))["content_mode"]["is_adult"] is True
 
 
 def test_someone_elses_save_and_a_missing_one_get_the_identical_404(app):
@@ -200,22 +285,18 @@ def test_someone_elses_save_and_a_missing_one_get_the_identical_404(app):
     assert owner_client.get(f"/game/{save_id}").status_code == 200
 
 
+def test_an_anonymous_visitor_and_a_locked_player_are_sent_away_from_a_save(app):
+    anonymous = app.test_client().get(f"/game/{GHOST}")
+    assert anonymous.status_code == 302 and anonymous.headers["Location"] == f"/login?next=%2Fgame%2F{GHOST}"   # 帶回到該網址的返回位置
+    client, _ = client_for(app, locked_at=START, lock_reason="rate_limited")
+    locked = client.get(f"/game/{GHOST}")
+    assert locked.status_code == 302 and locked.headers["Location"].startswith("/appeal")
+
+
 @pytest.mark.parametrize("junk", ["start", "x", "0", "%20", "null"])
 def test_a_path_that_is_not_a_save_id_is_a_404_not_an_error(app, junk):
     client, _ = client_for(app)
     assert client.get(f"/game/{junk}").status_code == 404
-
-
-def test_the_save_shell_creates_nothing_and_calls_no_api(app):
-    client, user = client_for(app)
-    save_id = open_save(app, user)
-    with Session(app.extensions["db_engine"]) as s:
-        before = (s.scalar(select(func.count()).select_from(Wallet)), s.scalar(select(func.count()).select_from(RpgSession)))
-    html = client.get(f"/game/{save_id}").get_data(as_text=True)
-    assert "/api/" not in html and "game-api.js" not in html and "entry.js" not in html     # 空殼沒有腳本與請求
-    with Session(app.extensions["db_engine"]) as s:
-        after = (s.scalar(select(func.count()).select_from(Wallet)), s.scalar(select(func.count()).select_from(RpgSession)))
-    assert before == after                                                       # 沒有開錢包、沒有改動存檔
 
 
 # ---- /game/start/<版本>：與存檔頁互不衝突 ------------------------------------------------------------------------
@@ -336,6 +417,70 @@ def test_the_wizard_loads_its_scripts_in_dependency_order_and_hard_codes_no_time
     assert not re.search(r"\b(35000|65000|45000|85000)\b", read(TEMPLATES / "start.html"))
     api = strip_js_comments(read(JS_DIR / "game-api.js"))
     assert not re.search(r"timeout\w*\s*[:=]\s*\d", api, re.I)                   # 逾時與中止訊號由呼叫端傳入，這裡不寫死
+
+
+# ---- /game/<存檔>：遊戲頁的樣板（遊戲邏輯在 tests/js/game-*.test.js；樣板用到的名稱由 tests/js/game-template.test.js 對照 game.js 的 setup()） ----
+
+
+def test_the_game_template_has_the_timeline_the_composer_the_sidebar_the_modals_and_a_state_driven_root():
+    html = read(TEMPLATES / "session.html")
+    assert re.search(r'<div id="game-app" class="gm-shell" v-cloak>', html)
+    assert 'role="log"' in html and 'ref="scroller"' in html and 'ref="input"' in html and "@scroll=\"onScroll\"" in html
+    assert 'v-for="item in items"' in html and ':key="item.key"' in html
+    for kind in ("opening", "turn", "note"):
+        assert f"item.kind === '{kind}'" in html, kind                           # 第 0 幕、完整回合、轉場與中斷說明；其餘是在途回合
+    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["COINS", "LEAVE_GAME", "ABANDON_TURN"]
+    assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
+    assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)               # 初始狀態經 tojson 跳脫
+    assert re.search(r'<aside id="gm-sidebar" v-show="sidebarOpen"', html)       # 側欄的顯示由 Vue 接管（預設收合，見 game.js）
+    assert re.search(r'<button type="button" class="gm-iconbtn" aria-controls="gm-sidebar" :aria-expanded=', html)
+    assert 'class="gm-scrim"' in html and '@click="closeSidebar"' in html          # 手機的覆蓋側欄有遮罩
+    assert re.search(r':disabled="sendDisabled"[^>]*@click="send"', html) and ":disabled=\"inputDisabled\"" in html
+    assert "@keydown.ctrl.enter.prevent=\"send\"" in html                         # Enter 換行，Ctrl＋Enter 送出
+    assert re.search(r'<a class="gm-nav__link" href="/cs">客服</a>', html) and re.search(r'<a class="gm-nav__link" href="/account">帳號</a>', html)
+    body = html[html.index("{% raw %}"):html.index("{% endraw %}")]
+    assert "記事簿" not in body and "notebook" not in body.lower()                # 記事簿分頁屬第 5 組（game-notebook.js），這一批不放半成品
+
+
+def test_the_game_template_shows_every_player_and_author_text_only_as_plain_interpolations():
+    html = read(TEMPLATES / "session.html")
+    for expression in ("title", "playerName", "item.text", "item.action", "item.story", "line", "world.location", "world.summary", "goal", "place", "notice.text",
+                       "loadFailure.message", "coinModalText", "checkinMessage"):
+        assert re.search(r"\{\{\s*" + re.escape(expression) + r"(\s*\|\|\s*'[^']*')?\s*\}\}", html), expression   # 只允許以固定文字當作空值的備援
+    assert 'v-model="draft"' in html
+    for forbidden in ("v-html", "innerHTML", "|safe", "<img", "<iframe", "<script src=\"http"):
+        assert forbidden not in html, forbidden
+    assert not re.search(r"\{\{[^}]*\|\s*safe", html)
+    assert "world.places" in html and "world.goals" in html and not re.search(r"world\.(traits|hidden\w*|arc\w*|entities|npc\w*)", html)   # 不洩漏 NPC 的特質、歸屬與弧線階段
+
+
+def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_timeout_or_limit(app):
+    client, user = client_for(app)
+    save_id = open_save(app, user)
+    html = client.get(f"/game/{save_id}").get_data(as_text=True)
+    names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
+    expected = ["auth-common.js", "game-labels.js", "sse-parser.js", "turn-stream.js", "game-state.js", "game-store.js", "game-sync.js",
+                "game-api.js", "game-wallet.js", "game-session.js", "game.js"]
+    for needed in ("vue.global.prod.js", "axios.min.js", "typewriter.js", "ui-components.js", "restriction.js", *expected):
+        assert needed in names, needed
+    assert names[-1] == "game.js"                                                # 掛載腳本必須是最後一個（它用到前面所有模組）
+    positions = [names.index(name) for name in expected]
+    assert positions == sorted(positions), expected                              # 載入順序即相依順序（rpg-game-ui design D6）
+    assert names.index("vue.global.prod.js") < names.index("typewriter.js") < names.index("ui-components.js") < names.index("auth-common.js")
+    assert names.index("axios.min.js") < names.index("game-api.js")
+    assert "建置中" not in html
+    template = read(TEMPLATES / "session.html")
+    assert not re.search(r"\b(45000|180000|1000)\b", template)                    # 逾時與字數上限只來自初始狀態
+    for name in ("game-wallet.js", "game-session.js", "game.js"):
+        code = strip_js_comments(read(JS_DIR / name))
+        assert not re.search(r"\b(45000|180000)\b", code), name
+
+
+def test_the_game_page_has_a_page_title_that_is_escaped_and_all_resources_are_local(app):
+    client, user = client_for(app)
+    html = client.get(f"/game/{open_save(app, user, title='標題 <script>x</script>')}").get_data(as_text=True)
+    assert "<title>標題 &lt;script&gt;x&lt;/script&gt;</title>" in html
+    assert "<script>x</script>" not in html
 
 
 # ---- 前端檔案的規則 --------------------------------------------------------------------------------------------------
@@ -543,6 +688,57 @@ def test_the_game_screen_label_tables_cover_exactly_the_backend_turn_statuses_do
     assert sorted(labels_in(source, "STREAM_ERROR_MESSAGES")) == sorted(ERROR_MESSAGES)
 
 
+def game_screen_css() -> str:
+    css = read(STATIC / "css" / "game.css")
+    return css[css.index("遊戲主畫面（/game/<存檔>"):]
+
+
+def test_the_game_screen_styles_use_theme_colors_only_and_the_992px_breakpoint_and_never_force_a_width():
+    css = game_screen_css()
+    lowered = css.lower()
+    assert "#fff" not in lowered and not re.search(r"(?<![\w-])white(?![\w-])", lowered) and "rgb(255, 255, 255)" not in lowered
+    assert not re.search(r"#[0-9a-f]{3,8}\b", lowered)                            # 顏色全部取自主題變數（theme.css），不另寫色碼
+    assert re.search(r"@media \(min-width: 992px\)", css)                          # 與客服的 Sidebar 同一個斷點
+    assert not re.search(r"@media[^{]*\b(min|max)-width:\s*(?!992px|575\.98px)\d", css)   # 除了 992px 與既有的手機斷點，沒有別的斷點
+    widths = re.findall(r"(?<![\w-])width:\s*([^;}]+)", css)
+    assert set(widths) <= {"1px", "0.5em", "min(320px, 86vw)"}, widths               # 唯一較寬的固定值包在 min() 內：360px 不會被撐出橫向捲軸
+    assert not re.search(r"(?<!max-)(?<!min-)width:\s*\d{3,}px", css)
+    assert "flex: 0 0 320px" in css                                                   # 桌面側欄 320px，推擠主區域
+    assert "overflow-wrap: anywhere" in css and css.count("min-width: 0") >= 2        # flex 子元素可收縮，長字不撐破版面
+
+
+def test_the_game_screen_keeps_the_composer_in_the_flow_so_it_never_covers_the_last_story_line():
+    css = game_screen_css()
+    shell = re.search(r"\.gm-shell \{([^}]*)\}", css).group(1)
+    assert "height: 100dvh" in shell and "flex-direction: column" in shell and "overflow: hidden" in shell
+    scroll = re.search(r"\.gm-scroll \{([^}]*)\}", css).group(1)
+    assert "overflow-y: auto" in scroll and "min-height: 0" in scroll and "flex: 1 1 auto" in scroll   # 只有時間軸捲動
+    composer = re.search(r"\.gm-composer \{([^}]*)\}", css).group(1)
+    assert "flex: 0 0 auto" in composer and "position: fixed" not in composer and "sticky" not in composer   # 在版面流程內，不是浮在內容上
+    fixed = re.findall(r"([^{}]+)\{[^}]*position:\s*fixed", css)
+    assert [rule.strip() for rule in fixed] == [".gm-side--overlay", ".gm-scrim"]    # 只有覆蓋用的側欄與遮罩是固定定位
+
+
+def test_every_game_screen_class_the_template_uses_has_a_style_rule():
+    css = game_screen_css()
+    template = read(TEMPLATES / "session.html")
+    body = template[template.index("{% raw %}"):template.index("{% endraw %}")]
+    used = set()
+    for attribute in re.findall(r'\sclass="([^"]*)"', body):
+        used.update(name for name in attribute.split() if name.startswith("gm-"))
+    for expression in re.findall(r"'(gm-[\w-]+)\s*'?\s*\+", body):                     # :class="'gm-notice--' + notice.tone" 這類動態類別只檢查前綴
+        used.add(expression)
+    assert len(used) >= 25, used
+    defined = set(re.findall(r"\.(gm-[\w-]+)", css))
+    missing = sorted(name for name in used if not any(rule == name or (name.endswith("--") and rule.startswith(name)) for rule in defined))
+    assert missing == [], missing
+
+
+def test_the_streaming_caret_and_every_animation_respect_reduced_motion():
+    css = game_screen_css()
+    assert "animation: gm-caret" in css and re.search(r"prefers-reduced-motion: reduce\)\s*\{\s*\.gm-story--streaming::after \{ animation: none", css)
+
+
 # ---- 與其他區域的導覽互通 ----------------------------------------------------------------------------------------
 
 
@@ -556,3 +752,16 @@ def test_the_game_home_and_the_other_areas_link_to_each_other_as_plain_site_link
         html = client.get(page).get_data(as_text=True)
         assert 'href="/game"' in html and ">冒險<" in html, page                  # 各頁的頁首都有回到 /game 的「冒險」
         assert collect(html).data_bs == [("data-bs-theme", "dark")], page
+
+
+def test_the_game_screen_links_back_to_the_adventure_home_support_and_the_account_as_plain_site_links(app):
+    client, user = client_for(app)
+    page = collect(client.get(f"/game/{open_save(app, user)}").get_data(as_text=True))
+    for target in ("/game", "/cs", "/account"):
+        assert target in page.hrefs, target                                      # 頂列：回到冒險、客服、帳號（一般站內連結）
+    assert page.data_bs == [("data-bs-theme", "dark")]                            # 沒有任何 Bootstrap 互動屬性
+    html = read(TEMPLATES / "session.html")
+    for label, target in (("回到冒險", "/game"), ("客服", "/cs"), ("帳號", "/account")):
+        assert re.search(rf'<a class="gm-nav__link" href="{target}"[^>]*>{label}</a>', html), label
+    # 精靈成功開存檔後導向 /game/<存檔>（不改）：路徑由 Game.sessionPath 組出，遊戲頁就在這個網址
+    assert "/game/" in read(JS_DIR / "game-labels.js") and "window.location.assign(Game.sessionPath(saved))" in strip_js_comments(read(JS_DIR / "wizard.js"))

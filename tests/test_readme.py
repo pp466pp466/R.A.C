@@ -446,3 +446,28 @@ def test_readme_rpg_entry_section_lists_exactly_the_three_game_pages_and_documen
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
     for needed in ("不寫入任何瀏覽器儲存", "pagehide", "AbortController", "DEFAULT_AFTER_LOGIN", "沒有資料庫遷移", "未驗證"):
         assert needed in section, needed
+
+
+def test_readme_rpg_game_screen_section_names_the_real_files_the_numbers_and_what_is_unverified():
+    """rpg-game-ui 一節：記載的前端檔案都存在、串流逾時與行動上限等數值與程式一致、側欄預設收合且不記住，驗收紀錄如實列出沒有驗證的項目。"""
+    from app.controllers import game_page_controller
+    from app.services import game_service
+
+    section = readme_section("RPG 遊戲主畫面（rpg-game-ui）")
+    js_dir = PROJECT_ROOT / "app" / "static" / "js" / "game"
+    for name in ("sse-parser", "turn-stream", "game-state", "game-labels", "game-store", "game-sync", "game-api", "game-wallet", "game-session"):
+        assert (js_dir / f"{name}.js").is_file(), name
+        assert name in section, name
+    assert (js_dir / "game.js").is_file() and "`app/static/js/game/game.js`" in section
+    assert (PROJECT_ROOT / "app" / "templates" / "game" / "session.html").is_file() and "session.html" in section
+    for test_file in ("tests/js/game-session.test.js", "tests/js/game-wallet.test.js", "tests/js/game.test.js", "tests/js/game-template.test.js", "tests/test_game_screen_flow.py"):
+        assert (PROJECT_ROOT / test_file).is_file(), test_file
+    assert str(game_page_controller.STREAM_IDLE_TIMEOUT_MS) in section and str(game_page_controller.STREAM_TOTAL_TIMEOUT_MS) in section
+    assert f"目前 {game_service.ACTION_MAX}" in section
+    for needed in ("不改任何後端端點", "沒有資料庫遷移", "預設收合", "不記住", "since_seq", "從不自動重送", "不阻止送出", "`done` 是完整接收的唯一依據", "IndexedDB",
+                   "未驗證", "任務 6.1", "任務 6.2", "任務 6.3", "pagehide", "AbortController", "992px", "不寫 `localStorage`"):
+        assert needed in section, needed
+    assert "全部至少一個測試失敗" in section                                           # 快速破壞的結果如實記載
+    # 登入後的入口一節不能再說存檔頁是空殼而沒有指向取代它的這一節
+    entry = readme_section("RPG 入口與開存檔畫面（rpg-entry-ui）")
+    assert "RPG 遊戲主畫面（rpg-game-ui）" in entry
