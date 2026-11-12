@@ -44,9 +44,9 @@
 
 ## 5. 記事簿面板與 `/game` 預設分頁
 
-- [ ] 5.1 新增 `app/static/js/game/game-notebook.js`（`createNotebook(deps)`）：開啟面板才 `GET …/notebook`、顯示全文與用量與預備空間、空狀態、已滿提示（面板與入口，用快照的摘要判斷）、編輯模式與草稿、即時字數與超過容量禁用儲存、`PUT` 帶 `expected_version`、`finally` 恢復、`notebook_conflict` 更新為後端最新並保留草稿、422／409／404／401／網路錯誤對照、未儲存離開的確認 Modal、已完結唯讀、不自動儲存。`session.html` 加「記事簿」分頁的樣板（`white-space: pre-wrap` 純文字、沒有 `v-html`），`game.js` 接線，`game-template` 的約定清單同步擴充。驗證：新增 `tests/js/game-notebook.test.js`（`vm` 沙盒）通過——規格 `rpg-notebook-panel` 的每個情境，含全文含 `<img onerror=…>` 字樣時以原文顯示、剛好用完容量不顯示已滿、2240／2000 顯示已滿與須一次刪到容量以內、衝突後草稿仍可取得、422 只顯示類別、重複點擊只送一次、**記事簿全文不進 IndexedDB 與主控台**；`tests/js/game-template.test.js` 與 `tests/test_game_pages.py` 的樣板案例通過。
-- [ ] 5.2 `app/static/js/game/entry.js`：掛載時並行載入「選劇本」與「我的存檔」第一頁；存檔非空且玩家尚未手動切換時切到「我的存檔」，存檔請求失敗維持「選劇本」。驗證：`tests/js/entry.test.js` 擴充通過——沒有存檔仍為「選劇本」、有存檔預設「我的存檔」、手動切換後載入完成不被覆蓋、存檔請求失敗退回並可重試、既有案例無須修改即通過（預設分頁那一項有意識地改寫，並在測試註解說明）；`tests/test_game_pages.py` 通過。
-- [ ] 5.3 同步文件：`docs/前端結構-frontend.md`、`README.md`（記事簿面板、預設分頁），`tests/test_readme.py` 守門。驗證：`tests/test_design_docs.py`、`tests/test_readme.py` 通過。
+- [x] 5.1 新增 `app/static/js/game/game-notebook.js`（`createNotebook(deps)`）：開啟面板才 `GET …/notebook`、顯示全文與用量與預備空間、空狀態、已滿提示（面板與入口，用快照的摘要判斷）、編輯模式與草稿、即時字數與超過容量禁用儲存、`PUT` 帶 `expected_version`、`finally` 恢復、`notebook_conflict` 更新為後端最新並保留草稿、422／409／404／401／網路錯誤對照、未儲存離開的確認 Modal、已完結唯讀、不自動儲存。`session.html` 加「記事簿」分頁的樣板（`white-space: pre-wrap` 純文字、沒有 `v-html`），`game.js` 接線，`game-template` 的約定清單同步擴充。驗證：新增 `tests/js/game-notebook.test.js`（`vm` 沙盒）通過——規格 `rpg-notebook-panel` 的每個情境，含全文含 `<img onerror=…>` 字樣時以原文顯示、剛好用完容量不顯示已滿、2240／2000 顯示已滿與須一次刪到容量以內、衝突後草稿仍可取得、422 只顯示類別、重複點擊只送一次、**記事簿全文不進 IndexedDB 與主控台**；`tests/js/game-template.test.js` 與 `tests/test_game_pages.py` 的樣板案例通過。
+- [x] 5.2 `app/static/js/game/entry.js`：掛載時並行載入「選劇本」與「我的存檔」第一頁；存檔非空且玩家尚未手動切換時切到「我的存檔」，存檔請求失敗維持「選劇本」。驗證：`tests/js/entry.test.js` 擴充通過——沒有存檔仍為「選劇本」、有存檔預設「我的存檔」、手動切換後載入完成不被覆蓋、存檔請求失敗退回並可重試、既有案例無須修改即通過（預設分頁那一項有意識地改寫，並在測試註解說明）；`tests/test_game_pages.py` 通過。
+- [x] 5.3 同步文件：`docs/前端結構-frontend.md`、`README.md`（記事簿面板、預設分頁），`tests/test_readme.py` 守門。驗證：`tests/test_design_docs.py`、`tests/test_readme.py` 通過。
 
 ## 6. 整合與收尾
 

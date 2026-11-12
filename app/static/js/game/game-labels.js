@@ -186,6 +186,18 @@
     return '記事簿超過容量（' + length + ' / ' + capacity + ' 字），請刪減到容量以內再儲存。';
   }
 
+  /* 預備空間的說明：有預備空間才有（整數大於 0），說明它只供 AI 寫入。 */
+  function notebookReserveNote(reserve) {
+    if (!isCount(reserve) || reserve <= 0) { return ''; }
+    return '預備空間 ' + reserve + ' 字。' + NOTEBOOK_TEXTS.reserve;
+  }
+
+  /* 編輯時超過容量：超出的字數（整數大於 0）；其他情況回傳空字串。 */
+  function notebookOverNote(overBy) {
+    if (!isCount(overBy) || overBy <= 0) { return ''; }
+    return '超出容量 ' + overBy + ' 字，須刪到容量以內才能儲存。';
+  }
+
   function checkinText(key) { return labelOf(CHECKIN_TEXTS, key, CHECKIN_TEXTS.unavailable); }
 
   /* 簽到後免費幣會超過上限：預覽會入帳多少、會作廢多少（整數）。 */
@@ -219,6 +231,8 @@
     notebookText: notebookText,
     notebookUsage: notebookUsage,
     notebookTooLongNotice: notebookTooLongNotice,
+    notebookReserveNote: notebookReserveNote,
+    notebookOverNote: notebookOverNote,
     checkinText: checkinText,
     checkinOverflowNotice: checkinOverflowNotice,
     checkinAlreadyNotice: checkinAlreadyNotice,

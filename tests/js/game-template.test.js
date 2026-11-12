@@ -102,6 +102,27 @@ test('the template has no inline handler that would write anywhere, and no stora
   }
 });
 
+test('the notebook text, the comparison text and the editor are plain interpolations and a textarea bound to the draft, kept readable by pre-wrap', () => {
+  const body = read(TEMPLATE);
+  assert.ok(/\{\{\s*notebook\.text\s*\}\}/.test(body));
+  assert.ok(/\{\{\s*notebookConflict\.text\s*\}\}/.test(body));
+  assert.ok(/<textarea[^>]*v-model="notebookDraft"/.test(body));
+  assert.ok(/<textarea[^>]*:readonly="notebookLocked"/.test(body));                       // 已完結或儲存中：輸入框唯讀
+  const css = read('app/static/css/game.css');
+  assert.ok(/\.gm-notebook__text[^{]*\{[^}]*white-space:\s*pre-wrap/.test(css));
+  assert.ok(/\.gm-notebook__text[^{]*\{[^}]*overflow-wrap:\s*anywhere/.test(css));         // 長字不撐破側欄
+  assert.ok(/\.gm-notebook__input[^{]*\{[^}]*resize:\s*vertical/.test(css));
+});
+
+test('the notebook is reachable only through the second sidebar tab and the full-notebook entrance, and the entrance sits outside the collapsible sidebar', () => {
+  const body = read(TEMPLATE);
+  const calls = [...body.matchAll(/@click="([^"]*)"/g)].map((match) => match[1]);
+  assert.ok(calls.includes("selectSideTab('notebook')") && calls.includes('openNotebook'));
+  assert.ok(body.indexOf('@click="openNotebook"') < body.indexOf('<aside id="gm-sidebar"'));   // 入口在頂列：側欄收合時也看得到
+  for (const method of ['startNotebookEdit', 'saveNotebook', 'cancelNotebookEdit', 'reloadNotebook']) { assert.ok(calls.includes(method), method); }
+  assert.ok(!/@(?:input|change|blur|keyup)="[^"]*(?:saveNotebook|notebook)/i.test(body));       // 沒有任何會自動儲存的事件
+});
+
 test('player and author text is rendered through interpolation, never as HTML', () => {
   const body = read(TEMPLATE);
   assert.ok(!/v-html|innerHTML|\|\s*safe/.test(body));

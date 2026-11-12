@@ -14,7 +14,8 @@
  *   **訊息只來自固定文字與列舉對照，不含玩家文字**：伺服器送來的 `message` 只在「不認得的 409」與 400 的逐欄位說明才顯示，而且必須通過 `trusted()`
  *   （含中文、不含角括號與控制字元、長度有上限）；審查類別只取列舉識別字的中文名稱。
  * - **小工具**：`notebookLength`（NFC 之後以 Unicode 字元計，與後端 `notebook_policy.length_of` 同一個算法，取樣案例由 pytest 比對）、
- *   `notebookView`、`worldView`／`mergeWorld`、`noticeText`、`sendBlocker`／`canSend`、`actionProblem`、`hasCompleteTurn`。
+ *   `notebookView`（面板讀到的全文與用量）、`notebookSummary`（快照裡只有用量的摘要）、`notebookIsFull`／`notebookCurrent`／`notebookEditState`（已滿的判斷、
+ *   摘要與檢視取較新者、編輯中的即時字數）、`worldView`／`mergeWorld`、`noticeText`、`sendBlocker`／`canSend`、`actionProblem`、`hasCompleteTurn`。
  * 所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。載入順序：game-labels.js 在前（固定文字取自它）。
  */
 (function (root, factory) {
@@ -538,6 +539,35 @@
     };
   }
 
+  /* 快照裡的記事簿摘要（沒有全文與預備空間）：{ version, length, capacity, full }；欄位缺漏或型別不對回傳 null（遊戲頁上的提示只在確定時才顯示）。 */
+  function notebookSummary(raw) {
+    if (!isObject(raw) || !isCount(raw.version) || !isCount(raw.length) || !isCount(raw.capacity)) { return null; }
+    return { version: raw.version, length: raw.length, capacity: raw.capacity, full: raw.full === true };
+  }
+
+  /* 「已滿」：長度大於容量（剛好用完容量、或只是用到預備空間都不算）。容量不明（0）時退回後端的 `full` 旗標。 */
+  function notebookIsFull(view) {
+    if (!isObject(view)) { return false; }
+    if (isCount(view.length) && isCount(view.capacity) && view.capacity > 0) { return view.length > view.capacity; }
+    return view.full === true;
+  }
+
+  /* 遊戲頁上要採用哪一份記事簿資料：面板讀到或儲存後的檢視（`view`，有全文）與快照的摘要（`summary`）取版本較新的；版本相同取檢視。 */
+  function notebookCurrent(view, summary) {
+    var fresh = isObject(view) ? view : null;
+    var brief = isObject(summary) ? summary : null;
+    if (fresh && brief) { return fresh.version >= brief.version ? fresh : brief; }
+    return fresh || brief;
+  }
+
+  /* 編輯中的即時檢查：`length` 是 NFC 之後的 Unicode 字元數；`over` 表示超過容量（玩家編輯沒有預備空間）、`overBy` 是超出的字數。容量不明（不是正整數）時不判斷，由伺服器為準。 */
+  function notebookEditState(draft, capacity) {
+    var length = notebookLength(draft);
+    var known = isCount(capacity) && capacity > 0;
+    var over = known && length > capacity;
+    return { length: length, over: over, overBy: over ? length - capacity : 0 };
+  }
+
   // ---- 送出行動 ---------------------------------------------------------------------------------------
 
   /* 目前不能送出的原因（可以送出回傳空字串）。失敗時關閉：狀態缺漏、第 0 幕未明確完成都視為不能送出。
@@ -586,6 +616,10 @@
     hasCompleteTurn: hasCompleteTurn,
     timelineFrom: timelineFrom,
     notebookView: notebookView,
+    notebookSummary: notebookSummary,
+    notebookIsFull: notebookIsFull,
+    notebookCurrent: notebookCurrent,
+    notebookEditState: notebookEditState,
     sendBlocker: sendBlocker,
     canSend: canSend,
     actionProblem: actionProblem

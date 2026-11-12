@@ -185,3 +185,220 @@ test('game.js stays within the contract: it returns nothing the template does no
   const extra = Object.keys(page).filter((name) => !CONTRACT_NAMES.includes(name));
   assert.deepEqual(extra, [], `setup() 多回傳了約定清單沒有的名稱：${extra}`);
 });
+
+// ---- 記事簿面板（側欄的第二個分頁）-----------------------------------------------------------------------------
+
+const { fakeIndexedDB, keyRange, dump } = require('./support/fake-indexeddb.js');
+
+const NOTEBOOK_MARK = '獨特的記事簿全文Q9';
+const NB_PATH = /\/api\/game\/sessions\/[^/]+\/notebook$/;
+const nbView = (text, extra) => Object.assign({ text, version: 4, length: Array.from(text).length, capacity: 2000, reserve: 500, full: false }, extra);
+const serverError = (status, code, extra) => Promise.reject({ response: { status, data: Object.assign({ ok: false, error: { code, message: '' } }, extra) } });
+
+/* 一個會回應快照、回合、錢包與記事簿的假伺服器。`server.put` 可以換成回傳 Promise 的函式；`server.notebook` 是目前的記事簿。 */
+function notebookGame({ summary = { version: 4, length: 12, capacity: 2000, full: false }, text = `${NOTEBOOK_MARK}（已確立的設定）`, width = DESKTOP, indexedDB = null } = {}) {
+  const server = { notebook: nbView(text), put: null, hang: false };
+  const respond = (request) => {
+    if (NB_PATH.test(request.url)) {
+      if (request.method === 'get') { return server.hang ? new Promise(() => {}) : Promise.resolve({ data: { notebook: server.notebook } }); }
+      return server.put ? server.put(request) : Promise.reject(new Error('unexpected PUT'));
+    }
+    if (/\/api\/game\/sessions\/[^/]+$/.test(request.url)) {
+      return Promise.resolve({ data: { session: { id: STATE.session.id, title: '青雲問道', content_tier: 'safe', status: 'active', ended: false, version: 1, completed_turns: 0,
+        opening: { state: 'ready', text: '第零幕。' }, world: { elapsed_months: 0, location: '山門', summary: '', goals: [], places: [], protagonist_age: 16 }, notebook: summary } } });
+    }
+    if (/\/turns$/.test(request.url)) { return Promise.resolve({ data: { turns: [], has_more: false } }); }
+    if (/\/api\/wallet$/.test(request.url)) { return Promise.resolve({ data: { ok: true, wallet: { total: 230, turn_cost: { standard: 30 }, checkin: { claimable: true } } } }); }
+    return Promise.reject(new Error('unexpected ' + request.method + ' ' + request.url));
+  };
+  const game = setupGame({ respond, width, indexedDB, keyRange: indexedDB ? keyRange : null });
+  const notebookRequests = () => game.requests.filter((request) => NB_PATH.test(request.url));
+  return { game, server, notebookRequests };
+}
+
+async function mounted(options) {
+  const env = notebookGame(options);
+  await env.game.mount();
+  await settle(20);
+  return env;
+}
+
+test('loading the page never asks for the notebook, and neither does opening the sidebar on the world tab or picking the notebook tab while it is closed', async () => {
+  const { game, notebookRequests } = await mounted();
+  const { page } = game;
+  assert.equal(page.sideTab.value, 'world');
+  assert.deepEqual(notebookRequests(), []);                                  // 載入頁面：沒有記事簿請求（全文只在開啟面板時才讀）
+  page.toggleSidebar();                                                       // 開在「世界」分頁
+  await settle();
+  assert.deepEqual(notebookRequests(), []);
+  page.toggleSidebar();                                                       // 收合
+  assert.equal(page.selectSideTab('notebook'), true);                         // 側欄收合時切分頁：還不算開啟
+  await settle();
+  assert.deepEqual(notebookRequests(), []);
+  assert.equal(page.selectSideTab('bogus'), false);                           // 不認得的分頁名稱：什麼都不做
+  assert.equal(page.sideTab.value, 'notebook');
+});
+
+test('the notebook is read every time the panel is opened: the sidebar opens on the notebook tab, or the tab is picked while the sidebar is open', async () => {
+  const { game, notebookRequests } = await mounted();
+  const { page } = game;
+  page.selectSideTab('notebook');
+  page.toggleSidebar();                                                       // 開啟側欄且目前是記事簿分頁：讀一次
+  await settle();
+  assert.equal(notebookRequests().length, 1);
+  assert.equal(notebookRequests()[0].method, 'get');
+  assert.equal(page.notebook.value.text, `${NOTEBOOK_MARK}（已確立的設定）`);
+  page.selectSideTab('world');
+  await settle();
+  assert.equal(notebookRequests().length, 1);                                 // 切到世界：不讀
+  page.selectSideTab('notebook');                                             // 側欄開著時切回記事簿：再讀一次
+  await settle();
+  assert.equal(notebookRequests().length, 2);
+  page.toggleSidebar();                                                       // 收合
+  page.toggleSidebar();                                                       // 再開啟：再讀一次
+  await settle();
+  assert.equal(notebookRequests().length, 3);
+  assert.deepEqual(notebookRequests().map((request) => request.method), ['get', 'get', 'get']);
+});
+
+test('the "notebook is full" entrance comes from the snapshot summary alone; one click opens the sidebar on the notebook tab and reads it', async () => {
+  const full = await mounted({ summary: { version: 5, length: 2240, capacity: 2000, full: true } });
+  assert.equal(full.game.page.notebookFull.value, true);                       // 頂列的入口與分頁徽章共用
+  assert.equal(full.game.page.notebookUsage.value, '2240 / 2000');
+  assert.deepEqual(full.notebookRequests(), []);                               // 只靠快照的摘要，沒有請求全文
+  assert.equal(full.game.page.sidebarOpen.value, false);
+  assert.equal(full.game.page.openNotebook(), true);
+  assert.equal(full.game.page.sidebarOpen.value, true);
+  assert.equal(full.game.page.sideTab.value, 'notebook');
+  await settle();
+  assert.equal(full.notebookRequests().length, 1);
+
+  const exact = await mounted({ summary: { version: 5, length: 2000, capacity: 2000, full: false } });
+  assert.equal(exact.game.page.notebookFull.value, false);                     // 剛好用完容量：不顯示
+  const none = await mounted({ summary: null });
+  assert.equal(none.game.page.notebookFull.value, false);                      // 快照沒有摘要：不顯示
+});
+
+test('editing through the real API sends exactly one PUT with the draft and the version, and a second click while it runs adds nothing', async () => {
+  const { game, server, notebookRequests } = await mounted();
+  const { page } = game;
+  let release = null;
+  server.put = () => new Promise((resolve) => { release = () => resolve({ data: { notebook: nbView('新的設定', { version: 5 }) } }); });
+  page.openNotebook();
+  await settle();
+  assert.equal(page.startNotebookEdit(), true);
+  page.notebookDraft.value = '新的設定';
+  const first = page.saveNotebook();
+  const second = page.saveNotebook();
+  await settle();
+  const puts = notebookRequests().filter((request) => request.method === 'put');
+  assert.equal(puts.length, 1);                                                // 重複點擊只送一個
+  assert.deepEqual(puts[0].data, { text: '新的設定', expected_version: 4 });
+  assert.equal(page.notebookSaving.value, true);
+  release();
+  assert.equal(await first, true);
+  assert.equal(await second, false);
+  assert.equal(page.notebook.value.text, '新的設定');
+  assert.equal(page.notebookEditing.value, false);
+  assert.equal(page.notebookSaving.value, false);
+  assert.deepEqual(game.toasts, ['記事簿已儲存。']);
+  assert.ok(game.requests.every((request) => request.method === 'get' || (request.method === 'put' && NB_PATH.test(request.url))));   // 沒有別的寫入
+});
+
+test('failures from the real API: a conflict keeps the draft, a rule hit names only the category, an ended save turns the whole page into read-only', async () => {
+  const { game, server } = await mounted();
+  const { page } = game;
+  page.openNotebook();
+  await settle();
+  page.startNotebookEdit();
+  page.notebookDraft.value = `${NOTEBOOK_MARK}我的版本`;
+
+  server.put = () => serverError(409, 'notebook_conflict', { notebook: nbView('AI 剛寫入', { version: 6 }) });
+  await page.saveNotebook();
+  assert.equal(page.notebook.value.text, 'AI 剛寫入');
+  assert.equal(page.notebookConflict.value.version, 6);
+  assert.equal(page.notebookDraft.value, `${NOTEBOOK_MARK}我的版本`);
+  assert.match(page.notebookNotice.value.text, /AI 或另一個裝置剛更新了記事簿/);
+
+  server.put = () => serverError(422, 'content_rejected', { categories: ['sexual_violence'] });
+  await page.saveNotebook();
+  assert.match(page.notebookNotice.value.text, /性暴力/);
+  assert.ok(!page.notebookNotice.value.text.includes(NOTEBOOK_MARK));
+
+  server.put = () => serverError(422, 'notebook_too_long', { length: 2100, capacity: 2000 });
+  await page.saveNotebook();
+  assert.match(page.notebookNotice.value.text, /2100 \/ 2000/);
+
+  assert.equal(page.ended.value, false);
+  server.put = () => serverError(409, 'session_ended');
+  await page.saveNotebook();
+  assert.equal(page.ended.value, true);                                         // 整個遊戲頁都標示為已完結（頂列、輸入區禁用）
+  assert.equal(page.notebookLocked.value, true);
+  assert.equal(page.sendDisabled.value, true);
+  assert.equal(page.notebookDraft.value, `${NOTEBOOK_MARK}我的版本`);
+});
+
+test('the whole notebook flow keeps the text out of IndexedDB, the console, and every other browser storage', async () => {
+  const factory = fakeIndexedDB();
+  const { game, server } = await mounted({ indexedDB: factory, summary: { version: 5, length: 2240, capacity: 2000, full: true } });
+  const { page } = game;
+  server.put = () => Promise.resolve({ data: { notebook: nbView(`${NOTEBOOK_MARK}存好了`, { version: 6 }) } });
+  page.openNotebook();
+  await settle();
+  page.selectSideTab('world');
+  page.selectSideTab('notebook');
+  await settle();
+  page.startNotebookEdit();
+  page.notebookDraft.value = `${NOTEBOOK_MARK}存好了`;
+  await page.saveNotebook();
+  await settle(40);
+  const rows = dump(factory);
+  assert.ok(rows.length >= 1, '暫存沒有寫入任何東西，這項檢查是空洞的');
+  assert.ok(JSON.stringify(rows).includes('青雲問道'));                         // 存檔摘要確實進了暫存
+  const stored = JSON.stringify(rows);
+  assert.ok(!stored.includes(NOTEBOOK_MARK) && !/notebook/i.test(stored) && !stored.includes('2240'), '記事簿全文或摘要進了 IndexedDB');
+  assert.deepEqual(game.logs, []);
+  assert.deepEqual(game.storageWrites, []);                                      // 分頁與側欄都不記住
+});
+
+test('Escape does not close the sidebar while the "discard unsaved changes" confirmation is open', async () => {
+  const { game } = await mounted();
+  const { page } = game;
+  page.openNotebook();
+  await settle();
+  page.startNotebookEdit();
+  page.notebookDraft.value = '改到一半';
+  assert.equal(page.cancelNotebookEdit(), true);
+  assert.equal(page.notebookDiscardOpen.value, true);
+  game.fireDocument('keydown', noEvent());
+  assert.equal(page.sidebarOpen.value, true);                                    // Modal 先吃這個鍵
+  assert.equal(page.confirmNotebookDiscard(), true);
+  assert.equal(page.notebookDiscardOpen.value, false);
+  assert.equal(page.notebookEditing.value, false);
+  game.fireDocument('keydown', noEvent());
+  assert.equal(page.sidebarOpen.value, false);
+});
+
+test('pagehide aborts a notebook read that is still running, and nothing is ever saved by leaving the page', async () => {
+  const { game, server, notebookRequests } = await mounted();
+  server.hang = true;
+  game.page.openNotebook();
+  await settle();
+  assert.equal(notebookRequests().length, 1);
+  assert.equal(notebookRequests()[0].signal.aborted, false);
+  game.fire('pagehide');
+  assert.equal(notebookRequests()[0].signal.aborted, true);
+  assert.equal(notebookRequests().filter((request) => request.method === 'put').length, 0);
+});
+
+test('pagehide with an unsaved draft sends no save request', async () => {
+  const { game, notebookRequests } = await mounted();
+  game.page.openNotebook();
+  await settle();
+  game.page.startNotebookEdit();
+  game.page.notebookDraft.value = '編輯到一半';
+  game.fire('pagehide');
+  await settle(30);
+  assert.equal(notebookRequests().filter((request) => request.method === 'put').length, 0);
+  assert.equal(game.page.notebookDraft.value, '編輯到一半');
+});

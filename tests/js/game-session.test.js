@@ -76,6 +76,22 @@ test('the snapshot is remembered in the local cache without the notebook or the 
   assert.ok(!dump.includes('notebook') && !dump.includes('林初') && !('protagonist' in record));
 });
 
+test('the notebook summary of the snapshot is kept in memory for the page prompts, follows every later snapshot, and is never cached locally', async () => {
+  const h = await ready();
+  assert.deepEqual(plain(h.session.notebookSummary.value), { version: 0, length: 0, capacity: 2000, full: false });
+  h.server.session.notebook = { version: 3, length: 2240, capacity: 2000, full: true };
+  await sendAction(h, '翻閱典籍', normalTurn({ seq: 1, clientMsgId: 'msg-1', story: '你翻開了書。' }));
+  await h.until(() => h.calls.snapshot.length >= 2 && h.session.notebookSummary.value.version === 3, '完成後的快照帶來新的摘要');
+  assert.deepEqual(plain(h.session.notebookSummary.value), { version: 3, length: 2240, capacity: 2000, full: true });
+  h.server.session.notebook = { version: 'broken' };                                   // 壞掉的摘要：什麼都不改（不確定就不亂顯示）
+  await sendAction(h, '再翻一頁', normalTurn({ seq: 2, clientMsgId: 'msg-2', story: '第二頁。' }));
+  await h.until(() => h.calls.snapshot.length >= 3, '第二輪之後再讀一次快照');
+  await h.idle();
+  assert.equal(h.session.notebookSummary.value.version, 3);
+  const record = await h.store.getSession(SESSION_ID);
+  assert.ok(!JSON.stringify(record).includes('notebook') && !JSON.stringify(record).includes('2240'));      // 摘要只在記憶體
+});
+
 test('a fallback opening (the script initial dialogue) is shown as it is and not generated again', async () => {
   const h = await ready({ session: { opening: { state: 'fallback', text: '劇本的初始對話。' } } });
   assert.equal(h.timeline()[0].text, '劇本的初始對話。');

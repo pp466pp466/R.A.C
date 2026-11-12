@@ -3,7 +3,7 @@
  * 以真的 Vue、真的 Auth、真的 UI 元件與全部真的 game-*.js 模組，執行 game.js 的 `setup()`，只把 axios、location、儲存物件、計時與 mount 換成替身。
  * - `innerWidth` 可指定（桌面與手機的側欄案例）；`resize` 等事件用 `fire('resize')` 觸發，`document` 的事件（keydown）用 `fireDocument('keydown', event)`；
  * - axios 替身記錄每個請求；`localStorage`、`sessionStorage`、`document.cookie` 是會記錄寫入的陷阱（`storageWrites`），整個流程結束後斷言它是空的；
- *   `indexedDB` 在沙盒裡不存在（`Game.store.openStore` 因此退回記憶體，不碰任何瀏覽器儲存）；
+ *   `indexedDB` 預設在沙盒裡不存在（`Game.store.openStore` 因此退回記憶體，不碰任何瀏覽器儲存）；測試可傳入假的 `indexedDB` 與 `keyRange`（tests/js/support/fake-indexeddb.js）；
  * - `console` 的每個方法都會把輸出記進 `logs`。沒有瀏覽器可以掛載；樣板的文字與結構由 tests/test_game_pages.py 檢查，樣板的名稱由 game-template.test.js 對照。 */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -26,11 +26,11 @@ const STATE = {
 const SCRIPTS = [
   'js/auth/auth-common.js', 'js/ui/typewriter.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/ui-components.js',
   'js/game/game-labels.js', 'js/game/sse-parser.js', 'js/game/turn-stream.js', 'js/game/game-state.js', 'js/game/game-store.js', 'js/game/game-sync.js',
-  'js/game/game-api.js', 'js/game/game-wallet.js', 'js/game/game-session.js',
+  'js/game/game-api.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-session.js',
 ];
 
 /* 建立沙盒並回傳 setup() 的結果。`respond(request)` 是 axios 的替身：收到 { method, url, data, timeout, signal }，回傳 Promise。 */
-function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, respond = () => Promise.reject(new Error('unexpected request')) } = {}) {
+function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')) } = {}) {
   const requests = [];
   const navigations = [];
   const mounted = [];
@@ -56,6 +56,7 @@ function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 12
   sandbox.location = { assign: (target) => navigations.push(target), hash: '', pathname, search: '' };
   sandbox.localStorage = trap('localStorage');
   sandbox.sessionStorage = trap('sessionStorage');
+  if (indexedDB) { sandbox.indexedDB = indexedDB; sandbox.IDBKeyRange = keyRange; }              // 傳入假的 IndexedDB 時，本機暫存真的寫進它（供「資料庫內容」的守門測試）
   const document = {
     createElement: () => ({}),
     querySelector: (selector) => (selector === 'meta[name="csrf-token"]' ? { getAttribute: () => 'CSRF-TOKEN' } : null),

@@ -455,19 +455,23 @@ def test_readme_rpg_game_screen_section_names_the_real_files_the_numbers_and_wha
 
     section = readme_section("RPG 遊戲主畫面（rpg-game-ui）")
     js_dir = PROJECT_ROOT / "app" / "static" / "js" / "game"
-    for name in ("sse-parser", "turn-stream", "game-state", "game-labels", "game-store", "game-sync", "game-api", "game-wallet", "game-session"):
+    for name in ("sse-parser", "turn-stream", "game-state", "game-labels", "game-store", "game-sync", "game-api", "game-wallet", "game-notebook", "game-session"):
         assert (js_dir / f"{name}.js").is_file(), name
         assert name in section, name
     assert (js_dir / "game.js").is_file() and "`app/static/js/game/game.js`" in section
     assert (PROJECT_ROOT / "app" / "templates" / "game" / "session.html").is_file() and "session.html" in section
-    for test_file in ("tests/js/game-session.test.js", "tests/js/game-wallet.test.js", "tests/js/game.test.js", "tests/js/game-template.test.js", "tests/test_game_screen_flow.py"):
+    for test_file in ("tests/js/game-session.test.js", "tests/js/game-wallet.test.js", "tests/js/game-notebook.test.js", "tests/js/game.test.js", "tests/js/game-template.test.js",
+                      "tests/js/entry.test.js", "tests/test_game_screen_flow.py"):
         assert (PROJECT_ROOT / test_file).is_file(), test_file
     assert str(game_page_controller.STREAM_IDLE_TIMEOUT_MS) in section and str(game_page_controller.STREAM_TOTAL_TIMEOUT_MS) in section
     assert f"目前 {game_service.ACTION_MAX}" in section
     for needed in ("不改任何後端端點", "沒有資料庫遷移", "預設收合", "不記住", "since_seq", "從不自動重送", "不阻止送出", "`done` 是完整接收的唯一依據", "IndexedDB",
-                   "未驗證", "任務 6.1", "任務 6.2", "任務 6.3", "pagehide", "AbortController", "992px", "不寫 `localStorage`"):
+                   "未驗證", "任務 6.1", "任務 6.2", "任務 6.3", "pagehide", "AbortController", "992px", "不寫 `localStorage`",
+                   "記事簿面板", "只在玩家開啟面板時才讀", "已滿＝長度大於容量", "從不自動儲存", "保留玩家的草稿", "預設分頁", "我的存檔"):
         assert needed in section, needed
     assert "全部至少一個測試失敗" in section                                           # 快速破壞的結果如實記載
+    assert "驗收紀錄（rpg-game-ui 第 4 批" in section and "與任務清單或規格不同之處" in section        # 第 4 批的偏離如實記載
+    assert "等價改動" in section and "長度大於容量" in section and "既有案例無須修改即通過" in section
     # 登入後的入口一節不能再說存檔頁是空殼而沒有指向取代它的這一節
     entry = readme_section("RPG 入口與開存檔畫面（rpg-entry-ui）")
     assert "RPG 遊戲主畫面（rpg-game-ui）" in entry

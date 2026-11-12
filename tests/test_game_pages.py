@@ -429,7 +429,7 @@ def test_the_game_template_has_the_timeline_the_composer_the_sidebar_the_modals_
     assert 'v-for="item in items"' in html and ':key="item.key"' in html
     for kind in ("opening", "turn", "note"):
         assert f"item.kind === '{kind}'" in html, kind                           # 第 0 幕、完整回合、轉場與中斷說明；其餘是在途回合
-    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["COINS", "LEAVE_GAME", "ABANDON_TURN"]
+    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["COINS", "LEAVE_GAME", "ABANDON_TURN", "DISCARD_NOTEBOOK"]
     assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
     assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)               # 初始狀態經 tojson 跳脫
     assert re.search(r'<aside id="gm-sidebar" v-show="sidebarOpen"', html)       # 側欄的顯示由 Vue 接管（預設收合，見 game.js）
@@ -438,14 +438,31 @@ def test_the_game_template_has_the_timeline_the_composer_the_sidebar_the_modals_
     assert re.search(r':disabled="sendDisabled"[^>]*@click="send"', html) and ":disabled=\"inputDisabled\"" in html
     assert "@keydown.ctrl.enter.prevent=\"send\"" in html                         # Enter 換行，Ctrl＋Enter 送出
     assert re.search(r'<a class="gm-nav__link" href="/cs">客服</a>', html) and re.search(r'<a class="gm-nav__link" href="/account">帳號</a>', html)
+
+
+def test_the_game_template_puts_the_notebook_in_a_second_sidebar_tab_with_a_full_entrance_in_the_top_bar_and_a_discard_confirmation():
+    """rpg-notebook-panel：側欄有「世界」「記事簿」兩個分頁（預設世界），記事簿面板在側欄內；頂列的「記事簿已滿」入口與分頁徽章共用同一個判斷；
+    放棄未儲存變更的確認是自製 Modal（v-model 由 Vue 接管），不使用瀏覽器原生的 confirm。
+    （第 3 批曾斷言樣板的 raw 區塊完全沒有「記事簿」與 notebook，因為面板留到這一批；第 4 批有意識地改寫成本測試，不是刪除。）"""
+    html = read(TEMPLATES / "session.html")
     body = html[html.index("{% raw %}"):html.index("{% endraw %}")]
-    assert "記事簿" not in body and "notebook" not in body.lower()                # 記事簿分頁屬第 5 組（game-notebook.js），這一批不放半成品
+    aside = body[body.index('<aside id="gm-sidebar"'):body.index("</aside>")]
+    assert "@click=\"selectSideTab('world')\">世界</button>" in aside and "@click=\"selectSideTab('notebook')\">記事簿" in aside
+    assert aside.count('role="tab"') == 2 and 'role="tablist"' in aside and aside.count('role="tabpanel"') == 2
+    assert "v-show=\"sideTab === 'world'\"" in aside and "v-show=\"sideTab === 'notebook'\"" in aside          # 分頁的顯示由 Vue 接管，不用 data-bs-*
+    assert '<span v-if="notebookFull" class="gm-tab__badge">已滿</span>' in aside
+    assert re.search(r'<button v-if="notebookFull" type="button" class="gm-chipbtn" @click="openNotebook">記事簿已滿</button>', body)   # 頂列的入口（側欄收合時看得到）
+    assert body.index('class="gm-chipbtn"') < body.index('<aside id="gm-sidebar"')
+    assert 'v-model="notebookDiscardOpen"' in body and 'status-code="DISCARD_NOTEBOOK"' in body and "confirm(" not in body
+    assert "data-bs-" not in body and "v-html" not in body
 
 
 def test_the_game_template_shows_every_player_and_author_text_only_as_plain_interpolations():
     html = read(TEMPLATES / "session.html")
     for expression in ("title", "playerName", "item.text", "item.action", "item.story", "line", "world.location", "world.summary", "goal", "place", "notice.text",
-                       "loadFailure.message", "coinModalText", "checkinMessage"):
+                       "loadFailure.message", "coinModalText", "checkinMessage",
+                       "notebook.text", "notebookConflict.text", "notebookNotice.text", "notebookError.message", "notebookFullText", "notebookEmptyText",
+                       "notebookReserveNote", "notebookEditHint", "notebookOverNote"):
         assert re.search(r"\{\{\s*" + re.escape(expression) + r"(\s*\|\|\s*'[^']*')?\s*\}\}", html), expression   # 只允許以固定文字當作空值的備援
     assert 'v-model="draft"' in html
     for forbidden in ("v-html", "innerHTML", "|safe", "<img", "<iframe", "<script src=\"http"):
@@ -460,7 +477,7 @@ def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_t
     html = client.get(f"/game/{save_id}").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
     expected = ["auth-common.js", "game-labels.js", "sse-parser.js", "turn-stream.js", "game-state.js", "game-store.js", "game-sync.js",
-                "game-api.js", "game-wallet.js", "game-session.js", "game.js"]
+                "game-api.js", "game-wallet.js", "game-notebook.js", "game-session.js", "game.js"]
     for needed in ("vue.global.prod.js", "axios.min.js", "typewriter.js", "ui-components.js", "restriction.js", *expected):
         assert needed in names, needed
     assert names[-1] == "game.js"                                                # 掛載腳本必須是最後一個（它用到前面所有模組）

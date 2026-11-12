@@ -5,12 +5,17 @@ const CONTRACT = {
   state: [
     'phase', 'loadFailure', 'restriction', 'title', 'playerName', 'tierLabel', 'modeNote', 'gateNotice', 'ended', 'offline', 'notice', 'openingNotice',
     'items', 'hasEarlier', 'jumpVisible', 'scroller', 'input', 'draft', 'actionError', 'draftCount', 'draftOver', 'actionMax', 'sending', 'sendDisabled',
-    'inputDisabled', 'blockerText', 'world', 'locationLine', 'balanceText', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'modal', 'coinModalOpen',
+    'inputDisabled', 'blockerText', 'world', 'locationLine', 'balanceText', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'sideTab', 'modal', 'coinModalOpen',
     'coinModalText', 'checkinBusy', 'checkinPreview', 'checkinMessage', 'checkinFinished',
+    // 記事簿面板（game-notebook.js）
+    'notebook', 'notebookLoading', 'notebookError', 'notebookEmpty', 'notebookUsage', 'notebookReserveNote', 'notebookFull', 'notebookFullText', 'notebookEmptyText',
+    'notebookStale', 'notebookEditing', 'notebookDraft', 'notebookDraftCount', 'notebookOver', 'notebookOverNote', 'notebookEditHint', 'notebookCanEdit',
+    'notebookCanSave', 'notebookLocked', 'notebookSaving', 'notebookNotice', 'notebookConflict', 'notebookDiscardOpen',
   ],
   methods: [
     'retryLoad', 'retryOpening', 'showEarlier', 'jumpToLatest', 'onScroll', 'send', 'cancel', 'dismissNotice', 'resendInflight', 'askAbandon',
-    'confirmAbandon', 'leaveClick', 'confirmLeave', 'toggleSidebar', 'closeSidebar', 'claimCheckin', 'confirmOverflow', 'cancelOverflow', 'closeCoinModal',
+    'confirmAbandon', 'leaveClick', 'confirmLeave', 'toggleSidebar', 'closeSidebar', 'selectSideTab', 'claimCheckin', 'confirmOverflow', 'cancelOverflow',
+    'closeCoinModal', 'openNotebook', 'reloadNotebook', 'startNotebookEdit', 'saveNotebook', 'cancelNotebookEdit', 'confirmNotebookDiscard',
   ],
 };
 const CONTRACT_NAMES = [].concat(CONTRACT.state, CONTRACT.methods).sort();

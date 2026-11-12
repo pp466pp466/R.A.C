@@ -3,20 +3,25 @@
    （v-if／v-show），不使用 Bootstrap 的 JavaScript 外掛與任何 Bootstrap 的互動屬性。所有來自玩家與劇本作者的文字（標題、行動、劇情、目標、地點）一律以雙大括號
    插值顯示（純文字，換行由 CSS 的 pre-wrap 保留），絕不解析任何標記語言。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。
    頁面外殼只有初始狀態（存檔摘要、會員等級、閘門、內容模式、兩個串流逾時、行動字數上限），**沒有任何劇情、第 0 幕、記事簿與世界狀態**：
-   這些由前端依序呼叫既有端點取得。側欄（世界狀態）在桌面與手機都預設收合，頂列的開關按鈕切換；開關只存在於記憶體，不寫任何瀏覽器儲存。
-   記事簿面板與它的分頁留到第 5 組（game-notebook.js）。
+   這些由前端依序呼叫既有端點取得。側欄（分頁「世界」「記事簿」）在桌面與手機都預設收合，頂列的開關按鈕切換；開關與分頁只存在於記憶體，不寫任何瀏覽器儲存。
+   記事簿全文只在側欄於「記事簿」分頁開啟時才由 game-notebook.js 讀取（純文字、保留換行，絕不解析標記），不在載入頁面時請求，也不進任何瀏覽器儲存。
 
-   與 game.js 的約定（game.js 的 setup() 合併 game-session.js、game-wallet.js 的回傳並加上側欄與 Modal，必須回傳的就是下面這份清單）：
+   與 game.js 的約定（game.js 的 setup() 合併 game-session.js、game-wallet.js、game-notebook.js 的回傳並加上側欄與 Modal，必須回傳的就是下面這份清單）：
    - 載入與狀態：phase（'loading'｜'ready'｜'gone'｜'failed'）、loadFailure（{ message, link, retry }｜null）、restriction（'locked'｜'suspended'｜null）、
      title、playerName、tierLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、
      openingNotice（{ tone, text, retry }｜null）。
    - 時間軸：items（最近 60 項：opening｜turn｜note｜inflight）、hasEarlier、jumpVisible、scroller（捲動區的元素參照）。
    - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
    - 世界與餘額：world（Game.worldView 的形狀）、locationLine、balanceText、lowBalanceText。
-   - 側欄與 Modal：sidebarOpen、sidebarMode（'push'｜'overlay'）、modal（{ leave, abandon }）。
+   - 側欄與 Modal：sidebarOpen、sidebarMode（'push'｜'overlay'）、sideTab（'world'｜'notebook'）、modal（{ leave, abandon }）。
    - 遊戲幣 Modal：coinModalOpen、coinModalText、checkinBusy、checkinPreview（{ wouldGain, wouldLose }｜null）、checkinMessage、checkinFinished。
+   - 記事簿面板（game-notebook.js）：notebook（{ text, version, length, capacity, reserve, full }｜null）、notebookLoading、notebookError（{ message, link, retry }｜null）、
+     notebookEmpty、notebookUsage（「1800 / 2000」）、notebookReserveNote、notebookFull（入口與面板共用）、notebookFullText、notebookEmptyText、notebookStale、
+     notebookEditing、notebookDraft、notebookDraftCount、notebookOver、notebookOverNote、notebookEditHint、notebookCanEdit、notebookCanSave、notebookLocked、
+     notebookSaving、notebookNotice（{ tone, text }｜null）、notebookConflict（後端最新的記事簿｜null）、notebookDiscardOpen（「放棄未儲存的變更」Modal）。
    - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、resendInflight、askAbandon、confirmAbandon、
-     leaveClick、confirmLeave、toggleSidebar、closeSidebar、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal。 #}
+     leaveClick、confirmLeave、toggleSidebar、closeSidebar、selectSideTab、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal、
+     openNotebook（頂列「記事簿已滿」入口）、reloadNotebook、startNotebookEdit、saveNotebook、cancelNotebookEdit、confirmNotebookDiscard。 #}
 {% block title %}{{ save.title or '冒險' }}{% endblock %}
 {% block head_assets %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
@@ -33,6 +38,7 @@
         <span class="ge-chip">{{ tierLabel }}</span>
         <span v-if="ended" class="ge-chip ge-chip--ended">已完結</span>
         <span v-else-if="offline" class="ge-chip">離線</span>
+        <button v-if="notebookFull" type="button" class="gm-chipbtn" @click="openNotebook">記事簿已滿</button>
         <template v-if="!sidebarOpen"><span v-if="locationLine" class="gm-topbar__where">{{ locationLine }}</span></template>
       </p>
     </div>
@@ -140,33 +146,85 @@
     </main>
 
     <template v-if="sidebarOpen"><div v-if="sidebarMode === 'overlay'" class="gm-scrim" @click="closeSidebar"></div></template>
-    <aside id="gm-sidebar" v-show="sidebarOpen" class="gm-side" :class="'gm-side--' + sidebarMode" aria-label="世界狀態">
+    <aside id="gm-sidebar" v-show="sidebarOpen" class="gm-side" :class="'gm-side--' + sidebarMode" aria-label="側欄">
       <div class="gm-side__head">
-        <h2 class="gm-side__title">世界</h2>
+        <div class="gm-tabs" role="tablist" aria-label="側欄分頁">
+          <button type="button" role="tab" class="gm-tab" :class="{ 'gm-tab--active': sideTab === 'world' }"
+                  :aria-selected="sideTab === 'world' ? 'true' : 'false'" @click="selectSideTab('world')">世界</button>
+          <button type="button" role="tab" class="gm-tab" :class="{ 'gm-tab--active': sideTab === 'notebook' }"
+                  :aria-selected="sideTab === 'notebook' ? 'true' : 'false'" @click="selectSideTab('notebook')">記事簿<span v-if="notebookFull" class="gm-tab__badge">已滿</span></button>
+        </div>
         <button type="button" class="gm-iconbtn" aria-label="關閉側欄" @click="closeSidebar">×</button>
       </div>
-      <p v-if="playerName" class="gm-side__line">主角：{{ playerName }}</p>
-      <dl class="gm-world">
-        <dt>目前地點</dt>
-        <dd>{{ world.location || '尚未記錄' }}</dd>
-        <dt>經過時間</dt>
-        <dd>{{ world.elapsed_months }} 個月</dd>
-        <template v-if="world.protagonist_age !== null">
-          <dt>主角年齡</dt>
-          <dd>{{ world.protagonist_age }} 歲</dd>
+
+      <div v-show="sideTab === 'world'" role="tabpanel" aria-label="世界狀態">
+        <p v-if="playerName" class="gm-side__line">主角：{{ playerName }}</p>
+        <dl class="gm-world">
+          <dt>目前地點</dt>
+          <dd>{{ world.location || '尚未記錄' }}</dd>
+          <dt>經過時間</dt>
+          <dd>{{ world.elapsed_months }} 個月</dd>
+          <template v-if="world.protagonist_age !== null">
+            <dt>主角年齡</dt>
+            <dd>{{ world.protagonist_age }} 歲</dd>
+          </template>
+        </dl>
+        <p v-if="world.summary" class="gm-world__summary">{{ world.summary }}</p>
+        <h3 class="gm-side__sub">進行中的目標</h3>
+        <ul v-if="world.goals.length" class="gm-list">
+          <li v-for="(goal, index) in world.goals" :key="index">{{ goal }}</li>
+        </ul>
+        <p v-else class="ge-hint">目前沒有進行中的目標。</p>
+        <h3 class="gm-side__sub">去過的地點</h3>
+        <ul v-if="world.places.length" class="gm-list">
+          <li v-for="(place, index) in world.places" :key="index">{{ place }}</li>
+        </ul>
+        <p v-else class="ge-hint">還沒有去過的地點。</p>
+      </div>
+
+      <section v-show="sideTab === 'notebook'" class="gm-notebook" role="tabpanel" aria-label="記事簿">
+        <p v-if="notebookLoading && !notebook" class="ge-hint" role="status">載入記事簿中…</p>
+        <p v-if="notebookError" class="ge-banner" role="alert">
+          {{ notebookError.message }}
+          <a v-if="notebookError.link" :href="notebookError.link.href">{{ notebookError.link.text }}</a>
+          <button v-if="notebookError.retry" type="button" class="gm-linkbtn" :disabled="notebookLoading" @click="reloadNotebook">重試</button>
+        </p>
+        <template v-if="notebook">
+          <p class="gm-notebook__usage">已用 <strong>{{ notebookUsage }}</strong> 字</p>
+          <p v-if="notebookReserveNote" class="ge-hint">{{ notebookReserveNote }}</p>
+          <p v-if="notebookFull" class="ge-banner gm-notebook__full" role="status">{{ notebookFullText }}</p>
+
+          <template v-if="!notebookEditing">
+            <p v-if="notebookStale" class="ge-hint" role="status">
+              記事簿剛剛有更新，畫面上的內容可能不是最新的。
+              <button type="button" class="gm-linkbtn" :disabled="notebookLoading" @click="reloadNotebook">重新載入</button>
+            </p>
+            <p v-if="notebookEmpty" class="ge-hint">{{ notebookEmptyText }}</p>
+            <div v-else class="gm-notebook__text">{{ notebook.text }}</div>
+            <p v-if="ended" class="ge-hint">這個存檔已經完結，記事簿只能閱讀。</p>
+            <p v-if="notebookCanEdit" class="gm-actions"><button type="button" class="ui-btn" @click="startNotebookEdit">編輯</button></p>
+          </template>
+
+          <template v-else>
+            <p v-if="notebookEditHint" class="ge-hint" role="status">{{ notebookEditHint }}</p>
+            <p v-if="notebookNotice" class="gm-notice" :class="'gm-notice--' + notebookNotice.tone" role="alert">{{ notebookNotice.text }}</p>
+            <template v-if="notebookConflict">
+              <span class="gm-eyebrow">後端最新的內容（供對照，你的編輯仍保留在下方）</span>
+              <div class="gm-notebook__text gm-notebook__text--compare">{{ notebookConflict.text }}</div>
+            </template>
+            <label class="gm-sr" for="gm-notebook-draft">編輯記事簿</label>
+            <textarea id="gm-notebook-draft" class="gw-input gm-notebook__input" rows="12" v-model="notebookDraft" :readonly="notebookLocked"
+                      autocomplete="off" spellcheck="false"></textarea>
+            <div class="gm-composer__bar">
+              <small class="gw-count" :class="{ 'gw-count--over': notebookOver }">{{ notebookDraftCount }}</small>
+              <span class="gm-composer__spacer"></span>
+              <button type="button" class="ui-btn" :disabled="notebookSaving" @click="cancelNotebookEdit">取消</button>
+              <button type="button" class="ui-btn ui-btn--primary" :disabled="!notebookCanSave" :aria-busy="notebookSaving ? 'true' : 'false'" @click="saveNotebook">{{ notebookSaving ? '儲存中…' : '儲存' }}</button>
+            </div>
+            <p v-if="notebookOverNote" class="gw-field-error" role="alert">{{ notebookOverNote }}</p>
+          </template>
         </template>
-      </dl>
-      <p v-if="world.summary" class="gm-world__summary">{{ world.summary }}</p>
-      <h3 class="gm-side__sub">進行中的目標</h3>
-      <ul v-if="world.goals.length" class="gm-list">
-        <li v-for="(goal, index) in world.goals" :key="index">{{ goal }}</li>
-      </ul>
-      <p v-else class="ge-hint">目前沒有進行中的目標。</p>
-      <h3 class="gm-side__sub">去過的地點</h3>
-      <ul v-if="world.places.length" class="gm-list">
-        <li v-for="(place, index) in world.places" :key="index">{{ place }}</li>
-      </ul>
-      <p v-else class="ge-hint">還沒有去過的地點。</p>
+      </section>
     </aside>
   </div>
 
@@ -191,6 +249,9 @@
   <ui-modal v-model="modal.abandon" title="放棄這個行動？" status-code="ABANDON_TURN" confirm-text="放棄" cancel-text="先留著" @confirm="confirmAbandon">
     <p>放棄之後，這個還沒有確認完成的行動就不再提示重送。伺服器若已經完成它，結果仍會出現在歷史裡，不會再次扣遊戲幣。</p>
   </ui-modal>
+  <ui-modal v-model="notebookDiscardOpen" title="放棄未儲存的變更？" status-code="DISCARD_NOTEBOOK" confirm-text="放棄變更" cancel-text="繼續編輯" @confirm="confirmNotebookDiscard">
+    <p>你對記事簿的修改還沒有儲存，離開編輯後這些修改就會消失。</p>
+  </ui-modal>
   <ui-toast-region></ui-toast-region>
 {% endraw %}
 </div>
@@ -207,6 +268,7 @@
   <script src="{{ url_for('static', filename='js/game/game-sync.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-wallet.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-notebook.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-session.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game.js') }}"></script>
 {% endblock %}

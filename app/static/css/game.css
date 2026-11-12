@@ -338,12 +338,16 @@ textarea.gw-input { resize: vertical; }
 .gm-notice--info { border-left-color: var(--color-border); color: var(--color-text-muted); }
 .gm-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
-/* ---- 側欄（世界狀態）------------------------------------------------------- */
+/* ---- 側欄（分頁：世界、記事簿）--------------------------------------------- */
 .gm-side { flex: 0 0 320px; min-width: 0; padding: 0.9rem 1rem 1.25rem; overflow-x: hidden; overflow-y: auto; background: var(--color-modal-surface); border-left: var(--border-hairline); }
 .gm-side--overlay { position: fixed; top: 0; right: 0; bottom: 0; z-index: 40; flex: none; width: min(320px, 86vw); box-shadow: -8px 0 24px rgba(15, 16, 18, 0.6); }
 .gm-scrim { position: fixed; top: 0; right: 0; bottom: 0; left: 0; z-index: 39; background: var(--color-modal-overlay); backdrop-filter: blur(8px); }
 .gm-side__head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-bottom: 0.6rem; }
-.gm-side__title { margin: 0; font-size: 1rem; font-weight: 500; letter-spacing: 0.08em; }
+.gm-tabs { display: flex; flex: 1 1 auto; gap: 0.25rem; min-width: 0; }
+.gm-tab { appearance: none; padding: 0.3rem 0.7rem; background: transparent; border: 0; border-bottom: 2px solid transparent; border-radius: 0; color: var(--color-text-muted); font: inherit; font-size: 0.95rem; letter-spacing: 0.08em; cursor: pointer; }
+.gm-tab:hover, .gm-tab:focus-visible { color: var(--color-accent); }
+.gm-tab--active { color: var(--color-text); border-bottom-color: var(--color-accent); }
+.gm-tab__badge { margin-left: 0.4rem; padding: 0 0.4rem; border: 1px solid var(--color-accent); border-radius: 999px; color: var(--color-accent); font-size: 0.72rem; letter-spacing: 0; }
 .gm-side__line { margin: 0 0 0.6rem; color: var(--color-text-muted); font-size: 0.9rem; overflow-wrap: anywhere; }
 .gm-side__sub { margin: 1rem 0 0.3rem; color: var(--color-text-muted); font-size: 0.82rem; font-weight: 400; letter-spacing: 0.1em; }
 .gm-world { margin: 0; }
@@ -351,6 +355,17 @@ textarea.gw-input { resize: vertical; }
 .gm-world dd { margin: 0.1rem 0 0; overflow-wrap: anywhere; }
 .gm-world__summary { margin: 0.8rem 0 0; font-size: 0.9rem; line-height: 1.8; overflow-wrap: anywhere; }
 .gm-list { margin: 0; padding-left: 1.1rem; font-size: 0.9rem; line-height: 1.8; overflow-wrap: anywhere; }
+
+/* 記事簿面板：全文與玩家的編輯都是純文字（pre-wrap 保留換行），長字不撐破側欄 */
+.gm-notebook { min-width: 0; }
+.gm-notebook__usage { margin: 0 0 0.4rem; color: var(--color-text-muted); font-size: 0.9rem; }
+.gm-notebook__usage strong { color: var(--color-text); font-weight: 500; }
+.gm-notebook__full { margin: 0.5rem 0; }
+.gm-notebook__text { max-height: 50vh; margin: 0.5rem 0; padding: 0.6rem 0.8rem; overflow-x: hidden; overflow-y: auto; background: var(--color-surface); border: var(--border-hairline); font-size: 0.92rem; line-height: 1.85; white-space: pre-wrap; overflow-wrap: anywhere; }
+.gm-notebook__text--compare { border-left: 2px solid var(--color-accent); }
+.gm-notebook__input { min-height: 14rem; max-height: 50vh; resize: vertical; }
+.gm-chipbtn { appearance: none; padding: 0.05rem 0.6rem; background: transparent; border: 1px solid var(--color-accent); border-radius: 999px; color: var(--color-accent); font: inherit; font-size: 0.8rem; cursor: pointer; }
+.gm-chipbtn:hover, .gm-chipbtn:focus-visible { background: var(--color-surface); }
 
 .gm-modal-text { margin: 0 0 0.6rem; line-height: 1.8; overflow-wrap: anywhere; }
 

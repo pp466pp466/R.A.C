@@ -3,6 +3,7 @@
  * 規則：分頁與提示的顯示完全由 Vue 的響應式狀態接管（v-show／v-if），不使用 Bootstrap 的 JavaScript 與 data-bs-*；
  * 所有來自作者與玩家的文字以 {{ }} 插值顯示（純文字），不使用 v-html。清單內容不在初始狀態裡，由兩個唯讀端點取得。
  * 無論成功或失敗，一律在 finally 恢復「載入更多」與重試；失敗時已載入的內容不消失。本頁只讀不寫：不碰遊戲幣、不寫任何瀏覽器儲存。
+ * 預設分頁：掛載時並行載入兩個清單的第一頁；有存檔（清單非空）而玩家還沒手動切換時，自動切到「我的存檔」，否則維持「選劇本」。
  * 「開始」只導向 `/game/start/<版本識別碼>`；帳號閘門非空時禁用（後端的閘門仍是唯一的把關者）。
  */
 (function () {
@@ -22,7 +23,9 @@
     setup: function () {
       var user = state.user || {};
       var gate = Vue.ref(typeof state.gate === 'string' && state.gate ? state.gate : null);
-      var tab = Vue.ref('scripts');
+      var tab = Vue.ref('scripts');                  // 預設「選劇本」；有存檔時掛載後會自動切到「我的存檔」（玩家沒有手動切換過的話）
+      var userPickedTab = false;                     // 非響應式：玩家手動切換過分頁
+      var leaving = false;                           // 非響應式：已經導向登入頁
       var restriction = Vue.ref(null);
       var contentMode = Vue.ref(null);
       var catalog = Vue.reactive(blankList('scripts'));
@@ -37,7 +40,10 @@
       function applyFailure(info) {
         var kind = UI.restrictionOf(info);
         if (kind) { restriction.value = kind; }
-        if (info.status === 401) { window.location.assign(Auth.loginUrlFor(PAGE_PATH)); }
+        if (info.status === 401 && !leaving) {                // 掛載時有兩個並行的請求，登入過期時兩個都會 401：只導向一次
+          leaving = true;
+          window.location.assign(Auth.loginUrlFor(PAGE_PATH));
+        }
       }
 
       /* 把一頁資料接在清單後面。以 id 去重（兩次請求之間若有新劇本上架，位移會錯開，同一筆可能出現兩次）；
@@ -76,10 +82,23 @@
       function loadCatalog() { return loadNext(catalog, Game.api.catalog); }
       function loadSaves() { return loadNext(saves, Game.api.sessions); }
 
+      /* 玩家自己切換分頁（點分頁按鈕）：記下「玩家選過了」，之後不會再被預設分頁的判斷自動切走。 */
       function selectTab(name) {
         if (name !== 'scripts' && name !== 'saves') { return; }
+        userPickedTab = true;
         tab.value = name;
         if (name === 'saves' && !saves.loaded && !saves.error && !saves.loading) { loadSaves(); }
+      }
+
+      /* 掛載：並行載入「選劇本」與「我的存檔」的第一頁，兩個請求互不阻擋。預設分頁依玩家有沒有存檔決定——存檔載入完成、非空，而且玩家還沒有手動切換過，
+         就切到「我的存檔」；沒有存檔、存檔請求失敗（「我的存檔」分頁自己顯示錯誤與重試）、或玩家已經選過分頁，都維持現狀。 */
+      function mountPage() {
+        var catalogLoading = loadCatalog();
+        var savesLoading = loadSaves().then(function (loaded) {
+          if (loaded && saves.items.length > 0 && !userPickedTab) { tab.value = 'saves'; }
+          return loaded;
+        });
+        return Promise.all([catalogLoading, savesLoading]);
       }
 
       /* 「開始」：閘門非空時不導向（按鈕本身也是禁用的）。回傳是否導向，供測試使用。 */
@@ -89,7 +108,7 @@
         return true;
       }
 
-      Vue.onMounted(loadCatalog);
+      Vue.onMounted(mountPage);
 
       return {
         user: user, gate: gate, tab: tab, restriction: restriction, contentMode: contentMode, catalog: catalog, saves: saves,

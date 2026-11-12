@@ -252,6 +252,17 @@ test('the too-long notice has only integers in it, and no number means no number
   }
 });
 
+test('the reserve note says the reserve is only for the AI, and only exists when there is a reserve', () => {
+  const note = Game.notebookReserveNote(500);
+  assert.ok(note.includes('預備空間 500 字') && note.includes('只供 AI 寫入') && note.includes('你自己編輯時不能使用'));
+  for (const junk of [0, -1, 2.5, '500', undefined, null, NaN]) { assert.equal(Game.notebookReserveNote(junk), '', JSON.stringify(junk)); }
+});
+
+test('the over-capacity note says how many characters are over and that the text must be cut to the capacity; no count means no note', () => {
+  assert.equal(Game.notebookOverNote(240), '超出容量 240 字，須刪到容量以內才能儲存。');
+  for (const junk of [0, -1, 2.5, '240', undefined, null, NaN]) { assert.equal(Game.notebookOverNote(junk), '', JSON.stringify(junk)); }
+});
+
 test('the check-in overflow notice shows what would be credited and what would be lost, as integers only', () => {
   const notice = Game.checkinOverflowNotice(120, 80);
   assert.ok(notice.includes('120') && notice.includes('80') && notice.includes('作廢') && notice.includes('要繼續領取嗎'));

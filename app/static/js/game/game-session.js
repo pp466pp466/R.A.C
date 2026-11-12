@@ -20,6 +20,8 @@
  * - **被擋與中斷的回合不保存任何部分文字**；前端中止不代表後端中止，所以每個串流結果之後都補齊一次，在途回合是否還在以後端為準。
  * - 在途回合：`done` 或確認後端已有完整回合就移除；開始前被拒（餘額不足、驗證失敗…）也移除（什麼都沒送出）；中斷、逾時、取消則保留，補齊後仍沒有完整回合才提供「重送／放棄」，
  *   **從不自動重送**（每一輪都要消耗遊戲幣）。
+ * - 快照裡的**記事簿摘要**（版本、字數、容量、是否已滿；沒有全文）放在 `notebookSummary`（每次讀到快照就更新，壞掉的摘要不改動），給 game-notebook.js 判斷遊戲頁上的「已滿」提示；
+ *   它只在記憶體，不進本機暫存（game-store.js 的白名單不收），記事簿全文不經過這個檔案。
  * - 這裡**不記錄、不輸出任何內容**（行動、劇情、第 0 幕都是玩家文字）；錯誤訊息只來自 game-state.js／game-labels.js 的固定文字。
  */
 (function (root, factory) {
@@ -100,6 +102,7 @@
     var history = ref([]);                 // 後端的回合（顯示用；進行中的回合沒有文字）
     var inflight = ref(null);              // { client_msg_id, action, created_at }｜null
     var world = ref(Game.worldView(null));
+    var notebookSummary = ref(null);       // 快照裡的記事簿摘要 { version, length, capacity, full }｜null（沒有全文；遊戲頁上的「已滿」提示用它，不寫入本機暫存）
     var liveTurn = ref(null);              // 目前串流中的回合：{ key, clientMsgId, action, story, streaming, seq }
     var turnNotes = reactive({});          // client_msg_id -> 轉場文字（顯示在該回合的行動與劇情之間）
     var draft = ref('');
@@ -234,6 +237,8 @@
       if (typeof snapshot.content_tier === 'string') { contentTier.value = snapshot.content_tier; }
       ended.value = snapshot.ended === true;
       world.value = Game.worldView(snapshot.world);
+      var brief = Game.notebookSummary(snapshot.notebook);
+      if (brief) { notebookSummary.value = brief; }
       setOpening(snapshot.opening);
     }
 
@@ -729,7 +734,7 @@
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,
       draft: draft, actionError: actionError, draftCount: draftCount, draftOver: draftOver, actionMax: actionMax, sending: sending,
       sendDisabled: sendDisabled, inputDisabled: inputDisabled, blockerText: blockerText,
-      world: world, locationLine: locationLine, inflight: inflight,
+      world: world, locationLine: locationLine, inflight: inflight, notebookSummary: notebookSummary,
       load: load, retryLoad: retryLoad, retryOpening: retryOpening, showEarlier: showEarlier, jumpToLatest: jumpToLatest, onScroll: onScroll,
       send: send, cancel: cancel, dismissNotice: dismissNotice, resendInflight: resendInflight, abandonInflight: abandonInflight,
       setOnline: setOnline, dispose: dispose

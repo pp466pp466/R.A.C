@@ -739,6 +739,50 @@ test('notebookView keeps the known fields and drops the rest; a broken record is
   for (const junk of [null, undefined, 'x', 5, [], {}, { text: 5, version: 1 }, { text: 'x', version: -1 }, { text: 'x', version: '1' }]) { assert.equal(State.notebookView(junk), null, JSON.stringify(junk)); }
 });
 
+test('notebookSummary keeps the four fields of the snapshot summary; a missing or mistyped field makes it null (nothing is shown unless certain)', () => {
+  assert.deepEqual(State.notebookSummary({ version: 3, length: 2240, capacity: 2000, full: true, text: MARKER, reserve: 500 }), { version: 3, length: 2240, capacity: 2000, full: true });
+  assert.equal(State.notebookSummary({ version: 0, length: 0, capacity: 2000 }).full, false);
+  assert.equal(State.notebookSummary({ version: 1, length: 1, capacity: 2000, full: 'yes' }).full, false);
+  for (const junk of [null, undefined, 'x', 5, [], {}, { version: 1 }, { version: 1, length: 5 }, { version: '1', length: 5, capacity: 2000 },
+    { version: 1, length: -1, capacity: 2000 }, { version: 1, length: 5, capacity: 1.5 }]) {
+    assert.equal(State.notebookSummary(junk), null, JSON.stringify(junk));
+  }
+});
+
+test('notebookIsFull means longer than the capacity: the boundary is exact, and an unknown capacity falls back to the full flag', () => {
+  assert.equal(State.notebookIsFull({ length: 2000, capacity: 2000, full: false }), false);
+  assert.equal(State.notebookIsFull({ length: 2001, capacity: 2000, full: false }), true);            // 以數字為準
+  assert.equal(State.notebookIsFull({ length: 2240, capacity: 5000, full: true }), false);
+  assert.equal(State.notebookIsFull({ length: 0, capacity: 2000, full: true }), false);
+  assert.equal(State.notebookIsFull({ length: 10, capacity: 0, full: true }), true);                 // 容量不明：退回後端旗標
+  assert.equal(State.notebookIsFull({ length: 10, capacity: 0, full: false }), false);
+  for (const junk of [null, undefined, 'x', 5, [], {}]) { assert.equal(State.notebookIsFull(junk), false, JSON.stringify(junk)); }
+});
+
+test('notebookCurrent picks the newer version of the panel view and the snapshot summary; a tie goes to the view', () => {
+  const view = { text: 'a', version: 4, length: 1, capacity: 2000, reserve: 500, full: false };
+  const summary = { version: 5, length: 9, capacity: 2000, full: false };
+  assert.equal(State.notebookCurrent(view, summary), summary);
+  assert.equal(State.notebookCurrent(view, { version: 4, length: 9, capacity: 2000, full: false }), view);
+  assert.equal(State.notebookCurrent(view, { version: 3, length: 9, capacity: 2000, full: false }), view);
+  assert.equal(State.notebookCurrent(view, null), view);
+  assert.equal(State.notebookCurrent(null, summary), summary);
+  assert.equal(State.notebookCurrent(null, null), null);
+  assert.equal(State.notebookCurrent('x', 5), null);
+});
+
+test('notebookEditState counts like the backend and flags only what is over the capacity (no reserve for the player)', () => {
+  assert.deepEqual(State.notebookEditState('字'.repeat(2000), 2000), { length: 2000, over: false, overBy: 0 });
+  assert.deepEqual(State.notebookEditState('字'.repeat(2001), 2000), { length: 2001, over: true, overBy: 1 });
+  assert.deepEqual(State.notebookEditState('字'.repeat(2400), 2000), { length: 2400, over: true, overBy: 400 });
+  assert.deepEqual(State.notebookEditState('é😀', 2000), { length: 2, over: false, overBy: 0 });      // NFC、代理對算一個
+  assert.deepEqual(State.notebookEditState('', 2000), { length: 0, over: false, overBy: 0 });
+  for (const capacity of [0, undefined, null, -1, 1.5, '2000', NaN]) {
+    assert.deepEqual(State.notebookEditState('字'.repeat(50), capacity), { length: 50, over: false, overBy: 0 }, String(capacity));   // 容量不明：不在前端判斷，由伺服器為準
+  }
+  assert.equal(State.notebookEditState(undefined, 2000).length, 0);
+});
+
 // ---- 送出行動 ----------------------------------------------------------------------------------------
 
 const OPEN = { gate: '', ended: false, offline: false, openingReady: true, inflight: null, busy: false };
