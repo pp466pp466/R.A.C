@@ -1,6 +1,6 @@
 # 路線圖與待決定事項
 
-> 狀態：持續更新 ｜ 最後更新：2026-11-11 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
+> 狀態：持續更新 ｜ 最後更新：2026-11-12 ｜ 對應 change：全部（每次封存後更新） ｜ 規劃依據：[report.md](report.md) 第 5.2 節、[RPG.md](RPG.md)
 
 本文件說明各個 change 的順序、相依與目前狀態，以及尚未決定的事項。細節與理由在 report.md 與 RPG.md；這裡只維護「現在在哪裡、下一步是什麼」。
 
@@ -33,7 +33,7 @@ flowchart LR
     PP["player-personas<br/>對話人設（可重用的主角模板）"]:::plan
     SP["story-preference<br/>故事偏好（用戶設定）與劇本 audience（已封存 2026-11-11）"]:::done
     RC3A["RC-3a rpg-entry-ui<br/>選劇本與存檔清單、序章、聯繫、創角畫面（已封存 2026-11-11）"]:::done
-    RC3["RC-3b rpg-game-ui<br/>/game 頁面、串流、記事簿面板"]:::active
+    RC3["RC-3b rpg-game-ui<br/>/game 頁面、串流、記事簿面板（已實作 2026-11-12，待驗收與封存）"]:::active
     OP["onboarding-polish<br/>條款、使用守則、分步精靈（尚未排程）"]:::plan
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
     RC5["RC-5 rpg-persona-library<br/>性格原型庫"]:::plan
@@ -100,7 +100,8 @@ flowchart LR
 | rpg-turn-engine（RC-2a）、rpg-notebook（RC-2b）、rpg-turn-revision（RC-2c） | **RC-2a 已封存**（2026-11-10，`openspec/changes/archive/2026-11-10-rpg-turn-engine/`：31／31 項，批次 ① 至 ⑥ 完成，16 份 delta 同步到主規格：新增 7 個能力、更新 9 個）；**RC-2b 已封存**（2026-11-10，`openspec/changes/archive/2026-11-10-rpg-notebook/`：21／21 項，含假模型 HTTP 驗收、容器驗收〔gthread 時序成立〕、真實模型驗證與破壞驗證，結果記在 README「驗收紀錄（rpg-notebook）」；5 份 delta 同步到主規格：新增 2 個能力 `rpg-notebook`、`rpg-notebook-capture`，更新 3 個 `llm-structured-calls`、`rpg-turn-stream`、`service-observability`；`openspec validate --specs` 72 項通過；沒有遷移）；2c 已探索、尚未立案 | — | RC-2 探索後切為三段，順序為 AGENTS.md 修訂（RA-16 至 RA-20，使用者核可後單獨提交）→ W1 → 2a → 2b、2c。2a：串流轉接器（推理設定、tick 輪詢）、`GameService`、上下文組裝、NPC 卡與階段驗證、狀態呼叫、里程碑與目標、第 0 幕、輸出審查（逐句緩衝、規則層）、被擋回合、SSE 端點、預扣遊戲幣；2b：記事簿；2c：玩家重新生成與編輯最後一輪輸入（附理由回饋、回合前快照）。第一次對真實 RPG 模型的探測：推理型，須關閉推理。見 [RPG.md](RPG.md) 第 7 章、report.md U-29 至 U-34 |
 | story-preference | **已實作、驗收並封存**（2026-11-11 封存為 `2026-11-11-story-preference`，六份 delta spec 已同步到主 spec，新增主 spec `story-preference`；任務 20／20 項完成，4.3 瀏覽器實測由使用者親自操作、回報五項都正常；立案 `a98b6a5`，實作 `6e309da`、`a675454`、`f6b6d05` 與 D 批；遷移 `0017`，本機 `project` 已於 2026-11-11 備份後升級到 `0017`，Azure 仍在 `0016`，新程式上線前須由使用者備份後升級） | 2026-11-11 | 用戶偏好（全讀者、男頻、女頻）與 `/account` 設定、劇本規格 `audience`（只有男頻、女頻進標準化內容，既有內容的 `content_hash` 逐位元不變）、作者工作坊的「讀者頻道」單選、`list_published` 的 `preference` 排序（RC-3a `rpg-entry-ui` 的 `GET /api/sessions/catalog` 已接上，玩家第一次看得到排序的效果）、匯出；不影響內容分級與可玩劇本。實作時的決定見 [RPG.md](RPG.md) 7.17.5 |
 | rpg-entry-ui（RC-3a） | **已實作、完成使用者的瀏覽器實測（任務 5.1）並封存**（2026-11-11 封存為 `2026-11-11-rpg-entry-ui`，四份 delta spec 已同步到主 spec：修改 `auth-pages` 的「登入後的預設頁面與首頁導向」（預設頁面由 `/cs` 改 `/game`，新增 2 個情境），新增主規格 `rpg-entry-pages`、`rpg-entry-api`、`rpg-creation-wizard`；立案 `6387770`，實作 A 至 E 批 `92a0c60`、`8adf187`、`67d0b59`、`4bbef64`、`8a691d8`，F 批為破壞驗證、全套測試與文件；任務 20／20；沒有遷移、沒有新資料表） | 2026-11-11 | 兩個唯讀端點 `GET /api/sessions/catalog`（可玩的上架劇本，依生效的內容模式篩選、依故事偏好排序；**這是 `story-preference` 的排序第一次有玩家端點使用**）與 `GET /api/sessions`（我的存檔，含已完成輪數）、`GameEntryService`、頁面 `/game`（選劇本與我的存檔）、`/game/start/<版本>`（序章、聯繫、創角的開存檔精靈，含 AI 生成預覽與自創）、`/game/<存檔>`（伺服器渲染的空殼）；**`DEFAULT_AFTER_LOGIN` 改為 `/game`**，各頁頁首加「冒險」連結；創角內容只在記憶體、不寫任何瀏覽器儲存。使用者已在 Chrome 實測一輪（AI 生成預覽因驗收環境的假模型不支援而未驗證）。實作時的決定與 RC-3b 接手的項目見 [RPG.md](RPG.md) 7.17.6 |
-| rpg-game-ui（RC-3b）、onboarding-polish | **已探索（2026-11-10），尚未立案**；順序 `story-preference` → RC-3a → RC-3b，**RC-3 排在 RC-2c 之前** | — | `rpg-game-ui`：把 `/game/<存檔>` 的空殼換成遊戲主畫面（第 0 幕、串流與打字機、歷史補齊、餘額、記事簿面板）；`onboarding-polish`（尚未排程）：條款全部同意、使用守則 Modal、`/age` 分步精靈、預留故事偏好步驟。見 [RPG.md](RPG.md) 7.17、7.17.6 |
+| rpg-game-ui（RC-3b） | **已實作，尚未封存**（2026-11-12；立案 `3a1a877`，實作第 1 至 4 批 `c8c8862`、`83eb8a9`、`6de5a3d`、`2472085`，第 5 批為正式的十項破壞驗證、全套測試與文件；瀏覽器實測〔任務 6.1〕由使用者親自操作，結果見 README「驗收紀錄（rpg-game-ui 第 5 批）」；封存須等使用者驗收；沒有遷移、沒有新資料表、沒有新端點） | 2026-11-12 | 把 `/game/<存檔>` 的空殼換成遊戲主畫面：第 0 幕、回合串流（原生 `fetch` 加 `ReadableStream`，`done` 為結束標記，閒置 45 秒、總逾時 180 秒）與打字機、被擋轉場與自動重生、歷史以 `since_seq` 補齊、IndexedDB 閱讀快取與在途回合（重送、放棄，不自動重送）、餘額與 `insufficient_coins` Modal、最小的每日簽到入口、側欄（「世界」「記事簿」，預設收合、不記住）、記事簿面板（檢視、用量、已滿提示、編輯與版本衝突）、`/game` 有存檔時預設「我的存檔」。實作時的決定與 RC-2c 的銜接見 [RPG.md](RPG.md) 7.17.7 |
+| onboarding-polish | **已探索（2026-11-10），尚未立案、尚未排程** | — | 條款全部同意、使用守則 Modal、`/age` 分步精靈、預留故事偏好步驟。見 [RPG.md](RPG.md) 7.17.3 |
 | player-hub、player-personas、故事偏好 | 已探索（2026-11-05），**尚未立案**；故事偏好已改由 `story-preference` 承接（2026-11-10 立案，2026-11-11 已實作並封存，見上方） | — | `player-hub`（W1 之後）：錢包頁、記錄頁、個人頁、底部導覽、語言列（只有繁體中文）、聊天顯示（模型選擇目前只有一個）；`player-personas`（依賴 RC-9）：可重用的主角模板，free 3、plus 5、vip 10，可標記預設人設；主角新增「來歷」（穿越者）；故事偏好（男頻、女頻、全讀者）只影響目錄排序，劇本規格新增 `audience`，隨 RC-8 的目錄。見 [RPG.md](RPG.md) 7.10、report.md U-33 |
 | RPG 系列（RC-1 至 RC-6） | 規劃中 | — | 見 [RPG.md](RPG.md)；沿用客服的模型呼叫層、`parse_llm_json`、`LlmService` 與帳本，另加串流。**2026-10-30 使用者決定 RPG 以「記事簿」取代對話摘要**（每個存檔一本，free 2000、plus 5000、vip 10000 字，每 10 輪抓重點，滿了停止更新；RPG.md R-17，已寫入 AGENTS.md 第 6 節），影響 RC-1（欄位）、RC-2（`NotebookService`）、RC-3（記事簿面板）。RC-4 另要把 C-4d 的錯誤率與延遲告警擴充到 RPG 的呼叫；RU-5、RU-6、RU-9 至 RU-12 已依建議寫成預設（RPG.md），RU-4 仍待預算 |
 

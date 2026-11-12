@@ -472,6 +472,8 @@ def test_readme_rpg_game_screen_section_names_the_real_files_the_numbers_and_wha
     assert "全部至少一個測試失敗" in section                                           # 快速破壞的結果如實記載
     assert "驗收紀錄（rpg-game-ui 第 4 批" in section and "與任務清單或規格不同之處" in section        # 第 4 批的偏離如實記載
     assert "等價改動" in section and "長度大於容量" in section and "既有案例無須修改即通過" in section
+    assert "驗收紀錄（rpg-game-ui 第 5 批" in section and "十項都至少一個測試失敗" in section             # 任務 6.2 的正式破壞驗證如實記載
+    assert "9989 項通過" in section and "922 項通過" in section and "觀察結果由使用者回報後再補進這一節" in section   # 任務 6.3 的筆數；6.1 沒做就明說
     # 登入後的入口一節不能再說存檔頁是空殼而沒有指向取代它的這一節
     entry = readme_section("RPG 入口與開存檔畫面（rpg-entry-ui）")
     assert "RPG 遊戲主畫面（rpg-game-ui）" in entry
