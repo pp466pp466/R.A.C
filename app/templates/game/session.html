@@ -19,9 +19,15 @@
      notebookEmpty、notebookUsage（「1800 / 2000」）、notebookReserveNote、notebookFull（入口與面板共用）、notebookFullText、notebookEmptyText、notebookStale、
      notebookEditing、notebookDraft、notebookDraftCount、notebookOver、notebookOverNote、notebookEditHint、notebookSaveHint（儲存鈕因為還沒修改而灰色時的說明）、notebookCanEdit、notebookCanSave、notebookLocked、
      notebookSaving、notebookNotice（{ tone, text }｜null）、notebookConflict（後端最新的記事簿｜null）、notebookDiscardOpen（「放棄未儲存的變更」Modal）。
+   - 重新生成與編輯最後一輪（game-revision.js，rpg-turn-revision）：revisionBusy（修訂串流進行中）、reviseKey（最後一輪時間軸項目的 key，'' 表示不顯示按鈕）、
+     reviseDisabled、reviseHint（按鈕為什麼不能按）、regenerateNote（「免費還剩 N 次」或幣價）、editNote（幣價）；重新生成 Modal：regenerateOpen、regenerateOptions
+     （{ value, label } 的分類清單）、regenerateCategory、regenerateReason、regenerateRule（字數規則）、regenerateCount、regenerateError、regenerateCanSubmit、
+     regenerateCostLine；編輯 Modal：editOpen、editDraft、editCount、editHint、editError、editCanSubmit、editInsufficient（餘額不足）、editCostLine。
+     理由字數範圍與分類來自初始狀態的 revision_limits，樣板不寫死任何數字；理由與分類只存在 Modal 的記憶體狀態，樣板以雙大括號顯示、不進任何儲存。
    - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、resendInflight、askAbandon、confirmAbandon、
      leaveClick、confirmLeave、toggleSidebar、closeSidebar、selectSideTab、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal、
-     openNotebook（頂列「記事簿已滿」入口）、reloadNotebook、startNotebookEdit、saveNotebook、cancelNotebookEdit、confirmNotebookDiscard。 #}
+     openNotebook（頂列「記事簿已滿」入口）、reloadNotebook、startNotebookEdit、saveNotebook、cancelNotebookEdit、confirmNotebookDiscard、
+     openRegenerate、openEdit、closeRegenerate、closeEdit、selectRegenerateCategory、submitRegenerate、submitEdit、cancelRevision。 #}
 {% block title %}{{ save.title or '冒險' }}{% endblock %}
 {% block head_assets %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
@@ -97,6 +103,16 @@
                 <p v-for="(line, index) in item.notes" :key="index" class="gm-note gm-note--transition">{{ line }}</p>
                 <div v-if="item.story" class="gm-story" :class="{ 'gm-story--streaming': item.streaming }">{{ item.story }}</div>
                 <p v-else-if="item.streaming" class="gm-wait" role="status">故事正在展開…</p>
+                <div v-if="item.key === reviseKey" class="gm-revise">
+                  <p class="gm-revise__bar">
+                    <button type="button" class="ui-btn gm-revise__btn" :disabled="reviseDisabled" @click="openRegenerate">重新生成</button>
+                    <small v-if="regenerateNote" class="gm-revise__note">{{ regenerateNote }}</small>
+                    <button type="button" class="ui-btn gm-revise__btn" :disabled="reviseDisabled" @click="openEdit">編輯</button>
+                    <small v-if="editNote" class="gm-revise__note">{{ editNote }}</small>
+                    <button v-if="revisionBusy" type="button" class="ui-btn gm-revise__btn" @click="cancelRevision">取消</button>
+                  </p>
+                  <p v-if="reviseHint" class="ge-hint gm-revise__hint" role="status">{{ reviseHint }}</p>
+                </div>
               </template>
 
               <p v-else-if="item.kind === 'note'" class="gm-note" :class="'gm-note--' + item.tone">{{ item.text }}</p>
@@ -229,6 +245,43 @@
     </aside>
   </div>
 
+  <ui-modal v-model="regenerateOpen" title="重新生成這一輪" status-code="REGENERATE_TURN" :show-cancel="false">
+    <p class="gm-modal-text">AI 會依同一個行動重新寫這一輪的劇情，新的內容通過檢查才會取代目前的。請選擇原因並簡短說明；理由會提供營運團隊檢視，不會送給 AI。</p>
+    <p class="gm-modal-text" role="status">{{ regenerateCostLine }}</p>
+    <fieldset class="gm-revise__choices">
+      <legend class="gm-eyebrow">原因分類</legend>
+      <label v-for="option in regenerateOptions" :key="option.value" class="gm-revise__choice" :class="{ 'gm-revise__choice--on': regenerateCategory === option.value }">
+        <input type="radio" name="gm-regenerate-category" :value="option.value" :checked="regenerateCategory === option.value" @change="selectRegenerateCategory(option.value)">
+        <span>{{ option.label }}</span>
+      </label>
+    </fieldset>
+    <label class="gm-eyebrow" for="gm-regenerate-reason">理由</label>
+    <input id="gm-regenerate-reason" type="text" class="gw-input" v-model="regenerateReason" autocomplete="off" placeholder="簡短說明原因">
+    <div class="gm-revise__row">
+      <small class="ge-hint">{{ regenerateRule }}</small>
+      <small class="gw-count">{{ regenerateCount }}</small>
+    </div>
+    <p v-if="regenerateError" class="gw-field-error" role="alert">{{ regenerateError }}</p>
+    <template #actions>
+      <button type="button" class="ui-btn" @click="closeRegenerate">取消</button>
+      <button type="button" class="ui-btn ui-btn--primary" :disabled="!regenerateCanSubmit" @click="submitRegenerate">重新生成</button>
+    </template>
+  </ui-modal>
+  <ui-modal v-model="editOpen" title="編輯這一輪的行動" status-code="EDIT_TURN" :show-cancel="false">
+    <p class="gm-modal-text">修改你這一輪的行動，AI 會依新的行動重新寫這一輪的劇情，新的內容通過檢查才會取代目前的。</p>
+    <p class="gm-modal-text">編輯會再次消耗遊戲幣；原本那輪已扣的幣不退，這一輪的免費重新生成次數會歸零。</p>
+    <p class="gm-modal-text" role="status">{{ editCostLine }}</p>
+    <label class="gm-sr" for="gm-edit-draft">編輯行動</label>
+    <textarea id="gm-edit-draft" class="gw-input gm-input" rows="4" v-model="editDraft" autocomplete="off"></textarea>
+    <div class="gm-revise__row"><small class="gw-count">{{ editCount }}</small></div>
+    <p v-if="editError" class="gw-field-error" role="alert">{{ editError }}</p>
+    <p v-else-if="editHint" class="ge-hint" role="status">{{ editHint }}</p>
+    <template #actions>
+      <button type="button" class="ui-btn" @click="closeEdit">取消</button>
+      <button v-if="editInsufficient" type="button" class="ui-btn" :disabled="checkinBusy" @click="claimCheckin">每日簽到</button>
+      <button type="button" class="ui-btn ui-btn--primary" :disabled="!editCanSubmit" @click="submitEdit">送出編輯</button>
+    </template>
+  </ui-modal>
   <ui-modal v-model="coinModalOpen" title="遊戲幣" status-code="COINS" :show-cancel="false">
     <p class="gm-modal-text">{{ coinModalText }}</p>
     <p v-if="checkinMessage" class="gm-modal-text" role="status">{{ checkinMessage }}</p>
@@ -270,6 +323,7 @@
   <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-wallet.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-notebook.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-revision.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-session.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game.js') }}"></script>
 {% endblock %}

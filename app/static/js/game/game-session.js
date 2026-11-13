@@ -103,6 +103,9 @@
     var inflight = ref(null);              // { client_msg_id, action, created_at }｜null
     var world = ref(Game.worldView(null));
     var notebookSummary = ref(null);       // 快照裡的記事簿摘要 { version, length, capacity, full }｜null（沒有全文；遊戲頁上的「已滿」提示用它，不寫入本機暫存）
+    var lastTurn = ref(null);              // 快照裡最後一輪的修訂資訊（Game.lastTurnView）｜null：不知道（按鈕不顯示）；新的一輪完成後先清成 null，等快照重讀
+    var revising = ref(false);             // 重新生成或編輯最後一輪的串流進行中（由 game-revision.js 設定）：期間不得送出新行動
+    var revisionOverlay = ref(null);       // 修訂串流中最後一輪的氣泡：{ clientMsgId, action（編輯時為新行動，否則 null）, story, streaming, notes }｜null；舊內容仍在 history 裡，沒有被改動
     var liveTurn = ref(null);              // 目前串流中的回合：{ key, clientMsgId, action, story, streaming, seq }
     var turnNotes = reactive({});          // client_msg_id -> 轉場文字（顯示在該回合的行動與劇情之間）
     var draft = ref('');
@@ -157,6 +160,15 @@
     /* 串流中的氣泡接在最後面；與補齊後的完整回合同一個 key，所以打字機還在跑時它蓋過後端的版本，結束後就地交給後端的版本。 */
     var timeline = computed(function () {
       var items = baseItems.value;
+      var overlay = revisionOverlay.value;
+      if (overlay) {                       // 修訂中：最後一輪的氣泡顯示新文字（編輯時連行動也是新的）；舊內容仍在 history，失敗時拿掉這一層就還原
+        items = items.map(function (item) {
+          if (item.kind !== 'turn' || item.clientMsgId !== overlay.clientMsgId) { return item; }
+          return assign(assign({}, item), {
+            action: overlay.action !== null ? overlay.action : item.action, story: overlay.story, streaming: overlay.streaming, notes: overlay.notes.slice()
+          });
+        });
+      }
       var current = liveTurn.value;
       if (!current) { return items; }
       var out = items.filter(function (item) { return item.key !== current.key; });
@@ -178,7 +190,7 @@
       if (phase.value !== 'ready' || !historyReady.value) { return 'loading'; }
       return Game.sendBlocker({
         gate: gate.value, ended: ended.value, offline: offline.value, openingReady: openingReady.value,
-        inflight: sending.value ? null : inflight.value, busy: sending.value
+        inflight: sending.value ? null : inflight.value, busy: sending.value || revising.value
       });
     });
     var sendDisabled = computed(function () { return blockerReason.value !== ''; });
@@ -239,6 +251,7 @@
       world.value = Game.worldView(snapshot.world);
       var brief = Game.notebookSummary(snapshot.notebook);
       if (brief) { notebookSummary.value = brief; }
+      lastTurn.value = Game.lastTurnView(snapshot.last_turn);                       // 沒有或壞掉的資料就是 null：不顯示重新生成與編輯
       setOpening(snapshot.opening);
     }
 
@@ -336,10 +349,19 @@
     }
 
     /* 載入完成後的歷史補齊與在途回合的確認（不依賴第 0 幕）。 */
+    /* 重新整理後遇到修訂（重新生成、編輯）的在途紀錄：換上最新的回合；沒有完成時說明「原本的回應已保留」。成功時什麼都不說，也不重送。 */
+    function onRevisionResolved(info) {
+      if (!isObject(info)) { return; }
+      if (Array.isArray(info.turns)) { history.value = Game.mergeTurns(history.value, info.turns); }
+      if (info.outcome === 'incomplete') { notice.value = { tone: 'info', text: Game.revisionText('incomplete'), link: null }; }
+    }
+
+    /* 載入時從「最後一輪的前一個序號」重讀（快照已先讀到 `last_turn`）：其他裝置的修訂與過期的快取內容被後端的內容覆寫。 */
     function loadHistory(signal) {
-      return sync.catchUp(sessionId, { signal: signal }).then(function (result) {
+      var from = lastTurn.value ? Math.max(0, lastTurn.value.seq - 1) : undefined;
+      return sync.catchUp(sessionId, { signal: signal, fromSeq: from }).then(function (result) {
         applyCatchUp(result);
-        return sync.resolveInflight(sessionId, { signal: signal, result: result }).then(function (record) { inflight.value = record; });
+        return sync.resolveInflight(sessionId, { signal: signal, result: result, onRevision: onRevisionResolved }).then(function (record) { inflight.value = record; });
       }).then(function () { historyReady.value = true; });
     }
 
@@ -576,6 +598,7 @@
           if (effect.ended) { ended.value = true; }
           if (liveTurn.value) { liveTurn.value.streaming = false; }
           if (effect.status === 'complete' || effect.status === 'ended') {
+            lastTurn.value = null;                                                                 // 最後一輪換人了：舊的修訂資訊作廢，等快照重讀才顯示按鈕
             commitLocal(context, effect);
             if (draft.value.replace(/^\s+|\s+$/g, '') === run.action) { draft.value = ''; }      // 成功才清空；被擋時保留，玩家可以修改後再試
           } else {
@@ -677,7 +700,7 @@
     }
 
     function runTurn(options) {
-      if (sending.value) { return Promise.resolve(false); }                                     // 重複點擊：只有一個請求
+      if (sending.value || revising.value) { return Promise.resolve(false); }                   // 重複點擊：只有一個請求；修訂進行中也不得送出新行動
       sending.value = true;
       notice.value = null;
       actionError.value = '';
@@ -701,7 +724,7 @@
     /* 在途回合的「重送」：用原本的 client_msg_id（後端冪等：已完成就重播、不重複扣幣）。 */
     function resendInflight() {
       var record = inflight.value;
-      if (!record || sending.value || offline.value || ended.value || gate.value || !openingReady.value) { return Promise.resolve(false); }
+      if (!record || sending.value || revising.value || offline.value || ended.value || gate.value || !openingReady.value) { return Promise.resolve(false); }
       return runTurn({ clientMsgId: record.client_msg_id, action: record.action, resend: true });
     }
 
@@ -728,7 +751,24 @@
       clearPoll();
     }
 
+    /* 修訂結束之後（不論結果）：從最後一輪的前一個序號起重讀回合並覆寫快取，再重讀快照（世界狀態、是否完結、`last_turn`）。永不拋出；
+       回傳快照有沒有讀到（讀不到時 `lastTurn` 仍是舊的，呼叫端不可據此判斷後端的 revision）。 */
+    function refreshAfterRevision(fromSeq) {
+      return sync.catchUp(sessionId, { fromSeq: fromSeq }).then(function (found) {
+        applyCatchUp(found);
+        return refreshSnapshot();
+      }).then(function (snapshot) { return !!snapshot; }, function () { return false; });
+    }
+
+    /* 交給 game-revision.js 的把手：它自己管 Modal 與串流流程，這裡只開放它需要讀寫的狀態與幾個既有的動作（不含任何玩家文字的處理）。 */
+    var revisionHost = {
+      sessionId: sessionId, lastTurn: lastTurn, history: history, phase: phase, historyReady: historyReady, openingReady: openingReady, ended: ended, offline: offline,
+      gate: gate, sending: sending, inflight: inflight, revising: revising, overlay: revisionOverlay, notice: notice,
+      applyEffects: applyEffects, showFailure: showFailure, refresh: refreshAfterRevision, notifyContent: notifyContent, dismissNotice: dismissNotice
+    };
+
     return {
+      revisionHost: revisionHost, lastTurn: lastTurn, revising: revising,
       phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, tierLabel: tierLabel, modeNote: modeNote,
       gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, openingNotice: openingNotice,
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,

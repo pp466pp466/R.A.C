@@ -5,7 +5,8 @@
  * - **側欄**（分頁「世界」「記事簿」）：桌面與手機**都預設收合**，頂列的開關按鈕切換。桌面（寬度 992px 以上）開啟時推擠本文區（`push`），手機與平板（未滿 992px）以覆蓋方式開啟並附遮罩（`overlay`），
  *   Esc 與遮罩都能關閉。開關與分頁由 Vue 的響應式變數接管，**不記住**（不寫任何瀏覽器儲存，每次回到收合與「世界」）；沒有 Bootstrap 的 JavaScript，也沒有 data-bs-*。
  *   記事簿的全文只在側欄於「記事簿」分頁開啟（或切到該分頁）時才讀，載入頁面時不請求。
- * - 自製 Modal 的狀態（離開確認、放棄在途回合）與 Toast；遊戲幣 Modal 的狀態在 game-wallet.js，記事簿「放棄未儲存變更」的確認在 game-notebook.js。
+ * - 自製 Modal 的狀態（離開確認、放棄在途回合）與 Toast；遊戲幣 Modal 的狀態在 game-wallet.js，記事簿「放棄未儲存變更」的確認在 game-notebook.js，
+ *   重新生成與編輯最後一輪的兩個 Modal、按鈕與串流流程在 game-revision.js（修訂進行中離開頁面與送出新行動的互斥也在這裡接線）。
  * - 捲動：`session.scrollTick` 變動時把時間軸捲到底（是否捲動由 session 依讀者的位置決定）；`pagehide` 時中止所有進行中的請求。
  * - 本機暫存在背景開啟（IndexedDB，失敗退回記憶體）；開好之前 session 的讀寫排在它後面，所以載入一開始就可以進行。
  * 所有玩家與作者的文字都由樣板以 {{ }} 插值顯示（純文字），這裡不輸出到主控台、不放網址、不寫瀏覽器儲存。
@@ -74,6 +75,11 @@
         var kind = UI.restrictionOf(info);
         if (kind) { session.restriction.value = kind; }
       };
+      var revision = Game.createRevision({
+        Vue: Vue, state: state, host: session.revisionHost, wallet: wallet, stream: stream, store: store, TypewriterBuffer: UI.TypewriterBuffer,
+        toast: UI.toast, goLogin: goLogin, csrf: function () { return Auth.csrfTokenFrom(document); }, now: function () { return Date.now(); },
+        AbortController: window.AbortController
+      });
       var notebook = Game.createNotebook({
         Vue: Vue, api: Game.api, sessionId: state.session && typeof state.session.id === 'string' ? state.session.id : '',
         summary: session.notebookSummary, ended: session.ended, onEnded: function () { session.ended.value = true; },
@@ -108,11 +114,13 @@
 
       // ---- Modal ------------------------------------------------------------------------------------
       var modal = Vue.reactive({ leave: false, abandon: false });
-      function anyModalOpen() { return modal.leave || modal.abandon || wallet.coinModalOpen.value || notebook.notebookDiscardOpen.value; }
+      function anyModalOpen() {
+        return modal.leave || modal.abandon || wallet.coinModalOpen.value || notebook.notebookDiscardOpen.value || revision.regenerateOpen.value || revision.editOpen.value;
+      }
 
       /* 頂列的「回到冒險」：這一輪還在進行時先問；其餘照一般連結離開。 */
       function leaveClick(event) {
-        if (!session.sending.value) { return false; }
+        if (!session.sending.value && !revision.revisionBusy.value) { return false; }                // 一輪或一次修訂還在進行：先問
         if (event && typeof event.preventDefault === 'function') { event.preventDefault(); }
         modal.leave = true;
         return true;
@@ -120,6 +128,7 @@
       function confirmLeave() {
         modal.leave = false;
         session.dispose();
+        revision.dispose();
         window.location.assign(HOME_PATH);
         return true;
       }
@@ -146,7 +155,7 @@
       window.addEventListener('resize', function () { viewportWidth.value = window.innerWidth; });
       window.addEventListener('online', function () { session.setOnline(true); });
       window.addEventListener('offline', function () { session.setOnline(false); });
-      window.addEventListener('pagehide', function () { session.dispose(); notebook.dispose(); });   // 離開頁面：中止所有進行中的請求（記事簿不會自動儲存）
+      window.addEventListener('pagehide', function () { session.dispose(); revision.dispose(); notebook.dispose(); });   // 離開頁面：中止所有進行中的請求（記事簿不會自動儲存）
       /* 編輯記事簿的分頁回到前景：另一個分頁或裝置可能已經儲存，先檢查版本（沒有在編輯就什麼都不做）。 */
       function checkNotebookFresh() { notebook.checkFresh(); }
       document.addEventListener('visibilitychange', function () {
@@ -184,7 +193,16 @@
         notebookCanEdit: notebook.notebookCanEdit, notebookCanSave: notebook.notebookCanSave, notebookLocked: notebook.notebookLocked,
         notebookSaving: notebook.notebookSaving, notebookNotice: notebook.notebookNotice, notebookConflict: notebook.notebookConflict,
         notebookDiscardOpen: notebook.notebookDiscardOpen, startNotebookEdit: notebook.startEdit, saveNotebook: notebook.save,
-        cancelNotebookEdit: notebook.cancelEdit, confirmNotebookDiscard: notebook.confirmDiscard
+        cancelNotebookEdit: notebook.cancelEdit, confirmNotebookDiscard: notebook.confirmDiscard,
+        revisionBusy: revision.revisionBusy, reviseKey: revision.reviseKey, reviseDisabled: revision.reviseDisabled, reviseHint: revision.reviseHint,
+        regenerateNote: revision.regenerateNote, editNote: revision.editNote, regenerateOpen: revision.regenerateOpen, regenerateOptions: revision.regenerateOptions,
+        regenerateCategory: revision.regenerateCategory, regenerateReason: revision.regenerateReason, regenerateRule: revision.regenerateRule,
+        regenerateCount: revision.regenerateCount, regenerateError: revision.regenerateError, regenerateCanSubmit: revision.regenerateCanSubmit,
+        regenerateCostLine: revision.regenerateCostLine, editOpen: revision.editOpen, editDraft: revision.editDraft, editCount: revision.editCount,
+        editHint: revision.editHint, editError: revision.editError, editCanSubmit: revision.editCanSubmit, editInsufficient: revision.editInsufficient,
+        editCostLine: revision.editCostLine, openRegenerate: revision.openRegenerate, openEdit: revision.openEdit, closeRegenerate: revision.closeRegenerate,
+        closeEdit: revision.closeEdit, selectRegenerateCategory: revision.selectRegenerateCategory, submitRegenerate: revision.submitRegenerate,
+        submitEdit: revision.submitEdit, cancelRevision: revision.cancelRevision
       };
     }
   });

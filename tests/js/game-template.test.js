@@ -17,7 +17,7 @@ const TEMPLATE = 'app/templates/game/session.html';
 const { CONTRACT, CONTRACT_NAMES } = require('./support/game-contract.js');
 
 const JS_WORDS = new Set(['true', 'false', 'null', 'undefined', 'in', 'of', 'typeof']);
-const LOOP_VARS = new Set(['item', 'index', 'line', 'goal', 'place']);
+const LOOP_VARS = new Set(['item', 'index', 'line', 'goal', 'place', 'option']);
 
 /* 取出 Vue 樣板裡所有運算式（插值與 v-*、:、@ 屬性）與元素參照（ref="…"），回傳其中最外層的識別字（不含屬性存取與字串內容）。 */
 function templateNames(html) {
@@ -130,5 +130,71 @@ test('player and author text is rendered through interpolation, never as HTML', 
   const css = read('app/static/css/game.css');
   assert.ok(/\.gm-story[^{]*\{[^}]*white-space:\s*pre-wrap/.test(css));
   assert.ok(/\.gm-action__text[^{]*\{[^}]*white-space:\s*pre-wrap/.test(css));
+});
+
+// ---- 重新生成與編輯最後一輪（rpg-turn-revision 4.4）-------------------------------------------------------
+
+function modalBlock(html, model) {
+  const start = html.indexOf(`<ui-modal v-model="${model}"`);
+  assert.ok(start >= 0, model);
+  return html.slice(start, html.indexOf('</ui-modal>', start));
+}
+
+test('the revision buttons sit under the story of the one turn whose key is reviseKey, and nowhere else (not on the opening, notes or other turns)', () => {
+  const html = read(TEMPLATE);
+  const turn = html.slice(html.indexOf("<template v-else-if=\"item.kind === 'turn'\">"), html.indexOf("<p v-else-if=\"item.kind === 'note'\""));
+  assert.ok(turn.includes('<div v-if="item.key === reviseKey" class="gm-revise">'));
+  for (const call of ['openRegenerate', 'openEdit', 'cancelRevision']) { assert.ok(turn.includes(`@click="${call}"`), call); }
+  assert.ok(turn.indexOf('{{ item.story }}') < turn.indexOf('class="gm-revise"'));                         // 在劇情的下方
+  const outside = html.replace(turn, '');
+  assert.ok(!outside.includes('@click="openRegenerate"') && !outside.includes('@click="openEdit"'));      // 只有這一處入口
+  assert.equal(html.split('item.key === reviseKey').length - 1, 1);                                       // 按鈕列與說明在同一個區塊裡，只用這一個 key 判斷
+});
+
+test('the revision buttons are disabled by the reactive state, the cancel button only shows while a revision runs, and the hint is plain text', () => {
+  const html = read(TEMPLATE);
+  assert.ok(/<button[^>]*:disabled="reviseDisabled"[^>]*@click="openRegenerate"/.test(html));
+  assert.ok(/<button[^>]*:disabled="reviseDisabled"[^>]*@click="openEdit"/.test(html));
+  assert.ok(/<button v-if="revisionBusy"[^>]*@click="cancelRevision"/.test(html));
+  assert.ok(/\{\{\s*reviseHint\s*\}\}/.test(html) && /\{\{\s*regenerateNote\s*\}\}/.test(html) && /\{\{\s*editNote\s*\}\}/.test(html));
+});
+
+test('the regenerate modal is a self-made Vue modal that explains where the reason goes, needs a category and a reason, and shows no hard-coded number', () => {
+  const html = read(TEMPLATE);
+  const block = modalBlock(html, 'regenerateOpen');
+  assert.ok(block.includes('理由會提供營運團隊檢視，不會送給 AI'));
+  assert.ok(/<input[^>]*type="text"[^>]*v-model="regenerateReason"/.test(block));                          // 單行輸入：理由不含換行
+  assert.ok(block.includes('v-for="option in regenerateOptions"') && block.includes('{{ option.label }}'));
+  assert.ok(/<input[^>]*type="radio"[^>]*@change="selectRegenerateCategory\(option\.value\)"/.test(block));
+  assert.ok(/:disabled="!regenerateCanSubmit"[^>]*@click="submitRegenerate"/.test(block));
+  assert.ok(block.includes('@click="closeRegenerate"'));                                                   // 取消不送出任何請求
+  for (const name of ['regenerateCostLine', 'regenerateRule', 'regenerateCount', 'regenerateError']) { assert.ok(block.includes(`{{ ${name} }}`), name); }
+  assert.ok(!/(?<![\w.-])\d+(?![\w.-])/.test(block.replace(/status-code="[^"]*"/, '').replace(/class="[^"]*"/g, '')), '理由字數範圍與幣價只能來自程式的狀態，樣板不寫死數字');
+});
+
+test('the edit modal reminds about the second charge, the lost refund and the reset of the free count, shows the balance line, and offers the check-in only when the balance is short', () => {
+  const html = read(TEMPLATE);
+  const block = modalBlock(html, 'editOpen');
+  for (const phrase of ['再次消耗遊戲幣', '原本那輪已扣的幣不退', '免費重新生成次數會歸零']) { assert.ok(block.includes(phrase), phrase); }
+  assert.ok(block.includes('{{ editCostLine }}'));
+  assert.ok(/<textarea[^>]*v-model="editDraft"/.test(block));
+  assert.ok(/<button v-if="editInsufficient"[^>]*@click="claimCheckin"/.test(block));
+  assert.ok(/:disabled="!editCanSubmit"[^>]*@click="submitEdit"/.test(block));
+  assert.ok(/\{\{\s*editError\s*\}\}/.test(block) && /\{\{\s*editHint\s*\}\}/.test(block));
+  assert.ok(!/(?<![\w.-])\d+(?![\w.-])/.test(block.replace(/status-code="[^"]*"/, '').replace(/rows="\d+"/, '').replace(/class="[^"]*"/g, '')), '樣板不寫死數字');
+});
+
+test('both revision modals come before the wallet modal, so the check-in or insufficient-coins modal stacks on top of them', () => {
+  const html = read(TEMPLATE);
+  assert.ok(html.indexOf('<ui-modal v-model="regenerateOpen"') < html.indexOf('<ui-modal v-model="editOpen"'));
+  assert.ok(html.indexOf('<ui-modal v-model="editOpen"') < html.indexOf('<ui-modal v-model="coinModalOpen"'));
+});
+
+test('the revision stylesheet rules keep a long category list and long text inside a 360px screen', () => {
+  const css = read('app/static/css/game.css');
+  assert.ok(/\.gm-revise__bar[^{]*\{[^}]*flex-wrap:\s*wrap/.test(css));
+  assert.ok(/\.gm-revise__row[^{]*\{[^}]*flex-wrap:\s*wrap/.test(css));
+  assert.ok(/\.gm-revise__choice[^{]*\{[^}]*display:\s*inline-flex/.test(css));
+  assert.ok(!/\.gm-revise[^{]*\{[^}]*(?<![\w-])(?:width|min-width):\s*\d{3,}px/.test(css));
 });
 

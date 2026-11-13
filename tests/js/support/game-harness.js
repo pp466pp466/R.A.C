@@ -19,6 +19,7 @@ const Sync = require(path.join(GAME, 'game-sync.js'));
 const { createTurnStream } = require(path.join(GAME, 'turn-stream.js'));
 const { createWallet } = require(path.join(GAME, 'game-wallet.js'));
 const { createSession } = require(path.join(GAME, 'game-session.js'));
+const { createRevision } = require(path.join(GAME, 'game-revision.js'));
 
 const Vue = loadVue();
 const SESSION_ID = '99999999-9999-4999-8999-999999999999';
@@ -34,6 +35,7 @@ function initialState(overrides) {
     content_mode: { effective: 'standard', is_adult: true },
     stream: { idle_timeout_ms: 45000, total_timeout_ms: 180000 },
     limits: { action_max: 1000 },
+    revision_limits: { reason_min: 5, reason_max: 50, categories: ['setting_mismatch', 'repetitive_or_dull', 'typo_or_quality', 'blocked_transition', 'other'] },
   }, overrides);
 }
 
@@ -106,7 +108,8 @@ function createHarness(options = {}) {
     wallet: (opts) => {
       calls.wallet.push(opts);
       if (server.walletFailure) { return Promise.reject(server.walletFailure); }
-      return Promise.resolve({ ok: true, wallet: { free_balance: server.wallet.total, paid_balance: 0, total: server.wallet.total, free_cap: 1000, turn_cost: { standard: 30 }, checkin: { claimable: true, grant: 200, would_gain: 200, would_lose: 0, next_reset_at: '2026-11-12T16:00:00+00:00' } } });
+      const cost = server.wallet.cost === undefined ? 30 : server.wallet.cost;                                              // cost: null 代表錢包沒有給每輪幣價
+      return Promise.resolve({ ok: true, wallet: { free_balance: server.wallet.total, paid_balance: 0, total: server.wallet.total, free_cap: 1000, turn_cost: cost === null ? {} : { standard: cost }, checkin: { claimable: true, grant: 200, would_gain: 200, would_lose: 0, next_reset_at: '2026-11-12T16:00:00+00:00' } } });
     },
     checkin: (confirm, opts) => { calls.checkin.push({ confirm, opts }); return Promise.resolve({ ok: true, wallet: { total: server.wallet.total + 200, turn_cost: { standard: 30 }, checkin: { claimable: false } } }); },
   };
@@ -183,6 +186,7 @@ function createHarness(options = {}) {
   let sync = null;
   let wallet = null;
   let session = null;
+  let revision = null;
 
   async function build() {
     store = Store.createStore(Store.createMemoryBackend());
@@ -203,6 +207,11 @@ function createHarness(options = {}) {
       isOnline: () => online, setTimeout: timers.set, clearTimeout: timers.clear, AbortController: globalThis.AbortController,
       restrictionOf: (info) => (info && info.status === 403 && info.code === 'account_locked' ? 'locked' : null),
     });
+    revision = createRevision({
+      Vue: { ref: Vue.ref, computed: Vue.computed }, state, host: session.revisionHost, wallet, stream, store, TypewriterBuffer: FakeTypewriter,
+      toast: (message) => toasts.push(message), goLogin: () => logins.push('revision'), csrf: () => 'CSRF-TOKEN', now: () => Date.UTC(2026, 10, 12, 12, 0, 0),
+      AbortController: globalThis.AbortController,
+    });
     return harness;
   }
 
@@ -218,7 +227,7 @@ function createHarness(options = {}) {
 
   const harness = {
     build, calls, logs, toasts, logins, typewriters, noted, server, state, timers, until, idle,
-    get store() { return store; }, get sync() { return sync; }, get wallet() { return wallet; }, get session() { return session; },
+    get store() { return store; }, get sync() { return sync; }, get wallet() { return wallet; }, get session() { return session; }, get revision() { return revision; },
     setOnline: (value) => { online = value; },
     /* 時間軸目前的項目（純資料）。 */
     timeline: () => plain(session.items.value),

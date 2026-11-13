@@ -25,6 +25,7 @@ const TABLES = [
   ['CATEGORY_LABELS', [
     'minor_sexual', 'sexual_violence', 'non_consensual', 'real_person_sexual', 'minor_suspected', 'real_person_suspected', 'tier_mismatch', 'other_concern',
   ], 'categoryLabel'],
+  ['REVISION_CATEGORY_LABELS', ['setting_mismatch', 'repetitive_or_dull', 'typo_or_quality', 'blocked_transition', 'other'], 'revisionCategoryLabel'],
 ];
 
 for (const [table, values, fn] of TABLES) {
@@ -291,6 +292,100 @@ test('check-in texts fall back to one general sentence for an unknown key', () =
 test('none of the new fixed texts contain a placeholder, markup or a template leftover', () => {
   const pools = [Game.TURN_STATUS_LABELS, Game.DONE_STATUS_LABELS, Game.STREAM_OUTCOME_LABELS, Game.STREAM_OUTCOME_NOTICES, Game.HISTORY_LINES, Game.STREAM_ERROR_MESSAGES, Game.NOTEBOOK_TEXTS, Game.CHECKIN_TEXTS];
   for (const pool of pools) { for (const text of Object.values(pool)) { assert.ok(!/[<>{}$]|undefined|null|NaN/.test(text), text); } }
+});
+
+// ---- 重新生成與編輯最後一輪（rpg-turn-revision 4.1）-----------------------------------------------
+
+test('the regenerate note shows the free count while there is one, the price once it is used up, and nothing when neither is certain', () => {
+  assert.equal(Game.revisionRegenerateNote(2, 30), '免費還剩 2 次');
+  assert.equal(Game.revisionRegenerateNote(1, 30), '免費還剩 1 次');
+  assert.equal(Game.revisionRegenerateNote(0, 30), '30 幣');
+  assert.equal(Game.revisionRegenerateNote(0, 45), '45 幣');                                  // 幣價來自伺服器，不寫死
+  assert.equal(Game.revisionRegenerateNote(0, null), '');                                    // 缺值時不顯示數字
+  assert.equal(Game.revisionRegenerateNote(null, null), '');
+  assert.equal(Game.revisionRegenerateNote(null, 30), '30 幣');
+  for (const junk of [-1, 1.5, '2', NaN, undefined]) {
+    assert.equal(Game.revisionRegenerateNote(junk, junk), '', String(junk));
+  }
+  assert.equal(Game.revisionRegenerateNote(0, 0), '');                                       // 幣價 0 不是有意義的價格
+});
+
+test('the edit note is the price of one turn, and empty when the price is unknown', () => {
+  assert.equal(Game.revisionEditNote(30), '30 幣');
+  for (const junk of [0, -1, 1.5, '30', NaN, null, undefined]) { assert.equal(Game.revisionEditNote(junk), '', String(junk)); }
+});
+
+test('the regenerate modal says whether it is free or what it costs, and leaves out a number it does not know', () => {
+  assert.equal(Game.revisionRegenerateCostLine(2, 30, 230), '這次重新生成不用遊戲幣（免費還剩 2 次）。');
+  assert.equal(Game.revisionRegenerateCostLine(0, 30, 230), '這次重新生成會消耗 30 遊戲幣（目前餘額 230 幣）。');
+  assert.equal(Game.revisionRegenerateCostLine(0, 30, null), '這次重新生成會消耗 30 遊戲幣。');
+  assert.equal(Game.revisionRegenerateCostLine(0, null, 230), '這次重新生成會消耗遊戲幣（目前餘額 230 幣）。');
+  assert.equal(Game.revisionRegenerateCostLine(null, null, null), '這次重新生成會消耗遊戲幣。');
+  assert.ok(!/undefined|null|NaN/.test(Game.revisionRegenerateCostLine(undefined, undefined, undefined)));
+});
+
+test('the edit modal shows the balance and the price, and when the balance is short says so and points to the daily check-in', () => {
+  assert.equal(Game.revisionEditCostLine(30, 230, false), '這次編輯需要 30 幣，目前餘額 230 幣。');
+  assert.equal(Game.revisionEditCostLine(30, null, false), '這次編輯需要 30 幣。');
+  const short = Game.revisionEditCostLine(30, 10, true);
+  assert.ok(short.includes('遊戲幣不足') && short.includes('目前餘額 10 幣') && short.includes('需要 30 幣') && short.includes('簽到'));
+  assert.ok(Game.revisionEditCostLine(null, null, true).includes('簽到'));
+  assert.ok(!/undefined|null|NaN/.test(Game.revisionEditCostLine(undefined, undefined, true)));
+});
+
+test('every not-revisable reason has its own explanation; an unknown reason has the general one and never shows the raw value', () => {
+  const reasons = ['ended', 'not_last', 'in_progress', 'no_snapshot'];
+  assert.deepEqual(Object.keys(Game.REVISION_NOT_REVISABLE_MESSAGES).sort(), [...reasons].sort());
+  const seen = new Set(reasons.map((reason) => Game.revisionNotRevisableMessage(reason)));
+  assert.equal(seen.size, 4);
+  for (const junk of JUNK) {
+    if (typeof junk === 'string' && reasons.includes(junk)) { continue; }
+    assert.equal(Game.revisionNotRevisableMessage(junk), '這一輪目前不能重新生成或編輯。', JSON.stringify(junk));
+  }
+});
+
+test('every revision stream error code says the original is kept; an unknown code falls back to the general message', () => {
+  assert.deepEqual(Object.keys(Game.REVISION_ERROR_MESSAGES).sort(), ['generation_failed', 'generation_timeout', 'internal_error', 'turn_superseded']);
+  for (const code of ['generation_failed', 'generation_timeout', 'internal_error']) {
+    const message = Game.revisionErrorMessage(code);
+    assert.ok(message.includes('已保留原本的回應') && message.includes('沒有扣遊戲幣') && message.includes('沒有用掉免費次數'), code);
+  }
+  for (const junk of JUNK) {
+    if (typeof junk === 'string' && Object.keys(Game.REVISION_ERROR_MESSAGES).includes(junk)) { continue; }
+    assert.equal(Game.revisionErrorMessage(junk), Game.revisionErrorMessage('nope'), JSON.stringify(junk));
+  }
+});
+
+test('the reason counter shows "count / max" and a dash when the count is not usable', () => {
+  assert.equal(Game.revisionReasonCount(12, 50), '12 / 50');
+  assert.equal(Game.revisionReasonCount(0, 50), '0 / 50');
+  assert.equal(Game.revisionReasonCount(12, null), '12');
+  assert.equal(Game.revisionReasonCount(null, 50), '—');
+  assert.equal(Game.revisionReasonCount('12', 50), '—');
+});
+
+test('the result texts have a fixed wording for the three promises: kept, synced and still processing; an unknown key falls back to the general line', () => {
+  assert.equal(Game.revisionText('kept'), '已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。');
+  assert.ok(Game.revisionText('kept_blocked').includes('已保留原本的回應'));
+  assert.ok(Game.revisionText('kept_failed').includes('已保留原本的回應'));
+  assert.ok(Game.revisionText('synced').includes('伺服器上最新的內容'));
+  assert.ok(Game.revisionText('processing').includes('伺服器還在處理'));
+  assert.ok(Game.revisionText('incomplete').includes('原本的回應已保留'));
+  for (const junk of JUNK) {
+    if (typeof junk === 'string' && Object.keys(Game.REVISION_TEXTS).includes(junk)) { continue; }
+    assert.equal(Game.revisionText(junk), Game.REVISION_TEXTS.unavailable, JSON.stringify(junk));
+  }
+  assert.equal(Game.revisionText('__proto__'), Game.REVISION_TEXTS.unavailable);
+});
+
+test('the revision texts are Traditional Chinese and carry no placeholder, markup or template leftover', () => {
+  for (const pool of [Game.REVISION_TEXTS, Game.REVISION_NOT_REVISABLE_MESSAGES, Game.REVISION_ERROR_MESSAGES, Game.REVISION_CATEGORY_LABELS]) {
+    for (const value of Object.values(pool)) {
+      assert.ok(HAN.test(value), value);
+      assert.ok(!/[<>{}$]|undefined|null|NaN/.test(value), value);
+    }
+  }
+  assert.ok(HAN.test(Game.REVISION_CONFLICT_MESSAGE) && !/[<>{}$]/.test(Game.REVISION_CONFLICT_MESSAGE));
 });
 
 // ---- 在瀏覽器載入 ---------------------------------------------------------------------------------

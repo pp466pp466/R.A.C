@@ -831,6 +831,253 @@ test('without a usable limit the length is left to the server, but an empty acti
   }
 });
 
+// ---- 重新生成與編輯最後一輪（rpg-turn-revision 4.1）-------------------------------------------------------
+
+const REVISION_CASES = [
+  // [status, code, top-level extra, expected kind, expected flags]
+  [409, 'revision_conflict', undefined, 'revision_conflict', { reload: true, catchUp: true }],
+  [409, 'not_revisable', { reason: 'ended' }, 'not_revisable', { reload: true, catchUp: true, ended: true }],
+  [409, 'not_revisable', { reason: 'not_last' }, 'not_revisable', { reload: true, catchUp: true, ended: false }],
+  [409, 'not_revisable', { reason: 'in_progress' }, 'not_revisable', { reload: true, catchUp: true, ended: false }],
+  [409, 'not_revisable', { reason: 'no_snapshot' }, 'not_revisable', { reload: true, catchUp: true, ended: false }],
+  [409, 'not_revisable', { reason: 'something_new' }, 'not_revisable', { reload: true, catchUp: true, ended: false }],
+  [409, 'not_revisable', undefined, 'not_revisable', { reload: true, catchUp: true, ended: false }],
+  [409, 'insufficient_coins', { balance: 10, needed: 30 }, 'coins', {}],
+  [409, 'turn_in_progress', undefined, 'busy', { catchUp: true }],
+  [422, 'validation_error', undefined, 'fields', {}],
+  [422, 'input_blocked', { categories: ['minor_sexual'] }, 'rejected', {}],
+  [400, 'validation_error', undefined, 'fields', {}],
+  [404, 'not_found', undefined, 'not_found', {}],
+  [503, 'system_busy', undefined, 'unavailable', { retry: true }],
+  [503, 'service_unavailable', undefined, 'unavailable', { retry: true }],
+];
+
+for (const [status, code, top, kind, flags] of REVISION_CASES) {
+  test(`describeHttpFailure(${status}, ${code}${top && top.reason ? ', ' + top.reason : ''}) for a revision is "${kind}" with a fixed message and the right flags`, () => {
+    const failure = State.describeHttpFailure(status, body(code, MARKER, { top }));
+    assert.equal(failure.kind, kind);
+    assert.equal(failure.status, status);
+    assert.ok(HAN.test(failure.message));
+    assertFixedMessage(failure, `${status} ${code}`);
+    for (const [flag, value] of Object.entries(flags)) { assert.equal(failure[flag], value, flag); }
+  });
+}
+
+test('each not_revisable reason has its own fixed explanation, an unknown or missing reason has the general one, and the server text is never shown', () => {
+  const messages = new Set();
+  for (const reason of ['ended', 'not_last', 'in_progress', 'no_snapshot']) {
+    const failure = State.describeHttpFailure(409, body('not_revisable', MARKER, { top: { reason } }));
+    assert.equal(failure.message, Labels.revisionNotRevisableMessage(reason) + '這一輪沒有扣除遊戲幣。');
+    messages.add(failure.message);
+  }
+  assert.equal(messages.size, 4);
+  for (const reason of ['__proto__', 'constructor', 7, null, {}, '']) {
+    const failure = State.describeHttpFailure(409, body('not_revisable', MARKER, { top: { reason } }));
+    assert.ok(failure.message.startsWith(Labels.revisionNotRevisableMessage('nope')), String(reason));
+    assert.equal(failure.ended, false);
+  }
+});
+
+test('a revision conflict explains that the latest content is shown and that nothing was charged', () => {
+  const failure = State.describeHttpFailure(409, body('revision_conflict', MARKER));
+  assert.ok(failure.message.includes('已經在另一個地方被修改過') && failure.message.includes(NO_CHARGE));
+});
+
+test('a 422 validation_error lists only the trusted field explanations and does not echo a category list or the reason text', () => {
+  const failure = State.describeHttpFailure(422, body('validation_error', MARKER, { fields: { reason: '請簡短說明原因，至少 5 字。', category: '<b>x</b>', ' bad': '請選擇一個分類。' } }));
+  assert.equal(failure.kind, 'fields');
+  assert.deepEqual(Object.keys(failure.fields).sort(), ['reason']);
+  assert.ok(!failure.message.includes(MARKER));
+});
+
+test('describeRevisionFailure: a finished stream has no failure', () => {
+  assert.equal(State.describeRevisionFailure({ outcome: 'done' }), null);
+});
+
+test('describeRevisionFailure: a rejected start hands back the describeHttpFailure result unchanged, and is certain', () => {
+  const given = State.describeHttpFailure(409, body('revision_conflict', MARKER));
+  const failure = State.describeRevisionFailure({ outcome: 'rejected', failure: given });
+  assert.equal(failure.kind, 'revision_conflict');
+  assert.equal(failure.message, given.message);
+  assert.equal(failure.uncertain, false);
+  assert.equal(State.describeRevisionFailure({ outcome: 'rejected', failure: given }).reload, true);
+});
+
+test('describeRevisionFailure: a broken rejected result becomes a fixed reload message that says nothing was charged', () => {
+  for (const junk of [undefined, null, { kind: 'mystery' }, { kind: '__proto__' }, 'x']) {
+    const failure = State.describeRevisionFailure({ outcome: 'rejected', failure: junk });
+    assert.equal(failure.reload, true);
+    assert.ok(failure.message.includes(NO_CHARGE) && HAN.test(failure.message));
+    assert.equal(failure.uncertain, false);
+  }
+});
+
+test('describeRevisionFailure: each known error code says the original response is kept; the server text is never shown', () => {
+  for (const code of ['generation_timeout', 'generation_failed', 'internal_error']) {
+    const failure = State.describeRevisionFailure({ outcome: 'error_event', failure: { kind: 'error_event', code, message: MARKER } });
+    assert.equal(failure.message, Labels.revisionErrorMessage(code));
+    assert.ok(failure.message.includes('已保留原本的回應') && failure.message.includes('沒有扣遊戲幣') && failure.message.includes('沒有用掉免費次數'), code);
+    assert.equal(failure.uncertain, false);
+    assert.ok(!failure.message.includes(MARKER));
+  }
+  const unknown = State.describeRevisionFailure({ outcome: 'error_event', failure: { code: MARKER.toLowerCase(), message: MARKER } });
+  assert.ok(unknown.message.includes('已保留原本的回應'));
+  assert.ok(!unknown.message.includes(MARKER));
+});
+
+test('describeRevisionFailure: being superseded by a newer attempt is uncertain and asks for a catch-up, not a retry', () => {
+  const failure = State.describeRevisionFailure({ outcome: 'error_event', failure: { code: 'turn_superseded' } });
+  assert.equal(failure.uncertain, true);
+  assert.equal(failure.catchUp, true);
+  assert.equal(failure.retry, false);
+});
+
+test('describeRevisionFailure: an interruption, both timeouts and a cancel are uncertain, ask for a catch-up, and do not promise that nothing changed', () => {
+  for (const outcome of ['interrupted', 'timeout_idle', 'timeout_total', 'aborted', 'something_new', undefined]) {
+    const failure = State.describeRevisionFailure({ outcome });
+    assert.equal(failure.uncertain, true, String(outcome));
+    assert.equal(failure.catchUp, true, String(outcome));
+    assert.ok(!failure.message.includes('沒有扣遊戲幣'), '不確定的結果不可以承諾沒有扣幣');
+    assert.ok(failure.message.includes('伺服器可能已經完成'));
+  }
+  assert.equal(State.describeRevisionFailure({ outcome: 'aborted' }).silent, true);
+  assert.equal(State.describeRevisionFailure({ outcome: 'timeout_idle' }).kind, 'timeout');
+  assert.equal(State.describeRevisionFailure({ outcome: 'interrupted' }).kind, 'interrupted');
+  assert.equal(State.describeRevisionFailure(undefined).uncertain, true);                               // 沒有結果也不當成成功
+});
+
+test('revisionNoticeText: a certain failure keeps its own fixed message', () => {
+  const failure = State.describeRevisionFailure({ outcome: 'error_event', failure: { code: 'generation_failed' } });
+  assert.equal(State.revisionNoticeText(failure, { revision: 9, expected: 1 }), failure.message);
+  assert.equal(State.revisionNoticeText(failure, undefined), failure.message);
+});
+
+test('revisionNoticeText: an uncertain failure is decided by what the backend now says', () => {
+  const failure = State.describeRevisionFailure({ outcome: 'interrupted' });
+  assert.equal(State.revisionNoticeText(failure, { revision: 3, expected: 2 }), Labels.revisionText('synced'));               // 伺服器已經完成
+  assert.equal(State.revisionNoticeText(failure, { revision: 2, expected: 2 }), Labels.revisionText('kept'));                // 沒有變：保留原本的回應
+  assert.equal(State.revisionNoticeText(failure, { revision: 2, expected: 2, inProgress: true }), Labels.revisionText('processing'));
+  assert.equal(State.revisionNoticeText(failure, { revision: 3, expected: 2, inProgress: true }), Labels.revisionText('synced'));  // 已完成優先於「還在處理」
+  assert.equal(State.revisionNoticeText(failure, { revision: null, expected: 2 }), failure.message);                          // 讀不到後端：維持「不確定」
+  assert.equal(State.revisionNoticeText(failure, undefined), failure.message);
+  assert.ok(Labels.revisionText('kept').includes('已保留原本的回應'));
+});
+
+test('no revision message contains the reason or the action we pass in anywhere a server could echo it', () => {
+  const echoed = body('revision_conflict', MARKER, { fields: { reason: MARKER, action: MARKER }, top: { reason: MARKER, balance: 1, needed: 30 } });
+  for (const [status, code] of [[409, 'revision_conflict'], [409, 'not_revisable'], [422, 'validation_error'], [422, 'input_blocked'], [400, 'validation_error']]) {
+    const failure = State.describeHttpFailure(status, Object.assign({}, echoed, { error: Object.assign({}, echoed.error, { code }) }));
+    assert.ok(!failure.message.includes(MARKER), `${status} ${code}`);
+  }
+  for (const outcome of ['error_event', 'interrupted', 'timeout_idle', 'timeout_total', 'aborted', 'rejected']) {
+    const failure = State.describeRevisionFailure({ outcome, failure: { kind: 'error_event', code: 'generation_failed', message: MARKER } });
+    assert.ok(!failure.message.includes(MARKER), outcome);
+  }
+});
+
+test('reasonProblem counts Unicode characters after NFC: a combining mark merges and an emoji is one', () => {
+  const combining = 'é'.repeat(5);                                    // 五個 é（NFC 之後各一字）
+  assert.equal(combining.length, 10);
+  assert.equal(State.reasonLength(combining), 5);
+  assert.equal(State.reasonProblem(combining, 5, 50), '');
+  assert.equal(State.reasonLength('😀😀😀😀😀'), 5);                         // 每個表情符號是一字，不是兩個 UTF-16 單位
+  assert.equal(State.reasonProblem('😀😀😀😀😀', 5, 50), '');
+  assert.equal(State.reasonProblem('😀😀😀😀', 5, 50), '請簡短說明原因，至少 5 字。');
+});
+
+test('reasonProblem: exactly the minimum and exactly the maximum are fine, one short or one over is a fixed explanation', () => {
+  assert.equal(State.reasonProblem('字'.repeat(5), 5, 50), '');
+  assert.equal(State.reasonProblem('字'.repeat(4), 5, 50), '請簡短說明原因，至少 5 字。');
+  assert.equal(State.reasonProblem('字'.repeat(50), 5, 50), '');
+  assert.equal(State.reasonProblem('字'.repeat(51), 5, 50), '理由最多 50 字（目前 51 字）。');
+  assert.equal(State.reasonProblem('', 5, 50), '請簡短說明原因，至少 5 字。');
+});
+
+test('reasonProblem trims, removes control characters (including newlines and tabs) like the backend, and treats junk as empty', () => {
+  assert.equal(State.reasonLength('  字字字字字  '), 5);
+  assert.equal(State.reasonLength('字\n字\t字\u0000字\u007f字'), 5);
+  assert.equal(State.reasonLength('   \n\t  '), 0);
+  for (const junk of [undefined, null, 5, {}, []]) { assert.equal(State.reasonLength(junk), 0, String(junk)); }
+});
+
+test('reasonProblem without usable limits only requires something (the server decides the range)', () => {
+  for (const junk of [undefined, null, 0, -1, '5', NaN, 1.5]) {
+    assert.equal(State.reasonProblem('字', junk, junk), '', String(junk));
+    assert.equal(State.reasonProblem('', junk, junk), '請簡短說明原因，至少 1 字。', String(junk));
+  }
+});
+
+test('reasonProblem never echoes the reason itself', () => {
+  assert.ok(!State.reasonProblem(MARKER.repeat(5), 5, 50).includes(MARKER));
+  assert.ok(!State.reasonProblem('字'.repeat(60) + MARKER, 5, 50).includes(MARKER));
+});
+
+test('lastTurnView keeps the known fields with the right types, and the reason only from the enumeration', () => {
+  const view = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 2, revisable: true, reason: null, free_left: 1, regenerate_cost: 0, edit_cost: 30, extra: 'x' });
+  assert.deepEqual(view, { clientMsgId: 'c9', seq: 9, revision: 2, revisable: true, reason: '', freeLeft: 1, regenerateCost: 0, editCost: 30 });
+  const blocked = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 1, revisable: false, reason: 'ended', free_left: 0, regenerate_cost: 30, edit_cost: 30 });
+  assert.equal(blocked.revisable, false);
+  assert.equal(blocked.reason, 'ended');
+  assert.equal(State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 1, revisable: false, reason: 'something_new' }).reason, '');
+});
+
+test('lastTurnView fails closed: only an explicit true is revisable, and a broken or incomplete record is null', () => {
+  for (const revisable of ['true', 1, null, undefined, {}]) {
+    assert.equal(State.lastTurnView({ client_msg_id: 'c', seq: 1, revision: 1, revisable }).revisable, false, String(revisable));
+  }
+  for (const junk of [undefined, null, 'x', [], {}, { seq: 1, revision: 1 }, { client_msg_id: '', seq: 1, revision: 1 }, { client_msg_id: 'c', revision: 1 },
+    { client_msg_id: 'c', seq: -1, revision: 1 }, { client_msg_id: 'c', seq: 1 }, { client_msg_id: 'c', seq: 1, revision: 0 }, { client_msg_id: 5, seq: 1, revision: 1 }]) {
+    assert.equal(State.lastTurnView(junk), null, JSON.stringify(junk));
+  }
+});
+
+test('lastTurnView: a missing or mistyped price or free count is null (no number is shown) rather than a guess', () => {
+  const view = State.lastTurnView({ client_msg_id: 'c', seq: 1, revision: 1, revisable: true, free_left: '2', regenerate_cost: -1, edit_cost: 1.5 });
+  assert.equal(view.freeLeft, null);
+  assert.equal(view.regenerateCost, null);
+  assert.equal(view.editCost, null);
+});
+
+test('a turn carries its revision only when the server sent a valid one; a missing revision counts as 1', () => {
+  assert.equal(State.normalizeTurn({ seq: 1, status: 'complete', revision: 3 }).revision, 3);
+  assert.ok(!('revision' in State.normalizeTurn({ seq: 1, status: 'complete' })));
+  for (const junk of [0, -1, 1.5, '2', null, NaN]) { assert.ok(!('revision' in State.normalizeTurn({ seq: 1, status: 'complete', revision: junk })), String(junk)); }
+  assert.equal(State.revisionOf({ seq: 1 }), 1);
+  assert.equal(State.revisionOf({ seq: 1, revision: 4 }), 4);
+  assert.equal(State.revisionOf(null), 1);
+});
+
+test('mergeTurns: the same seq with a newer revision replaces the cached turn, so another device\'s edit shows up', () => {
+  const cached = [{ seq: 1, client_msg_id: 'c1', turn_number: 1, status: 'complete', action: '舊行動', story: '舊劇情', revision: 1 }];
+  const merged = State.mergeTurns(cached, [{ seq: 1, client_msg_id: 'c1', turn_number: 1, status: 'complete', action: '新行動', story: '新劇情', revision: 2 }]);
+  assert.equal(merged.length, 1);
+  assert.deepEqual([merged[0].action, merged[0].story, merged[0].revision], ['新行動', '新劇情', 2]);
+});
+
+test('lastCompleteTurn is the complete turn with the highest seq; blocked and streaming turns after it do not count', () => {
+  const turns = [
+    { seq: 1, client_msg_id: 'a', status: 'complete', turn_number: 1 }, { seq: 2, client_msg_id: 'b', status: 'complete', turn_number: 2 },
+    { seq: 3, client_msg_id: 'c', status: 'blocked' }, { seq: 4, client_msg_id: 'd', status: 'streaming' },
+  ];
+  assert.equal(State.lastCompleteTurn(turns).client_msg_id, 'b');
+  assert.equal(State.lastCompleteTurn([]), null);
+  assert.equal(State.lastCompleteTurn([{ seq: 1, status: 'blocked' }]), null);
+  assert.equal(State.lastCompleteTurn(undefined), null);
+});
+
+test('revisionOutcome: a higher revision than expected is applied; the same or lower, a missing turn or a broken record is incomplete (fail closed)', () => {
+  const turns = [{ seq: 1, client_msg_id: 'c1', status: 'complete', revision: 3 }, { seq: 2, client_msg_id: 'c2', status: 'complete' }];
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'c1', expected_revision: 2 }), 'applied');
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'c1', expected_revision: 3 }), 'incomplete');
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'c1', expected_revision: 9 }), 'incomplete');
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'c2', expected_revision: 1 }), 'incomplete');      // 沒有 revision 視為 1
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'c2', expected_revision: 0 }), 'applied');
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'gone', expected_revision: 1 }), 'incomplete');
+  assert.equal(State.revisionOutcome(turns, { client_msg_id: 'c1' }), 'incomplete');
+  assert.equal(State.revisionOutcome(turns, null), 'incomplete');
+  assert.equal(State.revisionOutcome([{ seq: 1, client_msg_id: 'c1', status: 'blocked', revision: 9 }], { client_msg_id: 'c1', expected_revision: 1 }), 'incomplete');
+});
+
 // ---- 在瀏覽器載入 ------------------------------------------------------------------------------------
 
 test('in the browser the helpers join the shared Game namespace after the labels, and keep what another script already put there', () => {

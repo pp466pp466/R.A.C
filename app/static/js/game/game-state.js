@@ -13,6 +13,11 @@
  *   `notebook`（衝突時後端最新的記事簿）、`length`／`capacity`（記事簿太長）。
  *   **訊息只來自固定文字與列舉對照，不含玩家文字**：伺服器送來的 `message` 只在「不認得的 409」與 400 的逐欄位說明才顯示，而且必須通過 `trusted()`
  *   （含中文、不含角括號與控制字元、長度有上限）；審查類別只取列舉識別字的中文名稱。
+ * - **重新生成與編輯最後一輪**（rpg-turn-revision）：回合多一個 `revision`（沒有時視為 1）；`lastTurnView` 整理快照的 `last_turn`（缺漏就是 null，不顯示按鈕）；
+ *   `describeHttpFailure` 認得 409 `revision_conflict`、`not_revisable`（各原因的固定說明，已完結時一併轉為完結）與 422 `validation_error`（欄位問題）；
+ *   `describeRevisionFailure(result)` 把修訂串流沒有 `done` 的結果整理成「保留原本的回應」的說明並標示結果是否確定（取消、中斷、逾時不確定），
+ *   `revisionNoticeText` 在重抓之後依後端的 `revision` 決定最後要說「已保留」「已同步」或「還在處理」；`reasonProblem`／`reasonLength` 以 Unicode 字元計理由
+ *   （與後端 `clean_single_line` 同一個算法）；`revisionOutcome` 判定重新整理後的修訂在途紀錄是成功還是沒有完成。錯誤訊息只來自固定文字，**不含理由與行動**。
  * - **小工具**：`notebookLength`（NFC 之後以 Unicode 字元計，與後端 `notebook_policy.length_of` 同一個算法，取樣案例由 pytest 比對）、
  *   `notebookView`（面板讀到的全文與用量）、`notebookSummary`（快照裡只有用量的摘要）、`notebookIsFull`／`notebookCurrent`／`notebookEditState`（已滿的判斷、
  *   摘要與檢視取較新者、編輯中的即時字數）、`worldView`／`mergeWorld`、`noticeText`、`sendBlocker`／`canSend`、`actionProblem`、`hasCompleteTurn`。
@@ -98,7 +103,7 @@
     return normalizeRequest({
       kind: isCount(status) && status > 0 ? 'server' : 'network', status: status, code: error.code, fields: error.fields, message: error.message,
       categories: source.categories, balance: source.balance, needed: source.needed, checkin: source.checkin, notebook: source.notebook,
-      length: source.length, capacity: source.capacity
+      length: source.length, capacity: source.capacity, reason: source.reason
     });
   }
 
@@ -106,9 +111,13 @@
     var source = isObject(info) ? info : {};
     return normalizeRequest({
       kind: source.kind, status: source.status, code: source.code, fields: source.fields, message: source.message, categories: source.categories,
-      balance: source.balance, needed: source.needed, checkin: source.checkin, notebook: source.notebook, length: source.length, capacity: source.capacity
+      balance: source.balance, needed: source.needed, checkin: source.checkin, notebook: source.notebook, length: source.length, capacity: source.capacity,
+      reason: source.reason
     });
   }
+
+  /* `not_revisable` 的原因列舉（後端 `NOT_REVISABLE_REASONS`）；不認得的值當成沒有原因。 */
+  var NOT_REVISABLE_REASONS = { ended: true, not_last: true, in_progress: true, no_snapshot: true };
 
   function normalizeRequest(raw) {
     var status = isCount(raw.status) ? raw.status : 0;
@@ -124,7 +133,7 @@
       kind: kind, status: status, code: codeOf(raw.code), message: text(raw.message), fields: fields, categories: list(raw.categories),
       balance: isCount(raw.balance) ? raw.balance : null, needed: isCount(raw.needed) ? raw.needed : null,
       checkin: isObject(raw.checkin) ? raw.checkin : null, notebook: raw.notebook, length: isCount(raw.length) ? raw.length : null,
-      capacity: isCount(raw.capacity) ? raw.capacity : null
+      capacity: isCount(raw.capacity) ? raw.capacity : null, reason: has(NOT_REVISABLE_REASONS, raw.reason) ? raw.reason : ''
     };
   }
 
@@ -181,6 +190,9 @@
     if (status === 403) { return gateFailure(request, suffix); }
     if (status === 404) { return failure('not_found', 404, code, '找不到這個存檔，它可能已被刪除。', { link: linkCopy(HOME_LINK) }); }
     if (status === 409) { return conflictFailure(request, suffix); }
+    if (status === 422 && code === 'validation_error') {                                // 修訂的欄位問題（理由太短、分類不在列舉內、編輯後與原行動相同）：沒有審查類別
+      return failure('fields', 422, code, '送出的內容有問題，請檢查後再試。' + suffix, { fields: request.fields });
+    }
     if (status === 422) {
       var names = categoryNames(request.categories);
       return failure('rejected', 422, code, '這個內容未通過內容規範' + (names ? '（' + names + '）' : '') + '，無法送出。請換個說法再試。' + suffix, {});
@@ -216,6 +228,14 @@
     if (code === 'message_id_reused') {
       return failure('conflict', 409, code, '這則行動的識別碼已用於不同的內容，請重新整理頁面後再送出。' + suffix, { reload: true });
     }
+    if (code === 'revision_conflict') {                                                // 最後一輪已在別處被修訂：以後端為準，重讀最後一輪
+      return failure('revision_conflict', 409, code, labels.REVISION_CONFLICT_MESSAGE + suffix, { reload: true, catchUp: true });
+    }
+    if (code === 'not_revisable') {                                                    // 各原因的固定說明（不採用伺服器的文字）；已完結時畫面一併轉為完結
+      return failure('not_revisable', 409, code, labels.revisionNotRevisableMessage(request.reason) + suffix, {
+        reload: true, catchUp: true, ended: request.reason === 'ended'
+      });
+    }
     var shown = trusted(request.message) ? request.message : '目前無法處理這個操作，已為你重新同步。';
     return failure('conflict', 409, code, shown + suffix, { reload: true, catchUp: true });
   }
@@ -229,7 +249,7 @@
   /* 串流客戶端（turn-stream.js）沒有 `done` 的結果：開始前被拒、`error` 事件、中斷、逾時、取消。`done` 回傳 null。 */
   var KNOWN_FAILURE_KINDS = {
     canceled: true, timeout: true, network: true, csrf: true, login: true, gate: true, not_found: true, fields: true, coins: true, busy: true, opening_wait: true,
-    opening_pending: true, ended: true, conflict: true, rejected: true, limit: true, unavailable: true, unknown: true
+    opening_pending: true, ended: true, conflict: true, rejected: true, limit: true, unavailable: true, unknown: true, revision_conflict: true, not_revisable: true
   };
   function describeStreamFailure(result) {
     var outcome = isObject(result) ? result.outcome : undefined;
@@ -247,6 +267,43 @@
     if (outcome === 'aborted') { return failure('canceled', 0, 'canceled', '', { silent: true, catchUp: true }); }
     var kind = outcome === 'timeout_idle' || outcome === 'timeout_total' ? 'timeout' : 'interrupted';
     return failure(kind, 0, has(labels.STREAM_OUTCOME_LABELS, outcome) ? outcome : 'interrupted', labels.streamOutcomeNotice(outcome), { catchUp: true, retry: true });
+  }
+
+  /* 修訂串流（重新生成、編輯最後一輪）沒有 `done` 的結果 -> 畫面說明（`result` 是 turn-stream.js 的結果）。`done` 回傳 null。
+     回傳的失敗多一個 `uncertain`：結果是否確定。
+     - rejected：開始前被拒（`describeHttpFailure` 的結果原樣；還沒有認領也沒有預扣）。不確定＝否。
+     - error_event：伺服器已釋放認領並退回預扣；已知代碼各有固定說明（一律說「保留原本的回應」）。`turn_superseded`（被新的嘗試取代）不確定。
+     - 取消、中斷、逾時：前端中止不代表後端中止，不確定＝是；呼叫端重抓之後用 `revisionNoticeText` 依後端的 revision 決定要說「已保留」或「已同步」。
+     訊息只來自固定文字，不含理由與行動。 */
+  function describeRevisionFailure(result) {
+    var outcome = isObject(result) ? result.outcome : undefined;
+    if (outcome === 'done') { return null; }
+    if (outcome === 'rejected') {
+      var given = isObject(result.failure) ? result.failure : null;
+      if (given && has(KNOWN_FAILURE_KINDS, given.kind)) { return assign(copy(given), { uncertain: false }); }
+      return failure('unknown', 0, 'config', '這次修改無法開始，請重新整理頁面後再試。' + NO_CHARGE, { reload: true, uncertain: false });
+    }
+    if (outcome === 'error_event') {
+      var code = isObject(result.failure) ? codeOf(result.failure.code) : '';
+      var superseded = code === 'turn_superseded';
+      return failure('stream_error', 0, code, labels.revisionErrorMessage(code), { retry: !superseded, catchUp: true, uncertain: superseded });
+    }
+    if (outcome === 'aborted') { return failure('canceled', 0, 'canceled', labels.revisionText('uncertain'), { silent: true, catchUp: true, uncertain: true }); }
+    var kind = outcome === 'timeout_idle' || outcome === 'timeout_total' ? 'timeout' : 'interrupted';
+    return failure(kind, 0, has(labels.STREAM_OUTCOME_LABELS, outcome) ? outcome : 'interrupted', labels.revisionText('uncertain'), { catchUp: true, retry: true, uncertain: true });
+  }
+
+  /* 修訂結束且重抓之後，對玩家說的話（純文字）。`backend`：{ revision（重抓後最後一輪的 revision，讀不到為 null）、expected（送出時的 expected_revision）、
+     inProgress（快照說伺服器還在處理）}。確定的失敗直接用它的固定說明；不確定的看後端：revision 變大＝伺服器已完成（說「已同步」）、還在處理＝說還在處理、
+     沒變＝保留原本的回應（沒有扣幣、沒有用掉免費次數）、讀不到＝維持「不確定」的說明。 */
+  function revisionNoticeText(failureInfo, backend) {
+    var info = isObject(failureInfo) ? failureInfo : {};
+    var seen = isObject(backend) ? backend : {};
+    if (info.uncertain !== true) { return text(info.message) || labels.revisionText('kept'); }
+    if (isCount(seen.revision) && isCount(seen.expected) && seen.revision > seen.expected) { return labels.revisionText('synced'); }
+    if (seen.inProgress === true) { return labels.revisionText('processing'); }
+    if (isCount(seen.revision)) { return labels.revisionText('kept'); }
+    return text(info.message) || labels.revisionText('uncertain');
   }
 
   /* 記事簿面板（`GET`／`PUT …/notebook`）的失敗。所有失敗都保留玩家正在編輯的內容（`keepDraft`）。 */
@@ -465,7 +522,7 @@
     if (!isObject(raw) || !isCount(raw.seq)) { return null; }
     var status = has(TURN_STATUSES, raw.status) ? raw.status : 'interrupted';
     var complete = status === 'complete';
-    return {
+    var turn = {
       seq: raw.seq,
       client_msg_id: text(raw.client_msg_id).slice(0, 200),
       turn_number: isCount(raw.turn_number) ? raw.turn_number : null,
@@ -473,6 +530,56 @@
       action: complete ? text(raw.action) : '',
       story: complete ? text(raw.story) : ''
     };
+    if (isCount(raw.revision) && raw.revision >= 1) { turn.revision = raw.revision; }       // 修訂次數（從 1 起）；沒有（舊資料）時不帶，一律視為 1
+    return turn;
+  }
+
+  /* 回合的修訂次數：沒有（舊快取）視為 1。 */
+  function revisionOf(turn) { return isObject(turn) && isCount(turn.revision) && turn.revision >= 1 ? turn.revision : 1; }
+
+  /* 這些回合裡序號最大的完整回合（整理過的形狀）；沒有回傳 null。 */
+  function lastCompleteTurn(turns) {
+    var found = null;
+    mergeTurns(turns, []).forEach(function (turn) { if (turn.status === 'complete') { found = turn; } });
+    return found;
+  }
+
+  /* 修訂在途紀錄（種類不是 `turn`）的判定：快取的該回合 `revision` 大於紀錄的 `expected_revision` 就是成功（'applied'），否則沒有完成（'incomplete'）。
+     找不到完整的該回合也是沒有完成（失敗時關閉：不當成成功）。 */
+  function revisionOutcome(turns, record) {
+    if (!isObject(record) || !isCount(record.expected_revision)) { return 'incomplete'; }
+    var match = null;
+    mergeTurns(turns, []).forEach(function (turn) { if (turn.status === 'complete' && turn.client_msg_id === record.client_msg_id) { match = turn; } });
+    return match && revisionOf(match) > record.expected_revision ? 'applied' : 'incomplete';
+  }
+
+  /* 存檔快照的最後一輪修訂資訊（`last_turn`）整理成固定欄位；缺漏或型別不對回傳 null（失敗時關閉：不顯示按鈕）。
+     `revisable` 只有明確為真才算；`reason` 只認列舉；免費次數與幣價不是整數時為 null（不顯示數字）。 */
+  function lastTurnView(raw) {
+    if (!isObject(raw) || typeof raw.client_msg_id !== 'string' || raw.client_msg_id === '' || !isCount(raw.seq)) { return null; }
+    if (!isCount(raw.revision) || raw.revision < 1) { return null; }
+    return {
+      clientMsgId: raw.client_msg_id.slice(0, 200), seq: raw.seq, revision: raw.revision, revisable: raw.revisable === true,
+      reason: has(NOT_REVISABLE_REASONS, raw.reason) ? raw.reason : '', freeLeft: isCount(raw.free_left) ? raw.free_left : null,
+      regenerateCost: isCount(raw.regenerate_cost) ? raw.regenerate_cost : null, editCost: isCount(raw.edit_cost) ? raw.edit_cost : null
+    };
+  }
+
+  /* 理由的字數：與後端 `clean_single_line` 同一個算法（NFC、去除控制字元〔含換行與 Tab〕與頭尾空白，之後以 Unicode 字元計）。 */
+  function reasonText(value) {
+    if (typeof value !== 'string') { return ''; }
+    var normalized = typeof value.normalize === 'function' ? value.normalize('NFC') : value;
+    return normalized.replace(/[\u0000-\u001f\u007f-\u009f]/g, '').replace(/^\s+|\s+$/g, '');
+  }
+  function reasonLength(value) { return characterCount(reasonText(value)); }
+
+  /* 理由的即時檢查：太短或太長回傳固定說明（不含理由本身），沒問題回傳空字串。`min`／`max` 不是正整數時不檢查該端。 */
+  function reasonProblem(value, min, max) {
+    var count = reasonLength(value);
+    if (isCount(max) && max > 0 && count > max) { return '理由最多 ' + max + ' 字（目前 ' + count + ' 字）。'; }
+    var floor = isCount(min) && min > 0 ? min : 1;
+    if (count < floor) { return '請簡短說明原因，至少 ' + floor + ' 字。'; }
+    return '';
   }
 
   /* 合併本機快取與後端的回合：以 `seq` 為準，同序號後端覆寫本機；結果依 `seq` 遞增。傳入的陣列不被修改。 */
@@ -605,6 +712,14 @@
     describeStreamFailure: describeStreamFailure,
     describeNotebookFailure: describeNotebookFailure,
     describeCheckinFailure: describeCheckinFailure,
+    describeRevisionFailure: describeRevisionFailure,
+    revisionNoticeText: revisionNoticeText,
+    reasonLength: reasonLength,
+    reasonProblem: reasonProblem,
+    lastTurnView: lastTurnView,
+    lastCompleteTurn: lastCompleteTurn,
+    revisionOf: revisionOf,
+    revisionOutcome: revisionOutcome,
     worldView: worldView,
     mergeWorld: mergeWorld,
     noticeText: noticeText,

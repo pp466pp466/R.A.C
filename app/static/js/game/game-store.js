@@ -8,7 +8,8 @@
  *   turns     已定稿的回合，key = <存檔>|<補零的序號>（字典序即序號順序）：`Game.normalizeTurn` 的形狀（seq、client_msg_id、turn_number、status、action、story）；
  *             被擋與中斷的回合只存序號與狀態，沒有任何文字；**進行中（streaming）的回合不存**——它之後會變成別的狀態，若存下來，
  *             「以本機最大序號做 since_seq」就會跳過它完成後的內容
- *   inflight  在途回合，key = 存檔識別碼（所以每個存檔最多一筆）：client_msg_id、行動文字、建立時間（由呼叫端給）
+ *   inflight  在途回合，key = 存檔識別碼（所以每個存檔最多一筆）：client_msg_id、行動文字、建立時間（由呼叫端給）；
+ *             修訂（重新生成、編輯最後一輪）的紀錄另有 `kind` 與 `expected_revision`（編輯的 action 是新行動；**重新生成的理由與分類永遠不進來**）
  * 只寫入白名單欄位：**不存記事簿（全文或摘要）、主角角色卡、email、生日與年齡區間**；傳進來的物件有多餘欄位一律丟掉。
  * 這裡不記錄、不輸出任何內容（行動與劇情是玩家文字）。
  *
@@ -36,6 +37,7 @@
   var ID_MAX = 100;
   var CLIENT_MSG_ID_MAX = 200;
   var FINAL_STATUSES = { complete: true, blocked: true, interrupted: true };
+  var REVISION_KINDS = { regenerate: true, edit: true };
 
   function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
   function isCount(value) { return typeof value === 'number' && isFinite(value) && value >= 0 && Math.floor(value) === value; }
@@ -74,9 +76,19 @@
     };
   }
 
+  /* 在途紀錄的白名單。普通回合：client_msg_id、行動、建立時間。修訂（重新生成、編輯最後一輪）另有 `kind`（regenerate｜edit）與 `expected_revision`（送出時畫面上的修訂次數）；
+     編輯的 `action` 是新的行動文字，重新生成沒有行動。**理由與分類不在白名單**：傳進來的多餘欄位一律丟掉，所以它們永遠進不了 IndexedDB。
+     有 `kind` 卻不合格（不認得的種類、沒有有效的 expected_revision）的紀錄整筆丟掉——不能讓壞掉的修訂紀錄變成普通回合的「重送」。 */
   function inflightRecord(entry) {
     if (!isObject(entry) || typeof entry.client_msg_id !== 'string' || entry.client_msg_id === '' || entry.client_msg_id.length > CLIENT_MSG_ID_MAX) { return null; }
-    return { client_msg_id: entry.client_msg_id, action: text(entry.action), created_at: text(entry.created_at) };
+    var record = { client_msg_id: entry.client_msg_id, action: text(entry.action), created_at: text(entry.created_at) };
+    if (entry.kind !== undefined && entry.kind !== 'turn') {
+      if (typeof entry.kind !== 'string' || REVISION_KINDS[entry.kind] !== true || !isCount(entry.expected_revision) || entry.expected_revision < 1) { return null; }
+      record.kind = entry.kind;
+      record.expected_revision = entry.expected_revision;
+      if (entry.kind === 'regenerate') { record.action = ''; }                      // 重新生成沒有新行動，這個欄位永遠是空的
+    }
+    return record;
   }
 
   // ---- 後端一：記憶體 ----------------------------------------------------------------------------------

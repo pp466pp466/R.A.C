@@ -371,3 +371,80 @@ test('keys sort so that sequence order equals text order', () => {
   const keys = [1, 2, 9, 10, 11, 100].map((seq) => Store.turnKey('c', seq));
   assert.deepEqual([...keys].sort(), keys);
 });
+
+// ---- 修訂的在途紀錄（rpg-turn-revision 4.2）-------------------------------------------------------------
+
+const REASON_MARKER = '理由字樣：劇情太無聊';
+const CATEGORY_MARKER = 'repetitive_or_dull';
+
+for (const [name, open] of Object.entries(backends)) {
+  test(`[${name}] a revision record keeps the kind and expected_revision; an edit keeps the new action`, async () => {
+    const store = await open();
+    const edit = await store.setInflight(SESSION, { client_msg_id: 'm3', kind: 'edit', expected_revision: 2, action: '改成走後門', created_at: 't' });
+    assert.deepEqual(edit, { client_msg_id: 'm3', action: '改成走後門', created_at: 't', kind: 'edit', expected_revision: 2 });
+    assert.deepEqual(await store.getInflight(SESSION), edit);
+    const regenerate = await store.setInflight(SESSION, { client_msg_id: 'm3', kind: 'regenerate', expected_revision: 1, created_at: 't' });
+    assert.deepEqual(regenerate, { client_msg_id: 'm3', action: '', created_at: 't', kind: 'regenerate', expected_revision: 1 });
+    assert.deepEqual(await store.getInflight(SESSION), regenerate);
+  });
+
+  test(`[${name}] the reason and the category can never be stored: they are not in the whitelist, and a regenerate record has no action at all`, async () => {
+    const store = await open();
+    const record = await store.setInflight(SESSION, {
+      client_msg_id: 'm3', kind: 'regenerate', expected_revision: 1, created_at: 't', reason: REASON_MARKER, category: CATEGORY_MARKER,
+      regenerate: { reason: REASON_MARKER, category: CATEGORY_MARKER }, action: REASON_MARKER,
+    });
+    assert.deepEqual(Object.keys(record).sort(), ['action', 'client_msg_id', 'created_at', 'expected_revision', 'kind']);
+    assert.equal(record.action, '');
+    const text = JSON.stringify(await store.getInflight(SESSION));
+    assert.ok(!text.includes(REASON_MARKER) && !text.includes(CATEGORY_MARKER) && !text.includes('reason') && !text.includes('category'));
+  });
+
+  test(`[${name}] a broken revision record is not stored at all, so it can never turn into a resend card for an ordinary turn`, async () => {
+    const store = await open();
+    for (const bad of [
+      { client_msg_id: 'm3', kind: 'mystery', expected_revision: 1 }, { client_msg_id: 'm3', kind: 'edit' }, { client_msg_id: 'm3', kind: 'edit', expected_revision: 0 },
+      { client_msg_id: 'm3', kind: 'edit', expected_revision: 1.5 }, { client_msg_id: 'm3', kind: 'regenerate', expected_revision: '2' },
+      { client_msg_id: 'm3', kind: '__proto__', expected_revision: 1 }, { client_msg_id: 'm3', kind: 7, expected_revision: 1 }, { client_msg_id: 'm3', kind: null, expected_revision: 1 },
+    ]) {
+      assert.equal(await store.setInflight(SESSION, bad), null, JSON.stringify(bad));
+    }
+    assert.equal(await store.getInflight(SESSION), null);
+  });
+
+  test(`[${name}] an ordinary record is unchanged: an explicit kind "turn" and a missing kind both give the three-field record`, async () => {
+    const store = await open();
+    assert.deepEqual(await store.setInflight(SESSION, { client_msg_id: 'a', action: '行動', created_at: 't', kind: 'turn', expected_revision: 4 }), { client_msg_id: 'a', action: '行動', created_at: 't' });
+    assert.deepEqual(await store.setInflight(SESSION, { client_msg_id: 'b', action: '行動', expected_revision: 4 }), { client_msg_id: 'b', action: '行動', created_at: '' });
+  });
+
+  test(`[${name}] there is still at most one in-flight record per session: a revision record replaces the previous one`, async () => {
+    const store = await open();
+    await store.setInflight(SESSION, { client_msg_id: 'a', action: '行動' });
+    await store.setInflight(SESSION, { client_msg_id: 'b', kind: 'regenerate', expected_revision: 1 });
+    assert.equal((await store.getInflight(SESSION)).client_msg_id, 'b');
+    await store.clearInflight(SESSION);
+    assert.equal(await store.getInflight(SESSION), null);
+  });
+}
+
+test('[indexeddb] after a whole regenerate flow the database holds no reason or category wording, and the cached turn carries its revision', async () => {
+  const factory = fakeIndexedDB();
+  const store = await Store.openStore({ indexedDB: factory, name: Store.databaseName('user-1'), keyRange });
+  await store.putSession(SESSION, snapshot());
+  await store.putTurns(SESSION, [turn(1), turn(2, { revision: 3 })]);
+  await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 3, created_at: 't', reason: REASON_MARKER, category: CATEGORY_MARKER });
+  const rows = dump(factory);
+  const text = JSON.stringify(rows);
+  for (const marker of [REASON_MARKER, CATEGORY_MARKER, '"reason"', '"category"']) { assert.ok(!text.includes(marker), marker); }
+  assert.equal(rows.find((row) => row.collection === 'turns' && row.value.seq === 2).value.revision, 3);
+  assert.ok(!('revision' in rows.find((row) => row.collection === 'turns' && row.value.seq === 1).value));      // 沒有 revision 的回合維持原形
+});
+
+test('[memory] everything written to the memory backend for a revision holds no reason or category wording', async () => {
+  const { store, written } = recordingMemory();
+  await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'edit', expected_revision: 1, action: '新行動', reason: REASON_MARKER, category: CATEGORY_MARKER });
+  await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 1, reason: REASON_MARKER, category: CATEGORY_MARKER });
+  const text = JSON.stringify(written);
+  for (const marker of [REASON_MARKER, CATEGORY_MARKER, '"reason"', '"category"']) { assert.ok(!text.includes(marker), marker); }
+});

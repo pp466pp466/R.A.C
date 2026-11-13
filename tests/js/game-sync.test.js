@@ -361,3 +361,154 @@ test('the status helper separates connection failures from server answers', () =
   assert.equal(Sync.statusOfFailure(new Error('x')), 'failed');
   assert.equal(Sync.statusOfFailure(undefined), 'failed');
 });
+
+// ---- 修訂的重讀與在途紀錄（rpg-turn-revision 4.2）-------------------------------------------------------
+
+for (const [name, open] of Object.entries(backends)) {
+  test(`[${name}] catching up from the previous sequence of the last turn re-reads it and the backend's revision overwrites the cache`, async () => {
+    const store = await seeded(open, [1, 2, 3, 4, 5]);
+    const api = fakeApi([1, 2, 3, 4].map((seq) => turn(seq)).concat([turn(5, { story: '另一個裝置重新生成的劇情', revision: 2 })]));
+    const result = await Sync.createSync({ api, store }).catchUp(SESSION, { fromSeq: 4 });
+    assert.equal(api.calls.length, 1);
+    assert.equal(api.calls[0].since, 4);                                                    // 從最後一輪的前一個序號起
+    assert.deepEqual({ status: result.status, changed: result.changed, added: result.added }, { status: 'ok', changed: true, added: 0 });
+    const cached = await store.turnsOf(SESSION);
+    assert.equal(cached[4].story, '另一個裝置重新生成的劇情');
+    assert.equal(cached[4].revision, 2);
+    assert.equal(result.turns[4].story, '另一個裝置重新生成的劇情');
+    assert.deepEqual(cached.map((t) => t.seq), [1, 2, 3, 4, 5]);                            // 沒有多出或少掉的回合
+  });
+
+  test(`[${name}] a re-read that finds the same content and revision changes nothing and says so`, async () => {
+    const store = await seeded(open, [1, 2, 3]);
+    const result = await Sync.createSync({ api: fakeApi([turn(1), turn(2), turn(3)]), store }).catchUp(SESSION, { fromSeq: 2 });
+    assert.deepEqual({ status: result.status, changed: result.changed, added: result.added }, { status: 'ok', changed: false, added: 0 });
+  });
+
+  test(`[${name}] the same text with a higher revision is a change (another device regenerated into identical text, the revision still moves on)`, async () => {
+    const store = await seeded(open, [1, 2]);
+    const result = await Sync.createSync({ api: fakeApi([turn(1), turn(2, { revision: 2 })]), store }).catchUp(SESSION, { fromSeq: 1 });
+    assert.equal(result.changed, true);
+    assert.equal((await store.turnsOf(SESSION))[1].revision, 2);
+  });
+
+  test(`[${name}] a cached turn without a revision equals a remote revision 1 (old caches are not rewritten for nothing)`, async () => {
+    const store = await seeded(open, [1, 2]);
+    const result = await Sync.createSync({ api: fakeApi([turn(1), turn(2, { revision: 1 })]), store }).catchUp(SESSION, { fromSeq: 1 });
+    assert.equal(result.changed, false);
+  });
+
+  test(`[${name}] fromSeq only moves the start backwards: a larger value or junk is ignored, 0 re-reads everything`, async () => {
+    for (const [fromSeq, expected] of [[9, 3], [3, 3], [2, 2], [0, 0], [undefined, 3], [-1, 3], [1.5, 3], ['1', 3], [null, 3], [NaN, 3]]) {
+      const store = await seeded(open, [1, 2, 3]);
+      const api = fakeApi([turn(1), turn(2), turn(3)]);
+      await Sync.createSync({ api, store }).catchUp(SESSION, { fromSeq });
+      assert.equal(api.calls[0].since, expected, String(fromSeq));
+    }
+  });
+
+  test(`[${name}] the default catch-up is unchanged: without fromSeq it still starts at the local maximum`, async () => {
+    const store = await seeded(open, [1, 2, 3]);
+    const api = fakeApi([turn(1), turn(2), turn(3), turn(4)]);
+    await Sync.createSync({ api, store }).catchUp(SESSION, { signal: undefined });
+    assert.equal(api.calls[0].since, 3);
+  });
+
+  // ---- 修訂的在途紀錄 ----------------------------------------------------------------------------------
+
+  test(`[${name}] a revision record whose turn now has a higher revision is applied: the record is cleared, nothing is shown, the server is read from the turn before it`, async () => {
+    const store = await seeded(open, [1, 2, 3]);
+    await store.setInflight(SESSION, { client_msg_id: 'm3', kind: 'regenerate', expected_revision: 1, created_at: 't' });
+    const api = fakeApi([turn(1), turn(2), turn(3, { story: '新的劇情', revision: 2 })]);
+    const seen = [];
+    const outcome = await Sync.createSync({ api, store }).resolveInflight(SESSION, { onRevision: (info) => seen.push(info) });
+    assert.equal(outcome, null);
+    assert.equal(await store.getInflight(SESSION), null);
+    assert.equal(api.calls.length, 1);
+    assert.equal(api.calls[0].since, 2);
+    assert.equal(seen.length, 1);
+    assert.deepEqual([seen[0].kind, seen[0].outcome], ['regenerate', 'applied']);
+    assert.equal(seen[0].turns.find((t) => t.seq === 3).story, '新的劇情');                 // 呼叫端用它換上最新的回合
+    assert.equal((await store.turnsOf(SESSION))[2].revision, 2);
+  });
+
+  test(`[${name}] a revision record whose turn still has the expected revision is incomplete: the record is cleared too, and the caller is told`, async () => {
+    const store = await seeded(open, [1, 2, 3]);
+    await store.setInflight(SESSION, { client_msg_id: 'm3', kind: 'edit', expected_revision: 1, action: '新行動', created_at: 't' });
+    const seen = [];
+    const outcome = await Sync.createSync({ api: fakeApi([turn(1), turn(2), turn(3, { revision: 1 })]), store }).resolveInflight(SESSION, { onRevision: (info) => seen.push(info) });
+    assert.equal(outcome, null);                                                             // 不提供「重送」
+    assert.equal(await store.getInflight(SESSION), null);
+    assert.deepEqual(seen.map((info) => [info.kind, info.outcome]), [['edit', 'incomplete']]);
+  });
+
+  test(`[${name}] a revision record never makes the sync engine call anything but the turns listing, whatever the outcome`, async () => {
+    for (const revision of [1, 2]) {
+      const store = await seeded(open, [1, 2]);
+      await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'edit', expected_revision: 1, action: '新行動' });
+      const api = fakeApi([turn(1), turn(2, { revision })]);                                // fakeApi 的其他成員被存取就會丟出例外
+      await Sync.createSync({ api, store }).resolveInflight(SESSION, { onRevision: () => {} });
+      assert.ok(api.calls.every((call) => typeof call.since === 'number'));
+    }
+  });
+
+  test(`[${name}] a handed-over catch-up result is not used for a revision record: the target turn is read again`, async () => {
+    const store = await seeded(open, [1, 2, 3]);
+    await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 1 });
+    const api = fakeApi([turn(1), turn(2, { revision: 2 }), turn(3)]);
+    const sync = Sync.createSync({ api, store });
+    const stale = await sync.catchUp(SESSION);                                              // 本機最大序號 3：不會重讀第 2 輪
+    assert.equal(stale.turns[1].revision, undefined);
+    const seen = [];
+    await sync.resolveInflight(SESSION, { result: stale, onRevision: (info) => seen.push(info) });
+    assert.equal(api.calls[1].since, 1);
+    assert.deepEqual(seen.map((info) => info.outcome), ['applied']);
+  });
+
+  test(`[${name}] a revision record cannot be decided offline: it is kept for the next load, nothing is announced`, async () => {
+    for (const failure of [networkError(), timeoutError(), serverFailure(503, 'unavailable')]) {
+      const store = await seeded(open, [1, 2]);
+      await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 1 });
+      const seen = [];
+      const outcome = await Sync.createSync({ api: fakeApi([], { fail: () => failure }), store }).resolveInflight(SESSION, { onRevision: (info) => seen.push(info) });
+      assert.equal(outcome, null);
+      assert.equal((await store.getInflight(SESSION)).kind, 'regenerate');
+      assert.deepEqual(seen, []);
+    }
+  });
+
+  test(`[${name}] a revision record of a save that no longer exists is cleared with everything else, and nothing is announced`, async () => {
+    const store = await seeded(open, [1, 2]);
+    await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 1 });
+    const seen = [];
+    const outcome = await Sync.createSync({ api: fakeApi([], { fail: () => serverFailure(404, 'not_found') }), store }).resolveInflight(SESSION, { onRevision: (info) => seen.push(info) });
+    assert.equal(outcome, null);
+    assert.equal(await store.getInflight(SESSION), null);
+    assert.deepEqual(seen, []);
+  });
+
+  test(`[${name}] a revision record whose turn is not cached still reads from the local maximum and decides by what it finds`, async () => {
+    const store = await open();
+    await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 1 });
+    const api = fakeApi([turn(1), turn(2, { revision: 2 })]);
+    const seen = [];
+    await Sync.createSync({ api, store }).resolveInflight(SESSION, { onRevision: (info) => seen.push(info) });
+    assert.equal(api.calls[0].since, 0);
+    assert.deepEqual(seen.map((info) => info.outcome), ['applied']);
+  });
+
+  test(`[${name}] an onRevision callback that throws does not stop the record from being cleared`, async () => {
+    const store = await seeded(open, [1, 2]);
+    await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'regenerate', expected_revision: 1 });
+    const outcome = await Sync.createSync({ api: fakeApi([turn(1), turn(2)]), store }).resolveInflight(SESSION, { onRevision: () => { throw new Error('畫面端的錯誤'); } });
+    assert.equal(outcome, null);
+    assert.equal(await store.getInflight(SESSION), null);
+  });
+
+  test(`[${name}] without an onRevision callback a revision record is still resolved and cleared`, async () => {
+    const store = await seeded(open, [1, 2]);
+    await store.setInflight(SESSION, { client_msg_id: 'm2', kind: 'edit', expected_revision: 1, action: '新行動' });
+    assert.equal(await Sync.createSync({ api: fakeApi([turn(1), turn(2)]), store }).resolveInflight(SESSION), null);
+    assert.equal(await store.getInflight(SESSION), null);
+  });
+}

@@ -867,6 +867,109 @@ test('the whole flow writes nothing to the console or to browser storage, and th
   }
 });
 
+// ---- 重新生成與編輯最後一輪的接點（rpg-turn-revision 4.4）----------------------------------------------------
+
+const LAST_TURN = { client_msg_id: 't2', seq: 2, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 30 };
+const twoTurns = () => [turnView(1, 't1', '行動1', '劇情1', { revision: 1 }), turnView(2, 't2', '行動2', '劇情2', { revision: 1 })];
+
+test('the last-turn information of the snapshot is kept in memory in a fixed shape, follows every later snapshot, and a missing or broken one means "unknown"', async () => {
+  const h = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN } });
+  assert.deepEqual(plain(h.session.lastTurn.value), { clientMsgId: 't2', seq: 2, revision: 1, revisable: true, reason: '', freeLeft: 2, regenerateCost: 0, editCost: 30 });
+  h.server.session.last_turn = Object.assign({}, LAST_TURN, { revision: 2, free_left: 1 });
+  await sendAction(h, '再往前', normalTurn({ seq: 3, clientMsgId: 'msg-1', story: '第三輪。' }));
+  await h.until(() => h.calls.snapshot.length >= 2, '完成後重讀快照');
+  assert.equal(h.session.lastTurn.value.revision, 2);
+  h.server.session.last_turn = { client_msg_id: 't2' };
+  await h.session.load({ soft: true });
+  assert.equal(h.session.lastTurn.value, null);
+  const without = await ready({ turns: twoTurns(), session: { completed_turns: 2 } });
+  assert.equal(without.session.lastTurn.value, null);
+  const cache = JSON.stringify(await h.store.getSession(SESSION_ID));
+  assert.ok(!cache.includes('last_turn') && !cache.includes('free_left') && !cache.includes('revision'));      // 快取的白名單不含修訂資訊
+});
+
+test('loading re-reads from the turn before the last one when the snapshot names it, so a stale cache is overwritten; without it the catch-up starts at the local maximum', async () => {
+  const seed = (store) => store.putTurns(SESSION_ID, [turnView(1, 't1', '行動1', '劇情1'), turnView(2, 't2', '行動2', '舊劇情')]);
+  const withLast = await ready({ turns: [turnView(1, 't1', '行動1', '劇情1'), turnView(2, 't2', '行動2', '新劇情', { revision: 2 })], session: { completed_turns: 2, last_turn: Object.assign({}, LAST_TURN, { revision: 2 }) }, seed });
+  assert.deepEqual(withLast.calls.turns.map((call) => call.since), [1]);
+  assert.equal(withLast.storyOf('t2'), '新劇情');
+  const without = await ready({ turns: [turnView(1, 't1', '行動1', '劇情1'), turnView(2, 't2', '行動2', '新劇情', { revision: 2 })], session: { completed_turns: 2 }, seed });
+  assert.deepEqual(without.calls.turns.map((call) => call.since), [2]);
+  assert.equal(without.storyOf('t2'), '舊劇情');                                                         // 沒有 last_turn：行為與以前完全相同
+});
+
+test('a revision overlay replaces the story, the streaming flag and the notes of that turn only (and the action when it is an edit); removing it restores the history untouched', async () => {
+  const h = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN } });
+  const before = plain(h.timeline());
+  const host = h.session.revisionHost;
+  host.overlay.value = { clientMsgId: 't2', action: '新行動', story: '新的半句', streaming: true, notes: ['轉場一行'] };
+  const during = plain(h.timeline());
+  const changed = during.find((item) => item.key === 'turn:t2');
+  assert.deepEqual([changed.action, changed.story, changed.streaming, changed.notes], ['新行動', '新的半句', true, ['轉場一行']]);
+  assert.deepEqual(during.filter((item) => item.key !== 'turn:t2'), before.filter((item) => item.key !== 'turn:t2'));
+  assert.equal(host.history.value.find((turn) => turn.seq === 2).story, '劇情2');                         // 舊內容仍在記憶體
+  host.overlay.value.story = '新的半句，繼續';
+  assert.equal(h.storyOf('t2'), '新的半句，繼續');
+  host.overlay.value = { clientMsgId: 't2', action: null, story: '只換劇情', streaming: false, notes: [] };
+  assert.equal(plain(h.timeline()).find((item) => item.key === 'turn:t2').action, '行動2');               // action 為 null：行動不變
+  host.overlay.value = null;
+  assert.deepEqual(plain(h.timeline()), before);
+});
+
+test('an overlay for a turn that is not in the timeline changes nothing', async () => {
+  const h = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN } });
+  const before = plain(h.timeline());
+  h.session.revisionHost.overlay.value = { clientMsgId: 'nope', action: null, story: '不存在', streaming: true, notes: [] };
+  assert.deepEqual(plain(h.timeline()), before);
+});
+
+test('while a revision runs a new action cannot be sent or resent, and the send button is disabled; when it ends everything works again', async () => {
+  const h = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN }, seed: (store) => store.setInflight(SESSION_ID, { client_msg_id: 'lost', action: '沒送完', created_at: 'x' }) });
+  assert.ok(h.session.inflight.value);                                                                    // 有一筆在途回合
+  await h.session.abandonInflight();
+  h.session.revising.value = true;
+  assert.equal(h.session.sendDisabled.value, true);
+  h.session.draft.value = '新的行動';
+  assert.equal(await h.session.send(), false);
+  assert.equal(h.calls.streams.length, 0);
+  h.session.revising.value = false;
+  assert.equal(h.session.sendDisabled.value, false);
+
+  const resend = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN }, seed: (store) => store.setInflight(SESSION_ID, { client_msg_id: 'lost', action: '沒送完', created_at: 'x' }) });
+  resend.session.revising.value = true;
+  assert.equal(await resend.session.resendInflight(), false);
+  assert.equal(resend.calls.streams.length, 0);
+});
+
+test('a completed new turn makes the last-turn information unknown until the snapshot is read again, so the buttons never stay under the previous turn', async () => {
+  const h = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN } });
+  h.server.snapshotFailure = failureInfo(0, '', { kind: 'network' });                                      // 完成之後的快照讀不到
+  await sendAction(h, '往前走', normalTurn({ seq: 3, clientMsgId: 'msg-1', story: '第三輪。' }));
+  await h.idle();
+  assert.equal(h.session.lastTurn.value, null);
+});
+
+test('a revision record found while loading is resolved by the sync engine: the newest turns are shown, and only an unfinished one tells the player', async () => {
+  const unfinished = createHarness({
+    turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN },
+    seed: (store) => store.setInflight(SESSION_ID, { client_msg_id: 't2', kind: 'regenerate', expected_revision: 1, created_at: 'x' }),
+  });
+  await unfinished.build();
+  await unfinished.session.load();
+  assert.equal(unfinished.session.inflight.value, null);
+  assert.equal(unfinished.session.notice.value.text, Labels.revisionText('incomplete'));
+  assert.equal(await unfinished.store.getInflight(SESSION_ID), null);
+  const applied = createHarness({
+    turns: [turnView(1, 't1', '行動1', '劇情1'), turnView(2, 't2', '行動2', '新劇情', { revision: 2 })], session: { completed_turns: 2, last_turn: Object.assign({}, LAST_TURN, { revision: 2 }) },
+    seed: (store) => store.setInflight(SESSION_ID, { client_msg_id: 't2', kind: 'edit', expected_revision: 1, action: '新行動', created_at: 'x' }),
+  });
+  await applied.build();
+  await applied.session.load();
+  assert.equal(applied.session.notice.value, null);
+  assert.equal(applied.storyOf('t2'), '新劇情');
+  assert.equal(applied.calls.streams.length, 0);
+});
+
 test('the module source never touches the DOM, browser storage, the network or the console', () => {
   const source = fs.readFileSync(path.join(ROOT, 'app/static/js/game/game-session.js'), 'utf8')
     .replace(/\/\*[\s\S]*?\*\//g, '').replace(/(?<![:\w])\/\/[^\n]*/g, '');

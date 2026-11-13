@@ -109,14 +109,15 @@
     }
 
     /* 伺服器回 409 `insufficient_coins`（`failure` 是 `Game.describeHttpFailure` 的結果，帶 `balance`／`needed`）：開 Modal，並以伺服器說的餘額更新顯示。 */
-    function openInsufficient(failure) {
+    function openInsufficient(failure, options) {
       var known = isObject(failure) ? failure : {};
       if (isCount(known.balance)) { balance.value = known.balance; }
       var needed = isCount(known.needed) ? known.needed : turnCost.value;
       var head = balance.value !== null && needed !== null
         ? '遊戲幣不足：目前餘額 ' + balance.value + ' 幣，每一輪需要 ' + needed + ' 幣。'
         : '遊戲幣不足。';
-      coinModalText.value = head + '這一輪沒有扣除遊戲幣，你的行動文字還保留在輸入框裡。';
+      // 重新生成與編輯最後一輪（`options.revision`）：沒有行動文字留在輸入框，保留的是原本的回應
+      coinModalText.value = head + (isObject(options) && options.revision === true ? '這次修改沒有扣除遊戲幣，原本的回應已保留。' : '這一輪沒有扣除遊戲幣，你的行動文字還保留在輸入框裡。');
       reset('insufficient');
       coinModalOpen.value = true;
     }

@@ -21,16 +21,17 @@ const STATE = {
   content_mode: { effective: 'standard', is_adult: true },
   stream: { idle_timeout_ms: 45000, total_timeout_ms: 180000 },
   limits: { action_max: 1000 },
+  revision_limits: { reason_min: 5, reason_max: 50, categories: ['setting_mismatch', 'repetitive_or_dull', 'typo_or_quality', 'blocked_transition', 'other'] },
 };
 
 const SCRIPTS = [
   'js/auth/auth-common.js', 'js/ui/typewriter.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/ui-components.js',
   'js/game/game-labels.js', 'js/game/sse-parser.js', 'js/game/turn-stream.js', 'js/game/game-state.js', 'js/game/game-store.js', 'js/game/game-sync.js',
-  'js/game/game-api.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-session.js',
+  'js/game/game-api.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-revision.js', 'js/game/game-session.js',
 ];
 
 /* 建立沙盒並回傳 setup() 的結果。`respond(request)` 是 axios 的替身：收到 { method, url, data, timeout, signal }，回傳 Promise。 */
-function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')) } = {}) {
+function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')), fetchImpl = null } = {}) {
   const requests = [];
   const navigations = [];
   const mounted = [];
@@ -52,7 +53,7 @@ function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 12
   sandbox.innerWidth = width;
   sandbox.navigator = { onLine: online };
   sandbox.addEventListener = (type, handler) => { (listeners[type] = listeners[type] || []).push(handler); };
-  sandbox.fetch = (...args) => { fetches.push(args); return Promise.reject(new TypeError('network')); };
+  sandbox.fetch = (...args) => { fetches.push(args); return fetchImpl ? fetchImpl(...args) : Promise.reject(new TypeError('network')); };      // fetchImpl：串流端點的替身（重新生成與編輯的測試用）
   sandbox.location = { assign: (target) => navigations.push(target), hash: '', pathname, search: '' };
   sandbox.localStorage = trap('localStorage');
   sandbox.sessionStorage = trap('sessionStorage');

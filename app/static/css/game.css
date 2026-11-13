@@ -369,6 +369,19 @@ textarea.gw-input { resize: vertical; }
 
 .gm-modal-text { margin: 0 0 0.6rem; line-height: 1.8; overflow-wrap: anywhere; }
 
+/* 重新生成與編輯最後一輪（rpg-turn-revision）：最後一輪氣泡下方的按鈕列，以及兩個 Modal 裡的分類、字數列。全部取自主題變數，手機寬度會換行不溢出 */
+.gm-revise { margin: 0.7rem 0 0; }
+.gm-revise__bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.75rem; margin: 0; }
+.gm-revise__btn { padding: 0.2rem 0.8rem; font-size: 0.88rem; }
+.gm-revise__note { color: var(--color-text-muted); font-size: 0.82rem; }
+.gm-revise__hint { margin: 0.4rem 0 0; }
+.gm-revise__choices { min-width: 0; margin: 0 0 0.8rem; padding: 0; border: 0; }
+.gm-revise__choice { display: inline-flex; align-items: center; gap: 0.4rem; margin: 0 0.5rem 0.5rem 0; padding: 0.25rem 0.75rem; border: 1px solid var(--color-border); border-radius: 999px; color: var(--color-text-muted); font-size: 0.9rem; cursor: pointer; }
+.gm-revise__choice:hover, .gm-revise__choice:focus-within { border-color: var(--color-accent); color: var(--color-accent); }
+.gm-revise__choice--on { border-color: var(--color-accent); color: var(--color-text); }
+.gm-revise__choice input { accent-color: var(--color-accent); }
+.gm-revise__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.3rem 0.75rem; margin-top: 0.3rem; }
+
 @media (min-width: 992px) {
   .gm-topbar { padding-left: 24px; padding-right: 24px; }
   .gm-scroll { padding-left: 24px; padding-right: 24px; }

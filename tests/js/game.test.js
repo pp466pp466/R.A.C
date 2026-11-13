@@ -452,3 +452,175 @@ test('pagehide with an unsaved draft sends no save request', async () => {
   assert.equal(notebookRequests().filter((request) => request.method === 'put').length, 0);
   assert.equal(game.page.notebookDraft.value, '編輯到一半');
 });
+
+// ---- 重新生成與編輯最後一輪（rpg-turn-revision 4.4）-------------------------------------------------------
+
+const REVISION_REASON = '理由的獨特字樣Z7重複又無聊';
+const SESSION_PATH = /\/api\/game\/sessions\/[^/]+$/;
+
+/* 一個有兩輪、最後一輪可修訂的假伺服器；串流端點（`fetch`）的連線一直開著直到被中止。 */
+function revisionGame({ indexedDB = null, lastTurn = {} } = {}) {
+  const streams = [];
+  const respond = (request) => {
+    if (SESSION_PATH.test(request.url)) {
+      return Promise.resolve({ data: { session: {
+        id: STATE.session.id, title: '青雲問道', content_tier: 'safe', status: 'active', ended: false, version: 1, completed_turns: 2,
+        opening: { state: 'ready', text: '第零幕。' }, world: { elapsed_months: 0, location: '山門', summary: '', goals: [], places: [], protagonist_age: 16 },
+        notebook: { version: 0, length: 0, capacity: 2000, full: false },
+        last_turn: Object.assign({ client_msg_id: 't2', seq: 2, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 30 }, lastTurn),
+      } } });
+    }
+    if (/\/turns$/.test(request.url)) {
+      return Promise.resolve({ data: { has_more: false, turns: [
+        { seq: 1, client_msg_id: 't1', turn_number: 1, status: 'complete', action: '行動1', story: '劇情1', revision: 1 },
+        { seq: 2, client_msg_id: 't2', turn_number: 2, status: 'complete', action: '行動2', story: '劇情2', revision: 1 },
+      ] } });
+    }
+    if (/\/api\/wallet$/.test(request.url)) { return Promise.resolve({ data: { ok: true, wallet: { total: 230, turn_cost: { standard: 30 }, checkin: { claimable: true } } } }); }
+    return Promise.reject(new Error('unexpected ' + request.method + ' ' + request.url));
+  };
+  const fetchImpl = (url, init) => {
+    streams.push({ url, init, body: JSON.parse(init.body) });
+    return new Promise((resolve, reject) => { init.signal.addEventListener('abort', () => reject(new DOMException('aborted', 'AbortError'))); });
+  };
+  const game = setupGame({ respond, fetchImpl, indexedDB, keyRange: indexedDB ? keyRange : null });
+  return { game, streams };
+}
+
+async function revisionMounted(options) {
+  const env = revisionGame(options);
+  await env.game.mount();
+  await waitFor(() => env.game.page.reviseKey.value && !env.game.page.reviseDisabled.value || options && options.lastTurn);      // 假的 IndexedDB 要多等一會兒才開好
+  await settle(10);
+  return env;
+}
+
+/* 以真實的計時輪詢等條件成立（最多約 2 秒）；假的 IndexedDB 用計時器排程，光靠 setImmediate 的輪數會不穩定。 */
+async function waitFor(condition) {
+  for (let round = 0; round < 400 && !condition(); round += 1) { await new Promise((resolve) => setTimeout(resolve, 5)); }
+}
+
+function startRegenerate(page) {
+  assert.equal(page.openRegenerate(), true);
+  page.selectRegenerateCategory('repetitive_or_dull');
+  page.regenerateReason.value = REVISION_REASON;
+  return page.submitRegenerate();
+}
+
+test('mounting the real page shows the revision buttons under the last turn of the snapshot, with the free count and the price', async () => {
+  const { game } = await revisionMounted();
+  const { page } = game;
+  assert.equal(page.reviseKey.value, 'turn:t2');
+  assert.equal(page.reviseDisabled.value, false);
+  assert.equal(page.regenerateNote.value, '免費還剩 2 次');
+  assert.equal(page.editNote.value, '30 幣');
+  assert.deepEqual(Array.from(page.items.value.filter((item) => item.key === page.reviseKey.value).map((item) => item.story)), ['劇情2']);
+  assert.deepEqual(game.logs, []);
+  assert.deepEqual(game.storageWrites, []);
+});
+
+test('the real page has no revision buttons when the snapshot says it is not the last turn, and disabled ones with a reason while something is in progress', async () => {
+  const notLast = await revisionMounted({ lastTurn: { revisable: false, reason: 'not_last' } });
+  assert.equal(notLast.game.page.reviseKey.value, '');
+  const waiting = await revisionMounted({ lastTurn: { revisable: false, reason: 'in_progress' } });
+  assert.equal(waiting.game.page.reviseKey.value, 'turn:t2');
+  assert.equal(waiting.game.page.reviseDisabled.value, true);
+  assert.ok(waiting.game.page.reviseHint.value.includes('處理中'));
+});
+
+test('Escape does not close the sidebar while the regenerate or the edit modal is open', async () => {
+  const { game } = await revisionMounted({});
+  const { page } = game;
+  page.toggleSidebar();
+  assert.equal(page.openRegenerate(), true);
+  game.fireDocument('keydown', noEvent());
+  assert.equal(page.sidebarOpen.value, true);
+  page.closeRegenerate();
+  assert.equal(page.openEdit(), true);
+  game.fireDocument('keydown', noEvent());
+  assert.equal(page.sidebarOpen.value, true);
+  page.closeEdit();
+  game.fireDocument('keydown', noEvent());
+  assert.equal(page.sidebarOpen.value, false);
+});
+
+test('while a regenerate is running leaving asks first, a new action cannot be sent, and the request carries the right URL, body and token', async () => {
+  const { game, streams } = await revisionMounted();
+  const { page } = game;
+  const running = startRegenerate(page);
+  await settle(10);
+  assert.equal(page.revisionBusy.value, true);
+  assert.equal(streams.length, 1);
+  assert.ok(streams[0].url.endsWith('/turns/t2/regenerate/stream'));
+  assert.deepEqual(streams[0].body, { expected_revision: 1, category: 'repetitive_or_dull', reason: REVISION_REASON });
+  assert.equal(streams[0].init.headers['X-CSRF-Token'], 'CSRF-TOKEN');
+  assert.equal(page.sendDisabled.value, true);
+  page.draft.value = '新的行動';
+  assert.equal(await page.send(), false);
+  assert.equal(streams.length, 1);                                                // 修訂中不得送出新行動
+  let prevented = 0;
+  assert.equal(page.leaveClick({ preventDefault: () => { prevented += 1; } }), true);
+  assert.equal(prevented, 1);
+  assert.equal(page.modal.leave, true);
+  assert.equal(page.confirmLeave(), true);
+  assert.equal(streams[0].init.signal.aborted, true);                             // 離開：中止請求
+  assert.deepEqual(game.navigations, ['/game']);
+  await running;
+  assert.equal(page.revisionBusy.value, false);
+});
+
+test('pagehide aborts a running regenerate, and the page ends with the busy flag cleared and the old content shown', async () => {
+  const { game, streams } = await revisionMounted();
+  const { page } = game;
+  const running = startRegenerate(page);
+  await settle(10);
+  assert.equal(streams[0].init.signal.aborted, false);
+  game.fire('pagehide');
+  assert.equal(streams[0].init.signal.aborted, true);
+  await running;
+  await settle(20);
+  assert.equal(page.revisionBusy.value, false);
+  assert.deepEqual(Array.from(page.items.value.filter((item) => item.key === 'turn:t2').map((item) => item.story)), ['劇情2']);
+});
+
+test('the cancel method stops a running edit, and the edit modal reopens with the original action', async () => {
+  const { game, streams } = await revisionMounted();
+  const { page } = game;
+  assert.equal(page.openEdit(), true);
+  assert.equal(page.editDraft.value, '行動2');
+  page.editDraft.value = '改成別的行動';
+  const running = page.submitEdit();
+  await settle(10);
+  assert.ok(streams[0].url.endsWith('/turns/t2/edit/stream'));
+  assert.deepEqual(streams[0].body, { expected_revision: 1, action: '改成別的行動' });
+  assert.equal(page.cancelRevision(), true);
+  await running;
+  await settle(20);
+  assert.equal(page.revisionBusy.value, false);
+  assert.equal(page.openEdit(), true);
+  assert.equal(page.editDraft.value, '行動2');                                    // 取消之後還是原本的行動
+});
+
+test('the whole revision flow keeps the reason and the category out of IndexedDB, the console and every other browser storage', async () => {
+  const factory = fakeIndexedDB();
+  const { game, streams } = await revisionMounted({ indexedDB: factory });
+  const { page } = game;
+  const running = startRegenerate(page);
+  await waitFor(() => streams.length > 0);                                       // 假的 IndexedDB 寫完在途紀錄之後才會發出請求
+  assert.equal(streams.length, 1);
+  const during = dump(factory);
+  const record = during.find((row) => row.collection === 'inflight');
+  assert.ok(record, '修訂進行中應該有一筆在途紀錄');
+  assert.equal(record.value.kind, 'regenerate');
+  assert.equal(record.value.expected_revision, 1);
+  game.fire('pagehide');
+  await running;
+  await settle(30);
+  const stored = JSON.stringify(dump(factory)) + JSON.stringify(during);
+  for (const marker of [REVISION_REASON, 'repetitive_or_dull', '"reason"', '"category"']) { assert.ok(!stored.includes(marker), marker); }
+  assert.ok(stored.includes('青雲問道'), '暫存沒有寫入任何東西，這項檢查是空洞的');
+  assert.deepEqual(game.logs, []);
+  assert.deepEqual(game.storageWrites, []);
+  assert.ok(JSON.stringify(streams[0].body).includes(REVISION_REASON));          // 理由只在請求本文
+  assert.ok(!JSON.stringify(game.toasts).includes(REVISION_REASON));
+});

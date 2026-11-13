@@ -11,11 +11,16 @@ const CONTRACT = {
     'notebook', 'notebookLoading', 'notebookError', 'notebookEmpty', 'notebookUsage', 'notebookReserveNote', 'notebookFull', 'notebookFullText', 'notebookEmptyText',
     'notebookStale', 'notebookEditing', 'notebookDraft', 'notebookDraftCount', 'notebookOver', 'notebookOverNote', 'notebookEditHint', 'notebookSaveHint', 'notebookCanEdit',
     'notebookCanSave', 'notebookLocked', 'notebookSaving', 'notebookNotice', 'notebookConflict', 'notebookDiscardOpen',
+    // 重新生成與編輯最後一輪（game-revision.js）
+    'revisionBusy', 'reviseKey', 'reviseDisabled', 'reviseHint', 'regenerateNote', 'editNote', 'regenerateOpen', 'regenerateOptions', 'regenerateCategory',
+    'regenerateReason', 'regenerateRule', 'regenerateCount', 'regenerateError', 'regenerateCanSubmit', 'regenerateCostLine', 'editOpen', 'editDraft', 'editCount',
+    'editHint', 'editError', 'editCanSubmit', 'editInsufficient', 'editCostLine',
   ],
   methods: [
     'retryLoad', 'retryOpening', 'showEarlier', 'jumpToLatest', 'onScroll', 'send', 'cancel', 'dismissNotice', 'resendInflight', 'askAbandon',
     'confirmAbandon', 'leaveClick', 'confirmLeave', 'toggleSidebar', 'closeSidebar', 'selectSideTab', 'claimCheckin', 'confirmOverflow', 'cancelOverflow',
     'closeCoinModal', 'openNotebook', 'reloadNotebook', 'startNotebookEdit', 'saveNotebook', 'cancelNotebookEdit', 'confirmNotebookDiscard',
+    'openRegenerate', 'openEdit', 'closeRegenerate', 'closeEdit', 'selectRegenerateCategory', 'submitRegenerate', 'submitEdit', 'cancelRevision',
   ],
 };
 const CONTRACT_NAMES = [].concat(CONTRACT.state, CONTRACT.methods).sort();

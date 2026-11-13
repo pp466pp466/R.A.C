@@ -438,7 +438,8 @@ def test_the_game_template_has_the_timeline_the_composer_the_sidebar_the_modals_
     assert 'v-for="item in items"' in html and ':key="item.key"' in html
     for kind in ("opening", "turn", "note"):
         assert f"item.kind === '{kind}'" in html, kind                           # 第 0 幕、完整回合、轉場與中斷說明；其餘是在途回合
-    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["COINS", "LEAVE_GAME", "ABANDON_TURN", "DISCARD_NOTEBOOK"]
+    # rpg-turn-revision 4.4 有意識地改寫這一行（不是刪除）：新增重新生成與編輯兩個 Modal，放在遊戲幣 Modal 之前，所以遊戲幣不足或簽到的 Modal 會疊在它們上面
+    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["REGENERATE_TURN", "EDIT_TURN", "COINS", "LEAVE_GAME", "ABANDON_TURN", "DISCARD_NOTEBOOK"]
     assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
     assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)               # 初始狀態經 tojson 跳脫
     assert re.search(r'<aside id="gm-sidebar" v-show="sidebarOpen"', html)       # 側欄的顯示由 Vue 接管（預設收合，見 game.js）
@@ -497,7 +498,7 @@ def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_t
     html = client.get(f"/game/{save_id}").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
     expected = ["auth-common.js", "game-labels.js", "sse-parser.js", "turn-stream.js", "game-state.js", "game-store.js", "game-sync.js",
-                "game-api.js", "game-wallet.js", "game-notebook.js", "game-session.js", "game.js"]
+                "game-api.js", "game-wallet.js", "game-notebook.js", "game-revision.js", "game-session.js", "game.js"]
     for needed in ("vue.global.prod.js", "axios.min.js", "typewriter.js", "ui-components.js", "restriction.js", *expected):
         assert needed in names, needed
     assert names[-1] == "game.js"                                                # 掛載腳本必須是最後一個（它用到前面所有模組）
@@ -723,6 +724,32 @@ def test_the_game_screen_label_tables_cover_exactly_the_backend_turn_statuses_do
     assert sorted(labels_in(source, "TURN_STATUS_LABELS")) == sorted(TURN_STATUSES)
     assert sorted(labels_in(source, "DONE_STATUS_LABELS")) == sorted([DONE_COMPLETE, DONE_BLOCKED, DONE_ENDED])
     assert sorted(labels_in(source, "STREAM_ERROR_MESSAGES")) == sorted(ERROR_MESSAGES)
+
+
+def test_the_revision_label_tables_cover_exactly_the_backend_categories_not_revisable_reasons_and_the_error_codes_a_revision_can_send():
+    """rpg-turn-revision 4.1：重新生成的五個分類、不能修訂的四個原因、修訂串流可能送出的錯誤代碼，都要有繁體中文對照；
+    後端新增或改名時這裡會失敗，提醒同步 `game-labels.js`（否則畫面會退回通用文字）。分類的名稱與順序以頁面初始狀態為準，這裡只比對列舉。"""
+    from app.models.rpg_session import REGEN_CATEGORIES
+    from app.repositories.session_repository import NOT_REVISABLE_REASONS
+    from app.services.errors import NOT_REVISABLE_MESSAGES
+    from app.services.rpg_runner_base import ERROR_MESSAGES
+
+    source = read(JS_DIR / "game-labels.js")
+    assert sorted(labels_in(source, "REVISION_CATEGORY_LABELS")) == sorted(REGEN_CATEGORIES)
+    assert sorted(labels_in(source, "REVISION_NOT_REVISABLE_MESSAGES")) == sorted(NOT_REVISABLE_REASONS) == sorted(NOT_REVISABLE_MESSAGES)
+    assert sorted(labels_in(source, "REVISION_ERROR_MESSAGES")) == sorted(set(ERROR_MESSAGES) - {"opening_superseded"})   # 第 0 幕的代碼不會出現在修訂串流
+    state = read(JS_DIR / "game-state.js")
+    for reason in NOT_REVISABLE_REASONS:                                         # 前端辨識原因的列舉與後端一致
+        assert f"{reason}: true" in state, reason
+
+
+def test_the_revision_error_wording_never_promises_nothing_changed_for_an_outcome_that_is_not_certain():
+    """取消、中斷與逾時時伺服器可能已經完成修訂，前端的「不確定」說明不得承諾「沒有扣遊戲幣」；確定的失敗才說（rpg-turn-revision design 風險）。"""
+    source = read(JS_DIR / "game-labels.js")
+    uncertain = re.search(r"uncertain: '([^']*)'", source).group(1)
+    assert "伺服器可能已經完成" in uncertain and "沒有扣" not in uncertain
+    for key in ("kept", "kept_blocked", "kept_failed"):
+        assert "已保留原本的回應" in re.search(rf"{key}: '([^']*)'", source).group(1), key
 
 
 def game_screen_css() -> str:

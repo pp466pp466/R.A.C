@@ -9,6 +9,8 @@
  * - `formatTaipeiTime(iso)`：伺服器的 UTC 時間（`2026-10-27T12:00:00Z`）轉成台灣時間 `YYYY-MM-DD HH:mm`；台灣沒有日光節約時間，固定加 8 小時，不依賴瀏覽器的時區。
  * 遊戲主畫面（rpg-game-ui）另加：回合與串流結束狀態的名稱、轉場與中斷說明、串流 `error` 事件的訊息、歷史裡未完成回合的那一行說明、
  * 記事簿與簽到用的固定文字。這些文字**不含任何玩家文字**；不認得的值一律退回固定文字（失敗時關閉：不當成有內容的回合）。
+ * 重新生成與編輯最後一輪（rpg-turn-revision）另加：五個回饋分類的名稱、按鈕旁的免費次數與幣價說明、兩個 Modal 的費用說明、不能修訂的各種原因與結果通知
+ * （一律說明「已保留原本的回應」）；同樣不含任何玩家文字（行動、理由、劇情都不會被帶進來）。
  * 所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。
  */
 (function (root, factory) {
@@ -117,6 +119,54 @@
     unavailable: '簽到暫時無法使用，請稍後再試。'
   };
 
+  /* ---- 重新生成與編輯最後一輪（rpg-turn-revision）：分類、按鈕旁的說明、Modal 與結果通知的固定文字 ----
+     這些文字**不含任何玩家文字**（行動、理由、劇情都不會被帶進來）；數字只有次數、幣數、字數這類整數。
+     分類的鍵與後端 `REGEN_CATEGORIES` 一致（由 tests/test_game_pages.py 比對）；順序與是否啟用以頁面初始狀態的 `revision_limits.categories` 為準。 */
+  var REVISION_CATEGORY_LABELS = {
+    setting_mismatch: '不符合設定',
+    repetitive_or_dull: '劇情重複或無趣',
+    typo_or_quality: '錯字或文字品質',
+    blocked_transition: '被轉場擋掉',
+    other: '其他'
+  };
+  var REVISION_CATEGORY_FALLBACK = '其他';
+  var REVISION_TEXTS = {
+    kept: '已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。',
+    kept_blocked: '新的內容沒有通過內容檢查，劇情轉了個彎。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。',
+    kept_failed: '新的內容沒有生成成功。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。',
+    synced: '伺服器已經完成這次的修改，畫面已換成伺服器上最新的內容。',
+    processing: '伺服器還在處理這次的修改；完成後會以伺服器上的內容為準，請稍後重新整理頁面確認。',
+    uncertain: '連線在這次修改完成之前中斷了。伺服器可能已經完成，畫面會以伺服器上的內容為準。',
+    incomplete: '上次的重新生成或編輯沒有完成，原本的回應已保留。',
+    unavailable: '目前無法重新生成或編輯這一輪，請稍後再試。',
+    hint_offline: '需要連線才能重新生成或編輯。',
+    hint_sending: '新的一輪進行中，完成後才能重新生成或編輯。',
+    hint_revising: '正在重新生成或編輯這一輪…',
+    hint_inflight: '有一個行動還沒有確認完成，請先在時間軸裡選擇「重送」或「放棄」。',
+    hint_in_progress: '故事正在處理中，請稍候再試。',
+    hint_no_snapshot: '這一輪太久以前建立，已經不能重新生成或編輯。',
+    hint_unknown: '目前無法重新生成或編輯這一輪。',
+    category_missing: '請選擇一個分類。',
+    edit_unchanged: '行動和原本的相同，請修改後再送出。',
+    edit_empty: '請輸入你的行動。'
+  };
+  var REVISION_NOT_REVISABLE_MESSAGES = {
+    ended: '這個存檔已經完結，最後一輪不能再重新生成或編輯。',
+    not_last: '只有最後一輪可以重新生成或編輯。',
+    in_progress: '故事正在處理中，請稍候再試。',
+    no_snapshot: '這一輪太久以前建立，已經不能重新生成或編輯。'
+  };
+  var REVISION_NOT_REVISABLE_FALLBACK = '這一輪目前不能重新生成或編輯。';
+  var REVISION_CONFLICT_MESSAGE = '這一輪已經在另一個地方被修改過，已為你顯示最新的內容。';
+  /* 修訂串流中的 `error` 事件：全部說明「保留原本的回應」；不認得的代碼退回通用文字（不顯示伺服器送來的原文）。 */
+  var REVISION_ERROR_MESSAGES = {
+    generation_timeout: '新的內容生成逾時了。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。',
+    generation_failed: '新的內容暫時無法生成。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。',
+    turn_superseded: '這次的修改已經被新的嘗試取代，已為你重新同步。',
+    internal_error: '發生了預期之外的問題。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。'
+  };
+  var REVISION_ERROR_FALLBACK = '新的內容暫時無法生成。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。';
+
   function has(map, key) { return typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key); }
   function labelOf(map, value, fallback) { return has(map, value) ? map[value] : fallback; }
   function copy(notice) { return { text: notice.text, link: notice.link, linkText: notice.linkText }; }
@@ -216,7 +266,68 @@
     return when ? '今天已經簽到過了，下次可簽到的時間是 ' + when + '（台灣時間）。' : CHECKIN_TEXTS.already_default;
   }
 
+  /* 重新生成的分類名稱；不認得的值退回「其他」（不顯示原始值）。 */
+  function revisionCategoryLabel(value) { return labelOf(REVISION_CATEGORY_LABELS, value, REVISION_CATEGORY_FALLBACK); }
+
+  /* 修訂用的固定文字；不認得的鍵退回通用說明。 */
+  function revisionText(key) { return labelOf(REVISION_TEXTS, key, REVISION_TEXTS.unavailable); }
+
+  /* 「重新生成」旁的說明：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。 */
+  function revisionRegenerateNote(freeLeft, cost) {
+    if (isCount(freeLeft) && freeLeft > 0) { return '免費還剩 ' + freeLeft + ' 次'; }
+    if (isCount(cost) && cost > 0) { return cost + ' 幣'; }
+    return '';
+  }
+
+  /* 「編輯」旁的說明：一輪的幣價；缺值時不顯示數字。 */
+  function revisionEditNote(cost) { return isCount(cost) && cost > 0 ? cost + ' 幣' : ''; }
+
+  /* 重新生成 Modal 的費用說明（免費或會消耗多少、目前餘額）。數字不確定的部分不寫出來。 */
+  function revisionRegenerateCostLine(freeLeft, cost, balance) {
+    if (isCount(freeLeft) && freeLeft > 0) { return '這次重新生成不用遊戲幣（免費還剩 ' + freeLeft + ' 次）。'; }
+    var price = isCount(cost) && cost > 0 ? '這次重新生成會消耗 ' + cost + ' 遊戲幣' : '這次重新生成會消耗遊戲幣';
+    return price + (isCount(balance) ? '（目前餘額 ' + balance + ' 幣）。' : '。');
+  }
+
+  /* 編輯 Modal 的餘額與費用說明；餘額不足時改說明不足並指向簽到。 */
+  function revisionEditCostLine(cost, balance, insufficient) {
+    var price = isCount(cost) && cost > 0 ? cost + ' 幣' : '遊戲幣';
+    if (insufficient) {
+      return '遊戲幣不足' + (isCount(balance) ? '：目前餘額 ' + balance + ' 幣，' : '，') + '這次編輯需要 ' + price + '。可以先簽到領取免費遊戲幣。';
+    }
+    return '這次編輯需要 ' + price + (isCount(balance) ? '，目前餘額 ' + balance + ' 幣。' : '。');
+  }
+
+  /* 不能重新生成或編輯的原因（`last_turn.reason` 的列舉）；不認得的退回通用說明。 */
+  function revisionNotRevisableMessage(reason) { return labelOf(REVISION_NOT_REVISABLE_MESSAGES, reason, REVISION_NOT_REVISABLE_FALLBACK); }
+
+  function revisionErrorMessage(code) { return labelOf(REVISION_ERROR_MESSAGES, code, REVISION_ERROR_FALLBACK); }
+
+  /* 理由的字數規則說明（例如「請簡短說明原因，至少 5 字、最多 50 字。」）；範圍不明時只說簡短說明。數字來自頁面初始狀態，這裡不寫死。 */
+  function revisionReasonRule(min, max) {
+    if (isCount(min) && min > 0 && isCount(max) && max >= min) { return '請簡短說明原因，至少 ' + min + ' 字、最多 ' + max + ' 字。'; }
+    return '請簡短說明原因。';
+  }
+
+  /* 理由的字數提示（例如「12 / 50」）。 */
+  function revisionReasonCount(count, max) { return isCount(count) ? (isCount(max) && max > 0 ? count + ' / ' + max : String(count)) : '—'; }
+
   return {
+    REVISION_CATEGORY_LABELS: REVISION_CATEGORY_LABELS,
+    REVISION_TEXTS: REVISION_TEXTS,
+    REVISION_NOT_REVISABLE_MESSAGES: REVISION_NOT_REVISABLE_MESSAGES,
+    REVISION_ERROR_MESSAGES: REVISION_ERROR_MESSAGES,
+    REVISION_CONFLICT_MESSAGE: REVISION_CONFLICT_MESSAGE,
+    revisionCategoryLabel: revisionCategoryLabel,
+    revisionText: revisionText,
+    revisionRegenerateNote: revisionRegenerateNote,
+    revisionEditNote: revisionEditNote,
+    revisionRegenerateCostLine: revisionRegenerateCostLine,
+    revisionEditCostLine: revisionEditCostLine,
+    revisionNotRevisableMessage: revisionNotRevisableMessage,
+    revisionErrorMessage: revisionErrorMessage,
+    revisionReasonCount: revisionReasonCount,
+    revisionReasonRule: revisionReasonRule,
     TURN_STATUS_LABELS: TURN_STATUS_LABELS,
     DONE_STATUS_LABELS: DONE_STATUS_LABELS,
     STREAM_OUTCOME_LABELS: STREAM_OUTCOME_LABELS,
