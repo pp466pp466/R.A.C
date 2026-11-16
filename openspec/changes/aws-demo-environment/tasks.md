@@ -11,7 +11,7 @@
 - [x] 1.5 排程產生：把 `SCHEDULED_COMMANDS` 的 cron 運算式轉成 `OnCalendar`（只支援實際用到的三種形式，其他形式丟錯，時區 Asia/Taipei，`Persistent=true`）；測試：與 `SCHEDULED_COMMANDS` 逐項一致、沒有手動類指令、不支援的運算式會失敗
 - [x] 1.6 部署、回復與 `teardown` 步驟：快照 → 建置 → 遷移 → 重啟 → 驗證的順序；回復只重啟前一版標籤、沒有降級遷移；`teardown` 只選帶標籤的資源、RDS 刪除要求明確選擇最終快照（沒有預設）；測試：順序、回復內容、`teardown` 的清單範圍
 - [x] 1.7 文件：在 `docs/營運與部署-operations.md` 新增「AWS 展示環境」章節的拓撲圖（Mermaid）、元件表與步驟總表（與 `Step` 清單一致）；執行 `tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
-- [ ] 1.8 `teardown_plan` 的快照處理（design D14）：新增參數 `delete_snapshots`（`None`＝尚未決定，`td-delete-snapshots` 是沒有指令的 `blocked` 佔位；元組＝要刪的部署前快照名單，產生 `td-delete-snapshot-<名稱>` 步驟，排在 `td-wait-rds-deleted` 之後，每步先以標籤查詢把關）；名稱必須是 `<資料庫>-pre-<提交短碼>`，最終快照與其他名稱丟 `PlanError`；`snapshot_name()` 與列出快照的唯讀步驟（`td-list-remaining-snapshots` 沿用，改為也供執行器取得名單）；測試：未決定時沒有刪快照指令、被指定保留的不在名單、最終快照與別的資料庫的快照被拒、保留最終快照時也能刪部署前快照、每個刪除都先以標籤查詢、既有的拆除測試仍通過；營運文件第 8 節（規則與步驟總表）同步；`tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
+- [x] 1.8 `teardown_plan` 的快照處理（design D14）：新增參數 `delete_snapshots`（`None`＝尚未決定，`td-delete-snapshots` 是沒有指令的 `blocked` 佔位；元組＝要刪的部署前快照名單，產生 `td-delete-snapshot-<名稱>` 步驟，排在 `td-wait-rds-deleted` 之後，每步先以標籤查詢把關）；名稱必須是 `<資料庫>-pre-<提交短碼>`，最終快照與其他名稱丟 `PlanError`；`snapshot_name()` 與列出快照的唯讀步驟（`td-list-remaining-snapshots` 沿用，改為也供執行器取得名單）；測試：未決定時沒有刪快照指令、被指定保留的不在名單、最終快照與別的資料庫的快照被拒、保留最終快照時也能刪部署前快照、每個刪除都先以標籤查詢、既有的拆除測試仍通過；營運文件第 8 節（規則與步驟總表）同步；`tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
 
 ## 2. 執行器（預設預覽、逐步確認）
 

@@ -1026,7 +1026,7 @@ def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
 
 DEPLOY_GROUPS = ("prepare", "snapshot", "build", "migrate", "restart", "verify")    # 快照 → 建置 → 遷移 → 重啟 → 驗證
 ROLLBACK_GROUPS = ("prepare", "restart", "verify")
-TEARDOWN_GROUPS = ("compute", "database", "network", "iam", "storage", "notify", "verify")
+TEARDOWN_GROUPS = ("compute", "database", "snapshots", "network", "iam", "storage", "notify", "verify")
 DEPLOY_RESOURCES = ("db-snapshot",)                 # 部署時才建立的資源類型（不屬於 build_plan 的 ALLOWED_RESOURCES）
 COMMIT_TAG_PATTERN = re.compile(r"[0-9a-f]{7,40}")  # 映像標籤就是提交短碼（可對應提交；也符合 RDS 快照名稱的限制）
 PREVIOUS_RELEASE_ENV_PATH = f"{HOST_CONFIG_DIR}/release.previous.env"   # 部署前一版的標籤（回復用）
@@ -1279,15 +1279,68 @@ def _delete_step(step_id: str, group: str, title: str, argv: tuple[str, ...], fi
     return Step(step_id, group, title, argv, exists_argv=find, exists_nonempty=True, run_if_found=True, capture=capture)
 
 
-def teardown_plan(target: Target, *, final_snapshot: bool | None, today: date | None = None) -> list[Step]:
+def predeploy_snapshot_pattern(target: Target) -> re.Pattern:
+    """部署前快照的名稱：`<資料庫>-pre-<提交短碼>`（與 `snapshot_name()` 同一個格式）。最終快照（`-final-`）與其他名稱都不符。"""
+    return re.compile(re.escape(names(target).db_instance) + "-pre-" + COMMIT_TAG_PATTERN.pattern)
+
+
+def is_predeploy_snapshot(target: Target, name: object) -> bool:
+    return isinstance(name, str) and predeploy_snapshot_pattern(target).fullmatch(name) is not None
+
+
+def snapshot_listing_step(target: Target) -> Step:
+    """唯讀：列出該資料庫仍存在的手動快照（部署前快照與最終快照；`--output text` 是以空白分隔的名稱）。
+    執行器在拆除之前先單獨執行它、讓使用者看到清單並明確回覆要保留的例外（見 `snapshots_to_delete`）；
+    拆除計畫的最後也會再列一次，顯示還留著什麼。"""
+    n = names(target)
+    return Step("td-list-remaining-snapshots", "verify",
+                "列出該資料庫仍存在的手動快照（部署前快照與最終快照）；部署前快照在你明確回覆要保留的例外之後才會被刪，最終快照永遠不由本計畫刪除",
+                _aws(target, "rds", "describe-db-snapshots", "--snapshot-type", "manual",
+                     *_text(f"DBSnapshots[?starts_with(DBSnapshotIdentifier, '{n.db_instance}-')].DBSnapshotIdentifier")),
+                capture="remaining-snapshots")
+
+
+def snapshots_to_delete(target: Target, listed: tuple[str, ...] | list[str], keep: tuple[str, ...] | list[str] = ()) -> tuple[str, ...]:
+    """要刪的部署前快照＝列出的快照中，名稱符合部署前快照格式、且不在使用者指定的例外（`keep`）內者；保持列出的順序、去除重複。
+    最終快照與其他名稱一律不在結果內。`keep` 的名稱必須是列出的快照之一（打錯名稱就丟錯，不會悄悄變成「全部刪除」）。
+    「沒有例外」是明確傳入空的 `keep`（呼叫端必須向使用者確認過，不能把沉默當成沒有例外）。"""
+    listed_unique = tuple(dict.fromkeys(listed))
+    unknown = [name for name in keep if name not in listed_unique]
+    if unknown:
+        raise PlanError("要保留的快照不在列出的清單內（名稱打錯了？）：" + "、".join(repr(name) for name in unknown))
+    return tuple(name for name in listed_unique if is_predeploy_snapshot(target, name) and name not in keep)
+
+
+def _validated_delete_snapshots(target: Target, delete_snapshots: object) -> tuple[str, ...] | None:
+    if delete_snapshots is None:
+        return None
+    if not isinstance(delete_snapshots, (tuple, list)):
+        raise PlanError("delete_snapshots 必須是 None（尚未決定）或快照名稱的 tuple")
+    chosen = tuple(delete_snapshots)
+    bad = [name for name in chosen if not is_predeploy_snapshot(target, name)]
+    if bad:
+        raise PlanError("只能刪除本資料庫的部署前快照（<資料庫>-pre-<提交短碼>），最終快照與其他名稱不在範圍內："
+                        + "、".join(repr(name) for name in bad))
+    if len(set(chosen)) != len(chosen):
+        raise PlanError("delete_snapshots 有重複的名稱")
+    return chosen
+
+
+def teardown_plan(target: Target, *, final_snapshot: bool | None, today: date | None = None,
+                  delete_snapshots: tuple[str, ...] | None = None) -> list[Step]:
     """拆除展示環境：只刪帶有本專案標籤（Project 與 Environment）的資源，逐項先查詢、沒有符合就略過；順序與建立相反。
 
     `final_snapshot` **沒有預設值**：True＝刪除 RDS 前保留最終快照（需要 `today` 讓快照名稱唯一）、False＝不保留、
-    None＝尚未選擇，RDS 刪除步驟不輸出指令（`blocked`）。計畫**不刪任何手動快照**（部署前快照與最終快照）：
-    它們含資料庫內容，要不要刪由使用者決定（`td-list-remaining-snapshots` 會列出）。
+    None＝尚未選擇，RDS 刪除步驟不輸出指令（`blocked`）。
+
+    `delete_snapshots`（design D14）：要刪的部署前快照名單。None＝尚未決定，`td-delete-snapshots` 是沒有指令的 `blocked` 佔位；
+    元組＝只對名單裡的快照產生 `td-delete-snapshot-<名稱>` 步驟（空元組＝明確沒有要刪的）。名稱必須是本資料庫的部署前快照
+    （`<資料庫>-pre-<提交短碼>`），**最終快照永遠不由本計畫刪除**，不論 `final_snapshot` 的選擇；名單由執行器在使用者看過
+    `snapshot_listing_step` 並明確回覆例外之後，以 `snapshots_to_delete` 算出。
     """
     if final_snapshot not in VALID_FINAL_SNAPSHOT or isinstance(final_snapshot, int) and not isinstance(final_snapshot, bool):
         raise PlanError("final_snapshot 必須明確是 True（保留最終快照）、False（不保留）或 None（尚未選擇）")
+    chosen_snapshots = _validated_delete_snapshots(target, delete_snapshots)
     n = names(target)
     region, account = target.region, target.account_id
     final_id = None
@@ -1338,6 +1391,17 @@ def teardown_plan(target: Target, *, final_snapshot: bool | None, today: date | 
                _aws(target, "rds", "list-tags-for-resource", "--resource-name", f"arn:aws:rds:{region}:{account}:subgrp:{n.subnet_group}", *_text(_owned("TagList")))),
     ]
 
+    # snapshots：部署前快照（RDS 消失之後；名單由使用者看過清單、指定例外之後決定，見 D14）；最終快照不在這裡
+    if chosen_snapshots is None:
+        steps.append(Step("td-delete-snapshots", "snapshots",
+                          f"刪除 {n.db_instance} 的部署前快照——需要先列出快照並由你明確回覆要保留的例外（「沒有例外」也要明說）後才會輸出刪除指令；最終快照不會被刪",
+                          blocked=True))
+    for name in chosen_snapshots or ():
+        steps.append(delete(f"td-delete-snapshot-{name}", "snapshots", f"刪除部署前快照 {name}（你沒有指定保留；帶標籤才刪）",
+                            _aws(target, "rds", "delete-db-snapshot", "--db-snapshot-identifier", name),
+                            _aws(target, "rds", "list-tags-for-resource", "--resource-name", f"arn:aws:rds:{region}:{account}:snapshot:{name}",
+                                 *_text(_owned("TagList")))))
+
     # network：資料庫群組（它的規則參照主機群組，所以先刪）→ 主機群組
     for step_id, name, capture in (("td-delete-db-sg", n.db_sg, "td-db-sg-id"), ("td-delete-host-sg", n.host_sg, "td-host-sg-id")):
         steps.append(delete(step_id, "network", f"刪除安全群組 {name}（名稱與標籤都符合才刪）",
@@ -1387,9 +1451,7 @@ def teardown_plan(target: Target, *, final_snapshot: bool | None, today: date | 
     # verify：列出仍保留的手動快照（唯讀）→ 帶標籤的資源已清空，且各服務沒有以專案名稱開頭的資源
     prefix = NAME_PREFIX
     steps += [
-        Step("td-list-remaining-snapshots", "verify", "列出仍保留的手動快照（含部署前快照與最終快照；本計畫不刪除它們，保留期間仍計費，要不要刪由你決定）",
-             _aws(target, "rds", "describe-db-snapshots", "--snapshot-type", "manual",
-                  *_text(f"DBSnapshots[?starts_with(DBSnapshotIdentifier, '{n.db_instance}-')].DBSnapshotIdentifier")), capture="remaining-snapshots"),
+        snapshot_listing_step(target),
         Step("td-wait-tagged-resources-gone", "verify", "等待帶本專案標籤的資源清空（標籤查詢有延遲；手動快照除外），並逐一確認各服務沒有殘留",
              poll=Check(_aws(target, "resourcegroupstaggingapi", "get-resources", "--tag-filters", f"Key=Project,Values={PROJECT_TAG}",
                              f"Key=Environment,Values={ENV}", *_text("length(ResourceTagMappingList[?!contains(ResourceARN, ':snapshot:')])")), "0"),

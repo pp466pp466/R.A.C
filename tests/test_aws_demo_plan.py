@@ -1390,9 +1390,10 @@ def test_teardown_order_respects_dependencies_and_removes_the_budget_last():
     assert parameter_ids and len(parameter_ids) == len(plan.parameter_names(target()))
 
 
-def test_teardown_never_deletes_snapshots_but_lists_them_and_the_final_check_ignores_them():
+def test_the_final_listing_shows_what_is_left_and_the_final_check_ignores_snapshots():
     steps = by_id(teardown_steps(True))
     listing = steps["td-list-remaining-snapshots"]
+    assert listing == plan.snapshot_listing_step(target()), "拆除最後的列出與執行器事先列出的是同一個步驟"
     assert listing.capture == "remaining-snapshots" and not listing.run_if_found and "--snapshot-type" in listing.argv
     wait = steps["td-wait-tagged-resources-gone"]
     assert wait.poll.expect == "0" and "':snapshot:'" in " ".join(wait.poll.argv) and wait.timeout_seconds and wait.interval_seconds
@@ -1404,3 +1405,145 @@ def test_teardown_waits_for_the_host_and_the_database_to_disappear_with_a_timeou
     for step_id, minimum in (("td-wait-ec2-terminated", 300), ("td-wait-rds-deleted", 25 * 60)):
         step = steps[step_id]
         assert step.argv == () and step.poll.expect == "0" and step.timeout_seconds >= minimum and 0 < step.interval_seconds < step.timeout_seconds
+
+
+# ---- 1.8 拆除時的部署前快照（design D14）------------------------------------------------------------------
+
+PRE_A = "rac-demo-staging-db-pre-abc1234"
+PRE_B = "rac-demo-staging-db-pre-def5678"
+PRE_C = "rac-demo-staging-db-pre-0123456789ab"
+FINAL_OLD = "rac-demo-staging-db-final-20261201"
+FINAL_NEW = "rac-demo-staging-db-final-20261231"
+
+
+def snapshot_teardown(delete_snapshots, final_snapshot=True):
+    return plan.teardown_plan(target(), final_snapshot=final_snapshot, today=date(2026, 12, 31), delete_snapshots=delete_snapshots)
+
+
+def snapshot_delete_steps(steps):
+    return [s for s in steps if s.id.startswith("td-delete-snapshot-")]
+
+
+def test_until_the_exceptions_are_chosen_the_snapshot_step_is_a_placeholder_with_no_command():
+    for final_snapshot in (True, False, None):
+        steps = by_id(snapshot_teardown(None, final_snapshot))
+        placeholder = steps["td-delete-snapshots"]
+        assert placeholder.blocked and placeholder.argv == () and placeholder.exists_argv is None and placeholder.group == "snapshots"
+        assert "例外" in placeholder.title and "最終快照不會被刪" in placeholder.title
+        assert not snapshot_delete_steps(steps.values())
+        assert "delete-db-snapshot" not in whole_plan_text(list(steps.values()))
+    assert [s.id for s in teardown_steps(False) if s.group == "snapshots"] == ["td-delete-snapshots"], "預設（沒給名單）就是尚未決定"
+
+
+def test_each_chosen_snapshot_gets_a_tag_guarded_delete_step_after_the_database_is_gone():
+    steps = snapshot_teardown((PRE_A, PRE_B))
+    assert "td-delete-snapshots" not in {s.id for s in steps}
+    deleting = snapshot_delete_steps(steps)
+    assert [s.id for s in deleting] == [f"td-delete-snapshot-{PRE_A}", f"td-delete-snapshot-{PRE_B}"]
+    for step, name in zip(deleting, (PRE_A, PRE_B)):
+        assert step.group == "snapshots" and not step.blocked
+        assert step.argv == ("aws", "rds", "delete-db-snapshot", "--db-snapshot-identifier", name, "--region=ap-southeast-2")
+        assert step.run_if_found and step.exists_nonempty
+        find = " ".join(step.exists_argv)
+        assert f"arn:aws:rds:ap-southeast-2:{ACCOUNT}:snapshot:{name}" in find and "list-tags-for-resource" in find
+        assert "Key=='Project' && Value=='rac-demo'" in find and "Key=='Environment' && Value=='staging'" in find
+    assert_in_order(steps, "td-wait-rds-deleted", "td-delete-db-subnet-group", f"td-delete-snapshot-{PRE_A}", f"td-delete-snapshot-{PRE_B}",
+                    "td-delete-db-sg", "td-list-remaining-snapshots")
+    assert [s.group for s in steps] == sorted((s.group for s in steps), key=plan.TEARDOWN_GROUPS.index)
+
+
+@pytest.mark.parametrize("final_snapshot", [True, False, None])
+def test_the_pre_deploy_snapshots_can_be_deleted_whichever_final_snapshot_choice_was_made(final_snapshot):
+    steps = snapshot_teardown((PRE_A,), final_snapshot)
+    assert [s.id for s in snapshot_delete_steps(steps)] == [f"td-delete-snapshot-{PRE_A}"]
+    assert_placeholders_resolve(steps)
+
+
+def test_an_empty_choice_means_nothing_to_delete_and_adds_no_placeholder():
+    steps = snapshot_teardown(())
+    assert not [s for s in steps if s.group == "snapshots"]
+    assert "delete-db-snapshot" not in whole_plan_text(steps)
+
+
+@pytest.mark.parametrize("name", [
+    FINAL_NEW, FINAL_OLD,                                   # 最終快照一律不刪（本次保留的、先前拆除留下的）
+    "rac-demo-staging-other-db-pre-abc1234", "other-db-pre-abc1234", "rac-demo-staging-db-pre-", "rac-demo-staging-db-pre-ABC1234",
+    "rac-demo-staging-db-pre-abc123", "rac-demo-staging-db-pre-abc1234\n", "rac-demo-staging-db-pre-abc1234 ; rm", "rac-demo-staging-db",
+    "", "*", "rac-demo-staging-db-pre-abc1234,rac-demo-staging-db-pre-def5678", "automated:rac-demo-staging-db-2026-12-31",
+])
+def test_only_this_databases_pre_deploy_snapshots_are_accepted_and_the_final_snapshot_never(name):
+    with pytest.raises(plan.PlanError, match="部署前快照"):
+        snapshot_teardown((PRE_A, name))
+    assert not plan.is_predeploy_snapshot(target(), name)
+    assert plan.is_predeploy_snapshot(target(), PRE_A)
+
+
+@pytest.mark.parametrize("bad", ["rac-demo-staging-db-pre-abc1234", {PRE_A}, 5, b"x", object()])
+def test_the_snapshot_choice_must_be_none_or_a_tuple_or_list_of_names(bad):
+    with pytest.raises(plan.PlanError, match="delete_snapshots"):
+        snapshot_teardown(bad)
+    assert snapshot_teardown([PRE_A])             # list 可以
+
+
+def test_a_snapshot_cannot_be_listed_twice_and_non_strings_are_rejected():
+    with pytest.raises(plan.PlanError, match="重複"):
+        snapshot_teardown((PRE_A, PRE_A))
+    with pytest.raises(plan.PlanError, match="部署前快照"):
+        snapshot_teardown((PRE_A, 123))
+
+
+def test_the_delete_list_is_the_listed_pre_deploy_snapshots_minus_the_exceptions_and_never_a_final_snapshot():
+    listed = (PRE_A, FINAL_OLD, PRE_B, PRE_C, FINAL_NEW, "rac-demo-staging-db-pre-abc1234", "someone-elses-snapshot")
+    assert plan.snapshots_to_delete(target(), listed) == (PRE_A, PRE_B, PRE_C), "沒有例外：部署前快照全刪，最終快照與別人的快照不在內，順序不變、不重複"
+    assert plan.snapshots_to_delete(target(), listed, keep=(PRE_B,)) == (PRE_A, PRE_C)
+    assert plan.snapshots_to_delete(target(), listed, keep=(PRE_A, PRE_B, PRE_C)) == ()
+    assert plan.snapshots_to_delete(target(), listed, keep=(FINAL_OLD,)) == (PRE_A, PRE_B, PRE_C), "指定保留最終快照無妨，它本來就不會被刪"
+    assert plan.snapshots_to_delete(target(), (), ()) == ()
+    assert plan.snapshots_to_delete(target(), [PRE_A, PRE_B], [PRE_A]) == (PRE_B,)
+
+
+def test_an_exception_that_is_not_in_the_listing_is_an_error_instead_of_deleting_everything():
+    with pytest.raises(plan.PlanError, match="不在列出的清單內"):
+        plan.snapshots_to_delete(target(), (PRE_A, PRE_B), keep=("rac-demo-staging-db-pre-aaaaaaa",))
+    with pytest.raises(plan.PlanError, match="不在列出的清單內"):
+        plan.snapshots_to_delete(target(), (), keep=(PRE_A,))
+
+
+def test_what_the_executor_derives_always_passes_the_plan_validation():
+    listed = (PRE_A, FINAL_OLD, PRE_B, "automated:rac-demo-staging-db-2026-12-31")
+    for keep in ((), (PRE_A,), (PRE_B,), (PRE_A, PRE_B)):
+        names_to_delete = plan.snapshots_to_delete(target(), listed, keep)
+        steps = snapshot_teardown(names_to_delete)
+        assert {s.id for s in snapshot_delete_steps(steps)} == {f"td-delete-snapshot-{name}" for name in names_to_delete}
+        assert not set(keep) & {s.argv[4] for s in snapshot_delete_steps(steps)}
+
+
+def test_the_listing_step_is_read_only_and_covers_both_kinds_of_manual_snapshot():
+    step = plan.snapshot_listing_step(target())
+    assert step.id == "td-list-remaining-snapshots" and step.capture == "remaining-snapshots" and not step.run_if_found and not step.blocked
+    assert step.argv[:3] == ("aws", "rds", "describe-db-snapshots") and "--snapshot-type" in step.argv and "manual" in step.argv
+    assert "--region=ap-southeast-2" in step.argv
+    query = argument_after(step.argv, "--query")
+    assert "starts_with(DBSnapshotIdentifier, 'rac-demo-staging-db-')" in query
+    assert not any(verb in " ".join(step.argv) for verb in ("delete", "create", "copy", "modify"))
+
+
+def test_every_snapshot_deleting_command_is_aws_in_sydney_without_wildcards_and_the_ids_stay_unique():
+    steps = snapshot_teardown((PRE_A, PRE_B, PRE_C))
+    for step in snapshot_delete_steps(steps):
+        for argv in commands(step):
+            assert argv[0] == "aws" and "--region=ap-southeast-2" in argv and "*" not in " ".join(argv)
+    ids = [s.id for s in (*full_plan(), *deploy_steps(), *rollback_steps(), *steps)]
+    assert len(ids) == len(set(ids))
+    assert "production" not in whole_plan_text(steps).lower()
+
+
+def test_deleting_snapshots_does_not_touch_the_other_teardown_guards():
+    base = {s.id: s for s in teardown_steps(True)}
+    with_snapshots = {s.id: s for s in snapshot_teardown((PRE_A,))}
+    assert set(with_snapshots) - set(base) == {f"td-delete-snapshot-{PRE_A}"}
+    assert set(base) - set(with_snapshots) == {"td-delete-snapshots"}
+    for step_id in set(base) & set(with_snapshots):
+        assert base[step_id] == with_snapshots[step_id], step_id
+    rds = with_snapshots["td-delete-rds"]
+    assert argument_after(rds.argv, "--final-db-snapshot-identifier") == FINAL_NEW, "保留最終快照的選擇不受影響"

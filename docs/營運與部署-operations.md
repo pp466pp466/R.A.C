@@ -511,6 +511,7 @@ flowchart LR
 | `rollback_plan` | verify | `rollback-check-pools`、`wait-rollback-check-pools` | 同部署的驗證 |
 | `teardown_plan` | compute | `td-delete-ec2-alarm`、`td-terminate-ec2`、`td-wait-ec2-terminated`、`td-release-eip` | 告警、主機、Elastic IP |
 | `teardown_plan` | database | `td-delete-rds`、`td-wait-rds-deleted`、`td-delete-db-subnet-group` | RDS（必須明確選擇是否保留最終快照）與子網路群組 |
+| `teardown_plan` | snapshots | `td-delete-snapshots` | 部署前快照：沒給名單時是沒有指令的佔位；使用者看過清單並明確回覆要保留的例外之後，才改為對名單內的每個快照產生 `td-delete-snapshot-<名稱>`（最終快照永遠不刪） |
 | `teardown_plan` | network | `td-delete-db-sg`、`td-delete-host-sg` | 兩個安全群組（資料庫群組先刪） |
 | `teardown_plan` | iam | `td-remove-role-from-profile`、`td-delete-instance-profile`、`td-delete-role-policy`、`td-detach-ssm-policy`、`td-delete-role` | 角色與設定檔 |
 | `teardown_plan` | storage | `td-delete-bucket`、`td-delete-parameter-SECRET_KEY`、`td-delete-parameter-DATABASE_URL`、`td-delete-parameter-GEMINI_API_KEY`、`td-delete-parameter-RDS_MASTER_PASSWORD`、`td-delete-parameter-DB_APP_PASSWORD` | 傳檔儲存貯體（含物件）與每個機密參數 |
@@ -525,7 +526,7 @@ flowchart LR
 - **在主機上執行的命令**走 SSM Run Command：`send-command` 輸出命令編號，接著 `wait-…` 步驟輪詢到 `Success`，`Failed`、`Cancelled`、`TimedOut` 立即停止（不等逾時）；主機沒有 SSH。
 - **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。
 - **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
-- **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。計畫**不刪任何手動快照**（部署前快照與最終快照含資料庫內容，保留期間仍計費），只在最後列出，要不要刪由使用者決定。
+- **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。**手動快照**含資料庫內容、不隨 RDS 消失且持續計費，所以另有規則（design D14）：不論選擇保留或不保留最終快照，執行器先唯讀列出（`snapshot_listing_step()`）該資料庫仍存在的快照，使用者必須明確回覆要保留的**例外**（「沒有例外」也要明說，沉默不算），沒有被指定保留的**部署前快照**（`<資料庫>-pre-<提交短碼>`）才預設刪除；名單由 `snapshots_to_delete()` 算出（例外打錯名稱會丟錯，不會悄悄變成全部刪除），傳給 `teardown_plan(delete_snapshots=…)`，沒給名單時 `td-delete-snapshots` 沒有指令；每個刪除仍先以標籤查詢把關。**最終快照（本次保留的與先前拆除留下的）永遠不由計畫刪除**，要刪由使用者自己處理，拆除最後會列出仍留著的快照。
 - **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。**沒有對真實的 AWS、docker、systemd、Caddy 執行過**，指令與旗標的差異在雲端批次回寫（task 4.5）。
 
 ---
