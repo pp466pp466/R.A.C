@@ -171,10 +171,13 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         # game-wallet
         "InsufficientCoins": 409, "CheckinOverflow": 409, "AlreadyCheckedIn": 409, "HoldAlreadySettled": 409,
         "HoldAlreadyRefunded": 409, "WalletBusy": 503,
+        # rpg-turn-revision
+        "RevisionConflict": 409, "NotRevisable": 409, "RevisionInvalid": 422,
     }
     needs_arguments = {
         errors.VersionConflict: ({"id": "x"},), errors.InsufficientCoins: (20, 30), errors.CheckinOverflow: (100, 100),
         errors.NotebookTooLong: (2240, 2000), errors.NotebookConflict: ({"version": 2},),
+        errors.NotRevisable: ("not_last",), errors.RevisionInvalid: ({"reason": "太短"},),
     }
     made = {cls.__name__: _status_for(cls(*needs_arguments.get(cls, ()))) for cls in defined}
     assert made == expected

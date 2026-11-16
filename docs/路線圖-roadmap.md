@@ -28,7 +28,7 @@ flowchart LR
     RC1["RC-1 rpg-data-and-script<br/>劇本與存檔資料、固定規格、三種內容模式、內建劇本（已封存）"]:::done
     RC2["RC-2a rpg-turn-engine<br/>回合引擎、SSE、世界狀態、第 0 幕、輸出審查、預扣遊戲幣（已封存 2026-11-10）"]:::done
     RC2B["RC-2b rpg-notebook<br/>記事簿抓取與玩家編輯（已封存 2026-11-10）"]:::done
-    RC2C["RC-2c rpg-turn-revision<br/>重新生成、編輯最後一輪輸入、理由回饋（已實作，剩全套測試與封存）"]:::active
+    RC2C["RC-2c rpg-turn-revision<br/>重新生成、編輯最後一輪輸入、理由回饋（已實作，全套測試已通過，剩封存）"]:::active
     PH["player-hub<br/>錢包、記錄、個人頁"]:::plan
     PP["player-personas<br/>對話人設（可重用的主角模板）"]:::plan
     SP["story-preference<br/>故事偏好（用戶設定）與劇本 audience（已封存 2026-11-11）"]:::done

@@ -1384,7 +1384,7 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 
 ## RPG 重新生成與編輯（rpg-turn-revision）
 
-change `rpg-turn-revision`（RC-2c）。玩家只能對**最後一輪**重新生成 AI 的回應，或編輯該輪的玩家輸入後重送；AI 的輸出玩家不能直接修改。端點與開始前的錯誤代碼見上方「RPG 回合引擎」的端點表（兩個 `…/regenerate/stream`、`…/edit/stream`）；規範在 AGENTS.md 第 7、10、11 節（2026-11-16 修訂：編輯與重新生成共用每回合前 2 次免費，`437a5f5`）；設計見 `openspec/changes/rpg-turn-revision/design.md`（D1 至 D10），流程圖見 [docs/系統架構-architecture.md](docs/系統架構-architecture.md) 的「RPG 修訂」，決定紀錄見 [docs/RPG.md](docs/RPG.md) 7.8.1。**尚未封存**（剩 5.5 全套測試）。
+change `rpg-turn-revision`（RC-2c）。玩家只能對**最後一輪**重新生成 AI 的回應，或編輯該輪的玩家輸入後重送；AI 的輸出玩家不能直接修改。端點與開始前的錯誤代碼見上方「RPG 回合引擎」的端點表（兩個 `…/regenerate/stream`、`…/edit/stream`）；規範在 AGENTS.md 第 7、10、11 節（2026-11-16 修訂：編輯與重新生成共用每回合前 2 次免費，`437a5f5`）；設計見 `openspec/changes/rpg-turn-revision/design.md`（D1 至 D10），流程圖見 [docs/系統架構-architecture.md](docs/系統架構-architecture.md) 的「RPG 修訂」，決定紀錄見 [docs/RPG.md](docs/RPG.md) 7.8.1。**尚未封存**（全套測試 5.5 已通過，待使用者確認後歸檔）。
 
 ### 設計重點
 
@@ -1419,7 +1419,7 @@ change `rpg-turn-revision`（RC-2c）。玩家只能對**最後一輪**重新生
 
 - ①理由的五個分類的繁體中文名稱仍待使用者確認一次（不影響資料結構）。②隱私權政策沒有明寫「遊玩時的行動與劇情歷史」也送往 RPG 模型服務，列入法務覆核。③**普通回合的斷線**（串流中途斷線可退幣後同編號重送，等於免費重來）沒有納入免費次數，先觀察中斷比例（`docs/RPG.md` 7.16.4）。④管理員檢視回饋、第 0 幕的重新生成、對更早回合動手、ledger 專屬的帳本種類都不在這個 change。⑤前端中止不代表後端中止：玩家取消後後端仍可能替換成功，所以畫面只說「以伺服器上的內容為準」並重讀；重讀不到時維持「不確定」的說明。⑥認領後 worker 死掉時，玩家最長約 3 分鐘（`coin.hold_timeout_seconds`）看到「處理中」，逾時後可被接手。⑦瀏覽器實測由使用者回報沒有問題，但沒有逐項列舉細節與截圖（見下方驗收紀錄）。
 
-### 驗收紀錄（rpg-turn-revision，進行中；本節由任務 5.2 起，5.3、5.4 已記入，5.5 的結果續寫於此）
+### 驗收紀錄（rpg-turn-revision，任務 5.2 至 5.5 已記入；尚未封存）
 
 **假模型與 HTTP 驗收（任務 5.2，2026-11-16）**：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 補了修訂情境（重新生成給出與原回應不同的文字與另一個世界狀態、被擋一次／兩次、中斷、慢速、狀態呼叫失敗；編輯的新行動以 `測試編輯` 辨認，既有的回合關鍵字可直接放進新行動），並新增 `scripts/acceptance_rpg_revision.py`。假模型與腳本的單元測試在 `tests/test_acceptance_rpg_scripts.py`（62 → 97 項通過，新增 35 項：關鍵字與呼叫次數的對照表、用**真正的**狀態提示詞確認假模型找得到「本回合行動」、關鍵字不與回合與記事簿的關鍵字互相包含、腳本與假模型的常數一致、假的修訂劇情通過真正的規則層、遠端位址一律拒絕）。腳本對一個**私有的本機驗收實例**（另開的埠 5110／5111／5112 與獨立的 SQLite，沒有動使用者的 5010 驗收環境；Werkzeug 開發伺服器加假 RPG 模型）執行並附 `--server-log`：**journey 40 項、其餘六個案例 136 項，共 176 項通過、0 失敗、0 未驗證**。**2026-11-16 重啟使用者的驗收環境（5010／5001／5002，既有資料庫、沒有 `-Reset`）後再執行一次（單次執行七個案例）：175 項通過、0 失敗、0 未驗證（77.1 秒）**（比上面兩次加總少 1 項，因為日誌掃描只在整次執行的最後做一次）。
 
@@ -1451,10 +1451,21 @@ change `rpg-turn-revision`（RC-2c）。玩家只能對**最後一輪**重新生
 
 | 未驗證／限制（D 批） | 說明 |
 |---|---|
-| 全套測試 | 沒有跑（5.5 的 F 批做）；補的 4 個測試只跑了新測試本身與各破壞的相關檔案 |
+| 全套測試 | D 批當時沒有跑（留給 5.5 的 F 批，結果見下一段）；補的 4 個測試只跑了新測試本身與各破壞的相關檔案 |
 | 等價改動 | 不算：例如 1b 單獨看是「鎖內檢查之後的防禦縱深」，只有模擬競態才分得出來，所以用競態測試守住 |
 | 範圍 | 每個變體只改一處（1all 與 11b、13b、10b 一併改了數處）；後端只跑上列的相關檔案，前端只跑 `tests/js/game*.test.js`；SQL Server 版只在 SQLite 版沒有失敗時才加跑，所以「被抓到」的變體不保證 SQL Server 版同樣失敗 |
 | 瀏覽器端 | 沒有：⑮ 只在 Node 單元測試層驗證（5.3、6.5 的瀏覽器實測由使用者做，結果見上） |
+
+**全套測試與驗證（任務 5.5，F 批，2026-11-16）**：全部在 E 批（文件）之後、`app/` 與 `scripts/` 沒有任何變動的狀態上執行；F 批唯一的程式碼相關修改是下面第 1 次全套發現的那個守門測試。
+
+| 項目 | 結果 |
+|---|---|
+| 全套 pytest | `pytest -q -rfE --tb=short`（SQL Server 服務 `MSSQLSERVER` 執行中、同時只有一個 pytest 行程、輸出導到檔案、不接 `tail`、執行期間沒有改任何被測試讀取的檔案）。**第 1 次：10542 通過、1 失敗、1 略過（18 分 21 秒）；修正後第 2 次：10543 通過、0 失敗、1 略過（21 分 19 秒）**，含真實 SQL Server `project_test`，SQLite 與 SQL Server 在同一個行程。略過的是 `tests/test_container_files.py:124`（Windows 沒有 `grp` 模組，只在 Linux 才跑，容器驗收中實際執行過）。1 則既有警告：`test_assets_manifest` 的子行程輸出解碼（`UnicodeDecodeError`，與本 change 無關，先前的全套同樣出現） |
+| 第 1 次全套的失敗（真實的，已修） | `tests/test_service_errors.py::test_every_service_error_type_maps_to_a_deliberate_status`：這個守門測試列舉所有 `ServiceError` 子類並要求每一個都在期望表中有明確的 HTTP 狀態；任務 3.2 新增的 `RevisionConflict`（409）、`NotRevisable`（409）、`RevisionInvalid`（422）沒有登記，且 `NotRevisable` 與 `RevisionInvalid` 的建構需要引數，所以建構時 `TypeError`。**原因**：3.2 與後續各批只跑相關測試，沒有跑到這個跨模組的守門測試，到全套才發現。**修正**：只在測試檔補三個期望狀態與兩組建構引數（3 行，沒有放寬任何既有斷言、沒有改 `app/`）；該檔與 `test_errors_revision.py` 共 68 項通過後重跑全套，0 失敗 |
+| 全套 Node | `node --test "tests/js/**/*.test.js"`：**1099 項通過、0 失敗**（6.4 秒；與 B 批、4.5 的基準相同） |
+| 規格驗證 | `openspec validate rpg-turn-revision --strict` 通過 |
+| 筆數對照 | 本 README 上次記載的全套筆數是 `rpg-game-ui` 的 pytest 9989 與 Node 932（修正後）；現在是 pytest 10543、Node 1099（約 +554、+167），這些增量是該次記載之後所有批次的總和，不是只有本 change |
+| 限制 | 全套在 SQLite 與本機 SQL Server 的 `project_test` 上跑，沒有在雲端 Cloud SQL 上跑（尚無可計費的 GCP 專案，見 `cloud-staging-run`）；第 2 次全套比第 1 次慢約 3 分鐘，原因未查（兩次執行時都只有一個 pytest 行程），沒有測試因此失敗或逾時 |
 
 ## RPG 記事簿（rpg-notebook）
 
