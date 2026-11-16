@@ -1382,11 +1382,42 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | **多 worker 容量與全站同時串流上限** | 屬 RC-4（壓測）；每個進行中的串流多佔一條上游讀取執行緒，gunicorn 的 `workers`／`threads` 是初始值 |
 | **畫面** | 屬 RC-3（打字機、轉場文字、逾時與重送） |
 
-### 驗收紀錄（rpg-turn-revision，進行中；本節由任務 5.2 起，5.3 至 5.5 的結果續寫於此）
+### 驗收紀錄（rpg-turn-revision，進行中；本節由任務 5.2 起，5.3、5.4 已記入，5.5 的結果續寫於此）
 
 **假模型與 HTTP 驗收（任務 5.2，2026-11-16）**：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 補了修訂情境（重新生成給出與原回應不同的文字與另一個世界狀態、被擋一次／兩次、中斷、慢速、狀態呼叫失敗；編輯的新行動以 `測試編輯` 辨認，既有的回合關鍵字可直接放進新行動），並新增 `scripts/acceptance_rpg_revision.py`。假模型與腳本的單元測試在 `tests/test_acceptance_rpg_scripts.py`（62 → 97 項通過，新增 35 項：關鍵字與呼叫次數的對照表、用**真正的**狀態提示詞確認假模型找得到「本回合行動」、關鍵字不與回合與記事簿的關鍵字互相包含、腳本與假模型的常數一致、假的修訂劇情通過真正的規則層、遠端位址一律拒絕）。腳本對一個**私有的本機驗收實例**（另開的埠 5110／5111／5112 與獨立的 SQLite，沒有動使用者的 5010 驗收環境；Werkzeug 開發伺服器加假 RPG 模型）執行並附 `--server-log`：**journey 40 項、其餘六個案例 136 項，共 176 項通過、0 失敗、0 未驗證**。**2026-11-16 重啟使用者的驗收環境（5010／5001／5002，既有資料庫、沒有 `-Reset`）後再執行一次（單次執行七個案例）：175 項通過、0 失敗、0 未驗證（77.1 秒）**（比上面兩次加總少 1 項，因為日誌掃描只在整次執行的最後做一次）。
 
 **編輯與重新生成共用免費次數後的腳本調整與重驗（任務 6.3、6.4，2026-11-16）**：條款頁 `terms.html` 改為「重新生成或編輯共用同一組免費次數、免費次數內不扣幣也不需要餘額、編輯不使次數歸零」，`CURRENT_TERMS_VERSION` 提高為 `2026-11-16-draft-7`（`test_legal_pages`、`test_legal`、`test_auth_pages` 共 113 項通過；新增一個案例斷言舊規則的兩句不再出現、「歸零」只出現在「編輯不會使免費次數歸零」）。`scripts/acceptance_rpg_revision.py` 的案例依新規則調整：journey（一輪 → 重新生成免費 → 編輯免費 → 重新生成付費淨扣 30 → 編輯付費淨扣 30 → 再重新生成仍付費；每次檢查 `free_left`、`revision`、帳本與日誌開始事件的 `outcome`）、failures（新增「免費編輯被擋兩次：沒有預扣、次數不變」；付費編輯的失敗案例先用完兩次免費；日誌筆數 10／4／6 → 13／6／7）、coins（餘額 20 不足一輪時，免費次數內的編輯與重新生成仍可進行，用完後兩者都得到 409 `insufficient_coins`）；privacy、conflicts、rejections、notebook 不變；`tests/test_acceptance_rpg_scripts.py` 97 項通過（未修改）。腳本對**另開的 5012 實例**（載入目前程式，共用使用者驗收環境的資料庫、假模型 5002 與切換身分 5001，日誌另存）執行七個案例：**181 項通過、0 失敗、0 未驗證（79.8 秒）**。**5010 的應用程式行程仍載入舊規則**（重啟被權限設定擋下，沒有繞過）：對它跑 journey 與 coins 得到「36 通過、16 失敗、2 未驗證」，失敗項目正是新舊規則不同之處（`edit_cost` 30、免費編輯被預扣、餘額不足的免費編輯被擋、編輯使免費次數歸零），確認新腳本能分辨兩種規則；因此 6.5 的瀏覽器重驗要等 5010 重啟為新程式之後才有意義。
+
+**瀏覽器重驗（任務 6.5，2026-11-16，使用者親自做；5.3 隨之完成）**：我依使用者的要求重啟驗收環境（5010／5001／5002，既有資料庫、沒有 `-Reset`；重啟後 5010 的 `/terms` 顯示 `draft-7`，確認載入新程式），使用者在瀏覽器重驗編輯相關項目。使用者回報：我列出的八項預期**都沒有問題，行為與設計一致**——①一輪完成後「重新生成」與「編輯」旁都顯示「免費還剩 2 次」；②編輯 Modal 在免費次數內說明「這次編輯免費（免費還剩 N 次）」、不提餘額、沒有「免費次數會歸零」；③免費次數內餘額為 0 仍可編輯、不扣幣、帳本沒有新的列；④重新生成與編輯合計 2 次免費、第 2 次後兩個按鈕旁改顯示幣價；⑤用完之後的編輯 Modal 提醒消耗 30 幣、原本那輪已扣的幣不退並顯示餘額；⑥用完且餘額不足時編輯送出鈕停用並指向「每日簽到」、重新生成同樣收費；⑦編輯成功後免費次數遞減而不歸零、之後的重新生成照樣收費；⑧`/terms` 第 5 節是新的共用免費次數說明。**使用者沒有逐項列舉細節與截圖**，所以上面是依回報的整體結論逐項對照預期，沒有額外的觀察數字。5.3 的其餘項目（按鈕只出現在最後一輪、理由 Modal、串流與還原、兩個分頁的 409、重新整理、IndexedDB、手機寬度、已完結存檔、打字機與輸入法）沿用 2026-11-16 首輪實測的結論（使用者回報除編輯費用規則外沒有問題，同樣沒有逐項列舉）；本次沒有重做那些項目。
+
+**正式破壞驗證（任務 5.4，D 批，2026-11-16）**：專案外的暫時腳本（放在 scratchpad）逐項把一處程式暫時改壞，跑相關測試，**一定還原**（`finally`）並比對還原後的 SHA-256 與原檔相同；15 項共 34 個變體（同一項的不同防線各算一個），**最後 34 個變體都至少有一個測試失敗**，每次還原後與原檔位元相同，結束時 `git diff -- app scripts` 為空。**第一次跑有 3 個變體沒有任何測試失敗**（1b、1c、14d，連含 SQL Server `project_test` 的版本都全數通過），事後另發現 13c 只有結構性測試守著；依任務要求補了 4 個測試再重跑，補完後全數失敗（見表）。後端範圍：與修訂相關的 11 個 pytest 檔（`test_session_repository`、`test_session_repository_revision`、`test_turn_regeneration_repository`、`test_game_service_revision`、`test_game_service_begin`、`test_rpg_revision_runner`、`test_game_revision_endpoints`、`test_rpg_revision_flow`、`test_rpg_events`、`test_personal_export_regenerations`、`test_errors_revision`；⑭ 另加 `test_personal_export_service`、`test_account_export_api`、`test_personal_export_rpg_data`），先跑 SQLite 版（`-m "not sqlserver"`，約 25 秒），**沒有任何失敗才加跑含 SQL Server `project_test` 的版本**（約 3 分鐘）；前端範圍：`tests/js/game*.test.js`。pytest 以 `--maxfail=5` 執行，所以下面的失敗筆數是「至少」，不是全部會失敗的數目。
+
+| # | 破壞（暫時改壞一處） | 失敗的測試（節錄） |
+|---|---|---|
+| ① | 認領不檢查 `revision`：1a `claim_revision` 不回報衝突；**1b** 認領的條件式 UPDATE 不比對 `revision`；**1c** `begin_revision` 的 Service 層不比對；1e `replace_turn` 的條件式 UPDATE 不比對；1all 四處全拿掉 | 1a 2 項（「錯的 `expected_revision` 是衝突且不改動任何東西」「revision 衝突先於任何不可修訂的原因」）；**1b 與 1c 第一次 0 項失敗**（749 項全過），補測試後各 1 項；1e 1 項（沒有認領或 `revision`、`attempt` 不符時替換失敗且不改動）；1all 5 項 |
+| ② | 2a `replace_turn` 的條件式 UPDATE 不比對 `attempt`；2b `release_revision` 不比對 `attempt`（被接手的舊執行者會清掉新的認領） | 2a 5 項，含「被接手後舊執行者的替換失敗」「過時的執行者以 `turn_superseded` 結束且不碰新的認領」；2b 3 項，含「釋放時 `attempt` 不符什麼都不做」 |
+| ③ | `hold_key` 的預扣冪等鍵不含 `attempt` | 5 項，含「第三次重新生成用含新 `attempt` 的鍵付費」「付費修訂失敗退款後下一次用新的鍵、淨扣一次」「過期認領被接手後用較新的 `attempt`」 |
+| ④ | `RevisionRunner._abort`：失敗路徑不退回預扣 | 5 項，含「狀態呼叫失敗保留舊內容與世界並釋放一切」「世界版本在修訂期間改變時失敗並退款」「兩個模型在任何文字之前都失敗時退款」「第二次被擋以 `done(blocked)` 結束」 |
+| ⑤ | `release_revision`：失敗釋放認領時仍使 `regen_count` 加 1 | 5 項，含「付費編輯失敗退款且不計次」「免費次數設為 0 時每次重新生成都付費」「狀態呼叫失敗釋放一切」「釋放只清自己的認領」 |
+| ⑥ | `replace_turn`：成功時不清除認領 | 5 項，含「替換內容、輪數與序號不變並清除認領」「每次成功的重新生成使次數加 1」「編輯換行動並使次數加 1」 |
+| ⑦ | 7a `complete_turn`：下一輪完成時不清除前一輪的快照；7b `_end_unfinished`：被擋或中斷的下一輪也清除最後一輪的快照 | 7a 3 項（「下一輪完成只清前一輪的快照」「`finish_turn` 也清」「Service 層：下一輪完成時前一輪的快照被清掉」）；7b 5 項（「被擋或中斷的下一輪不清除前一輪的快照」「被擋或中斷的嘗試不使最後一輪變成非最後一輪」等） |
+| ⑧ | `RevisionRunner._finalize`：狀態呼叫失敗仍替換內容 | 5 項，含 HTTP 層「串流開始後失敗是 `error` 事件、舊內容留著」「沒有狀態供應商時修訂失敗並保留舊內容」 |
+| ⑨ | 9a 重新生成的理由接在行動後面（進 `contents`）；9b 接在 `system_instruction` 後面 | 9a 4 項（「理由與分類不在計畫裡、也到不了模型」「重新生成沿用原行動」等）；9b 2 項（兩個「理由與分類從不進入任何模型呼叫」） |
+| ⑩ | 10a `log_revision_failed` 的原因不驗證列舉；10b `log_revision_started` 新增理由參數並寫進日誌，`begin_revision` 傳入玩家的理由 | 10a 3 項（「修訂事件不帶自由文字」「列舉外的值被拒絕」）；10b 5 項（「修訂的日誌不含理由、行動與劇情」「日誌函式沒有玩家文字參數」「整段修訂流程的日誌掃描」） |
+| ⑪ | 11a `game-store.js` 的在途紀錄白名單放行 `reason`、`category`；11b 另讓 `game-revision.js` 把理由與分類寫進在途紀錄 | 11a Node 4 項（記憶體與 IndexedDB 兩種後端：「理由與分類不可能被存」「整個資料庫沒有理由或分類字樣」）；11b Node 9 項，含「交給 store 的在途紀錄從不帶理由與分類」「理由與分類只在請求本文」 |
+| ⑫ | 12a 編輯成功不使 `regen_count` 加 1；12b 編輯成功使它歸零（舊規則）；12c 免費次數內的編輯仍預扣；12d `done.free_left` 對編輯不遞減；12e `last_turn.edit_cost` 在免費次數內仍是整輪幣價 | 12a、12b 各 5 項（「重新生成與編輯共用前兩次免費」「編輯成功使次數加 1、`replace_turn` 不再接受歸零」）；12c 5 項（「前兩次免費且不預扣」「第三次無論哪種操作都付費」）；12d 5 項（端點、Runner 與整段流程）；12e 2 項（「`last_turn` 追蹤免費次數與兩種幣價」） |
+| ⑬ | 13a `RevisionRunner` 暴露 `capture_target`；13b 修訂成功後掛記事簿抓取（Runner 提供 `CaptureTarget`、兩個修訂端點掛 `after_close`）；**13c** 同 13b 但排除結構性測試並含 SQL Server | 13a 1 項（結構性：Runner 沒有 `capture_target`）；13b 原本只有同一個結構性測試失敗，補測試後 2 項；**13c 第一次 0 項失敗**（751 項全過，行為層沒有測試），補「修訂端點不掛記事簿抓取」後 1 項 |
+| ⑭ | 14a 沒有回饋元件時 `_regeneration_rows` 一律為空；14b JSON 的 `regenerations` 永遠為空；14c CSV 的 `turn_regenerations.csv` 沒有資料列；**14d** `registry` 組裝匯出服務時沒有接上回饋元件 | 14a 5 項、14b 4 項、14c 3 項（匯出的回饋含失敗與被擋的嘗試、公式字元只在 CSV 中和、他人的回饋不在我的匯出、分頁讀取）；**14d 第一次 0 項失敗**（902 項全過，服務層測試都是手動組裝），補走真實端點的測試後 1 項 |
+| ⑮ | 15a `game-revision.js`：失敗、被擋與中斷時不拿掉覆蓋層；15b 把未完成的新文字寫進歷史與快取 | 15a Node 11 項（「被擋後顯示轉場並還原舊內容」「錯誤事件以固定訊息還原舊內容」「串流中取消還原舊內容」「連線中斷時舊內容照舊」等）；15b Node 2 項（餘額不足、內容規範拒絕時 Modal 與舊內容不變） |
+
+**因破壞驗證補的 4 個測試**（都在未破壞的程式上通過；前兩個在 SQLite 與真實 SQL Server `project_test` 上都通過，後兩個走測試應用程式〔SQLite〕）：`test_session_repository_revision.py` 的 `test_the_claim_update_itself_refuses_a_revision_that_changed_after_the_check`（模擬競態：鎖內檢查通過之後、UPDATE 之前 `revision` 被改掉，認領回報 `busy`）；`test_game_service_revision.py` 的 `test_a_stale_expected_revision_wins_over_every_later_check_of_the_begin_order`（過時的 `expected_revision` 先於「不是最後一輪」「相同行動」「規則層」「全站預算」回報 `revision_conflict`）；`test_account_export_api.py` 的 `test_the_http_export_carries_the_regeneration_feedback_through_the_real_service_wiring`（真實端點的 JSON 與 CSV 都帶回饋、不含他人的）；`test_game_revision_endpoints.py` 的 `test_the_revision_endpoints_never_hook_a_notebook_capture_after_the_response`（以「Controller 有沒有取得抓取器」為探針，普通回合是對照組）。
+
+| 未驗證／限制（D 批） | 說明 |
+|---|---|
+| 全套測試 | 沒有跑（5.5 的 F 批做）；補的 4 個測試只跑了新測試本身與各破壞的相關檔案 |
+| 等價改動 | 不算：例如 1b 單獨看是「鎖內檢查之後的防禦縱深」，只有模擬競態才分得出來，所以用競態測試守住 |
+| 範圍 | 每個變體只改一處（1all 與 11b、13b、10b 一併改了數處）；後端只跑上列的相關檔案，前端只跑 `tests/js/game*.test.js`；SQL Server 版只在 SQLite 版沒有失敗時才加跑，所以「被抓到」的變體不保證 SQL Server 版同樣失敗 |
+| 瀏覽器端 | 沒有：⑮ 只在 Node 單元測試層驗證（5.3、6.5 的瀏覽器實測由使用者做，結果見上） |
 
 ## RPG 記事簿（rpg-notebook）
 

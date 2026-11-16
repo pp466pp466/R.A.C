@@ -279,6 +279,28 @@ def test_a_device_that_lost_the_race_gets_a_revision_conflict_after_the_other_fi
     assert turn_row(kit, save).revision == 2
 
 
+def test_a_stale_expected_revision_wins_over_every_later_check_of_the_begin_order(kit):
+    """`begin_revision` 的順序：4（revision）在 5（可修訂）、6（編輯的相同行動與規則層）、7（全站預算）之前——過時的 `expected_revision`
+    永遠先得到 `revision_conflict`，不論之後的檢查也會失敗（正式破壞驗證 5.4 ①：Service 層的檢查被拿掉時，下面每一種都會改回報別的錯誤）。"""
+    user, save, _ = ready(kit)
+    make_turn(kit, user, save, msg="m-2", action="第二個行動。")
+    total = kit.total(user)
+    with pytest.raises(RevisionConflict):                                               # 5：目標不是最後一輪
+        regenerate(kit, user, save, msg="m-1", revision=2)
+    with pytest.raises(RevisionConflict):
+        edit(kit, user, save, msg="m-1", revision=2)
+    with pytest.raises(RevisionConflict):                                               # 6：編輯的新行動和原本相同
+        edit(kit, user, save, msg="m-2", revision=2, action="第二個行動。")
+    with pytest.raises(RevisionConflict):                                               # 6：編輯的新行動被規則層擋下
+        edit(kit, user, save, msg="m-2", revision=2, action=BAD_ACTION)
+    kit.budget_exhausted = True                                                         # 7：全站預算用盡
+    for call in (regenerate, edit):
+        with pytest.raises(RevisionConflict):
+            call(kit, user, save, msg="m-2", revision=2)
+    assert turn_row(kit, save, "m-1").revising_started_at is None and feedback(kit, save) == [] and kit.total(user) == total
+    assert_untouched(kit, user, save, total, msg="m-2")
+
+
 def test_only_the_last_complete_turn_can_be_revised(kit):
     user, save, _ = ready(kit)
     make_turn(kit, user, save, msg="m-2", action="第二個行動。")

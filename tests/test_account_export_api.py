@@ -147,3 +147,26 @@ def test_both_formats_carry_the_story_preference_and_the_script_audience(app):
     assert dict(zip(*csv.reader(io.StringIO(account))))["story_preference"] == "male"
     script_header, script_row = list(csv.reader(io.StringIO(scripts)))[:2]
     assert dict(zip(script_header, script_row))["audience"] == "female"
+
+
+def test_the_http_export_carries_the_regeneration_feedback_through_the_real_service_wiring(app):
+    """匯出服務由 `registry.get_personal_export_service` 組裝（正式破壞驗證 5.4 ⑭）：服務層的測試都是手動組裝，看不出回饋元件有沒有接上；
+    這裡走真正的端點，JSON 的 `regenerations` 與 CSV 的 `turn_regenerations.csv` 都要有玩家填的回饋，且不含他人的。"""
+    from app.models import User
+    from tests.test_personal_export_regenerations import REASON_A, REASON_B, rows, save_with_feedback
+
+    owner, other = make_member(app, 1), make_member(app, 2)
+    with Session(app.extensions["db_engine"]) as s:
+        save_with_feedback(s, s.get(User, owner.id))
+        save_with_feedback(s, s.get(User, other.id))
+    client = logged_in_client(app, owner)
+
+    data = json.loads(client.post("/api/account/export", json={"format": "json"}).get_data().decode("utf-8"))
+    (session_block,) = data["sessions"]
+    assert [item["result"] for item in session_block["regenerations"]] == ["applied", "blocked", "failed", "applied"]
+    assert session_block["regenerations"][0]["reason"] == REASON_A
+
+    with zipfile.ZipFile(io.BytesIO(client.post("/api/account/export", json={"format": "csv"}).get_data())) as archive:
+        feedback_rows = rows(archive.read("turn_regenerations.csv"))
+    assert len(feedback_rows) == 4 and feedback_rows[0]["reason"] == REASON_A
+    assert feedback_rows[1]["reason"] == "'" + REASON_B                                  # 公式字元被中和

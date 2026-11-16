@@ -199,6 +199,23 @@ def test_the_state_event_of_a_revision_has_only_validated_fields(app, provider):
     assert "status_summary" not in json.dumps(state)
 
 
+def test_the_revision_endpoints_never_hook_a_notebook_capture_after_the_response(app, provider, monkeypatch):
+    """修訂不碰記事簿（正式破壞驗證 5.4 ⑬）：兩個修訂端點不掛回應關閉之後的記事簿抓取（抓取視窗永遠不含最後一輪）。
+    以「Controller 有沒有取得抓取器」當探針：普通回合是對照組（一定會取，證明探針有效），重新生成與編輯都不得再取。"""
+    from app.controllers import game_api_controller
+
+    asked: list[int] = []
+    real = game_api_controller.build_notebook_capturer
+    monkeypatch.setattr(game_api_controller, "build_notebook_capturer", lambda: asked.append(1) or real())
+    client, uid, save_id = played(app, provider)                                                       # 普通回合：對照組
+    assert asked == [1]
+    script_revision(provider)
+    parse(regen(client, save_id))
+    script_revision(provider)
+    parse(edit(client, save_id, revision=2))
+    assert asked == [1] and row(app)[0] == 3                                                           # 兩次修訂都成功，也都沒有取得抓取器
+
+
 def test_a_failure_after_the_stream_starts_is_an_error_event_and_the_old_content_stays(app, provider):
     client, uid, save_id = played(app, provider)
     script_revision(provider, state="不是 JSON")

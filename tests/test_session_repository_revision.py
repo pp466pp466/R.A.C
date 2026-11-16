@@ -8,7 +8,7 @@ import inspect
 from datetime import timedelta
 
 import pytest
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.models import MemoryLog, RpgSession
@@ -239,6 +239,26 @@ def test_a_wrong_expected_revision_is_a_conflict_and_changes_nothing(repo, membe
     assert result.outcome == REVISION_CONFLICT and result.turn.revision == 1
     turn = turn_of(repo, alice, save)
     assert (turn.attempt, turn.revising_started_at) == (1, None)
+
+
+def test_the_claim_update_itself_refuses_a_revision_that_changed_after_the_check(repo, member_session, world, monkeypatch):
+    """防禦縱深（正式破壞驗證 5.4 ①）：鎖內的 revision 檢查通過之後、條件式 UPDATE 之前，revision 被改掉（模擬競態：在兩者之間的
+    `_not_revisable_reason` 裡把 revision 加 1），UPDATE 的 `revision` 條件使認領不成立（回報 busy、不加嘗試序號、不留認領）。
+    沒有這個條件時，過時的 `expected_revision` 會被認領成功。"""
+    alice, save = world
+    play(repo, alice, save, 1)
+    original = repo._not_revisable_reason
+
+    def bump_then_check(*args, **kwargs):
+        member_session.execute(update(MemoryLog).where(MemoryLog.client_msg_id == "m-1").values(revision=MemoryLog.revision + 1))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(repo, "_not_revisable_reason", bump_then_check)
+    result = claim(repo, alice, save)
+    assert result.outcome == REVISION_BUSY
+    member_session.expire_all()
+    turn = turn_of(repo, alice, save)
+    assert (turn.revision, turn.attempt, turn.revising_started_at) == (2, 1, None)
 
 
 def test_a_second_claim_on_a_live_claim_is_busy_and_does_not_add_an_attempt(repo, member_session, world):
