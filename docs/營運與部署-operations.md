@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-16 ｜ 對應 change：aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟與拆除；實作中，尚未對真實 AWS 執行）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-16 ｜ 對應 change：aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器與拆除；實作中，尚未對真實 AWS 執行）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的營運變化（新排程指令 `purge-unconfirmed-accounts`、告警改名為「帳號鎖定激增」、期限清除納入鎖定計次）與 change ② `remove-player-password-auth`：`EMAIL_VERIFICATION_REQUIRED` 已淘汰（留著只會警告一次，部署計畫檔含有它會被拒絕）；寄信設定只供營運告警信與管理員的重設密碼信使用，玩家不收任何信；部署多一個資料遷移 `0011`；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie（`scripts/mint_test_sessions.py`）。
 > 注意（2026-11-03）：本文件已納入 change `rpg-data-and-script`：成人模式的環境變數改為 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`（舊的 `SEXUAL_CONTENT_LEVEL3_*` 已淘汰：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕；staging 與 production 不再一律禁止，須明確設定才生效）、新的人工類指令 `seed-scripts`（部署之後執行）、`purge-expired-data` 新增 RPG 存檔與回合部分內容兩類，以及遷移 `0012`。
 
@@ -440,7 +440,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組已完成並有測試，尚未對真實 AWS 執行**（沒有建立任何資源）。執行器 `scripts/aws_demo.py`、資料庫初始化腳本與雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組與執行器已完成並有測試，尚未對真實 AWS 執行**（沒有建立任何資源）。資料庫初始化腳本與雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容與執行器 `scripts/aws_demo.py` 的用法；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -528,6 +528,43 @@ flowchart LR
 - **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
 - **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。**手動快照**含資料庫內容、不隨 RDS 消失且持續計費，所以另有規則（design D14）：不論選擇保留或不保留最終快照，執行器先唯讀列出（`snapshot_listing_step()`）該資料庫仍存在的快照，使用者必須明確回覆要保留的**例外**（「沒有例外」也要明說，沉默不算），沒有被指定保留的**部署前快照**（`<資料庫>-pre-<提交短碼>`）才預設刪除；名單由 `snapshots_to_delete()` 算出（例外打錯名稱會丟錯，不會悄悄變成全部刪除），傳給 `teardown_plan(delete_snapshots=…)`，沒給名單時 `td-delete-snapshots` 沒有指令；每個刪除仍先以標籤查詢把關。**最終快照（本次保留的與先前拆除留下的）永遠不由計畫刪除**，要刪由使用者自己處理，拆除最後會列出仍留著的快照。
 - **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。**沒有對真實的 AWS、docker、systemd、Caddy 執行過**，指令與旗標的差異在雲端批次回寫（task 4.5）。
+
+### 執行器（`scripts/aws_demo.py`）
+
+執行器只負責預覽、確認、執行與驗證，步驟的內容與順序都在計畫模組。**預設只預覽，不呼叫任何外部指令**（包含 `aws` 與 `git`）；加上 `--execute` 才會逐步執行，每一步執行前列出該步驟（指令、暫存檔內容、輪詢與驗證）並等待確認，**拒絕就停止**（結束代碼 3）。外部指令一律以引數清單傳遞（沒有 shell）；區域不是 `ap-southeast-2` 時，在呼叫任何指令之前就被拒絕；`--account-id` 沒有預設值，執行前先用 `aws sts get-caller-identity` 比對目前登入的帳號，不符即停止。
+
+| 子命令 | 做什麼（對應的計畫） | 範例 |
+|---|---|---|
+| `provision` | 建立環境（`build_plan`）：`--group` 只做某幾組、`--secrets-file` 提供機密的值、`--accept-cost` 同意建立計費資源 | `python scripts/aws_demo.py provision --account-id 123456789012 --notify-email ops@example.com --accept-cost --execute` |
+| `deploy` | 部署（`deploy_plan`）：`--tag` 是提交短碼，省略時取目前 git 的短提交；第一次部署用 `--group` 分組執行（`build`，然後 `snapshot`、`migrate`；`restart`、`verify` 留到 `create-admin` 之後） | `python scripts/aws_demo.py deploy --account-id 123456789012 --tag abc1234 --execute` |
+| `rollback` | 回復（`rollback_plan`）：只把兩個池換回舊標籤，不動資料庫 | `python scripts/aws_demo.py rollback --account-id 123456789012 --tag abc1234 --execute` |
+| `teardown` | 拆除（`teardown_plan`）：必須明確選 `--final-snapshot` 或 `--no-final-snapshot`（互斥、沒有預設值；真正執行時沒選會在呼叫任何指令前被拒絕） | `python scripts/aws_demo.py teardown --account-id 123456789012 --no-final-snapshot --execute` |
+| `duckdns` | 把展示網域指向帶標籤的 Elastic IP；權杖只從環境變數 `DUCKDNS_TOKEN` 讀取 | `python scripts/aws_demo.py duckdns --account-id 123456789012 --execute` |
+
+- **單步執行**：`--only STEP`（步驟代碼見預覽或上面的步驟總表）只處理那一步；`--only STEP --yes` 執行並**不再詢問**確認（確認由呼叫者針對該步驟明確給出）；`--yes` 只能與 `--only` 一起用，沒有「整份計畫一律同意」；`--only` 與 `--group` 不能一起用。
+- **取回先前步驟的結果**：步驟之間以 `{{名稱}}` 傳遞擷取值（例如 `vpc-id`）。單步或分組執行時，缺少的值只用**唯讀**的方式向 AWS 取回（建立資源的步驟只重跑它的「已存在」查詢，純查詢的步驟重跑自己）；SSM 命令編號之類無法安全取回的值會要求先執行產生它的步驟，不會為了取值而重複建立任何東西。
+- **`--accept-cost`（只有 `provision`）**：沒有它時，建立 RDS、EC2 與 Elastic IP 的步驟只留說明、不輸出指令，預覽仍會顯示費用預估，真正執行到那一步會**停止**（結束代碼 4）；有它時，建立計費資源前先顯示預估（約 US$1.6／日、到 2026-12-31 約 US$75；牌價粗估，以 AWS 帳單頁為準），之後仍逐步確認。`--only … --yes` 也需要它。
+- **機密**：值來自 `--secrets-file`（`KEY=VALUE`、UTF-8、**不做變數插值**；建議檔名 `aws-demo.secrets`，`*.secrets` 已被 `.gitignore` 忽略）或由腳本隨機產生（`SECRET_KEY` 64 位十六進位、資料庫兩個密碼 40 字且只含英數與 `-_`）；`DATABASE_URL` 由腳本用 RDS 端點與專屬登入組成（`Encrypt=yes` 加 RDS 的 CA 套件路徑，**沒有 `TrustServerCertificate`**，密碼經 URL 編碼）。檔案只能放來自你的機密：由腳本產生或組成的名稱與未知的名稱會被拒絕，選取的步驟需要的機密缺漏時列出名稱（不顯示任何值）。值只經暫存檔（權限限本人、**用後一定刪除，含失敗與中斷**）交給 `aws ssm put-parameter --cli-input-json file://…`，不進命令列、輸出與日誌，所有輸出另外經過遮蔽（出現已知的機密值就以 `***` 取代）。**只有建立該參數的步驟能產生新值**；其他步驟（例如建立 RDS 用的主要使用者密碼）一律從 SSM 讀回已存在的值，讀不到就失敗，絕不為已存在的資源另外產生一個沒有存下來的密碼。已存在的參數不覆寫。
+- **輪詢**：有間隔與上限，逾時時說明等待了多久與最後一次的狀態；命令錯誤視為「還沒好」（例如 SSM 命令剛送出時 `InvocationDoesNotExist`）；SSM 命令進入 `Failed`、`Cancelled`、`TimedOut` 立即停止，並印出該命令錯誤輸出的前 500 字（主機腳本的訊息是英文、不含機密）。
+- **DuckDNS**：用標準函式庫呼叫 `https://www.duckdns.org/update`；權杖來自環境變數 `DUCKDNS_TOKEN`，不經命令列、不傳給 `aws` 與 `git` 子行程，任何輸出與例外都不含權杖或含權杖的網址（例外只記錄類別）；先唯讀查出 Elastic IP，顯示後由你確認才更新，只接受單層的 `*.duckdns.org` 子網域。
+- **結束代碼**：0 成功；1 失敗（指令失敗、驗證不符、逾時）；2 用法錯誤（區域、帳號、未選最終快照等，沒有呼叫任何指令）；3 你拒絕或沒有明確回覆；4 步驟被擋下（沒有 `--accept-cost`、尚未選擇最終快照）。
+- **Windows**：子行程設定 `AWS_CLI_FILE_ENCODING=UTF-8`，暫存檔以 UTF-8 寫入；主控台是 cp950 時不能編碼的字元以 `?` 取代，不會因此中斷。
+
+**人工確認點**（執行器不會替你做的事）：
+
+| 步驟 | 要你做什麼 |
+|---|---|
+| `confirm-sns-subscriptions` | 每位收件人開啟 AWS 寄的訂閱確認信並點擊確認（沒收到先看垃圾郵件匣）；`--yes` 不能代替人工動作，此步驟一律詢問 |
+| `create-rds-instance`、`launch-ec2`、`allocate-eip` | 開始計費：看過費用預估並加上 `--accept-cost`，再逐步確認 |
+| 主機初始化 | 沒有計畫步驟（見上）：第一次雲端執行時在 SSM Session Manager 上現場撰寫、逐步確認，之後回寫（task 4.5） |
+| `create-admin` | 由你在 SSM 終端機自己執行並輸入密碼，不經腳本與對話（task 5.5） |
+| `duckdns` | 確認查到的 Elastic IP 正確，才會更新網域 |
+| `teardown` 的保留或不保留最終快照 | 明確選擇 `--final-snapshot` 或 `--no-final-snapshot`，沒有預設值 |
+| `teardown` 的快照例外 | 見下：必須明確回覆，「沒有例外」也要明說 |
+
+**拆除時的快照流程（design D14）**：真正執行 `teardown` 時，執行器在**任何刪除之前**先唯讀列出該資料庫的手動快照，顯示部署前快照（預設會刪除）與其他快照（例如最終快照，永遠不刪），然後要求你回覆要保留的例外：輸入要保留的快照名稱（空白或逗號分隔），或輸入「沒有例外」；**沉默、直接按 Enter 都不算回覆**，名稱打錯會說明原因並重問，三次沒有明確回覆就停止（結束代碼 3，沒有刪除任何東西）。回覆之後才以 `snapshots_to_delete()` 算出名單、重新產生計畫（`td-delete-snapshot-<名稱>`），之後照一般拆除逐步確認；每個快照刪除前仍先以標籤查詢把關。`--yes` 不能略過這個問題；`td-delete-snapshots`（沒有指令的佔位）不能用 `--only` 執行。預覽（不加 `--execute`）不呼叫 AWS，所以只列出「列出快照」的指令與被擋下的佔位步驟。
+
+**已驗證與未驗證（執行器）**：預覽不呼叫任何指令、拒絕即停止、單步只執行一步、被擋下的步驟不執行、輸出與引數沒有機密值、暫存檔一定刪除、輪詢逾時與失敗狀態、DuckDNS 權杖不外洩、拆除不會刪到未標籤的資源與被保留的快照，都由 `tests/test_aws_demo_script.py` 以假的 runner 驗證。**沒有對真實 AWS 執行過**：實際的 `aws` 回應形狀、錯誤文字與耗時、`file://` 暫存檔在真實 CLI 的行為，都在雲端批次發現後回寫。
 
 ---
 

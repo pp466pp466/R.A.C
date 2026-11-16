@@ -39,6 +39,9 @@ Desktop.ini
 # 部署用的一般設定檔（scripts/gcp_launch.py 的 --vars-file；不含機密，但含環境專屬的設定，不進版本庫）
 *.vars
 
+# AWS 展示環境的機密值（scripts/aws_demo.py 的 --secrets-file，KEY=VALUE；含真實的 API 金鑰，絕不進版本庫）
+*.secrets
+
 # 負載測試的輸出（loadtest/）
 loadtest/result*
 loadtest/*.db
