@@ -166,7 +166,9 @@ SYNCED_RULES = [
     (7, "幣不過期（免費、付費相同）；扣款先扣免費幣、再扣付費幣", "references/business-encoding.md"),
     (7, "扣款於回合開始時原子預扣、完成時結算、失敗時原路退回", "references/business-encoding.md"),
     (7, "玩家只能對「最後一輪」重新生成其 AI 回應，或編輯該輪的玩家輸入後重送；AI 的輸出玩家不能直接修改", "references/business-encoding.md"),
-    (7, "每個回合前 2 次免費，第 3 次起每次消耗 30 幣", "references/business-encoding.md"),
+    # 2026-11-16（rpg-turn-revision 實測回饋）：編輯與重新生成共用每回合前 2 次免費，編輯不再使次數歸零（取代 2026-11-05 的「重新生成前 2 次免費、編輯歸零」）
+    (7, "重新生成與編輯共用同一組免費次數：每個回合前 2 次（兩種操作合計）免費，第 3 次起每次消耗 30 幣（原本那輪已扣的幣不退）；成功才計次，編輯不使次數歸零", "references/business-encoding.md"),
+    (7, "編輯按下前，若本次需要消耗遊戲幣，須提醒並顯示餘額，餘額不足時不得送出；免費次數內不需要餘額", "references/business-encoding.md"),
     (7, "玩家必須選擇分類並填寫理由（5 至 50 字，只需重點）才能送出", "references/business-encoding.md"),
     (7, "新回應須完整通過審查與狀態驗證才原子替換舊回應；失敗、中斷或被擋時保留舊內容、退回預扣、不消耗免費次數；被取代的輸入與輸出不保存", "references/business-encoding.md"),
     (7, "理由只供營運檢視，不得送入模型、不得進入 system_instruction", "references/business-encoding.md"),
