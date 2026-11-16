@@ -440,7 +440,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組與執行器已完成並有測試，尚未對真實 AWS 執行**（沒有建立任何資源）。資料庫初始化腳本與雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容與執行器 `scripts/aws_demo.py` 的用法；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試，尚未對真實 AWS 執行**（沒有建立任何資源）。雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -565,6 +565,24 @@ flowchart LR
 **拆除時的快照流程（design D14）**：真正執行 `teardown` 時，執行器在**任何刪除之前**先唯讀列出該資料庫的手動快照，顯示部署前快照（預設會刪除）與其他快照（例如最終快照，永遠不刪），然後要求你回覆要保留的例外：輸入要保留的快照名稱（空白或逗號分隔），或輸入「沒有例外」；**沉默、直接按 Enter 都不算回覆**，名稱打錯會說明原因並重問，三次沒有明確回覆就停止（結束代碼 3，沒有刪除任何東西）。回覆之後才以 `snapshots_to_delete()` 算出名單、重新產生計畫（`td-delete-snapshot-<名稱>`），之後照一般拆除逐步確認；每個快照刪除前仍先以標籤查詢把關。`--yes` 不能略過這個問題；`td-delete-snapshots`（沒有指令的佔位）不能用 `--only` 執行。預覽（不加 `--execute`）不呼叫 AWS，所以只列出「列出快照」的指令與被擋下的佔位步驟。
 
 **已驗證與未驗證（執行器）**：預覽不呼叫任何指令、拒絕即停止、單步只執行一步、被擋下的步驟不執行、輸出與引數沒有機密值、暫存檔一定刪除、輪詢逾時與失敗狀態、DuckDNS 權杖不外洩、拆除不會刪到未標籤的資源與被保留的快照，都由 `tests/test_aws_demo_script.py` 以假的 runner 驗證。**沒有對真實 AWS 執行過**：實際的 `aws` 回應形狀、錯誤文字與耗時、`file://` 暫存檔在真實 CLI 的行為，都在雲端批次發現後回寫。
+
+### 資料庫初始化與連線探測（`scripts/aws_demo_bootstrap_db.py`、`scripts/aws_demo_probe_db.py`）
+
+兩支腳本都在**主映像內以一次性容器執行**（design D7、D8）：映像不含 `scripts/`（`.dockerignore`），所以由主機把腳本唯讀掛入；各自獨立、不匯入其他維運腳本，所以可以單獨掛入（初始化不匯入 `app/`；探測只匯入應用程式的引擎工廠，容器的工作目錄是 `/app`，腳本由別處掛入時會把工作目錄加進匯入路徑）。它們不是執行器的子命令：第一次雲端執行（task 5.2）時，由使用者在主機上以 SSM 逐步確認執行，並回寫成計畫步驟（task 4.5）。順序固定為「建置映像 → 資料庫初始化 → 連線探測 → 快照與 migration」，探測沒有通過就**停止**，不進入 migration，也不改用放寬的設定。
+
+| | `aws_demo_bootstrap_db.py`（初始化） | `aws_demo_probe_db.py`（探測） |
+|---|---|---|
+| 身分 | RDS 主要使用者 `racmaster`（密碼取環境變數 `RDS_MASTER_PASSWORD`） | 應用程式的專屬登入（環境變數 `DATABASE_URL`，與應用程式相同） |
+| 輸入 | `--host`（RDS 端點，必填）；`--port`、`--master-user`、`--db-name`、`--app-login`、`--ca-bundle` 有預設值（與計畫模組的常數相同，測試比對）；應用程式登入的密碼取環境變數 `DB_APP_PASSWORD`；兩者來自機密取出腳本產生的 `/run/rac/bootstrap.env`（`--env-file`），**沒有任何密碼的命令列參數**，多給的參數一律拒絕且不回顯內容 | 沒有參數；連線只來自 `DATABASE_URL`，並經應用程式的引擎工廠 `create_engine_for` |
+| 做什麼 | 依序「不存在才建立」：資料庫 `rac_demo` → 登入 `rac_app` → 資料庫使用者 → `db_owner` 角色（遷移要建表與改表；**沒有任何伺服器層級的角色**）。可重複執行：已存在就略過，**既有登入的密碼不重設**；資料庫內有同名但對應到別的登入的使用者時停止、不修改 | 以 ORM 表達式執行 `SELECT 1`，成功才允許 migration |
+| 驗證憑證 | `Encrypt=yes` 加 `ServerCertificate=<CA 套件>`，**沒有任何信任所有憑證的選項**；CA 套件檔案不存在時拒絕，不改用別的方式 | 拒絕（不連線、結束代碼 2）：`TrustServerCertificate` 為真、`Encrypt` 關閉或 `optional`、不是 SQL Server 的連線字串、`ServerCertificate` 檔案不存在 |
+| 輸出 | 名稱與「已建立／已存在」；失敗時只有步驟、類別、例外類型與 SQLSTATE | 成功或失敗與類別；成功時另印連線選項的型態（`Encrypt` 與 `ServerCertificate` 是否設定、沒有 `TrustServerCertificate`），供記錄採用的連線字串型態（task 5.3） |
+| 結束代碼 | 0 成功；1 資料庫操作失敗；2 輸入不合法或缺少環境變數（沒有連線） | 0 成功；1 連線或查詢失敗；2 設定不合格（沒有連線） |
+
+- **名稱與密碼的白名單**：資料庫、登入與主要使用者名稱只含英數與底線（英文字母開頭、最長 63 字），不得以 `db_`、`sys`、`rds` 開頭，不得是系統資料庫或 `sa`、`dbo`、`public`、`guest`；應用程式登入不得與主要使用者相同；密碼 12 至 128 字且只含英數、`_` 與 `-`（與執行器產生的密碼同一字元集，測試以 200 次產生確認全部通過），兩個密碼不得相同。DDL 無法使用參數，所以識別字經白名單與方括號、密碼值以字元集排除引號；存在性查詢一律以參數傳入。語句只有 `CREATE DATABASE`、`CREATE LOGIN`、`CREATE USER`、`ALTER ROLE ... ADD MEMBER` 四種，屬維運腳本的 T-SQL（位於 `scripts/`，不在 `tests/architecture/test_no_raw_sql.py` 掃描的 `app/` 與 `migrations/`，與 `scripts/restore_drill.py` 的 `RESTORE` 同類）。
+- **機密不外洩**：密碼只經環境變數進入行程，不寫入日誌、輸出、命令列或例外訊息；失敗時**不輸出例外訊息**（驅動程式的訊息可能含伺服器位址或登入名稱），只輸出固定的類別。類別為 `login_failed`、`tls_certificate`（憑證無法驗證，決定是否採用 design D7 候選 B）、`timeout`、`network`、`driver_missing`、`password_policy`、`permission_denied`、`orphaned_user`、`unknown`。驅動程式的訊息會依作業系統語系在地化（繁體中文 Windows 上的憑證失敗是中文），所以分類另比對不分語系的標記與 Windows 的錯誤碼；兩支腳本各自帶一份相同的規則，測試比對。
+- **已驗證**：名稱與密碼的白名單、四個語句的內容與順序、重複執行不再執行任何 DDL 且不重設密碼、中途失敗即停止並指出步驟、輸出不含密碼與位址、分類與命令列的拒絕行為，由 `tests/test_aws_demo_bootstrap_db.py` 與 `tests/test_aws_demo_probe_db.py` 驗證；另有標記 `sqlserver` 的整合測試對 `TEST_SQLSERVER_URL` 的本機 SQL Server 實際執行兩次初始化（登入可連線、是 `db_owner`、不是 `sysadmin`、可建表、第二次不重設密碼；測試自己建立並清除 `racbootit_*` 的資料庫與登入，連不到時標為跳過），以及取得真實的驅動程式錯誤（未信任的自簽憑證歸為 `tls_certificate`、錯誤密碼歸為 `login_failed` 且 SQLSTATE 為 28000）。
+- **未驗證**：對 **RDS** 的行為——主要使用者在 RDS 上的 `CREATE LOGIN`／`CREATE DATABASE`／`ALTER ROLE` 權限、`CHECK_POLICY = ON` 的密碼規則；以及 design D7 的**已知不確定**：ODBC Driver 18 的 `ServerCertificate` 是否接受 RDS 的 CA 套件（它可能要求與伺服器憑證完全相同），須在 task 5.2 以探測實測；英文（Linux 容器）的驅動程式訊息只以樣本字串驗證，沒有取得真實的訊息。探測失敗時依 task 5.3 處理（停止並回報，不採用 `TrustServerCertificate=yes` 或行程範圍的 `SSL_CERT_FILE`）。
 
 ---
 
