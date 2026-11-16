@@ -4,9 +4,9 @@
 
 ## 1. 計畫模組（純函式，不呼叫任何 AWS 指令）
 
-- [ ] 1.1 新增 `scripts/aws_demo_plan.py` 的 `Target`、`Step`、命名與標籤規則、區域守門（只接受 `ap-southeast-2`）、名稱不得含 `production`；`tests/test_aws_demo_plan.py` 驗證：其他區域被拒、名稱守門、每個資源都帶標籤
-- [ ] 1.2 變數歸類從 `scripts/launch_plan.py` 匯入（`SECRET_VARS`、`PLAIN_VARS`、`NOT_DEPLOYED`、`OBSOLETE_VARS`），產生機密參數名稱清單與一般設定；測試：`.env.example` 的每個變數恰好屬於一類、計畫輸出沒有任何機密值、應用程式單元的參數不含 RDS 主要使用者密碼
-- [ ] 1.3 資源步驟：預算與 SNS、安全群組（對外只開 80／443，沒有 22）、IAM 角色與執行個體設定檔（讀取權限限本專案的參數路徑）、S3 傳檔儲存貯體、RDS（不公開、加密、備份保留 7 天、只允許主機安全群組）、EC2（IMDSv2 強制、gp3 20 GB、無金鑰對）、Elastic IP、SSM 參數；測試：資源清單只含規格允許的類型、建立 RDS 與 EC2 的步驟在沒有 `--accept-cost` 時不輸出指令、預算步驟有兩個門檻且通知對象沒有預設值
+- [x] 1.1 新增 `scripts/aws_demo_plan.py` 的 `Target`、`Step`、命名與標籤規則、區域守門（只接受 `ap-southeast-2`）、名稱不得含 `production`；`tests/test_aws_demo_plan.py` 驗證：其他區域被拒、名稱守門、每個資源都帶標籤
+- [x] 1.2 變數歸類從 `scripts/launch_plan.py` 匯入（`SECRET_VARS`、`PLAIN_VARS`、`NOT_DEPLOYED`、`OBSOLETE_VARS`），產生機密參數名稱清單與一般設定；測試：`.env.example` 的每個變數恰好屬於一類、計畫輸出沒有任何機密值、應用程式單元的參數不含 RDS 主要使用者密碼
+- [x] 1.3 資源步驟：預算與 SNS、安全群組（對外只開 80／443，沒有 22）、IAM 角色與執行個體設定檔（讀取權限限本專案的參數路徑）、S3 傳檔儲存貯體、RDS（不公開、加密、備份保留 7 天、只允許主機安全群組）、EC2（IMDSv2 強制、gp3 20 GB、無金鑰對）、Elastic IP、SSM 參數；測試：資源清單只含規格允許的類型、建立 RDS 與 EC2 的步驟在沒有 `--accept-cost` 時不輸出指令、預算步驟有兩個門檻且通知對象沒有預設值
 - [ ] 1.4 主機檔案產生函式：Caddyfile（`/api/game/*` 分流到 RPG 池、`flush_interval -1`、客服池其餘）、`rac-cs`／`rac-rpg`／`rac-caddy` 單元（回送位址綁定、非 root、`--cap-drop=ALL`、`no-new-privileges`、`Restart=always`、日誌循環）、機密取出腳本（寫到記憶體檔案系統、`0600`）；測試：應用程式埠不綁 `0.0.0.0`、沒有 `TrustServerCertificate`、兩個池使用各自的 gunicorn 設定、Caddyfile 對串流路徑沒有 `encode`
 - [ ] 1.5 排程產生：把 `SCHEDULED_COMMANDS` 的 cron 運算式轉成 `OnCalendar`（只支援實際用到的三種形式，其他形式丟錯，時區 Asia/Taipei，`Persistent=true`）；測試：與 `SCHEDULED_COMMANDS` 逐項一致、沒有手動類指令、不支援的運算式會失敗
 - [ ] 1.6 部署、回復與 `teardown` 步驟：快照 → 建置 → 遷移 → 重啟 → 驗證的順序；回復只重啟前一版標籤、沒有降級遷移；`teardown` 只選帶標籤的資源、RDS 刪除要求明確選擇最終快照（沒有預設）；測試：順序、回復內容、`teardown` 的清單範圍
