@@ -631,11 +631,11 @@ class SessionRepository(BaseRepository[RpgSession]):
 
     def replace_turn(
         self, user_id: int, public_id: str, client_msg_id: str, *, expected_revision: int, attempt: int, llm_raw_response: str,
-        structured_result: Mapping[str, Any] | None, now: datetime, user_action: str | None = None, reset_regen_count: bool = False,
+        structured_result: Mapping[str, Any] | None, now: datetime, user_action: str | None = None,
         world_changes: Mapping[str, Any] | None = None, expected_version: int | None = None, end_story: bool = False,
     ) -> TurnFinish | None:
-        """修訂成功：以新的回應替換回合的內容。輪數與序號不變、`revision` 加 1、認領清除；`regen_count` 加 1（編輯時 `reset_regen_count`
-        為真則歸零）；`user_action` 不是 `None` 時一併替換（編輯）；快照不動（這一輪仍是最後一輪，可以再修訂）。
+        """修訂成功：以新的回應替換回合的內容。輪數與序號不變、`revision` 加 1、認領清除；`regen_count` 一律加 1（重新生成與編輯共用同一組
+        免費次數，編輯不歸零）；`user_action` 不是 `None` 時一併替換（編輯）；快照不動（這一輪仍是最後一輪，可以再修訂）。
 
         條件式 UPDATE 要求回合為 `complete`、`revision` 與 `attempt` 相符且仍有認領；不符（過時的執行者、已被接手、已被別人修訂）拋出
         `InvalidTurnTransitionError`。`world_changes`（`WorldState.to_fields()` 的六欄）以 `expected_version` 比對後寫回，`end_story`
@@ -653,7 +653,7 @@ class SessionRepository(BaseRepository[RpgSession]):
         values: dict[str, Any] = {
             "llm_raw_response": llm_raw_response, "structured_result": dict(structured_result) if structured_result is not None else None,
             "revision": MemoryLog.revision + 1, "revising_started_at": None,
-            "regen_count": 0 if reset_regen_count else MemoryLog.regen_count + 1, "updated_at": now,
+            "regen_count": MemoryLog.regen_count + 1, "updated_at": now,
         }
         if user_action is not None:
             values["user_action"] = user_action

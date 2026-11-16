@@ -17,7 +17,7 @@ from app.services.errors import (
     ValidationError,
 )
 from app.services.game_service import (
-    CATEGORIES, KIND_EDIT, KIND_REGENERATE, REASON_MAX, REASON_MIN, RevisionPlan, free_left_of, hold_key, world_from_snapshot, world_of,
+    CATEGORIES, KIND_EDIT, KIND_REGENERATE, REASON_MAX, REASON_MIN, RevisionPlan, hold_key, world_from_snapshot, world_of,
 )
 from tests.support.game import MARKER, GameKit
 
@@ -55,11 +55,11 @@ def edit(kit, user, save, msg="m-1", *, revision=1, action=NEW_ACTION):
 
 
 def succeed(kit, user, save, plan, story="新的劇情。"):
-    """模擬 `RevisionRunner` 的成功收尾：替換內容（編輯時一併換行動並使免費次數歸零）並結算預扣。"""
+    """模擬 `RevisionRunner` 的成功收尾：替換內容（編輯時一併換行動）、已用的修訂次數加 1（重新生成與編輯相同，不歸零）並結算預扣。"""
     is_edit = plan.kind == KIND_EDIT
     kit.sessions.replace_turn(
         user.id, save.public_id, plan.client_msg_id, expected_revision=plan.expected_revision, attempt=plan.attempt, llm_raw_response=story,
-        structured_result=None, now=kit.clock(), user_action=plan.action if is_edit else None, reset_regen_count=is_edit,
+        structured_result=None, now=kit.clock(), user_action=plan.action if is_edit else None,
     )
     if plan.hold_key is not None:
         kit.wallet.settle(user, plan.hold_key)
@@ -381,6 +381,7 @@ def test_once_the_claim_has_expired_a_new_turn_can_start(kit):
 
 def test_an_expired_claim_is_taken_over_with_a_newer_attempt_and_the_old_feedback_row_fails(kit):
     user, save, _ = ready(kit)
+    kit.set_limit("rpg.free_regenerations", 0)                                          # 兩次都付費，預扣鍵才有可比較的值
     old = edit(kit, user, save)
     kit.clock.advance(seconds=kit.limits.coin_hold_timeout() + 1)
     new = regenerate(kit, user, save)
@@ -388,7 +389,7 @@ def test_an_expired_claim_is_taken_over_with_a_newer_attempt_and_the_old_feedbac
     first, second = feedback(kit, save)
     assert (first.attempt, first.result) == (old.attempt, REGEN_FAILED) and first.reason is None          # 編輯沒有理由
     assert (second.attempt, second.result, second.reason) == (new.attempt, REGEN_PENDING, REASON)
-    assert old.hold_key != new.hold_key
+    assert old.hold_key is not None and new.hold_key is not None and old.hold_key != new.hold_key
 
 
 def test_the_old_executors_replace_fails_after_a_takeover(kit):
@@ -448,18 +449,76 @@ def test_a_failed_paid_revision_refunds_and_the_next_one_uses_a_new_key_and_nets
     assert kit.total(user) == total - 30
 
 
-def test_an_edit_is_always_paid_even_with_free_regenerations_left_and_resets_the_free_count(kit):
+def revise(kit, user, save, kind, *, revision):
+    """依種類開始一次修訂（編輯每次用不同的新行動，避免和上一次的行動相同）。"""
+    if kind == KIND_EDIT:
+        return edit(kit, user, save, revision=revision, action=f"{NEW_ACTION}（第 {revision} 版）")
+    return regenerate(kit, user, save, revision=revision)
+
+
+@pytest.mark.parametrize("order", [
+    (KIND_REGENERATE, KIND_REGENERATE), (KIND_REGENERATE, KIND_EDIT), (KIND_EDIT, KIND_REGENERATE), (KIND_EDIT, KIND_EDIT),
+])
+def test_regenerations_and_edits_share_the_first_two_free_revisions_and_hold_nothing(kit, order):
     user, save, total = ready(kit)
-    succeed(kit, user, save, regenerate(kit, user, save, revision=1))
-    succeed(kit, user, save, regenerate(kit, user, save, revision=2))
-    assert free_left_of(2, turn_row(kit, save).regen_count) == 0
-    plan = edit(kit, user, save, revision=3)
-    assert (plan.is_free, plan.cost, plan.kind) == (False, 30, KIND_EDIT) and kit.total(user) == total - 30
+    for revision, kind in enumerate(order, start=1):
+        plan = revise(kit, user, save, kind, revision=revision)
+        assert (plan.kind, plan.is_free, plan.hold_key, plan.cost, plan.free_limit) == (kind, True, None, 0, 2)
+        assert kit.total(user) == total                                                 # 帳本沒有任何預扣
+        succeed(kit, user, save, plan)
+    assert [row.is_free for row in feedback(kit, save)] == [True, True]
+    assert [row.kind for row in feedback(kit, save)] == [REGEN_KIND_EDIT if kind == KIND_EDIT else REGEN_KIND_REGENERATE for kind in order]
+    assert kit.total(user) == total and turn_row(kit, save).regen_count == 2
+
+
+@pytest.mark.parametrize("first_two", [(KIND_REGENERATE, KIND_EDIT), (KIND_EDIT, KIND_REGENERATE)])
+@pytest.mark.parametrize("third", [KIND_REGENERATE, KIND_EDIT])
+def test_the_third_revision_is_paid_whichever_operation_it_is(kit, first_two, third):
+    user, save, total = ready(kit)
+    for revision, kind in enumerate(first_two, start=1):
+        succeed(kit, user, save, revise(kit, user, save, kind, revision=revision))
+    plan = revise(kit, user, save, third, revision=3)
+    assert (plan.kind, plan.is_free, plan.cost, plan.attempt) == (third, False, 30, 4)
+    assert plan.hold_key == hold_key(save.public_id, "m-1", 4) and kit.total(user) == total - 30
+    assert feedback(kit, save)[-1].is_free is False
+
+
+def test_a_free_edit_needs_no_balance_at_all(kit):
+    user, save, _ = ready(kit)
+    kit.wallet.adjust(user.id, bucket="free", delta=-kit.total(user))
+    plan = edit(kit, user, save)
+    assert (plan.is_free, plan.hold_key, plan.cost) == (True, None, 0) and kit.total(user) == 0
     succeed(kit, user, save, plan)
+    assert turn_row(kit, save).user_action == NEW_ACTION and kit.total(user) == 0
+
+
+def test_a_successful_edit_adds_one_to_the_count_and_never_resets_it(kit):
+    user, save, total = ready(kit)
+    succeed(kit, user, save, edit(kit, user, save, revision=1))
     row = turn_row(kit, save)
-    assert (row.revision, row.regen_count, row.user_action) == (4, 0, NEW_ACTION)
-    again = regenerate(kit, user, save, revision=4)
-    assert again.is_free is True and again.regen_count == 0                             # 編輯之後又有 N 次免費
+    assert (row.revision, row.regen_count, row.user_action) == (2, 1, NEW_ACTION)        # 編輯算一次，不是歸零
+    succeed(kit, user, save, regenerate(kit, user, save, revision=2))
+    assert turn_row(kit, save).regen_count == 2 and kit.total(user) == total
+    paid = regenerate(kit, user, save, revision=3)                                         # 編輯沒有讓次數重來：第三次照樣付費
+    assert (paid.is_free, paid.cost, paid.regen_count) == (False, 30, 2) and kit.total(user) == total - 30
+    succeed(kit, user, save, paid)
+    after = edit(kit, user, save, revision=4, action=f"{NEW_ACTION}（再改）")
+    assert (after.is_free, after.cost) == (False, 30)
+
+
+def test_a_failed_paid_edit_refunds_and_does_not_count_and_the_next_one_nets_one_charge(kit):
+    user, save, total = ready(kit)
+    for revision in (1, 2):
+        succeed(kit, user, save, regenerate(kit, user, save, revision=revision))
+    first = edit(kit, user, save, revision=3)
+    assert first.is_free is False and kit.total(user) == total - 30
+    fail(kit, user, save, first)
+    row = turn_row(kit, save)
+    assert (row.revision, row.regen_count, row.user_action) == (3, 2, ACTION) and kit.total(user) == total      # 失敗不計次、舊內容不變
+    second = edit(kit, user, save, revision=3)
+    assert second.hold_key != first.hold_key and second.attempt == first.attempt + 1 and kit.total(user) == total - 30
+    succeed(kit, user, save, second)
+    assert kit.total(user) == total - 30 and turn_row(kit, save).regen_count == 3
 
 
 def test_a_zero_free_setting_makes_every_regeneration_paid_and_the_setting_is_read_each_time(kit):
@@ -475,13 +534,28 @@ def test_a_zero_free_setting_makes_every_regeneration_paid_and_the_setting_is_re
 def test_insufficient_coins_for_a_paid_revision_leaves_no_claim_and_no_feedback_row(kit):
     user, save, _ = ready(kit)
     kit.wallet.adjust(user.id, bucket="free", delta=-(kit.total(user) - 20))            # 剩 20 幣，不足 30
+    kit.set_limit("rpg.free_regenerations", 0)                                          # 沒有免費次數：兩種操作都需要付費
     with pytest.raises(InsufficientCoins) as caught:
         edit(kit, user, save)
     assert (caught.value.balance, caught.value.needed) == (20, 30)
-    kit.set_limit("rpg.free_regenerations", 0)
     with pytest.raises(InsufficientCoins):
         regenerate(kit, user, save)
     assert_untouched(kit, user, save, 20)
+
+
+def test_insufficient_coins_after_the_free_revisions_are_used_up_blocks_both_operations(kit):
+    user, save, _ = ready(kit)
+    succeed(kit, user, save, regenerate(kit, user, save, revision=1))
+    succeed(kit, user, save, regenerate(kit, user, save, revision=2))
+    kit.wallet.adjust(user.id, bucket="free", delta=-(kit.total(user) - 20))
+    before = turn_row(kit, save)
+    state = (before.revision, before.regen_count, before.user_action, len(feedback(kit, save)))
+    for call in (regenerate, edit):
+        with pytest.raises(InsufficientCoins):
+            call(kit, user, save, revision=3)
+    after = turn_row(kit, save)
+    assert (after.revision, after.regen_count, after.user_action, len(feedback(kit, save))) == state
+    assert after.revising_started_at is None and kit.total(user) == 20                   # 沒有認領、沒有新的回饋列、餘額不變
 
 
 def test_a_free_regeneration_needs_no_balance_at_all(kit):
@@ -573,14 +647,17 @@ def test_the_logs_of_a_revision_never_contain_the_reason_the_action_or_the_story
     reason, new_action = "獨特理由只該在回饋表裡", "獨特的新行動只該在請求裡"
     with caplog.at_level(logging.DEBUG):
         make_turn(kit, user, save, action="獨特的舊行動", story="獨特的舊劇情。")
-        plan = regenerate(kit, user, save, reason=reason)
-        fail(kit, user, save, plan)
-        edit(kit, user, save, action=new_action)
+        fail(kit, user, save, regenerate(kit, user, save, reason=reason))                # 免費的重新生成（失敗，不計次）
+        fail(kit, user, save, edit(kit, user, save, action=new_action))                  # 免費次數內的編輯同樣標示 free
+        kit.set_limit("rpg.free_regenerations", 0)
+        edit(kit, user, save, action=new_action)                                         # 沒有免費次數時，編輯標示 paid
     blob = "\n".join(record.getMessage() + " " + json.dumps(record.__dict__, default=str, ensure_ascii=False) for record in caplog.records)
     for secret in (reason, new_action, "獨特的舊行動", "獨特的舊劇情", "repetitive", "other"):
         assert secret not in blob, secret
     started = [record for record in caplog.records if getattr(record, "event", "") == "rpg.revision_started"]
-    assert [(record.kind, record.outcome, record.coins) for record in started] == [(REGEN_KIND_REGENERATE, "free", 0), (REGEN_KIND_EDIT, "paid", 30)]
+    assert [(record.kind, record.outcome, record.coins) for record in started] == [
+        (REGEN_KIND_REGENERATE, "free", 0), (REGEN_KIND_EDIT, "free", 0), (REGEN_KIND_EDIT, "paid", 30),
+    ]
 
 
 # ---- 回合前快照（begin_turn）--------------------------------------------------------------------
@@ -679,17 +756,17 @@ def test_last_turn_describes_the_revisable_last_turn_and_tracks_the_free_count_a
     view = kit.game.session_snapshot(user, save.public_id)["last_turn"]
     assert set(view) == LAST_TURN_KEYS
     assert view == {
-        "client_msg_id": "m-1", "seq": 1, "revision": 1, "revisable": True, "reason": None, "free_left": 2, "regenerate_cost": 0, "edit_cost": 30,
+        "client_msg_id": "m-1", "seq": 1, "revision": 1, "revisable": True, "reason": None, "free_left": 2, "regenerate_cost": 0, "edit_cost": 0,
     }
     succeed(kit, user, save, regenerate(kit, user, save, revision=1))
     view = kit.game.session_snapshot(user, save.public_id)["last_turn"]
-    assert (view["revision"], view["free_left"], view["regenerate_cost"], view["edit_cost"], view["revisable"]) == (2, 1, 0, 30, True)
-    succeed(kit, user, save, regenerate(kit, user, save, revision=2))
+    assert (view["revision"], view["free_left"], view["regenerate_cost"], view["edit_cost"], view["revisable"]) == (2, 1, 0, 0, True)
+    succeed(kit, user, save, edit(kit, user, save, revision=2))                           # 編輯也用掉一次免費，不歸零
     view = kit.game.session_snapshot(user, save.public_id)["last_turn"]
-    assert (view["revision"], view["free_left"], view["regenerate_cost"]) == (3, 0, 30)
-    succeed(kit, user, save, edit(kit, user, save, revision=3))
+    assert (view["revision"], view["free_left"], view["regenerate_cost"], view["edit_cost"]) == (3, 0, 30, 30)
+    succeed(kit, user, save, regenerate(kit, user, save, revision=3))                     # 付費的修訂之後仍是付費
     view = kit.game.session_snapshot(user, save.public_id)["last_turn"]
-    assert (view["revision"], view["free_left"], view["regenerate_cost"]) == (4, 2, 0)
+    assert (view["revision"], view["free_left"], view["regenerate_cost"], view["edit_cost"]) == (4, 0, 30, 30)
 
 
 def test_last_turn_reports_why_it_is_not_revisable(kit):

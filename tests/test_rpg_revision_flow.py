@@ -1,7 +1,7 @@
 """rpg-turn-revision 的端到端整合測試（任務 3.6）：以假的模型供應商（不連網）走過 HTTP、真實的 Service、Repository 與資料庫。
 
-旅程（預設幣價 30、前 2 次重新生成免費）：
-- 一輪 → 兩次免費重新生成（帳本沒有新列）→ 第三次付費（淨扣 30）→ 編輯（淨扣 30、已用次數歸零）→ 再重新生成又免費；
+旅程（預設幣價 30、前 2 次修訂免費；重新生成與編輯共用同一組次數，編輯不歸零）：
+- 一輪 → 重新生成（免費）→ 編輯（免費，帳本都沒有新列）→ 再重新生成（付費，淨扣 30）→ 再編輯（付費，淨扣 30）→ 再重新生成（仍付費，淨扣 30）；
 - 兩個請求以同一個 `expected_revision`：先到的認領、後到的得到 409；進行中送新行動也得到 409；完成後後到的得到 `revision_conflict`；
 - 失敗的付費重新生成（退回）→ 再付費重新生成：鍵不重複、淨扣一次；
 - 第 11 輪完成並抓取記事簿之後修訂第 11 輪：記事簿、`notebook_upto_turn` 與抓取呼叫都不變；邊界輪（第 10 輪）在下一輪之前被修訂，之後的抓取用的是修訂後的內容；
@@ -36,7 +36,8 @@ STATE_NEW = json.dumps({"elapsed_months": 1, "status_summary": "你在寺中避�
 ENTRIES = ("主角在青雲宗山門前遇見守門弟子。", "守門弟子對主角抱持戒心。")
 REASON = "獨特的理由只該在回饋表裡"
 NEW_ACTION = "獨特的新行動只該在請求裡"
-CHEAP = 5                                                                        # 第 11 輪的案例用便宜的幣價，不必簽到就夠用
+SECOND_EDIT = f"{NEW_ACTION}（第二次編輯）"                                          # 與上一次編輯的文字不同才可再編輯
+CHEAP = 5                                                                       # 第 11 輪的案例用便宜的幣價，不必簽到就夠用
 
 
 def action(n: int) -> str:
@@ -106,17 +107,17 @@ class Play:
         self.provider.script_stream(*story_script(*story)).script(Step(STATE_OLD), *capture_steps)
         return parse(self.post(n))
 
-    def revision_response(self, kind: str, msg: str, revision: int, **options):
+    def revision_response(self, kind: str, msg: str, revision: int, *, new_action: str = NEW_ACTION, **options):
         body = {"expected_revision": revision}
-        body.update({"category": "other", "reason": REASON} if kind == "regenerate" else {"action": NEW_ACTION})
+        body.update({"category": "other", "reason": REASON} if kind == "regenerate" else {"action": new_action})
         return self.client.post(f"/api/game/sessions/{self.save_id}/turns/{msg}/{kind}/stream", json=body, **options)
 
     def script_revision(self, label: str, *state_steps: Step, story: tuple[str, ...] | None = None) -> None:
         self.provider.script_stream(*story_script(*(story or sentences(label)))).script(*(state_steps or (Step(STATE_NEW),)))
 
-    def revise(self, kind: str, msg: str, revision: int, label: str = "新", **kwargs) -> list[tuple[str, dict]]:
+    def revise(self, kind: str, msg: str, revision: int, label: str = "新", *, new_action: str = NEW_ACTION, **kwargs) -> list[tuple[str, dict]]:
         self.script_revision(label, **kwargs)
-        return parse(self.revision_response(kind, msg, revision))
+        return parse(self.revision_response(kind, msg, revision, new_action=new_action))
 
     # ---- 觀察（每次都讀最新的資料）----------------------------------------------------------------
 
@@ -184,53 +185,57 @@ def test_the_whole_revision_journey_costs_exactly_what_the_rules_say(world, log_
     assert play.coins() == 170 and len(play.holds()) == 1
     ledger_rows = len(play.entries())
 
-    # 兩次免費的重新生成：帳本沒有新列
+    # 第一次修訂（重新生成）：免費，帳本沒有新列
     first = play.revise("regenerate", "m-1", 1, "甲")
     assert done_of(first) == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 2, "free_left": 1}
-    second = play.revise("regenerate", "m-1", 2, "乙")
-    assert done_of(second) == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 3, "free_left": 0}
     assert play.coins() == 170 and len(play.entries()) == ledger_rows
 
-    # 第三次：付費，淨扣一輪的幣價
+    # 第二次修訂（編輯）：共用同一組免費次數，一樣免費、帳本沒有新列
+    second = play.revise("edit", "m-1", 2, "乙")
+    assert done_of(second) == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 3, "free_left": 0}
+    assert play.coins() == 170 and len(play.entries()) == ledger_rows and len(play.holds()) == 1
+    assert (play.turn_row("m-1").regen_count, play.turn_row("m-1").user_action) == (2, NEW_ACTION)
+
+    # 第三次（重新生成）：付費，淨扣一輪的幣價
     third = play.revise("regenerate", "m-1", 3, "丙")
     assert done_of(third) == {"status": "complete", "turn_number": 1, "coins": 140, "revision": 4, "free_left": 0}
     assert play.coins() == 140 and len(play.holds()) == 2
 
-    # 編輯：再淨扣一輪的幣價，已用次數歸零
-    edited = play.revise("edit", "m-1", 4, "丁")
-    assert done_of(edited) == {"status": "complete", "turn_number": 1, "coins": 110, "revision": 5, "free_left": 2}
+    # 第四次（編輯）：同樣付費，再淨扣一輪的幣價；次數沒有歸零
+    edited = play.revise("edit", "m-1", 4, "丁", new_action=SECOND_EDIT)
+    assert done_of(edited) == {"status": "complete", "turn_number": 1, "coins": 110, "revision": 5, "free_left": 0}
     assert play.coins() == 110 and len(play.holds()) == 3
-    assert play.turn_row("m-1").regen_count == 0
+    assert (play.turn_row("m-1").regen_count, play.turn_row("m-1").user_action) == (4, SECOND_EDIT)
 
-    # 編輯之後又有免費的重新生成
+    # 編輯之後的重新生成照樣付費（編輯沒有讓免費次數重來）
     again = play.revise("regenerate", "m-1", 5, "戊")
-    assert done_of(again) == {"status": "complete", "turn_number": 1, "coins": 110, "revision": 6, "free_left": 1}
-    assert play.coins() == 110 and len(play.holds()) == 3
+    assert done_of(again) == {"status": "complete", "turn_number": 1, "coins": 80, "revision": 6, "free_left": 0}
+    assert play.coins() == 80 and len(play.holds()) == 4
 
-    # 三筆預扣都已結算，沒有退回；鍵不重複
+    # 四筆預扣（原回合加三次付費修訂）都已結算，沒有退回；鍵不重複
     holds = play.holds()
-    assert [(entry.resolution, entry.free_delta + entry.paid_delta) for entry in holds] == [("settled", -30)] * 3
-    assert len({entry.idempotency_key for entry in holds}) == 3
-    assert [entry.idempotency_key.rsplit(":", 1)[1] for entry in holds] == ["1", "4", "5"]                 # 原回合是 1、付費修訂用認領後的新序號
+    assert [(entry.resolution, entry.free_delta + entry.paid_delta) for entry in holds] == [("settled", -30)] * 4
+    assert len({entry.idempotency_key for entry in holds}) == 4
+    assert [entry.idempotency_key.rsplit(":", 1)[1] for entry in holds] == ["1", "4", "5", "6"]         # 原回合是 1；免費的修訂用掉序號 2、3，付費的用認領後的新序號
 
     # 讀取的是最後一版內容與新的 revision、免費次數
     turns = play.client.get(f"/api/game/sessions/{play.save_id}/turns").get_json()["turns"]
     assert [(item["story"], item["action"], item["revision"], item["turn_number"]) for item in turns] == [
-        ("".join(sentences("戊")), NEW_ACTION, 6, 1),
+        ("".join(sentences("戊")), SECOND_EDIT, 6, 1),
     ]
     assert play.last_turn() == {
-        "client_msg_id": "m-1", "seq": 1, "revision": 6, "revisable": True, "reason": None, "free_left": 1, "regenerate_cost": 0, "edit_cost": 30,
+        "client_msg_id": "m-1", "seq": 1, "revision": 6, "revisable": True, "reason": None, "free_left": 0, "regenerate_cost": 30, "edit_cost": 30,
     }
     resent = parse(play.client.post(f"/api/game/sessions/{play.save_id}/turns/stream", json={"client_msg_id": "m-1", "action": "不同的文字也一樣"}))
     assert [data["text"] for name, data in resent if name == "token"] == ["".join(sentences("戊"))]     # 重送得到最新版本
     assert [(row.kind, row.result, row.is_free) for row in play.feedback()] == [
-        ("regenerate", "applied", True), ("regenerate", "applied", True), ("regenerate", "applied", False), ("edit", "applied", False),
-        ("regenerate", "applied", True),
+        ("regenerate", "applied", True), ("edit", "applied", True), ("regenerate", "applied", False), ("edit", "applied", False),
+        ("regenerate", "applied", False),
     ]
 
     # 整個流程的日誌：沒有理由、行動與劇情
     raw = log_lines.raw()
-    for secret in (REASON, NEW_ACTION, action(1), *(text for label in ("初版", "甲", "乙", "丙", "丁", "戊") for text in sentences(label))):
+    for secret in (REASON, NEW_ACTION, SECOND_EDIT, action(1), *(text for label in ("初版", "甲", "乙", "丙", "丁", "戊") for text in sentences(label))):
         assert secret not in raw, secret
     events = [line.get("event") for line in log_lines() if str(line.get("event", "")).startswith("rpg.revision_")]
     assert events.count("rpg.revision_started") == 5 and events.count("rpg.revision_completed") == 5 and "rpg.revision_failed" not in events

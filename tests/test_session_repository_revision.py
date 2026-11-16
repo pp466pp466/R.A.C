@@ -394,15 +394,28 @@ def test_replacing_swaps_the_content_keeps_number_and_seq_and_clears_the_claim(r
     assert repo.count_complete_turns(alice.id, save.public_id) == 2
 
 
-def test_replacing_with_a_new_action_replaces_the_player_input_and_can_reset_the_regeneration_count(repo, member_session, world):
+def test_replacing_with_a_new_action_replaces_the_player_input_and_adds_one_to_the_count_without_resetting_it(repo, member_session, world):
     alice, save = world
     play(repo, alice, save, 1)
     claim(repo, alice, save)
     replace(repo, alice, save)                                                           # 一次成功的重新生成：regen_count 1、revision 2
     claim(repo, alice, save, expected=2, now=NOW + timedelta(seconds=1))
-    replace(repo, alice, save, expected=2, attempt=3, user_action="我改變主意了", reset_regen_count=True)
+    replace(repo, alice, save, expected=2, attempt=3, user_action="我改變主意了")
     turn = turn_of(repo, alice, save)
-    assert (turn.user_action, turn.regen_count, turn.revision) == ("我改變主意了", 0, 3)
+    assert (turn.user_action, turn.regen_count, turn.revision) == ("我改變主意了", 2, 3)       # 編輯與重新生成共用次數：加 1，不歸零
+
+
+def test_the_first_edit_of_a_turn_counts_as_one_and_replace_turn_no_longer_accepts_a_reset(repo, member_session, world):
+    alice, save = world
+    play(repo, alice, save, 1)
+    claim(repo, alice, save)
+    replace(repo, alice, save, user_action="第一次就編輯")
+    turn = turn_of(repo, alice, save)
+    assert (turn.user_action, turn.regen_count, turn.revision) == ("第一次就編輯", 1, 2)
+    claim(repo, alice, save, expected=2, now=NOW + timedelta(seconds=1))
+    with pytest.raises(TypeError):                                                       # 歸零的參數已移除，不可能再被傳入
+        replace(repo, alice, save, expected=2, attempt=3, reset_regen_count=True)
+    assert turn_of(repo, alice, save).regen_count == 1
 
 
 def test_each_successful_regeneration_adds_one_to_the_count(repo, member_session, world):

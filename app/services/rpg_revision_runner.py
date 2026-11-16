@@ -121,11 +121,11 @@ class RevisionRunner(RunnerBase):
         yield self._send(EVENT_DONE, self._done_data(final.status, applied=True, coins=final.coins))
 
     def _done_data(self, status: str, *, applied: bool, coins: int) -> dict[str, Any]:
-        """`done` 事件：成功時 `revision` 加 1、已用免費次數加 1（編輯則歸零）；被擋時兩者都維持修訂前的值。"""
+        """`done` 事件：成功時 `revision` 加 1、已用免費次數加 1（重新生成與編輯共用，編輯不歸零）；被擋時兩者都維持修訂前的值。"""
         plan = self._plan
         if applied:
             revision = plan.expected_revision + 1
-            free_left = free_left_of(plan.free_limit, 0 if plan.kind == KIND_EDIT else plan.regen_count + 1)
+            free_left = free_left_of(plan.free_limit, plan.regen_count + 1)
         else:
             revision = plan.expected_revision
             free_left = free_left_of(plan.free_limit, plan.regen_count)
@@ -217,8 +217,7 @@ class RevisionRunner(RunnerBase):
             finish = SessionRepository(session).replace_turn(
                 plan.user_id, plan.session_public_id, plan.client_msg_id, expected_revision=plan.expected_revision, attempt=plan.attempt,
                 llm_raw_response=narration, structured_result=structured, now=self._deps.clock(), user_action=plan.action if is_edit else None,
-                reset_regen_count=is_edit, world_changes=state.world.to_fields() if state.world else None, expected_version=plan.version,
-                end_story=state.ending,
+                world_changes=state.world.to_fields() if state.world else None, expected_version=plan.version, end_story=state.ending,
             )
             if finish is None:                                                # 不是自己的存檔：開始階段已驗證過，不會發生
                 raise RuntimeError("修訂收尾找不到存檔")

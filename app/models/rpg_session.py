@@ -9,7 +9,7 @@
 - JSON 欄位（劇本複本、NPC 狀態、目標、里程碑進度、回合的結構化結果）由 Repository 序列化，**不得依其內容做篩選查詢**。
 - 存檔與回合的內容（行動、劇情原文、記事簿、世界狀態、劇本文字）是個資：不進日誌、不進管理員預設可檢視的範圍。
 - 重新生成與編輯最後一輪（rpg-turn-revision）：回合列在修訂期間仍是 `complete`，以 `revising_started_at`（認領時間，逾時視同沒有人在修訂）
-  表示修訂中；`revision` 每次成功修訂加 1，`regen_count` 是目前這份輸入已成功重新生成幾次（編輯歸零）；`state_before_json` 是回合前的世界快照，
+  表示修訂中；`revision` 每次成功修訂加 1，`regen_count` 是目前這個回合已成功修訂（重新生成或編輯）幾次（共用免費次數，不歸零）；`state_before_json` 是回合前的世界快照，
   下一輪完成時清為空。回饋表 `turn_regenerations` 存玩家填的分類與理由（供營運檢視）。
   **理由、快照與被取代的輸入屬玩家文字衍生的個資**：不進日誌、不進模型呼叫、不進管理員預設可檢視的範圍；回饋表隨存檔與帳號刪除、納入匯出。
 """
@@ -130,7 +130,7 @@ class MemoryLog(Base, TimestampMixin):
 
     # 重新生成與編輯（rpg-turn-revision）：expand 階段新增，舊版程式不認識它們也照常運作
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")             # 每次成功修訂加 1；前端用來偵測並行與覆寫快取
-    regen_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")          # 這份輸入已成功重新生成幾次；成功的編輯歸零
+    regen_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")          # 這個回合已成功修訂（重新生成或編輯）幾次；不歸零
     revising_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)  # 認領時間：空或逾時＝沒有人在修訂
     # 回合前的世界快照（WorldState.to_fields() 的六欄）：最多一個回合有；下一輪完成時清為空。玩家文字衍生的個資，不得依內容篩選查詢
     state_before_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)

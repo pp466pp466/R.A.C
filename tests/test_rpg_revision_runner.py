@@ -181,24 +181,37 @@ def test_a_paid_regeneration_settles_its_hold_and_uses_the_new_attempts_key(kit)
     assert turn_row(kit, save).regen_count == 3 and len(holds(kit, user)) == 2
 
 
-def test_an_edit_replaces_the_action_charges_resets_the_free_count_and_makes_the_next_regeneration_free(kit):
+def test_a_free_edit_replaces_the_action_holds_nothing_and_uses_up_one_shared_free_revision(kit):
     user, save = first_turn(kit)
-    revise(kit, user, save, Step(STATE_NEW))
-    revise(kit, user, save, Step(STATE_NEW), revision=2)
-    assert turn_row(kit, save).regen_count == 2
-    plan, events = revise(kit, user, save, Step(STATE_NEW), revision=3, kind="edit")
-    assert plan.kind == "edit" and plan.is_free is False and plan.action == NEW_ACTION
+    plan, events = revise(kit, user, save, Step(STATE_NEW), kind="edit")
+    assert plan.kind == "edit" and plan.is_free is True and plan.hold_key is None and plan.action == NEW_ACTION
     assert of(events, "meta")[0]["kind"] == "edit"
-    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 140, "revision": 4, "free_left": 2}
+    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 2, "free_left": 1}
     turn = turn_row(kit, save)
-    assert (turn.user_action, turn.llm_raw_response, turn.regen_count, turn.revision, turn.turn_number) == (NEW_ACTION, NEW, 0, 4, 1)
-    assert kit.wallets.entry(user.id, plan.hold_key).resolution == "settled" and kit.total(user) == 140
+    assert (turn.user_action, turn.llm_raw_response, turn.regen_count, turn.revision, turn.turn_number) == (NEW_ACTION, NEW, 1, 2, 1)
+    assert len(holds(kit, user)) == 1 and kit.total(user) == 170                                       # 免費的編輯：沒有新的預扣、餘額不變
     *_older, last = kit.feedback(save)
-    assert (last.kind, last.result, last.is_free, last.category, last.reason) == (REGEN_KIND_EDIT, REGEN_APPLIED, False, None, None)
+    assert (last.kind, last.result, last.is_free, last.category, last.reason) == (REGEN_KIND_EDIT, REGEN_APPLIED, True, None, None)
     state_call = kit.provider.calls[-1]
     assert NEW_ACTION in "".join(part for content in state_call.contents for part in content.parts)  # 狀態呼叫看到的是新行動
-    again = kit.revise(user, save, revision=4)
-    assert again.is_free is True                                                                      # 編輯後又有免費次數
+    again = kit.revise(user, save, revision=2)
+    assert again.is_free is True and again.regen_count == 1                                           # 還剩一次免費（編輯與重新生成共用）
+
+
+def test_a_paid_edit_after_the_free_ones_settles_its_hold_and_the_count_keeps_growing(kit):
+    user, save = first_turn(kit)
+    revise(kit, user, save, Step(STATE_NEW))
+    revise(kit, user, save, Step(STATE_NEW), revision=2, kind="edit")                                  # 兩種操作共用前兩次免費
+    assert turn_row(kit, save).regen_count == 2 and kit.total(user) == 170 and len(holds(kit, user)) == 1
+    plan, events = revise(kit, user, save, Step(STATE_NEW), revision=3, kind="edit", action=f"{NEW_ACTION}（再改）")
+    assert plan.kind == "edit" and plan.is_free is False and plan.attempt == 4 and plan.hold_key == hold_key(save.public_id, "m-1", 4)
+    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 140, "revision": 4, "free_left": 0}
+    turn = turn_row(kit, save)
+    assert (turn.user_action, turn.regen_count, turn.revision) == (f"{NEW_ACTION}（再改）", 3, 4)         # 沒有歸零
+    assert kit.wallets.entry(user.id, plan.hold_key).resolution == "settled" and kit.total(user) == 140
+    *_older, last = kit.feedback(save)
+    assert (last.kind, last.result, last.is_free) == (REGEN_KIND_EDIT, REGEN_APPLIED, False)
+    assert kit.revise(user, save, revision=4).is_free is False                                         # 編輯沒有讓次數重來
 
 
 # ---- 狀態階段失敗與世界版本改變 -------------------------------------------------------------------

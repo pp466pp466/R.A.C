@@ -39,7 +39,7 @@ COIN_CHECKIN_GRANT_KEY = "coin.checkin_grant"        # 每日簽到（免費幣�
 COIN_FREE_CAP_KEY = "coin.free_cap"                  # 免費幣上限（只限制新發放）
 COIN_HOLD_TIMEOUT_KEY = "coin.hold_timeout_seconds"  # 預扣逾時秒數：超過仍未結算者在下次存取錢包時退回
 RPG_MAX_MONTHS_KEY = "rpg.max_months_per_turn"       # 單一回合最多推進幾個遊戲內月份（模型提議的 elapsed_months 超過時以此為上限）
-RPG_FREE_REGENERATIONS_KEY = "rpg.free_regenerations"  # 每個回合前幾次重新生成免費（第 N+1 次起每次消耗一輪的幣價；編輯使次數歸零）
+RPG_FREE_REGENERATIONS_KEY = "rpg.free_regenerations"  # 每個回合前幾次修訂免費（重新生成與編輯共用；第 N+1 次起每次消耗一輪的幣價）
 # 可以計價的模型鍵（常數，不是設定：新增模型是程式與設定表一起新增的事件，見 W3）
 WALLET_MODEL_KEYS = ("standard",)
 
@@ -154,7 +154,7 @@ class RuntimeLimits:
         return self.get(RPG_MAX_MONTHS_KEY)
 
     def rpg_free_regenerations(self) -> int:
-        """每個回合前幾次重新生成免費（0 表示每一次都收費）；缺值或不合法時用保底預設 2。"""
+        """每個回合前幾次修訂（重新生成與編輯合計）免費（0 表示每一次都收費）；缺值或不合法時用保底預設 2。"""
         return self.get(RPG_FREE_REGENERATIONS_KEY)
 
     def rows(self, group: str | None = None) -> list[LimitRow]:

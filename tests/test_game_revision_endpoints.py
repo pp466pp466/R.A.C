@@ -165,14 +165,29 @@ def test_a_regeneration_streams_events_in_order_with_the_required_headers_and_re
     assert (last["client_msg_id"], last["revision"], last["revisable"], last["free_left"]) == ("m-1", 2, True, 1)
 
 
-def test_an_edit_streams_events_replaces_the_action_charges_and_resets_the_free_count(app, provider):
+def test_a_free_edit_streams_events_replaces_the_action_charges_nothing_and_uses_one_shared_free_revision(app, provider):
     client, uid, save_id = played(app, provider)
     script_revision(provider)
     events = parse(edit(client, save_id))
     assert of(events, "meta")[0]["kind"] == "edit"
-    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 140, "revision": 2, "free_left": 2}
+    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 170, "revision": 2, "free_left": 1}
     revision, regen_count, _attempt, claimed, story, action = row(app)
-    assert (revision, regen_count, claimed, story, action) == (2, 0, None, NEW, NEW_ACTION) and total(app, uid) == 140
+    assert (revision, regen_count, claimed, story, action) == (2, 1, None, NEW, NEW_ACTION) and total(app, uid) == 170      # 免費：不扣幣、算一次
+    last = client.get(f"/api/game/sessions/{save_id}").get_json()["session"]["last_turn"]
+    assert (last["revision"], last["free_left"], last["regenerate_cost"], last["edit_cost"]) == (2, 1, 0, 0)
+
+
+def test_an_edit_after_the_free_revisions_are_used_up_is_charged_and_the_count_does_not_reset(app, provider):
+    client, uid, save_id = played(app, provider)
+    script_revision(provider)
+    parse(regen(client, save_id))                                                                      # 第一次修訂（免費）
+    script_revision(provider)
+    parse(edit(client, save_id, revision=2))                                                           # 第二次修訂（編輯，免費）
+    assert total(app, uid) == 170 and row(app)[1] == 2
+    script_revision(provider)
+    events = parse(edit(client, save_id, revision=3, action=f"{NEW_ACTION}（再改）"))                    # 第三次：付費
+    assert of(events, "done")[0] == {"status": "complete", "turn_number": 1, "coins": 140, "revision": 4, "free_left": 0}
+    assert row(app)[1] == 3 and total(app, uid) == 140
 
 
 def test_the_state_event_of_a_revision_has_only_validated_fields(app, provider):

@@ -299,7 +299,7 @@ def log_notebook_save_rejected(
 
 
 def log_revision_started(*, user_id: int, session_id: int, kind: str, attempt: int, is_free: bool, cost: int) -> None:
-    """修訂已認領（付費者已預扣）：種類（重新生成或編輯）、認領後的嘗試序號、是否免費、預扣的幣數（免費為 0）。沒有理由與行動。"""
+    """修訂已認領（免費次數用完的付費者已預扣；重新生成與編輯依同一個次數決定是否免費）：種類（重新生成或編輯）、認領後的嘗試序號、是否免費、預扣的幣數（免費為 0）。沒有理由與行動。"""
     if not isinstance(is_free, bool):
         raise ValueError(f"is_free 必須是布林：{is_free!r}")
     _info(

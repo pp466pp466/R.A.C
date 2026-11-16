@@ -98,7 +98,7 @@ class TurnPlan:
     system_instruction: str
     contents: tuple[Any, ...]
     revision: int                           # 回合目前的修訂序號（新回合為 1）；`done` 事件帶出
-    free_left: int                          # 這個回合還剩幾次免費重新生成（新回合為設定的免費次數）；`done` 事件帶出
+    free_left: int                          # 這個回合還剩幾次免費修訂（重新生成與編輯共用；新回合為設定的免費次數）；`done` 事件帶出
 
 
 @dataclass(frozen=True)
@@ -113,7 +113,7 @@ class TurnReplay:
     story: str
     ended: bool                             # 存檔是否已完結（結局回合）
     revision: int                           # 回合目前的修訂序號；`done` 事件帶出
-    free_left: int                          # 這個回合還剩幾次免費重新生成；`done` 事件帶出
+    free_left: int                          # 這個回合還剩幾次免費修訂（重新生成與編輯共用）；`done` 事件帶出
 
 
 @dataclass(frozen=True)
@@ -176,10 +176,10 @@ class RevisionPlan:
     client_msg_id: str
     attempt: int                            # 認領後的嘗試序號（預扣鍵、回饋列、替換與釋放的憑證）
     expected_revision: int                  # 認領時的回合 revision（替換時比對；成功後加 1）
-    regen_count: int                        # 認領時這份輸入已成功重新生成的次數
+    regen_count: int                        # 認領時這個回合已成功修訂（重新生成或編輯）的次數
     free_limit: int                         # 認領當下設定的免費次數（`done` 的 `free_left` 由它與 `regen_count` 算出）
     taken_over: bool                        # 這次接手了逾時的舊認領
-    is_free: bool                           # 免費的重新生成（不預扣）
+    is_free: bool                           # 免費的修訂（重新生成或編輯，不預扣、不檢查餘額）
     hold_key: str | None                    # 預扣鍵；免費者為 `None`
     cost: int                               # 預扣的幣數（免費為 0）
     turn_number: int                        # 目標回合的輪數
@@ -267,7 +267,7 @@ def world_from_snapshot(snapshot: Mapping[str, Any]) -> rpg_world.WorldState:
 
 
 def free_left_of(free_limit: int, regen_count: int) -> int:
-    """這個回合還剩幾次免費重新生成。"""
+    """這個回合還剩幾次免費修訂（重新生成與編輯共用）。"""
     return max(0, int(free_limit) - int(regen_count))
 
 
@@ -410,7 +410,8 @@ class GameService:
            同一回合已有未逾時的認領為 `turn_in_progress`）；6. 編輯：新行動須不同於原行動（422），再過規則層（`input_blocked`）；
         7. 全站每日 token 上限（`system_busy`）；
         8. 同一個 SAVEPOINT：認領（條件式 UPDATE，`attempt` 加 1）→ 接手時把舊的 `pending` 回饋標為 `failed` → 回饋列 `pending` →
-           （付費重新生成與所有編輯）`wallet.hold`，鍵含認領後的 `attempt`；餘額不足時整段復原，**不留認領、不留回饋列**。
+           （免費次數用完之後的修訂，重新生成與編輯共用同一組次數）`wallet.hold`，鍵含認領後的 `attempt`；免費者不預扣、不檢查餘額；
+           餘額不足時整段復原，**不留認領、不留回饋列**。
 
         回傳純資料的 `RevisionPlan`：世界狀態是回合前快照，歷史不含目標回合。理由與分類只寫入回饋表，不在計畫裡，也不進模型。"""
         self._policy.require_chat_access(current)
@@ -478,7 +479,7 @@ class GameService:
                     raise NotRevisable(NOT_REVISABLE_NO_SNAPSHOT)
                 attempt = turn.attempt
                 taken_over = claim.outcome == REVISION_TAKEN_OVER
-                is_free = kind == KIND_REGENERATE and turn.regen_count < free_limit
+                is_free = turn.regen_count < free_limit               # 重新生成與編輯共用同一組免費次數（每回合前 N 次）
                 if taken_over:                                    # 舊執行者的回饋列先標為失敗，新的一列才不會被一起標記
                     self._regenerations.fail_pending_for_turn(current.id, session_public_id, turn_seq=turn.seq, now=now)
                 self._regenerations.add_pending(
@@ -635,7 +636,7 @@ class GameService:
 
     def _last_turn_view(self, current: CurrentUser, session_public_id: str) -> dict[str, Any] | None:
         """最後一輪的修訂資訊（玩家端 `last_turn`）：與 `begin_revision` 用同一個判斷（`revision_state`），畫面與端點不會各說各話。
-        沒有完成的回合時為 `None`。沒有快照、認領與內部編號。"""
+        沒有完成的回合時為 `None`。沒有快照、認領與內部編號。還有免費次數時，重新生成與編輯的幣價都是 0（兩種操作共用次數）。"""
         state = self._sessions.revision_state(
             current.id, session_public_id, now=self._clock(), stale_after_seconds=self._limits.coin_hold_timeout(),
         )
@@ -645,7 +646,8 @@ class GameService:
         cost = self._limits.coin_turn_cost(DEFAULT_MODEL_KEY)
         return {
             "client_msg_id": state.client_msg_id, "seq": state.seq, "revision": state.revision, "revisable": state.revisable,
-            "reason": state.reason, "free_left": free_left, "regenerate_cost": 0 if free_left > 0 else cost, "edit_cost": cost,
+            "reason": state.reason, "free_left": free_left, "regenerate_cost": 0 if free_left > 0 else cost,
+            "edit_cost": 0 if free_left > 0 else cost,
         }
 
     def _plan(
