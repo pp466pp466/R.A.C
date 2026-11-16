@@ -1,6 +1,6 @@
 # 設計文件索引與維護規則
 
-> 狀態：持續更新 ｜ 最後更新：2026-10-30 ｜ 對應 change：全部 ｜ 維護提醒：`.claude/skills/design-docs-sync/SKILL.md`
+> 狀態：持續更新 ｜ 最後更新：2026-11-16 ｜ 對應 change：全部 ｜ 維護提醒：`.claude/skills/design-docs-sync/SKILL.md`
 
 這裡的設計文件用 Mermaid 圖說明專案的主要設計，讓人（與 AI）能快速對齊架構。**它們描述「現在的設計」**，不是歷史紀錄：每次 propose、apply、archive 之後，受影響的文件要一起更新，使內容、圖與程式保持一致。決策的來龍去脈與備選方案留在 `openspec/`（每個 change 的 `design.md` 與封存紀錄）與 [report.md](report.md)、[RPG.md](RPG.md)。
 
@@ -26,6 +26,8 @@
 | `README.md`（根目錄） | 安裝、環境變數、端點表、驗收紀錄與已知限制；設計文件引用它而不重複 |
 | `openspec/specs/` | 已封存能力的規格（需求與情境）；設計文件說明「怎麼做」 |
 | [report.md](report.md)、[RPG.md](RPG.md) | 探索與決策紀錄（含備選方案與理由），不隨每次 change 更新 |
+| [1.0簡報.md](1.0簡報.md)、1.0簡報.pdf | 對外報告用的簡報（以 Mermaid 圖說明，與設計文件的架構一致）；摘要設計文件、不是設計文件本身；PDF 由 `diagrams/build_deck.py` 產生 |
+| 登入與註冊架構圖解.png、MCP架構圖解.png | 以 Azure 圖示設計的關聯圖與功能對應表（`diagrams/build_diagrams.py` 產生）；**MCP 圖明確標示現況沒有實作 MCP**，虛線為 RC-6 的規劃。重新產生的做法見 [diagrams/README.md](diagrams/README.md) |
 
 ## 2. 改了什麼，更新哪一份
 
@@ -39,6 +41,7 @@
 | 前端模組、載入順序、共用元件、Sidebar、暫存與同步、前端規範 | 前端結構-frontend.md |
 | 環境與必要機密、容器、gunicorn、日誌白名單與事件、維運指令、測試與驗收分層 | 營運與部署-operations.md |
 | 任何 change 的 propose、apply 完成、archive；待決定事項有結論 | 路線圖-roadmap.md |
+| 登入流程、客服週期、分層或資料庫結構有重大改版 | 重新產生 登入與註冊架構圖解.png、MCP架構圖解.png 與 1.0簡報.pdf（圖中的函式與資料表名稱寫在 `diagrams/build_diagrams.py`，簡報內容在 1.0簡報.md；步驟見 diagrams/README.md） |
 
 ## 3. 維護流程
 

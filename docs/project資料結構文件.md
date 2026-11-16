@@ -1,8 +1,10 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-12 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0018_rpg_turn_revision`（實際的 `project` 目前為 `0017_story_preference`，0018 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0018_rpg_turn_revision`（實際的 `project` 目前為 `0017_story_preference`，0018 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、249 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+
+流程與資料表的對應（登入與註冊、客服對話各碰到哪些資料表）見第 10.1 節；簡報 [1.0簡報.md](1.0簡報.md) 摘要了本文件。
 
 與其他文件的分工：本文件回答「資料庫裡**有什麼**」（結構、型別、鍵、固定值、保存期限的對照）；為什麼這樣設計、跨資料庫（SQLite 與 SQL Server）的取捨與決策理由，在 [資料模型-data-model.md](資料模型-data-model.md)；各資料的保存與刪除指令在 [營運與部署-operations.md](營運與部署-operations.md)；程式分層與依賴方向在 [系統架構-architecture.md](系統架構-architecture.md)。
 
@@ -1533,6 +1535,50 @@ flowchart LR
 | `RetentionRepository` | 跨表（期限清除） | 只有 DataRetentionService 使用；每類三個方法：找出、計數、處理一批（500） |
 | `HealthRepository` | （無資料表） | /readyz 的連線檢查 |
 
+### 10.1 流程與資料表的對應（登入與註冊、客服對話）
+
+兩條主要的使用者流程各碰到哪些資料表、由哪個 Repository 讀寫。逐步的程式與函式對照見 [登入與註冊架構圖解.png](登入與註冊架構圖解.png) 與 [MCP架構圖解.png](MCP架構圖解.png)（以 Azure 圖示設計，圖下方有「功能對應」表）。
+
+```mermaid
+flowchart LR
+    subgraph Login["登入與註冊"]
+        L1["GoogleSignInService<br/>Google 回呼與帳號對應"]
+        L2["AuthService<br/>年齡確認、管理員密碼、session"]
+        L3["AccountLockService<br/>AccountErasureService"]
+        L4["EmailFlowService<br/>管理員重設密碼"]
+    end
+    subgraph Chat["客服對話"]
+        C1["ChatService<br/>送出訊息"]
+        C2["UsageService<br/>用量檢查"]
+        C3["LlmService<br/>模型呼叫與帳本"]
+    end
+    L1 -->|"R/W"| T1["users<br/>user_identities"]
+    L2 -->|"R/W"| T1
+    L2 -->|"W 贈幣"| T2["wallets<br/>wallet_entries"]
+    L3 -->|"W"| T3["lock_strikes<br/>deletion_tombstones"]
+    L4 -->|"R/W"| T4["auth_tokens"]
+    C1 -->|"R/W"| T5["chat_conversations<br/>chat_messages"]
+    C2 -->|"R"| T5
+    C2 -->|"R"| T6["llm_call_logs"]
+    C3 -->|"W"| T6
+    C2 -->|"W 洗版計次"| T3
+```
+
+| 流程 | 資料表 | 讀寫 | Repository 與說明 |
+|---|---|---|---|
+| 登入與註冊 | `users` | R/W | `UserRepository`：帳號對應、建立帳號（`age_deadline_at` 為建立後 24 小時）、年齡確認、`last_login_at`、`token_version` |
+| 登入與註冊 | `user_identities` | R/W | `UserIdentityRepository`：以 `provider_subject`（Google 的 sub）辨識已綁定的身分 |
+| 登入與註冊 | `lock_strikes` | W | `LockStrikeRepository`：登入被拒或年齡資料不一致的計次，達門檻鎖定帳號 |
+| 登入與註冊 | `deletion_tombstones` | W | `DeletionTombstoneRepository`：未滿 13 歲立即抹除與排程清除，與刪除同一交易 |
+| 登入與註冊 | `wallets`、`wallet_entries` | W | `WalletRepository`：年齡確認通過後的首次註冊贈幣（失敗不影響年齡確認） |
+| 登入與註冊 | `auth_tokens` | R/W | `AuthTokenRepository`：只服務管理員的重設密碼，只存 SHA-256 雜湊 |
+| 登入與註冊 | `lock_appeals` | R/W | `LockAppealRepository`：被鎖定或被暫停發佈的玩家申訴 |
+| 登入與註冊 | `admin_audit_logs` | W | `AdminAuditRepository`：自動鎖定的稽核，經 registry 的 `_system_audit`，管理員欄位為空 |
+| 客服對話 | `chat_conversations`、`chat_messages` | R/W | `ChatRepository`：所有方法以 `user_id` 為擁有者條件；處理標記、冪等（`client_msg_id`）、`seq`、狀態與摘要 |
+| 客服對話 | `llm_call_logs` | R/W | `LlmCallLogRepository`：每次模型呼叫一筆；每日輪數、斷路與全站用量都由它推得 |
+| 客服對話 | `lock_strikes` | W | `LockStrikeRepository`：每分鐘訊息數上限被擋下的計次（洗版） |
+| 客服對話 | `admin_audit_logs` | W | `AdminAuditRepository`：管理員讀取意見回饋或被標記的對話前先寫稽核 |
+
 ## 11. 種子資料與初始資料
 
 | 資料表 | 內容 | 來源 | 重複執行 |
@@ -1667,3 +1713,4 @@ flowchart TD
 | 2026-11-12 | 新增 | 欄位 `memory_logs.revision`（INTEGER，NOT NULL，資料庫預設 1）、`memory_logs.regen_count`（INTEGER，NOT NULL，資料庫預設 0）、`memory_logs.revising_started_at`（DATETIME2(6)，可為空）、`memory_logs.state_before_json`（NVARCHAR(max)，可為空） | 重新生成與編輯最後一輪：修訂版本、已成功重新生成的次數（決定是否免費）、修訂的認領時間（逾時可被接手）與回合前的世界快照（下一輪完成時清除）；既有回合的 revision 為 1、regen_count 為 0、其餘為空（快照不回填，所以遷移之前建立的回合不可修訂） | `0018_rpg_turn_revision` |
 | 2026-11-12 | 新增 | 資料表 `turn_regenerations`（11 欄，1 個唯一約束 `uq_turn_regenerations_session_turn_attempt`，1 個外鍵 `session_id`→`sessions.id` CASCADE） | 玩家重新生成時選的分類與填的理由（供營運檢視）與每次修訂的結果；不存被取代的行動與劇情；隨存檔與帳號抹除、納入個人資料匯出；新表 21 張、欄位共 249 個 | `0018_rpg_turn_revision` |
 | 2026-11-12 | 新增 | `runtime_limits` 的一列初始資料（`rpg.free_regenerations` = 2） | 每個回合前幾次重新生成免費；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋；`runtime_limits` 由 16 列變 17 列 | `0018_rpg_turn_revision` |
+| 2026-11-16 | 文件 | 本文件 | 校對並補充：以 `tests/test_project_db_schema_doc.py` 與 `tests/test_design_docs.py` 確認與 ORM 一致；對照實際的 `project`（唯讀，只查詢版本與結構計數，不讀任何資料列）：`alembic_version` 為 `0017_story_preference`、20 張資料表、234 個欄位、17 個外鍵、`runtime_limits` 16 列，與第 1 節的記載一致；新增第 10.1 節「流程與資料表的對應」（登入與註冊、客服對話）。**沒有結構變更、沒有遷移、沒有套用到 `project`**；`0018_rpg_turn_revision` 仍待備份後套用 | 本文件；`docs/1.0簡報.md` |
