@@ -102,8 +102,9 @@ def test_the_privacy_page_numbers_for_age_still_come_from_the_policy_not_the_tex
 
 
 def test_the_terms_version_names_the_new_draft_and_the_registration_records_it():
-    # rpg-turn-revision 補了重新生成理由與遊戲幣帳本的告知，版本隨內容提高（只影響之後新註冊者記錄的版本）
-    assert CURRENT_TERMS_VERSION == "2026-11-16-draft-6" and len(CURRENT_TERMS_VERSION) <= 40
+    # rpg-turn-revision 補了重新生成理由與遊戲幣帳本的告知（draft-6），之後又把編輯改為與重新生成共用免費次數（draft-7）；
+    # 版本隨內容提高（只影響之後新註冊者記錄的版本）
+    assert CURRENT_TERMS_VERSION == "2026-11-16-draft-7" and len(CURRENT_TERMS_VERSION) <= 40
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
@@ -255,12 +256,24 @@ def test_the_privacy_policy_still_does_not_promise_payment_features(client):
 def test_the_terms_describe_the_regeneration_and_edit_rules(client):
     html = client.get("/terms").get_data(as_text=True)
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
-    for needle in ("重新生成與編輯最後一輪", "最後一輪", "AI 的輸出不能直接修改", "下一輪開始後這一輪就不能再動", "前幾次重新生成免費",
-                   "每次消耗與一輪劇情相同的遊戲幣", "編輯同樣消耗一輪的遊戲幣", "免費重新生成次數歸零", "餘額不足時無法送出",
+    for needle in ("重新生成與編輯最後一輪", "最後一輪", "AI 的輸出不能直接修改", "下一輪開始後這一輪就不能再動",
+                   # 2026-11-16 規則修訂：兩種操作共用同一組免費次數；免費次數內編輯不扣幣也不需要餘額；編輯不使次數歸零
+                   "前幾次重新生成或編輯免費", "兩種操作共用同一組次數", "免費次數內不扣遊戲幣，也不需要有餘額",
+                   "每次重新生成或編輯都消耗與一輪劇情相同的遊戲幣", "原本那一輪已扣的幣不退", "餘額不足時無法送出", "編輯不會使免費次數歸零",
                    "必須選擇分類並填寫", "理由會提供營運團隊檢視、不會送給 AI", "完整通過內容檢查", "原本的回應會保留", "不扣遊戲幣，也不消耗免費次數",
                    "遊戲幣帳本會隨帳號一併刪除"):
         assert needle in section, needle
     assert "沒有成功產生回應" in section and "以遊戲內顯示為準" in section
+
+
+def test_the_terms_no_longer_carry_the_old_edit_always_paid_and_resets_the_free_count_rule(client):
+    """舊規則（編輯一律消耗幣並使免費次數歸零）已於 2026-11-16 作廢；條款不得再留下這兩句。"""
+    html = client.get("/terms").get_data(as_text=True)
+    section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+    for stale in ("編輯同樣消耗一輪的遊戲幣", "使該回合的免費重新生成次數歸零", "免費重新生成次數歸零"):
+        assert stale not in section, stale
+    # 「歸零」只允許出現在「編輯不會使免費次數歸零」這一句
+    assert section.count("歸零") == 1 and "編輯不會使免費次數歸零" in section
 
 
 def test_the_reason_length_range_in_both_pages_comes_from_the_service_constants_not_from_the_text(client, monkeypatch):

@@ -21,15 +21,19 @@
     測試狀態失敗     這段行動的所有狀態呼叫都回 500
 
 - 七個案例：
-    journey     一輪 → 兩次免費重新生成（帳本不動）→ 第三次付費（淨扣 30）→ 編輯（淨扣 30、免費次數歸零）→ 再重新生成又免費；
+    journey     一輪 → 重新生成（免費、帳本不動）→ 編輯（免費、帳本不動；與重新生成共用同一組免費次數）→ 重新生成（付費，淨扣 30）→
+                編輯（付費，淨扣 30）→ 再重新生成（仍是付費：編輯沒有使免費次數歸零）；
                 每次替換後：輪數與序號不變、`revision` 加 1、世界狀態是「還原再套用」（經過月數不累加）、`last_turn` 與 `done` 一致
+                （2026-11-16 規範修訂前：編輯一律付費並使免費次數歸零；現行規則見 AGENTS.md 7.8）
     privacy     理由帶標記文字：重新生成的所有模型呼叫都不含它（先用一個把標記放進行動的對照回合確認偵測有效）
-    failures    被擋一次（自動重生）、被擋兩次（保留舊內容）、上游中斷、狀態呼叫失敗、付費編輯被擋與狀態失敗（退回、再付費只淨扣一次）、
+    failures    被擋一次（自動重生）、被擋兩次（保留舊內容）、上游中斷、狀態呼叫失敗、免費編輯被擋（沒有預扣、次數不變）、
+                用完兩次免費（一次重新生成、一次編輯）後的付費編輯被擋與狀態失敗（退回、再付費只淨扣一次）、
                 串流中途斷線（認領被釋放）：每一種都保留舊內容、不消耗免費次數、遊戲幣與預期一致
     conflicts   修訂進行中：同一個 `expected_revision`、編輯與新行動都得到 409 `turn_in_progress`；完成後以舊的 `expected_revision` 得到 `revision_conflict`
     rejections  不是最後一輪（`not_last`）、已完結（`ended`）、404（不存在與他人）、驗證（理由太短、分類、行動相同、規則層命中）、
                 未登入與缺 CSRF；被拒絕的請求沒有扣幣也沒有留下認領
-    coins       餘額不足：免費的重新生成不需要餘額、第三次付費得到 409 `insufficient_coins`，沒有認領、免費次數不變
+    coins       餘額不足：免費次數內的編輯與重新生成都不需要餘額；用完之後，付費的重新生成與編輯得到 409 `insufficient_coins`，
+                沒有認領、免費次數不變
     notebook    第 11 輪（記事簿在此抓取）完成後修訂：記事簿的版本與內容不變、沒有新的抓取呼叫
 - `--server-log` 是應用程式日誌的路徑：提供時，腳本讀取本次新增的 JSON 行，確認 `rpg.revision_*` 事件的筆數、種類與原因，並掃描整段日誌找不到任何
   理由、行動、劇情與被擋的句子；未提供時這些項目標為「未驗證」。假模型的 `GET /_status`（`--model-url`）提供呼叫計數，連不上時相關項目標為「未驗證」。
@@ -191,9 +195,9 @@ class RevisionAcceptance(NotebookAcceptance):
         done = first.done or {}
         r.check("第 1 輪完成：revision 1、剩餘免費重新生成 2", (done.get("status"), done.get("turn_number"), done.get("revision"), done.get("free_left")) == ("complete", 1, 1, FREE_REGENERATIONS), str(done))
         last = self.snapshot(player, save).get("last_turn") or {}
-        r.check(f"快照的 last_turn：可修訂、revision 1、免費 2（重新生成 0 幣、編輯 {TURN_COST} 幣）",
+        r.check("快照的 last_turn：可修訂、revision 1、免費 2（兩種操作共用，重新生成與編輯都是 0 幣）",
                 (last.get("client_msg_id"), last.get("revision"), last.get("revisable"), last.get("free_left"), last.get("regenerate_cost"), last.get("edit_cost"))
-                == ("n-1", 1, True, FREE_REGENERATIONS, 0, TURN_COST), str(last))
+                == ("n-1", 1, True, FREE_REGENERATIONS, 0, 0), str(last))
         r.check("原本那一輪的世界狀態：1 個月、山門", self.world_of(player, save) == NORMAL_WORLD, str(self.world_of(player, save)))
         balance = self.total(player)
         r.check(f"遊戲幣：扣了一輪（{start} → {start - TURN_COST}）", balance == start - TURN_COST, str(balance))
@@ -211,40 +215,45 @@ class RevisionAcceptance(NotebookAcceptance):
                     (world.get("elapsed_months"), world.get("location")) == expected_world and expected_world[1] in world.get("places", []), str(world))
             r.check(f"{label}：遊戲幣餘額 {expected_balance}", self.total(player) == expected_balance, str(self.total(player)))
 
+        # 免費次數兩種操作共用：第 1 次重新生成、第 2 次編輯都免費；用完之後兩種操作都付費，編輯不使次數歸零
         one = self.revise(player, save, "n-1", "regenerate", 1)
-        self.applied("第 1 次重新生成（免費）", one, kind="regenerate", msg="n-1", revision=1, turn_number=1, free_left=1, mark=REGEN_MARK)
+        self.applied("第 1 次操作：重新生成（免費）", one, kind="regenerate", msg="n-1", revision=1, turn_number=1, free_left=1, mark=REGEN_MARK)
         r.check("新舊劇情不同、新劇情沒有留下舊的句子", one.text != story and story not in one.text)
-        check_world_and_balance("第 1 次重新生成", REGEN_WORLD, balance, 2, original, one.text)
+        check_world_and_balance("第 1 次操作（重新生成）", REGEN_WORLD, balance, 2, original, one.text)
         r.check("免費的重新生成：帳本沒有新的列", self.entry_count(player) == entries)
-        two = self.revise(player, save, "n-1", "regenerate", 2)
-        self.applied("第 2 次重新生成（免費）", two, kind="regenerate", msg="n-1", revision=2, turn_number=1, free_left=0, mark=REGEN_MARK)
-        check_world_and_balance("第 2 次重新生成", REGEN_WORLD, balance, 3, original, two.text)
-        last = self.snapshot(player, save).get("last_turn") or {}
-        r.check(f"免費次數用完：last_turn 的免費 0、重新生成改為 {TURN_COST} 幣", (last.get("free_left"), last.get("regenerate_cost"), last.get("revision")) == (0, TURN_COST, 3), str(last))
-        three = self.revise(player, save, "n-1", "regenerate", 3)
-        self.applied("第 3 次重新生成（付費）", three, kind="regenerate", msg="n-1", revision=3, turn_number=1, free_left=0, mark=REGEN_MARK)
-        check_world_and_balance("第 3 次重新生成", REGEN_WORLD, balance - TURN_COST, 4, original, three.text)
-        r.check("付費的 done.coins 是結算後的餘額", (three.done or {}).get("coins") == balance - TURN_COST, str((three.done or {}).get("coins")))
         new_action = self.edit_action()
-        edited = self.revise(player, save, "n-1", "edit", 4, action=new_action)
-        self.applied("編輯行動（付費）", edited, kind="edit", msg="n-1", revision=4, turn_number=1, free_left=FREE_REGENERATIONS, mark=EDIT_MARK)
-        check_world_and_balance("編輯行動", EDIT_WORLD, balance - 2 * TURN_COST, 5, new_action, edited.text)
+        two = self.revise(player, save, "n-1", "edit", 2, action=new_action)
+        self.applied("第 2 次操作：編輯行動（免費，與重新生成共用免費次數）", two, kind="edit", msg="n-1", revision=2, turn_number=1, free_left=0, mark=EDIT_MARK)
+        check_world_and_balance("第 2 次操作（編輯）", EDIT_WORLD, balance, 3, new_action, two.text)
         world = self.snapshot(player, save).get("world", {})
         r.check("編輯：回到回合開始時的世界再套用（地點不含上一次重新生成的後山）", REGEN_WORLD[1] not in world.get("places", []), str(world.get("places")))
-        again = self.revise(player, save, "n-1", "regenerate", 5)
-        self.applied("編輯後再重新生成（免費次數已歸零，又是免費）", again, kind="regenerate", msg="n-1", revision=5, turn_number=1, free_left=FREE_REGENERATIONS - 1, mark=EDIT_MARK)
-        r.check(f"遊戲幣：總共淨扣 {3 * TURN_COST}（原本那輪、第 3 次重新生成、編輯各 {TURN_COST}）", self.total(player) == start - 3 * TURN_COST, str(self.total(player)))
+        r.check("免費的編輯：帳本沒有新的列、遊戲幣不變（免費次數內不預扣）", self.entry_count(player) == entries and self.total(player) == balance, str(self.total(player)))
         last = self.snapshot(player, save).get("last_turn") or {}
-        r.check("最後的 last_turn：revision 6、可修訂、剩餘免費 1", (last.get("revision"), last.get("revisable"), last.get("free_left")) == (6, True, FREE_REGENERATIONS - 1), str(last))
+        r.check(f"免費次數用完（一次重新生成加一次編輯）：last_turn 的免費 0、重新生成與編輯都改為 {TURN_COST} 幣",
+                (last.get("free_left"), last.get("regenerate_cost"), last.get("edit_cost"), last.get("revision")) == (0, TURN_COST, TURN_COST, 3), str(last))
+        three = self.revise(player, save, "n-1", "regenerate", 3)
+        self.applied("第 3 次操作：重新生成（付費）", three, kind="regenerate", msg="n-1", revision=3, turn_number=1, free_left=0, mark=EDIT_MARK)
+        check_world_and_balance("第 3 次操作（付費的重新生成）", EDIT_WORLD, balance - TURN_COST, 4, new_action, three.text)
+        r.check("付費的 done.coins 是結算後的餘額", (three.done or {}).get("coins") == balance - TURN_COST, str((three.done or {}).get("coins")))
+        paid_action = self.edit_action()
+        edited = self.revise(player, save, "n-1", "edit", 4, action=paid_action)
+        self.applied("第 4 次操作：編輯行動（付費）", edited, kind="edit", msg="n-1", revision=4, turn_number=1, free_left=0, mark=EDIT_MARK)
+        check_world_and_balance("第 4 次操作（付費的編輯）", EDIT_WORLD, balance - 2 * TURN_COST, 5, paid_action, edited.text)
+        r.check("付費的 done.coins 是結算後的餘額（編輯）", (edited.done or {}).get("coins") == balance - 2 * TURN_COST, str((edited.done or {}).get("coins")))
+        again = self.revise(player, save, "n-1", "regenerate", 5)
+        self.applied("編輯之後再重新生成（編輯沒有使免費次數歸零，仍是付費）", again, kind="regenerate", msg="n-1", revision=5, turn_number=1, free_left=0, mark=EDIT_MARK)
+        r.check(f"遊戲幣：總共淨扣 {4 * TURN_COST}（原本那輪，加三次付費的操作各 {TURN_COST}）", self.total(player) == start - 4 * TURN_COST, str(self.total(player)))
+        last = self.snapshot(player, save).get("last_turn") or {}
+        r.check("最後的 last_turn：revision 6、可修訂、剩餘免費 0（沒有因編輯而歸零）", (last.get("revision"), last.get("revisable"), last.get("free_left")) == (6, True, 0), str(last))
         if base is None:
             r.unverified("修訂不觸發記事簿抓取", "連不上假模型的 /_status")
         else:
             r.check("修訂不觸發記事簿抓取（抓取呼叫次數不變）", self.capture_calls() == base)
-        self.tally(since, "旅程", started=5, completed=5, failed=0, kinds={"regenerate": 4, "edit": 1})
+        self.tally(since, "旅程", started=5, completed=5, failed=0, kinds={"regenerate": 3, "edit": 2})
         if self.log.available:
             started = self.log.named(since, "rpg.revision_started")
             paid = sorted(str(event.get("outcome")) for event in started)
-            r.check("日誌：開始事件的費用——3 次免費、2 次付費", paid == ["free", "free", "free", "paid", "paid"], str(paid))
+            r.check("日誌：開始事件的費用——2 次免費（重新生成與編輯各一）、3 次付費", paid == ["free", "free", "paid", "paid", "paid"], str(paid))
 
     def case_privacy(self) -> None:
         r = self.r
@@ -333,20 +342,36 @@ class RevisionAcceptance(NotebookAcceptance):
         r.check("狀態呼叫失敗：舊劇情、revision 與世界狀態原樣保留，遊戲幣不變", view.get("story") == before_story and view.get("revision") == 1 and self.world_of(player, save) == before_world and self.total(player) == balance, str(view.get("revision")))
         failed_reasons.append("state_failed")
 
-        # 5. 付費的編輯：被擋兩次與狀態失敗都退回，之後成功的編輯只淨扣一次
-        original = self.action()
+        # 5. 編輯：免費的被擋兩次（沒有預扣、免費次數不變）→ 用完兩次共用的免費次數（一次重新生成、一次編輯）→
+        #    付費的編輯被擋兩次與狀態失敗都退回，之後成功的編輯只淨扣一次
+        original = self.action(KW_REGEN)
         self.post_turn(player, save, "n-5", original)
         balance = self.total(player)
         blocked = self.revise(player, save, "n-5", "edit", 1, action=self.edit_action(KW_BLOCK_TWICE))
-        r.check("編輯被擋兩次：done(blocked)、舊行動與舊劇情保留、預扣退回（餘額不變）", (blocked.done or {}).get("status") == "blocked" and (blocked.done or {}).get("revision") == 1
+        done = blocked.done or {}
+        r.check("免費的編輯被擋兩次：done(blocked)、revision 與免費次數不變、舊行動保留、沒有預扣（餘額不變）",
+                (done.get("status"), done.get("revision"), done.get("free_left")) == ("blocked", 1, FREE_REGENERATIONS)
+                and self.turn_of(player, save, "n-5").get("action") == original and self.total(player) == balance, f"{done} {self.total(player)} vs {balance}")
+        failed_reasons.append("blocked")
+        free_regen = self.revise(player, save, "n-5", "regenerate", 1)
+        r.check("免費操作 1（重新生成）：成功、revision 2、剩餘免費 1、沒有扣幣",
+                ((free_regen.done or {}).get("status"), (free_regen.done or {}).get("revision"), (free_regen.done or {}).get("free_left")) == ("complete", 2, FREE_REGENERATIONS - 1)
+                and self.total(player) == balance, f"{free_regen.done} {self.total(player)} vs {balance}")
+        original = self.edit_action("免費")
+        free_edit = self.revise(player, save, "n-5", "edit", 2, action=original)
+        r.check("免費操作 2（編輯，與重新生成共用）：成功、revision 3、剩餘免費 0（不歸零）、行動已替換、沒有扣幣",
+                ((free_edit.done or {}).get("status"), (free_edit.done or {}).get("revision"), (free_edit.done or {}).get("free_left")) == ("complete", 3, 0)
+                and self.turn_of(player, save, "n-5").get("action") == original and self.total(player) == balance, f"{free_edit.done} {self.total(player)} vs {balance}")
+        blocked = self.revise(player, save, "n-5", "edit", 3, action=self.edit_action(KW_BLOCK_TWICE))
+        r.check("付費的編輯被擋兩次：done(blocked)、舊行動與舊劇情保留、預扣退回（餘額不變）", (blocked.done or {}).get("status") == "blocked" and (blocked.done or {}).get("revision") == 3
                 and self.turn_of(player, save, "n-5").get("action") == original and self.total(player) == balance, f"{blocked.done} {self.total(player)} vs {balance}")
         failed_reasons.append("blocked")
-        broken = self.revise(player, save, "n-5", "edit", 1, action=self.edit_action(KW_STATE_FAIL))
-        r.check("編輯的狀態呼叫失敗：error、舊行動保留、預扣退回（餘額不變）", broken.names[-1:] == ["error"] and self.turn_of(player, save, "n-5").get("action") == original and self.total(player) == balance, f"{broken.names} {self.total(player)} vs {balance}")
+        broken = self.revise(player, save, "n-5", "edit", 3, action=self.edit_action(KW_STATE_FAIL))
+        r.check("付費的編輯的狀態呼叫失敗：error、舊行動保留、預扣退回（餘額不變）", broken.names[-1:] == ["error"] and self.turn_of(player, save, "n-5").get("action") == original and self.total(player) == balance, f"{broken.names} {self.total(player)} vs {balance}")
         failed_reasons.append("state_failed")
         final_action = self.edit_action("繼續")
-        success = self.revise(player, save, "n-5", "edit", 1, action=final_action)
-        r.check(f"兩次失敗之後的編輯成功：revision 2、行動已替換，總共只淨扣 {TURN_COST}（鍵不重複）", (success.done or {}).get("revision") == 2 and self.turn_of(player, save, "n-5").get("action") == final_action
+        success = self.revise(player, save, "n-5", "edit", 3, action=final_action)
+        r.check(f"兩次失敗之後的付費編輯成功：revision 4、行動已替換，總共只淨扣 {TURN_COST}（鍵不重複）", (success.done or {}).get("revision") == 4 and self.turn_of(player, save, "n-5").get("action") == final_action
                 and self.total(player) == balance - TURN_COST, f"{success.done} {self.total(player)} vs {balance - TURN_COST}")
 
         # 6. 串流中途斷線：停止、保留舊內容、釋放認領
@@ -367,8 +392,8 @@ class RevisionAcceptance(NotebookAcceptance):
             r.check("客戶端斷線：應用程式關閉上游的模型串流", closed)
         last_balance = self.total(player)
         r.check("伺服器仍正常（/healthz 200）", self.clone(player).call("GET", "/healthz").status == 200)
-        r.check(f"整個案例的遊戲幣：6 輪加 1 次成功的編輯，共 {7 * TURN_COST}", last_balance == SIGNUP_GRANT + 100 - 7 * TURN_COST, str(last_balance))
-        self.tally(since, "失敗案例", started=10, completed=4, failed=6, reasons=failed_reasons)
+        r.check(f"整個案例的遊戲幣：6 輪加 1 次成功的付費編輯，共 {7 * TURN_COST}（免費的操作與所有失敗都不扣）", last_balance == SIGNUP_GRANT + 100 - 7 * TURN_COST, str(last_balance))
+        self.tally(since, "失敗案例", started=13, completed=6, failed=7, reasons=failed_reasons)
 
     def case_conflicts(self) -> None:
         r = self.r
@@ -498,12 +523,20 @@ class RevisionAcceptance(NotebookAcceptance):
         balance = self.total(player)
         msg = f"n-{turns}"
         r.check(f"{turns} 輪之後餘額 {SIGNUP_GRANT - turns * TURN_COST}，不夠一輪（{TURN_COST}）", balance == SIGNUP_GRANT - turns * TURN_COST < TURN_COST, str(balance))
-        for revision in (1, 2):
-            turn = self.revise(player, save, msg, "regenerate", revision)
-            r.check(f"餘額不足時，第 {revision} 次（免費）重新生成仍可進行", (turn.done or {}).get("status") == "complete" and (turn.done or {}).get("revision") == revision + 1 and self.total(player) == balance, str(turn.done))
+        # 兩種操作共用免費次數，免費的都不檢查餘額：先編輯、再重新生成（旅程案例走相反的順序）
+        edited = self.revise(player, save, msg, "edit", 1)
+        r.check("餘額不足時，免費次數內的編輯仍可進行（第 1 次操作：revision 2、剩餘免費 1、餘額不變）",
+                ((edited.done or {}).get("status"), (edited.done or {}).get("revision"), (edited.done or {}).get("free_left")) == ("complete", 2, FREE_REGENERATIONS - 1)
+                and self.total(player) == balance, f"{edited.done} {self.total(player)} vs {balance}")
+        regenerated = self.revise(player, save, msg, "regenerate", 2)
+        r.check("餘額不足時，免費次數內的重新生成仍可進行（第 2 次操作，與編輯共用：revision 3、剩餘免費 0、餘額不變）",
+                ((regenerated.done or {}).get("status"), (regenerated.done or {}).get("revision"), (regenerated.done or {}).get("free_left")) == ("complete", 3, 0)
+                and self.total(player) == balance, f"{regenerated.done} {self.total(player)} vs {balance}")
+        last = self.snapshot(player, save).get("last_turn") or {}
+        r.check(f"免費次數用完：last_turn 的免費 0、重新生成與編輯都改為 {TURN_COST} 幣", (last.get("free_left"), last.get("regenerate_cost"), last.get("edit_cost")) == (0, TURN_COST, TURN_COST), str(last))
         for kind in ("regenerate", "edit"):
             reply = self.reject(player, save, msg, kind, self.body(kind, 3))
-            r.check(f"餘額不足的付費 {kind} → 409 insufficient_coins（需要 {TURN_COST}、餘額 {balance}）", reply.status == 409 and reply.code == "insufficient_coins"
+            r.check(f"免費次數用完且餘額不足的付費 {kind} → 409 insufficient_coins（需要 {TURN_COST}、餘額 {balance}）", reply.status == 409 and reply.code == "insufficient_coins"
                     and (reply.json.get("needed"), reply.json.get("balance")) == (TURN_COST, balance), f"{reply.status} {reply.code} {reply.json.get('needed')} {reply.json.get('balance')}")
         last = self.snapshot(player, save).get("last_turn") or {}
         r.check("餘額不足：沒有認領、revision 與免費次數不變、餘額不變", (last.get("revision"), last.get("revisable"), last.get("free_left")) == (3, True, 0) and self.total(player) == balance, f"{last} {self.total(player)}")
