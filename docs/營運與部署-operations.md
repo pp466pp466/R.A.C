@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-16 ｜ 對應 change：aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟與拆除；實作中，尚未對真實 AWS 執行）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的營運變化（新排程指令 `purge-unconfirmed-accounts`、告警改名為「帳號鎖定激增」、期限清除納入鎖定計次）與 change ② `remove-player-password-auth`：`EMAIL_VERIFICATION_REQUIRED` 已淘汰（留著只會警告一次，部署計畫檔含有它會被拒絕）；寄信設定只供營運告警信與管理員的重設密碼信使用，玩家不收任何信；部署多一個資料遷移 `0011`；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie（`scripts/mint_test_sessions.py`）。
 > 注意（2026-11-03）：本文件已納入 change `rpg-data-and-script`：成人模式的環境變數改為 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`（舊的 `SEXUAL_CONTENT_LEVEL3_*` 已淘汰：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕；staging 與 production 不再一律禁止，須明確設定才生效）、新的人工類指令 `seed-scripts`（部署之後執行）、`purge-expired-data` 新增 RPG 存檔與回合部分內容兩類，以及遷移 `0012`。
 
@@ -437,6 +437,96 @@ flowchart BT
 | **內容安全政策（CSP）** | 未明文要求，屬安全加固；列在此以免遺忘 | 前端使用 Vue 全域建置，模板在瀏覽器編譯，政策必須允許 `unsafe-eval`，幾乎沒有保護力（見「傳輸安全與安全標頭」） | 若出現 XSS，沒有第二道防線；目前靠純文字渲染（嚴禁 `v-html`）與輸入驗證 | 前端改為預先編譯模板時 |
 | **RPG 專用的獨立 worker 池** | AGENTS.md 第 9 節「客服與 RPG 串流使用獨立的 worker 池」 | `gunicorn.rpg.conf.py` 與串流端點（`/api/game/`）已完成（rpg-turn-engine），但還沒有把該前綴分流到獨立的服務；執行緒數與 worker 數是初始值 | 在分流之前，長連線的串流會佔用客服的執行緒 | 部署分流（Cloud Run 第二個服務或入口層路徑規則）與 RC-4（壓測） |
 | **平台告警尚未在雲端建立** | AGENTS.md 第 11 節（五項告警之外的三項由平台負責） | 定義已寫成腳本（預設只預覽），沒有雲端專案可建立 | 上線後沒有人會被通知 5xx、存活與寄信失敗 | C-5b 建立預備環境時 |
+
+## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
+
+> **狀態：計畫模組已完成並有測試，尚未對真實 AWS 執行**（沒有建立任何資源）。執行器 `scripts/aws_demo.py`、資料庫初始化腳本與雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容；實際執行時發現的差異會先回寫計畫與測試。
+
+展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
+
+**限制（不得誤當成 production）**：它不是 production，資源名稱與網域都不含 `production`（計畫模組在建立時就拒絕）；不含真實會員資料（只用 `.invalid` 的測試帳號）；單機單點、記憶體與延遲的數字**不是容量依據**；備份保留、日誌保存與平台告警都**未達** production 的要求，缺口明細與重新評估時機另列（task 7.4，雲端批次完成後補上）。AGENTS.md 第 9 節的「雲端平台為 Google Cloud」描述的是 production，本環境不修改它。
+
+### 拓撲
+
+```mermaid
+flowchart LR
+    Visitor["瀏覽器"] -->|"HTTPS 443、HTTP 80<br/>rac001.duckdns.org"| Eip["Elastic IP"]
+    Eip --> Caddy
+    subgraph Host["EC2 t3.small（Amazon Linux 2023；沒有 SSH，只開 80 與 443）"]
+        Caddy["rac-caddy<br/>Caddy 2、host 網路<br/>憑證存 /var/lib/rac/caddy"]
+        Cs["rac-cs 客服池<br/>127.0.0.1:8081"]
+        Rpg["rac-rpg RPG 串流池<br/>127.0.0.1:8082"]
+        Jobs["rac-job-*.timer<br/>排程（一次性容器）"]
+        Env["/run/rac/*.env<br/>tmpfs、0600、機密"]
+    end
+    Caddy -->|"其餘路徑"| Cs
+    Caddy -->|"/api/game/*<br/>flush_interval -1，不壓縮"| Rpg
+    Cs --> Rds
+    Rpg --> Rds
+    Jobs --> Rds
+    Rds[("RDS SQL Server Express<br/>db.t3.micro，不公開、加密")]
+    Ssm["SSM Parameter Store<br/>/rac-demo/staging/*"] -->|"啟動前取出"| Env
+    Source["S3 傳檔儲存貯體<br/>git archive 的壓縮檔"] -->|"主機上 docker build"| Host
+    Operator["管理者"] -->|"SSM Session Manager"| Host
+    Watch["Budgets 60% 與 90%<br/>EC2 狀態告警"] --> Sns["SNS 電子郵件"]
+```
+
+| 元件 | 實體與設定 | 產生它的函式（`scripts/aws_demo_plan.py`） |
+|---|---|---|
+| 入口 | `rac-caddy.service`：`caddy:2`、host 網路、`admin off`、唯讀根檔案系統、只保留綁 80 與 443 的 capability；`/api/game/*` 到 RPG 池並關閉回應緩衝，其餘到客服池；不對任何路徑壓縮；憑證與帳戶資料存持久路徑 `/var/lib/rac/caddy` | `caddyfile()`、`caddy_unit()` |
+| 客服池、RPG 池 | `rac-cs.service`（`gunicorn.conf.py`、埠 8081）、`rac-rpg.service`（`gunicorn.rpg.conf.py`、埠 8082）：只發布在回送位址、非 root、`--read-only`、`--cap-drop=ALL`、`no-new-privileges`、日誌循環、`Restart=always` | `pool_unit()` |
+| 版本標籤 | `/etc/rac/release.env`（`RAC_IMAGE_TAG=<提交短碼>`）；部署前把目前的標籤存成 `release.previous.env`；容器一律 `--pull=never`，標籤不存在就失敗 | `release_env_file()`、`_switch_release_lines()` |
+| 機密 | 存在 SSM Parameter Store（SecureString，`/rac-demo/staging/<名稱>`）；每個單元一支取出腳本（`rac-render-env-app`、`-bootstrap`），只取該單元需要的名稱，寫到 tmpfs 的 `/run/rac`；應用程式單元**不含** RDS 主要使用者密碼；一般設定在 `/etc/rac/plain.env`（非機密） | `render_env_script()`、`plain_env_file()` |
+| 排程 | `rac-job-<指令>.service／.timer`：由 `SCHEDULED_COMMANDS` 逐項產生（只支援 `*/N * * * *`、`0 * * * *`、`M H * * *`，其他形式丟錯）；時區 `Asia/Taipei`、`Persistent=true`；手動類指令不排程 | `cron_to_on_calendar()`、`scheduled_units()` |
+| 資料庫 | RDS for SQL Server Express `db.t3.micro`：單一可用區、20 GB gp3、加密、不公開、備份保留 7 天、只允許主機安全群組連入；主要使用者 `racmaster`（不是 `sa`），應用程式之後只用專屬登入 | `build_plan()` 的 `rds` 與 `rds-ready` 組 |
+| 映像 | 在主機上以 `git archive <提交短碼>` 的壓縮檔（經 S3）建置，標記 `rac-app:<提交短碼>`；不含 `.env`，以非 root（uid 10001）執行；前一版映像保留供回復 | `deploy_plan()` |
+| 預算與告警 | Budgets：季度 US$75，實際花費 60% 與 90% 兩個門檻寄信；CloudWatch：EC2 狀態檢查連續失敗通知 SNS 主題；收件人由呼叫者提供，沒有預設值 | `build_plan()` 的 `budget` 與 `alarms` 組 |
+
+主機上要放的檔案共 17 個（`host_files()`：Caddyfile、`plain.env`、兩支取出腳本、三個常駐單元、五個排程的各一對 `.service`／`.timer`）。**主機初始化**（建立 `/etc/rac` 與 `/var/lib/rac/caddy`、2 GB 交換檔、安裝並啟動 docker、放置 RDS 的 CA 套件、經 SSM 放置上述檔案、`systemctl daemon-reload` 與啟用單元）**尚未列為計畫步驟**，待決定是新增一組步驟，或在第一次雲端執行時現場撰寫後回寫。
+
+### 步驟總表
+
+四份計畫各自獨立、步驟 id 不重複（執行器以 id 選單步）。下表與 `scripts/aws_demo_plan.py` 產生的步驟逐項一致，`tests/test_design_docs.py` 會比對；以預設的目標（一個通知信箱、沒有額外機密）為準。
+
+| 計畫 | 組 | 步驟 id | 做什麼 |
+|---|---|---|---|
+| `build_plan` | preflight | `check-identity` | 確認目前的 AWS 帳號就是預期的帳號，不符即停止 |
+| `build_plan` | budget | `create-budget`、`create-sns-topic`、`subscribe-sns-0`、`confirm-sns-subscriptions` | 預算與兩個門檻、SNS 主題、每個通知信箱一個訂閱（`subscribe-sns-<N>`）、人工確認訂閱信 |
+| `build_plan` | network | `get-default-vpc`、`create-host-sg`、`authorize-host-ingress`、`create-db-sg`、`authorize-db-ingress` | 預設 VPC；主機安全群組只開 80 與 443；資料庫群組只允許主機群組 |
+| `build_plan` | iam | `create-host-role`、`attach-ssm-managed-policy`、`put-role-policy`、`create-instance-profile`、`add-role-to-profile`、`wait-instance-profile` | 主機角色（SSM 受管政策加只讀本專案參數路徑與傳檔儲存貯體的內嵌政策）與設定檔 |
+| `build_plan` | storage | `create-bucket`、`block-bucket-public-access`、`encrypt-bucket`、`tag-bucket` | 傳檔儲存貯體：封鎖公開、加密、標籤 |
+| `build_plan` | secrets | `put-parameter-SECRET_KEY`、`put-parameter-GEMINI_API_KEY`、`put-parameter-RDS_MASTER_PASSWORD`、`put-parameter-DB_APP_PASSWORD` | SSM 參數（已存在不覆寫；值來自 `--secrets-file` 或隨機產生，不經命令列）；另有 `--secrets-file` 額外指定的機密 |
+| `build_plan` | rds | `get-default-subnets`、`create-db-subnet-group`、`create-rds-instance` | 只建立、不等待（開始計費，需要 `--accept-cost`） |
+| `build_plan` | ec2 | `get-ami`、`launch-ec2`、`wait-ec2-running`、`allocate-eip`、`get-eip-address`、`associate-eip`、`wait-ssm-online` | RDS 建立的等待期間建立主機（IMDSv2 強制、無金鑰對）與 Elastic IP（需要 `--accept-cost`） |
+| `build_plan` | rds-ready | `wait-rds-available`、`get-rds-endpoint`、`put-parameter-DATABASE_URL` | 等 RDS 可用、驗證不公開與加密，再寫入 `DATABASE_URL` |
+| `build_plan` | alarms | `create-ec2-status-alarm` | EC2 狀態檢查告警 |
+| `deploy_plan` | prepare | `deploy-find-host` | 以名稱與標籤找出主機，必須剛好一台 |
+| `deploy_plan` | snapshot | `snapshot-db`、`wait-snapshot-db` | 遷移之前的 RDS 快照（每個提交短碼一個，已存在就沿用），等到 available |
+| `deploy_plan` | build | `archive-source`、`upload-source`、`build-image`、`wait-build-image`、`check-image`、`wait-check-image` | `git archive` 取出已提交的內容、上傳到傳檔儲存貯體、在主機上建置映像並檢查（非 root、沒有 `.env` 與 `.git`） |
+| `deploy_plan` | migrate | `migrate-db`、`wait-migrate-db`、`check-migration-head`、`wait-check-migration-head`、`seed-scripts`、`wait-seed-scripts` | 一次性容器執行 `alembic upgrade head`、確認已是最新版、再執行 `seed-scripts`；失敗即停止，不重啟 |
+| `deploy_plan` | restart | `switch-release`、`wait-switch-release` | 換 `release.env`（前一版存成 `release.previous.env`）並只重啟兩個池 |
+| `deploy_plan` | verify | `check-pools`、`wait-check-pools` | 兩個池在回送位址上 `/readyz` 回 200，且都在跑新映像 |
+| `rollback_plan` | prepare | `rollback-find-host` | 找出主機 |
+| `rollback_plan` | restart | `rollback-switch-release`、`wait-rollback-switch-release` | 換回前一版標籤並重啟兩個池；映像不在主機上就在改任何檔案前失敗；**不執行任何遷移或降級、不還原資料庫** |
+| `rollback_plan` | verify | `rollback-check-pools`、`wait-rollback-check-pools` | 同部署的驗證 |
+| `teardown_plan` | compute | `td-delete-ec2-alarm`、`td-terminate-ec2`、`td-wait-ec2-terminated`、`td-release-eip` | 告警、主機、Elastic IP |
+| `teardown_plan` | database | `td-delete-rds`、`td-wait-rds-deleted`、`td-delete-db-subnet-group` | RDS（必須明確選擇是否保留最終快照）與子網路群組 |
+| `teardown_plan` | network | `td-delete-db-sg`、`td-delete-host-sg` | 兩個安全群組（資料庫群組先刪） |
+| `teardown_plan` | iam | `td-remove-role-from-profile`、`td-delete-instance-profile`、`td-delete-role-policy`、`td-detach-ssm-policy`、`td-delete-role` | 角色與設定檔 |
+| `teardown_plan` | storage | `td-delete-bucket`、`td-delete-parameter-SECRET_KEY`、`td-delete-parameter-DATABASE_URL`、`td-delete-parameter-GEMINI_API_KEY`、`td-delete-parameter-RDS_MASTER_PASSWORD`、`td-delete-parameter-DB_APP_PASSWORD` | 傳檔儲存貯體（含物件）與每個機密參數 |
+| `teardown_plan` | notify | `td-delete-sns-topic`、`td-delete-budget` | SNS 主題與預算（最後刪，拆除期間費用告警仍有效） |
+| `teardown_plan` | verify | `td-list-remaining-snapshots`、`td-wait-tagged-resources-gone` | 列出仍保留的手動快照；等帶標籤的資源清空並逐一確認各服務沒有殘留 |
+
+### 計畫的共同規則
+
+- **區域與名稱守門**：`Target` 建立時就檢查，區域不是 `ap-southeast-2`、帳號不是 12 位數字、網域或任何資源名稱含 `production` 都拒絕，所以不可能產生任何指令；每個 `aws` 指令都明確帶 `--region=ap-southeast-2`。
+- **費用護欄**：建立 RDS、EC2 與 Elastic IP 的步驟在沒有 `--accept-cost` 時只留說明、不輸出指令；執行器顯示的預估來自 `cost_lines()`（約 US$1.6／日，到 2026-12-31 約 US$75；牌價粗估，以 AWS 帳單頁為準）。
+- **機密**：計畫裡只有機密的名稱與參照（`{{secret:名稱}}`，只出現在經暫存檔傳入的 JSON 內），沒有值；傳給 AWS 的 JSON 一律只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`）。
+- **在主機上執行的命令**走 SSM Run Command：`send-command` 輸出命令編號，接著 `wait-…` 步驟輪詢到 `Success`，`Failed`、`Cancelled`、`TimedOut` 立即停止（不等逾時）；主機沒有 SSH。
+- **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。
+- **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
+- **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。計畫**不刪任何手動快照**（部署前快照與最終快照含資料庫內容，保留期間仍計費），只在最後列出，要不要刪由使用者決定。
+- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。**沒有對真實的 AWS、docker、systemd、Caddy 執行過**，指令與旗標的差異在雲端批次回寫（task 4.5）。
 
 ---
 

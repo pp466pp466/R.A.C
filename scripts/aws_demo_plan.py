@@ -14,6 +14,11 @@
 - 預設使用預設 VPC（Free plan 新帳號都有），不建立 NAT 閘道、負載平衡器或第二台主機。
 - 主機檔案（Caddyfile、`rac-*` 單元、機密取出腳本、排程計時器；task 1.4、1.5）也是純函式：回傳字串（UTF-8、LF、不含 BOM），
   由執行器經 SSM 放到主機；字串內只有機密的**名稱**與 SSM 路徑，沒有任何機密值。
+- 部署、回復與拆除（task 1.6）各是一份獨立的計畫（`deploy_plan`、`rollback_plan`、`teardown_plan`），與 `build_plan` 的步驟 id 不重複：
+  部署依序快照 → 建置 → 遷移 → 重啟 → 驗證；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
+  拆除每一步都先以**帶標籤的查詢**找出資源，沒有符合才略過，所以不會碰到帳號中的其他資源。
+  在主機上執行的命令一律走 SSM Run Command（`send-command` 之後接 `wait-…` 步驟輪詢結果），內容只用 ASCII
+  （`file://` 的 JSON 在 Windows 以系統地區編碼讀取，繁體中文會變成亂碼）。
 
 佔位符（`{{…}}`）：
 - `{{名稱}}`：先前某個步驟用 `capture` 存下的標準輸出（例如 `{{host-sg-id}}`）；執行器在執行時代入。
@@ -74,8 +79,10 @@ BUDGET_LIMIT_USD = 75                   # D12 的到 2026-12-31 預估（約 US$
 BUDGET_THRESHOLDS_PERCENT = (60, 90)    # 兩個門檻：預估金額的 60% 與 90%（實際花費）
 MAX_NOTIFY_EMAILS = 10                  # AWS Budgets 每個通知最多 10 位訂閱者
 
+SSM_CORE_POLICY_ARN = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"   # 主機角色唯一附加的受管政策（建立與拆除共用）
+
 RDS_PORT = 1433
-RDS_MASTER_USER = "racmaster"           # 不是 sa；密碼隨機產生、只存在 SSM（design D8）
+RDS_MASTER_USER = "racmaster"          # 不是 sa；密碼隨機產生、只存在 SSM（design D8）
 DB_NAME = "rac_demo"                    # 專屬資料庫與登入的名稱（建立由 aws_demo_bootstrap_db.py 負責）
 DB_APP_LOGIN = "rac_app"
 RDS_BACKUP_RETENTION_DAYS = 7
@@ -131,6 +138,9 @@ class Step:
     timeout_seconds: int | None = None
     interval_seconds: int | None = None
     verify: tuple[Check, ...] = ()       # 執行後的唯讀驗證
+    run_if_found: bool = False           # 拆除步驟：先執行 exists_argv（查詢只會回傳帶本專案標籤的資源），輸出為空代表沒有符合的資源，略過本步；
+                                         # 非空才執行 argv，且 capture 存的是 exists_argv 的輸出（argv 可用 {{capture}}）；與「已存在就略過」相反
+    poll_fail: tuple[str, ...] = ()      # 輪詢時輸出等於其中任一值就立即失敗（例如 SSM 命令的 Failed），不必等到逾時
 
 
 @dataclass(frozen=True)
@@ -460,7 +470,7 @@ def _iam_steps(target: Target) -> list[Step]:
     n = names(target)
     trust = {"Version": "2012-10-17", "Statement": [
         {"Effect": "Allow", "Principal": {"Service": "ec2.amazonaws.com"}, "Action": "sts:AssumeRole"}]}
-    ssm_core = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
+    ssm_core = SSM_CORE_POLICY_ARN
     profile_check = _aws(target, "iam", "get-instance-profile", "--instance-profile-name", n.instance_profile,
                          *_text("InstanceProfile.InstanceProfileName"))
     return [
@@ -1007,3 +1017,390 @@ def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
     files.append(HostFile(f"{UNIT_DIR}/rac-caddy.service", "0644", caddy_unit()))
     files += [HostFile(f"{UNIT_DIR}/{name}", "0644", content) for name, content in scheduled_units().items()]
     return tuple(files)
+
+
+# ---- 部署、回復與拆除（task 1.6）-------------------------------------------------------------------------------
+# 三份獨立的計畫：`deploy_plan`、`rollback_plan`、`teardown_plan`。步驟 id 與 `build_plan` 的不重複（執行器以 id 選單步）。
+# 在主機上執行的命令走 SSM Run Command：`send-command` 的 JSON 經暫存檔傳入、輸出存成命令編號，接著一個 `wait-…` 步驟輪詢結果。
+# 傳給 AWS 的 JSON 只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`），所以主機上的腳本訊息都是英文。
+
+DEPLOY_GROUPS = ("prepare", "snapshot", "build", "migrate", "restart", "verify")    # 快照 → 建置 → 遷移 → 重啟 → 驗證
+ROLLBACK_GROUPS = ("prepare", "restart", "verify")
+TEARDOWN_GROUPS = ("compute", "database", "network", "iam", "storage", "notify", "verify")
+DEPLOY_RESOURCES = ("db-snapshot",)                 # 部署時才建立的資源類型（不屬於 build_plan 的 ALLOWED_RESOURCES）
+COMMIT_TAG_PATTERN = re.compile(r"[0-9a-f]{7,40}")  # 映像標籤就是提交短碼（可對應提交；也符合 RDS 快照名稱的限制）
+PREVIOUS_RELEASE_ENV_PATH = f"{HOST_CONFIG_DIR}/release.previous.env"   # 部署前一版的標籤（回復用）
+LOCAL_ARCHIVE_DIR = "build/aws-demo"                # 本機放原始碼壓縮檔的目錄（`build/` 已被 .gitignore；執行器要先建立它）
+SOURCE_KEY_PREFIX = "source"                        # 傳檔儲存貯體內的物件前綴
+IMAGE_USER_ID = "10001"                             # Dockerfile 的 `useradd --uid 10001`（映像以非 root 執行）
+APP_DIR = "/app"                                    # Dockerfile 的 WORKDIR（映像內不得有 .env 與 .git）
+POOL_READY_PATH = "/readyz"                         # 含資料庫檢查；主機內對回送位址探測
+SSM_FAILED_STATUSES = ("Failed", "Cancelled", "TimedOut", "Cancelling")
+BUILD_TIMEOUT_SECONDS = 1800                        # t3.small 上建置映像（pip 與 ODBC 驅動）的上限
+SNAPSHOT_TIMEOUT_SECONDS = 1800
+TEARDOWN_RDS_TIMEOUT_SECONDS = 2400
+VALID_FINAL_SNAPSHOT = (True, False, None)          # None＝尚未選擇：RDS 刪除步驟不輸出指令
+
+
+def _commit_tag(tag: str) -> str:
+    if not isinstance(tag, str) or not COMMIT_TAG_PATTERN.fullmatch(tag):
+        raise PlanError("映像標籤必須是提交短碼（7 至 40 位小寫十六進位）：標籤要能對應到提交")
+    return tag
+
+
+def _host_filters(target: Target) -> tuple[str, ...]:
+    n = names(target)
+    return ("--filters", f"Name=tag:Name,Values={n.host}", f"Name=tag:Project,Values={PROJECT_TAG}",
+            f"Name=tag:Environment,Values={ENV}", "Name=instance-state-name,Values=running")
+
+
+def _find_host_step(target: Target, step_id: str, group: str) -> Step:
+    """主機的實例編號不從建立時帶過來（部署可能在很久之後、另一次執行）：用名稱與標籤找；必須剛好一台。"""
+    n = names(target)
+    return Step(step_id, group, f"找出主機 {n.host}（running、帶本專案標籤；找不到或不只一台即停止）",
+                _aws(target, "ec2", "describe-instances", *_host_filters(target), *_text("Reservations[].Instances[].InstanceId")),
+                capture="instance-id",
+                verify=(Check(_aws(target, "ec2", "describe-instances", *_host_filters(target), *_text("length(Reservations[].Instances[])")), "1"),))
+
+
+def _ssm_steps(target: Target, step_id: str, group: str, title: str, lines: list[str], *, timeout: int,
+               expect: str | None = None) -> list[Step]:
+    """在主機上執行一段腳本：`send-command`（輸出命令編號）加 `wait-…`（輪詢到 Success；Failed、Cancelled、TimedOut 立即停止）。
+    `expect` 不是 None 時，等待步驟驗證命令的標準輸出（去除前後空白）等於它。腳本內容只用 ASCII。"""
+    command = f"{step_id}-command-id"
+    body = {"InstanceIds": ["{{instance-id}}"], "DocumentName": "AWS-RunShellScript", "Comment": step_id, "TimeoutSeconds": 60,
+            "Parameters": {"commands": lines, "executionTimeout": [str(timeout)]}}
+    invocation = ("--command-id", "{{" + command + "}}", "--instance-id", "{{instance-id}}")
+    verify = ()
+    if expect is not None:
+        verify = (Check(_aws(target, "ssm", "get-command-invocation", *invocation, *_text("StandardOutputContent")), expect),)
+    return [
+        Step(step_id, group, title,
+             _aws(target, "ssm", "send-command", "--cli-input-json", "file://{{input_file}}", *_text("Command.CommandId")),
+             input_json=_json(body), capture=command),
+        Step(f"wait-{step_id}", group, f"等待主機上的命令完成：{step_id}（失敗、取消或逾時即停止；細節看該命令的輸出）",
+             poll=Check(_aws(target, "ssm", "get-command-invocation", *invocation, *_text("Status")), "Success"),
+             timeout_seconds=timeout + 120, interval_seconds=10, poll_fail=SSM_FAILED_STATUSES, verify=verify),
+    ]
+
+
+# 主機上的腳本片段：全部 ASCII、POSIX sh 相容（SSM 的 AWS-RunShellScript 以 sh 執行），沒有任何機密值
+
+def _one_off_lines(tag: str, name: str, command: tuple[str, ...], *, pipe: str = "") -> list[str]:
+    """用指定標籤的映像、與兩個池相同的強化與環境檔，執行一次性容器（遷移、種子、檢查）。
+    環境檔的機密先由 `rac-render-env-app` 取到記憶體檔案系統；容器內的標籤變數由這份腳本自己設定（`APP_IMAGE_REF` 展開 `${RAC_IMAGE_TAG}`）。"""
+    run = " ".join(_app_run_args(name, command)) + pipe
+    return [f"{SBIN_DIR}/rac-render-env-app", f"{IMAGE_TAG_VAR}={tag}", f"{DOCKER} rm -f {name} >/dev/null 2>&1 || true", run]
+
+
+def _build_lines(target: Target, tag: str) -> list[str]:
+    n = names(target)
+    key = f"{SOURCE_KEY_PREFIX}/{tag}.tar.gz"
+    return [
+        "set -eu", "export HOME=/root",
+        'work="$(mktemp -d /var/tmp/rac-build.XXXXXX)"',           # 持久磁碟（AL2023 的 /tmp 是記憶體檔案系統）
+        "trap 'rm -rf \"$work\"' EXIT",
+        f'aws s3 cp "s3://{n.bucket}/{key}" "$work/source.tar.gz" --region {target.region} --only-show-errors',
+        'mkdir "$work/src"',
+        'tar -xzf "$work/source.tar.gz" -C "$work/src"',
+        f'{DOCKER} build --tag {APP_IMAGE_REPO}:{tag} "$work/src"',
+    ]
+
+
+def _image_check_lines(tag: str) -> list[str]:
+    """映像以非 root 執行、且工作目錄內沒有 .env 與 .git（輸出一行：`<uid> clean`）。"""
+    image = f"{APP_IMAGE_REPO}:{tag}"
+    probe = f"if [ -e {APP_DIR}/.env ] || [ -e {APP_DIR}/.git ]; then echo dirty; else echo clean; fi"
+    return [
+        "set -eu", "export HOME=/root",
+        f'user="$({DOCKER} run --rm --pull=never --entrypoint id {image} -u)"',
+        f"state=\"$({DOCKER} run --rm --pull=never --entrypoint sh {image} -c '{probe}')\"",
+        'echo "$user $state"',
+    ]
+
+
+def _migrate_lines(tag: str) -> list[str]:
+    return ["set -eu", "export HOME=/root", *_one_off_lines(tag, "rac-migrate", ("alembic", "upgrade", "head"))]
+
+
+def _migration_head_lines(tag: str) -> list[str]:
+    """`alembic current` 在資料庫已是最新版時會在版本後面標 `(head)`；輸出 1 代表是最新版、0 代表不是（含執行失敗）。"""
+    *prepare, run = _one_off_lines(tag, "rac-migrate-check", ("alembic", "current"), pipe=" 2>/dev/null | grep -c '(head)' || true")
+    return ["set -eu", "export HOME=/root", *prepare, f'heads="$({run})"', 'echo "$heads"']
+
+
+def _seed_lines(tag: str) -> list[str]:
+    return ["set -eu", "export HOME=/root", *_one_off_lines(tag, "rac-seed", ("flask", "--app", "wsgi", "seed-scripts"))]
+
+
+def _switch_release_lines(tag: str) -> list[str]:
+    """把 `release.env` 換成指定標籤並重啟兩個池。映像不存在時在改任何檔案之前就失敗；換掉之前先把目前的標籤存成 `release.previous.env`
+    （同一個標籤重複部署時不覆蓋，避免前一版被自己蓋掉）。檔案以暫存檔加改名寫入（原子）。"""
+    line = release_env_file(tag).strip()          # 同時驗證標籤格式
+    return [
+        "set -eu",
+        f"{DOCKER} image inspect {APP_IMAGE_REPO}:{tag} >/dev/null",
+        f"cd {HOST_CONFIG_DIR}",
+        f"if [ -f release.env ] && ! grep -qx '{line}' release.env; then cp -p release.env release.previous.env; fi",
+        f"printf '%s\\n' '{line}' > release.env.new",
+        "chmod 0644 release.env.new",
+        "mv -f release.env.new release.env",
+        "systemctl restart " + " ".join(f"{pool.container}.service" for pool in POOLS),
+    ]
+
+
+def _pool_check_lines() -> list[str]:
+    """兩個池各自在回送位址上回 200（`/readyz` 含資料庫檢查；最多等 150 秒），最後輸出兩個容器實際使用的映像。"""
+    ports = " ".join(str(pool.port) for pool in POOLS)
+    images = " ".join(f"$({DOCKER} inspect --format '{{{{.Config.Image}}}}' {pool.container})" for pool in POOLS)
+    return [
+        "set -eu",
+        f"for port in {ports}; do",
+        "  ok=0",
+        "  for attempt in $(seq 1 30); do",
+        f'    if curl -fsS -o /dev/null --max-time 5 "http://127.0.0.1:$port{POOL_READY_PATH}"; then ok=1; break; fi',
+        "    sleep 5",
+        "  done",
+        '  if [ "$ok" != 1 ]; then echo "pool on port $port is not ready" >&2; exit 1; fi',
+        "done",
+        f'echo "{images}"',
+    ]
+
+
+def _pool_check_expect(tag: str) -> str:
+    return " ".join(f"{APP_IMAGE_REPO}:{tag}" for _ in POOLS)
+
+
+def snapshot_name(target: Target, tag: str) -> str:
+    """遷移前的 RDS 快照名稱：每個版本標籤一個（重複部署同一個標籤時沿用，因為它仍是遷移之前的還原點）。"""
+    return assert_name(f"{names(target).db_instance}-pre-{_commit_tag(tag)}", what="快照名稱")
+
+
+def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] = DEPLOY_GROUPS) -> list[Step]:
+    """新版部署：資料庫快照 → 建置映像 → 遷移 → 重啟兩個池 → 驗證（每個階段一組，順序固定；`groups` 只取其中幾組）。
+
+    - `tag` 是要部署的提交短碼：原始碼以 `git archive <tag>` 取出（只含已提交內容，不含 .env），經傳檔儲存貯體到主機建置，
+      映像標記為 `rac-app:<tag>`，前一版的映像保留供回復。
+    - 遷移之前一定有快照；遷移（含種子）失敗就停止，不重啟兩個池；遷移是 expand-only，所以舊版程式仍能在新結構上運作。
+    - 沒有任何步驟降級資料庫結構。
+    """
+    unknown = [g for g in groups if g not in DEPLOY_GROUPS]
+    if unknown:
+        raise PlanError("不認得的步驟組：" + "、".join(unknown))
+    tag = _commit_tag(tag)
+    n = names(target)
+    snapshot = snapshot_name(target, tag)
+    snapshot_arn = f"arn:aws:rds:{target.region}:{target.account_id}:snapshot:{snapshot}"
+    archive = f"{LOCAL_ARCHIVE_DIR}/source-{tag}.tar.gz"
+    object_key = f"{SOURCE_KEY_PREFIX}/{tag}.tar.gz"
+    steps: dict[str, list[Step]] = {group: [] for group in DEPLOY_GROUPS}
+
+    steps["prepare"].append(_find_host_step(target, "deploy-find-host", "prepare"))
+
+    steps["snapshot"] += [
+        Step("snapshot-db", "snapshot", f"建立 RDS 快照 {snapshot}（遷移之前的還原點；已存在就略過）",
+             _aws(target, "rds", "create-db-snapshot", "--db-instance-identifier", n.db_instance, "--db-snapshot-identifier", snapshot,
+                  "--tags", _json(tag_list(snapshot))),
+             resource="db-snapshot",
+             exists_argv=_aws(target, "rds", "describe-db-snapshots", "--db-snapshot-identifier", snapshot, *_text("DBSnapshots[].DBSnapshotIdentifier")),
+             exists_nonempty=True,
+             verify=(Check(_aws(target, "rds", "list-tags-for-resource", "--resource-name", snapshot_arn, *_text("TagList[?Key=='Project'].Value|[0]")), PROJECT_TAG),)),
+        Step("wait-snapshot-db", "snapshot", f"等待快照 {snapshot} 進入 available（失敗即停止；不等快照完成就不能遷移）",
+             poll=Check(_aws(target, "rds", "describe-db-snapshots", "--db-snapshot-identifier", snapshot, *_text("DBSnapshots[0].Status")), "available"),
+             timeout_seconds=SNAPSHOT_TIMEOUT_SECONDS, interval_seconds=30, poll_fail=("failed",)),
+    ]
+
+    steps["build"] += [
+        Step("archive-source", "build", f"本機：git archive {tag} 取出已提交的原始碼壓縮檔（不含 .env 與未提交的變更）到 {archive}",
+             ("git", "archive", "--format=tar.gz", f"--output={archive}", tag)),
+        Step("upload-source", "build", f"上傳壓縮檔到傳檔儲存貯體 s3://{n.bucket}/{object_key}（伺服器端加密）",
+             _aws(target, "s3", "cp", archive, f"s3://{n.bucket}/{object_key}", "--sse", "AES256", "--only-show-errors"),
+             verify=(Check(_aws(target, "s3api", "head-object", "--bucket", n.bucket, "--key", object_key, *_text("ServerSideEncryption")), "AES256"),)),
+        *_ssm_steps(target, "build-image", "build", f"在主機上建置映像 {APP_IMAGE_REPO}:{tag}（約數分鐘；前一版的映像保留）",
+                    _build_lines(target, tag), timeout=BUILD_TIMEOUT_SECONDS),
+        *_ssm_steps(target, "check-image", "build", f"確認映像以非 root（uid {IMAGE_USER_ID}）執行，且 {APP_DIR} 內沒有 .env 與 .git",
+                    _image_check_lines(tag), timeout=300, expect=f"{IMAGE_USER_ID} clean"),
+    ]
+
+    steps["migrate"] += [
+        *_ssm_steps(target, "migrate-db", "migrate", "執行 alembic upgrade head（一次性容器；失敗即停止，不重啟兩個池）",
+                    _migrate_lines(tag), timeout=900),
+        *_ssm_steps(target, "check-migration-head", "migrate", "確認資料庫版本已是最新（alembic current 標有 head）",
+                    _migration_head_lines(tag), timeout=300, expect="1"),
+        *_ssm_steps(target, "seed-scripts", "migrate", "執行 flask seed-scripts（建立或更新內建劇本；冪等，遷移之後執行）",
+                    _seed_lines(tag), timeout=600),
+    ]
+
+    steps["restart"] += _ssm_steps(
+        target, "switch-release", "restart", f"把 {RELEASE_ENV_PATH} 換成 {tag}（前一版存成 release.previous.env）並重啟客服池與 RPG 池",
+        _switch_release_lines(tag), timeout=300)
+
+    steps["verify"] += _ssm_steps(
+        target, "check-pools", "verify", f"驗證兩個池在回送位址上 {POOL_READY_PATH} 回 200，且都在跑 {APP_IMAGE_REPO}:{tag}",
+        _pool_check_lines(), timeout=300, expect=_pool_check_expect(tag))
+
+    selected = set(groups)
+    if selected & {"build", "migrate", "restart", "verify"}:
+        selected.add("prepare")             # 在主機上執行的命令都要實例編號；找主機是唯讀的，所以一律自動帶上
+    plan: list[Step] = []
+    for group in DEPLOY_GROUPS:
+        if group in selected:
+            plan.extend(steps[group])
+    return plan
+
+
+def rollback_plan(target: Target, tag: str) -> list[Step]:
+    """回復：只把兩個池換回前一版的映像標籤並重啟；**不執行任何遷移或降級、不還原資料庫**（遷移是 expand-only，
+    舊版程式可在新結構上運作）。`tag` 是要回到的標籤（部署時存在主機的 `release.previous.env`）；該映像不在主機上就在改任何檔案前失敗。"""
+    tag = _commit_tag(tag)
+    steps = [_find_host_step(target, "rollback-find-host", "prepare")]
+    steps += _ssm_steps(target, "rollback-switch-release", "restart", f"把 {RELEASE_ENV_PATH} 換回 {tag} 並重啟客服池與 RPG 池（不動資料庫）",
+                        _switch_release_lines(tag), timeout=300)
+    steps += _ssm_steps(target, "rollback-check-pools", "verify", f"驗證兩個池在回送位址上 {POOL_READY_PATH} 回 200，且都在跑 {APP_IMAGE_REPO}:{tag}",
+                        _pool_check_lines(), timeout=300, expect=_pool_check_expect(tag))
+    return steps
+
+
+# ---- 拆除 -------------------------------------------------------------------------------------------------
+
+
+def _owned(tags: str) -> str:
+    """JMESPath：只有 Environment 與 Project 兩個標籤都符合時才回傳非空（`&&` 在前者為空清單時回傳前者）；
+    `tags` 是回應中標籤清單的路徑（例如 `TagList`、`Role.Tags`）。"""
+    return f"{tags}[?Key=='Environment' && Value=='{ENV}'] && {tags}[?Key=='Project' && Value=='{PROJECT_TAG}'].Value"
+
+
+def _owned_ec2_filters(*extra: str) -> tuple[str, ...]:
+    return ("--filters", f"Name=tag:Project,Values={PROJECT_TAG}", f"Name=tag:Environment,Values={ENV}", *extra)
+
+
+def _delete_step(step_id: str, group: str, title: str, argv: tuple[str, ...], find: tuple[str, ...], *, capture: str | None = None) -> Step:
+    """拆除的一步：先 `find`（帶標籤的查詢），沒有符合的資源就略過；有才執行 `argv`。"""
+    return Step(step_id, group, title, argv, exists_argv=find, exists_nonempty=True, run_if_found=True, capture=capture)
+
+
+def teardown_plan(target: Target, *, final_snapshot: bool | None, today: date | None = None) -> list[Step]:
+    """拆除展示環境：只刪帶有本專案標籤（Project 與 Environment）的資源，逐項先查詢、沒有符合就略過；順序與建立相反。
+
+    `final_snapshot` **沒有預設值**：True＝刪除 RDS 前保留最終快照（需要 `today` 讓快照名稱唯一）、False＝不保留、
+    None＝尚未選擇，RDS 刪除步驟不輸出指令（`blocked`）。計畫**不刪任何手動快照**（部署前快照與最終快照）：
+    它們含資料庫內容，要不要刪由使用者決定（`td-list-remaining-snapshots` 會列出）。
+    """
+    if final_snapshot not in VALID_FINAL_SNAPSHOT or isinstance(final_snapshot, int) and not isinstance(final_snapshot, bool):
+        raise PlanError("final_snapshot 必須明確是 True（保留最終快照）、False（不保留）或 None（尚未選擇）")
+    n = names(target)
+    region, account = target.region, target.account_id
+    final_id = None
+    if final_snapshot:
+        if not isinstance(today, date):
+            raise PlanError("保留最終快照時必須提供日期（快照名稱要唯一）")
+        final_id = assert_name(f"{n.db_instance}-final-{today:%Y%m%d}", what="最終快照名稱")
+
+    delete = _delete_step
+    steps: list[Step] = []
+    # compute：告警 → 主機 → Elastic IP
+    steps += [
+        delete("td-delete-ec2-alarm", "compute", f"刪除告警 {n.alarm}（帶標籤才刪）",
+               _aws(target, "cloudwatch", "delete-alarms", "--alarm-names", n.alarm),
+               _aws(target, "cloudwatch", "list-tags-for-resource", "--resource-arn", f"arn:aws:cloudwatch:{region}:{account}:alarm:{n.alarm}", *_text(_owned("Tags")))),
+        delete("td-terminate-ec2", "compute", "終止帶本專案標籤的主機（磁碟隨主機刪除）",
+               _aws(target, "ec2", "terminate-instances", "--instance-ids", "{{td-instance-id}}"),
+               _aws(target, "ec2", "describe-instances", *_owned_ec2_filters("Name=instance-state-name,Values=pending,running,stopping,stopped"),
+                    *_text("Reservations[].Instances[].InstanceId")), capture="td-instance-id"),
+        Step("td-wait-ec2-terminated", "compute", "等待帶本專案標籤的主機全部終止（Elastic IP 與安全群組要等它終止才能刪）",
+             poll=Check(_aws(target, "ec2", "describe-instances",
+                             *_owned_ec2_filters("Name=instance-state-name,Values=pending,running,stopping,stopped,shutting-down"),
+                             *_text("length(Reservations[].Instances[])")), "0"),
+             timeout_seconds=600, interval_seconds=10),
+        delete("td-release-eip", "compute", "釋放帶本專案標籤的 Elastic IP（停止公有 IPv4 計費）",
+               _aws(target, "ec2", "release-address", "--allocation-id", "{{td-eip-id}}"),
+               _aws(target, "ec2", "describe-addresses", *_owned_ec2_filters(), *_text("Addresses[].AllocationId")), capture="td-eip-id"),
+    ]
+
+    # database：RDS（需要明確選擇是否保留最終快照）→ 子網路群組
+    rds_find = _aws(target, "rds", "list-tags-for-resource", "--resource-name", f"arn:aws:rds:{region}:{account}:db:{n.db_instance}", *_text(_owned("TagList")))
+    if final_snapshot is None:
+        steps.append(Step("td-delete-rds", "database",
+                          f"刪除 RDS {n.db_instance}——需要明確選擇是否保留最終快照（沒有預設值）：保留或不保留，擇一後才會輸出刪除指令",
+                          blocked=True))
+    else:
+        snapshot_args = ("--final-db-snapshot-identifier", final_id) if final_snapshot else ("--skip-final-snapshot",)
+        kept = f"保留最終快照 {final_id}" if final_snapshot else "不保留最終快照（資料庫內容永久消失）"
+        steps.append(delete("td-delete-rds", "database", f"刪除 RDS {n.db_instance}（{kept}；自動備份一併刪除）",
+                            _aws(target, "rds", "delete-db-instance", "--db-instance-identifier", n.db_instance, *snapshot_args, "--delete-automated-backups"),
+                            rds_find))
+    steps += [
+        Step("td-wait-rds-deleted", "database", f"等待 RDS {n.db_instance} 消失（刪除約數分鐘，保留最終快照時更久）",
+             poll=Check(_aws(target, "rds", "describe-db-instances", *_text(f"length(DBInstances[?DBInstanceIdentifier=='{n.db_instance}'])")), "0"),
+             timeout_seconds=TEARDOWN_RDS_TIMEOUT_SECONDS, interval_seconds=30),
+        delete("td-delete-db-subnet-group", "database", f"刪除資料庫子網路群組 {n.subnet_group}（帶標籤才刪）",
+               _aws(target, "rds", "delete-db-subnet-group", "--db-subnet-group-name", n.subnet_group),
+               _aws(target, "rds", "list-tags-for-resource", "--resource-name", f"arn:aws:rds:{region}:{account}:subgrp:{n.subnet_group}", *_text(_owned("TagList")))),
+    ]
+
+    # network：資料庫群組（它的規則參照主機群組，所以先刪）→ 主機群組
+    for step_id, name, capture in (("td-delete-db-sg", n.db_sg, "td-db-sg-id"), ("td-delete-host-sg", n.host_sg, "td-host-sg-id")):
+        steps.append(delete(step_id, "network", f"刪除安全群組 {name}（名稱與標籤都符合才刪）",
+                            _aws(target, "ec2", "delete-security-group", "--group-id", "{{" + capture + "}}"),
+                            _aws(target, "ec2", "describe-security-groups", *_owned_ec2_filters(f"Name=group-name,Values={name}"), *_text("SecurityGroups[].GroupId")),
+                            capture=capture))
+
+    # iam：角色從設定檔移出 → 設定檔 → 內嵌政策 → 受管政策 → 角色（每一步都以角色或設定檔的標籤把關）
+    role_owned = _aws(target, "iam", "get-role", "--role-name", n.role, *_text(_owned("Role.Tags")))
+    profile_owned = _aws(target, "iam", "get-instance-profile", "--instance-profile-name", n.instance_profile, *_text(_owned("InstanceProfile.Tags")))
+    in_profile = f"InstanceProfile.Roles[?RoleName=='{n.role}'] && {_owned('InstanceProfile.Tags')}"
+    steps += [
+        delete("td-remove-role-from-profile", "iam", f"把角色 {n.role} 從設定檔 {n.instance_profile} 移出",
+               _aws(target, "iam", "remove-role-from-instance-profile", "--instance-profile-name", n.instance_profile, "--role-name", n.role),
+               _aws(target, "iam", "get-instance-profile", "--instance-profile-name", n.instance_profile, *_text(in_profile))),
+        delete("td-delete-instance-profile", "iam", f"刪除執行個體設定檔 {n.instance_profile}（帶標籤才刪）",
+               _aws(target, "iam", "delete-instance-profile", "--instance-profile-name", n.instance_profile), profile_owned),
+        delete("td-delete-role-policy", "iam", f"刪除角色 {n.role} 的內嵌政策 {n.role_policy}（角色帶標籤才刪）",
+               _aws(target, "iam", "delete-role-policy", "--role-name", n.role, "--policy-name", n.role_policy), role_owned),
+        delete("td-detach-ssm-policy", "iam", f"從角色 {n.role} 移除受管政策 AmazonSSMManagedInstanceCore（角色帶標籤才動）",
+               _aws(target, "iam", "detach-role-policy", "--role-name", n.role, "--policy-arn", SSM_CORE_POLICY_ARN), role_owned),
+        delete("td-delete-role", "iam", f"刪除角色 {n.role}（帶標籤才刪）",
+               _aws(target, "iam", "delete-role", "--role-name", n.role), role_owned),
+    ]
+
+    # storage：傳檔儲存貯體（含物件）→ 機密參數
+    steps.append(delete("td-delete-bucket", "storage", f"刪除傳檔儲存貯體 {n.bucket} 與其中的原始碼壓縮檔（帶標籤才刪；沒有開版本控制）",
+                        _aws(target, "s3", "rb", f"s3://{n.bucket}", "--force"),
+                        _aws(target, "s3api", "get-bucket-tagging", "--bucket", n.bucket, *_text(_owned("TagSet")))))
+    for var in parameter_names(target):
+        name = parameter_name(var)
+        steps.append(delete(f"td-delete-parameter-{var}", "storage", f"刪除機密參數 {name}（帶標籤才刪）",
+                            _aws(target, "ssm", "delete-parameter", "--name", name),
+                            _aws(target, "ssm", "list-tags-for-resource", "--resource-type", "Parameter", "--resource-id", name, *_text(_owned("TagList")))))
+
+    # notify：SNS 主題（訂閱隨之消失）→ 預算（最後刪，所以拆除期間費用告警仍有效）
+    topic_arn = sns_topic_arn(target)
+    steps += [
+        delete("td-delete-sns-topic", "notify", f"刪除 SNS 主題 {n.topic}（帶標籤才刪；電子郵件訂閱隨之消失）",
+               _aws(target, "sns", "delete-topic", "--topic-arn", topic_arn),
+               _aws(target, "sns", "list-tags-for-resource", "--resource-arn", topic_arn, *_text(_owned("Tags")))),
+        delete("td-delete-budget", "notify", f"刪除預算 {n.budget}（帶標籤才刪）",
+               _aws(target, "budgets", "delete-budget", "--account-id", account, "--budget-name", n.budget),
+               _aws(target, "budgets", "list-tags-for-resource", "--resource-arn", f"arn:aws:budgets::{account}:budget/{n.budget}", *_text(_owned("ResourceTags")))),
+    ]
+
+    # verify：列出仍保留的手動快照（唯讀）→ 帶標籤的資源已清空，且各服務沒有以專案名稱開頭的資源
+    prefix = NAME_PREFIX
+    steps += [
+        Step("td-list-remaining-snapshots", "verify", "列出仍保留的手動快照（含部署前快照與最終快照；本計畫不刪除它們，保留期間仍計費，要不要刪由你決定）",
+             _aws(target, "rds", "describe-db-snapshots", "--snapshot-type", "manual",
+                  *_text(f"DBSnapshots[?starts_with(DBSnapshotIdentifier, '{n.db_instance}-')].DBSnapshotIdentifier")), capture="remaining-snapshots"),
+        Step("td-wait-tagged-resources-gone", "verify", "等待帶本專案標籤的資源清空（標籤查詢有延遲；手動快照除外），並逐一確認各服務沒有殘留",
+             poll=Check(_aws(target, "resourcegroupstaggingapi", "get-resources", "--tag-filters", f"Key=Project,Values={PROJECT_TAG}",
+                             f"Key=Environment,Values={ENV}", *_text("length(ResourceTagMappingList[?!contains(ResourceARN, ':snapshot:')])")), "0"),
+             timeout_seconds=300, interval_seconds=15,
+             verify=(
+                 Check(_aws(target, "iam", "list-roles", *_text(f"length(Roles[?starts_with(RoleName, '{prefix}')])")), "0"),
+                 Check(_aws(target, "iam", "list-instance-profiles", *_text(f"length(InstanceProfiles[?starts_with(InstanceProfileName, '{prefix}')])")), "0"),
+                 Check(_aws(target, "s3api", "list-buckets", *_text(f"length(Buckets[?Name=='{n.bucket}'])")), "0"),
+                 Check(_aws(target, "sns", "list-topics", *_text(f"length(Topics[?ends_with(TopicArn, ':{n.topic}')])")), "0"),
+                 Check(_aws(target, "budgets", "describe-budgets", "--account-id", account, *_text(f"length(Budgets[?BudgetName=='{n.budget}'])")), "0"),
+                 Check(_aws(target, "ssm", "describe-parameters", "--parameter-filters", f"Key=Path,Option=Recursive,Values={SSM_PREFIX}", *_text("length(Parameters)")), "0"),
+             )),
+    ]
+    return steps

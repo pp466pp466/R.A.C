@@ -500,8 +500,11 @@ def assert_placeholders_resolve(steps):
         before = [step.input_json or "", *step.argv, *(step.exists_argv or ())]
         if step.poll:
             before.extend([*step.poll.argv, step.poll.expect])
+        # 拆除步驟（run_if_found）：capture 存的是查詢的輸出，指令可以用它；查詢本身仍只能用更早的擷取
+        own = {step.capture} if step.run_if_found and step.capture else set()
         used = placeholders(before)
-        assert used <= captured, f"{step.id} 用到尚未擷取的佔位符：{sorted(used - captured)}"
+        assert used <= captured | own, f"{step.id} 用到尚未擷取的佔位符：{sorted(used - captured - own)}"
+        assert placeholders(step.exists_argv or ()) <= captured, f"{step.id} 的查詢用到尚未擷取的佔位符"
         assert ("{{input_file}}" in " ".join(step.argv)) == (step.input_json is not None), step.id
         if step.capture:
             captured.add(step.capture)
@@ -978,3 +981,426 @@ def test_job_names_pass_the_name_guard_and_never_contain_production():
     with pytest.raises(plan.PlanError):
         plan.job_unit_name("Bad_Name")
     assert all("production" not in name for name in plan.scheduled_units())
+
+
+# ---- 1.6 部署、回復與拆除 ----------------------------------------------------------------------------------
+
+TAG = "abc1234"
+OTHER_TAG = "def5678"
+DEPLOY_PLAN_IDS = (
+    "deploy-find-host", "snapshot-db", "wait-snapshot-db", "archive-source", "upload-source", "build-image", "wait-build-image",
+    "check-image", "wait-check-image", "migrate-db", "wait-migrate-db", "check-migration-head", "wait-check-migration-head",
+    "seed-scripts", "wait-seed-scripts", "switch-release", "wait-switch-release", "check-pools", "wait-check-pools",
+)
+
+
+def deploy_steps(tag=TAG, **overrides):
+    return plan.deploy_plan(target(**overrides), tag)
+
+
+def rollback_steps(tag=OTHER_TAG, **overrides):
+    return plan.rollback_plan(target(**overrides), tag)
+
+
+def teardown_steps(final_snapshot=True, **overrides):
+    return plan.teardown_plan(target(**overrides), final_snapshot=final_snapshot, today=date(2026, 12, 31))
+
+
+def script_lines(step):
+    """SSM 命令要在主機上執行的腳本（一行一個元素）。"""
+    return json.loads(step.input_json)["Parameters"]["commands"]
+
+
+def script_text(step):
+    return "\n".join(script_lines(step))
+
+
+def is_host_command(step):
+    return step.argv[1:3] == ("ssm", "send-command")
+
+
+def host_scripts(steps):
+    return {step.id: script_text(step) for step in steps if is_host_command(step)}
+
+
+def positions(steps, *ids):
+    ordered = [s.id for s in steps]
+    return [ordered.index(step_id) for step_id in ids]
+
+
+def assert_in_order(steps, *ids):
+    found = positions(steps, *ids)
+    assert found == sorted(found) and len(set(found)) == len(ids), dict(zip(ids, found))
+
+
+def whole_plan_text(steps):
+    """每個步驟的說明、指令、JSON 範本與預期輸出（含主機腳本）串成一段文字，用來掃描禁止出現的字樣。"""
+    parts = []
+    for step in steps:
+        parts.extend(all_strings(step))
+        parts.extend(" ".join(argv) for argv in commands(step))
+    return " ".join(parts)
+
+
+def deleting_steps(steps):
+    verbs = ("delete", "terminate", "release", "remove", "detach", "rb")
+    return [s for s in steps if s.argv and s.argv[0] == "aws" and any(s.argv[2].startswith(verb) for verb in verbs)]
+
+
+def test_the_deploy_plan_has_the_expected_steps_in_the_five_phases_snapshot_build_migrate_restart_verify():
+    steps = deploy_steps()
+    assert tuple(s.id for s in steps) == DEPLOY_PLAN_IDS
+    phases = [s.group for s in steps]
+    assert phases == sorted(phases, key=plan.DEPLOY_GROUPS.index)
+    assert set(phases) == set(plan.DEPLOY_GROUPS)
+    assert_in_order(steps, "snapshot-db", "wait-snapshot-db", "archive-source", "upload-source", "build-image", "migrate-db",
+                    "wait-migrate-db", "seed-scripts", "switch-release", "check-pools")
+    assert steps[-1].id == "wait-check-pools", "驗證在最後"
+
+
+def test_the_snapshot_is_available_before_any_migration_and_the_migration_succeeds_before_any_restart():
+    steps = deploy_steps()
+    assert_in_order(steps, "snapshot-db", "wait-snapshot-db", "migrate-db")
+    assert_in_order(steps, "wait-migrate-db", "wait-check-migration-head", "wait-seed-scripts", "switch-release")
+    assert_in_order(steps, "wait-switch-release", "check-pools")
+    restarting = [s.id for s in steps if is_host_command(s) and "systemctl restart" in script_text(s)]
+    assert restarting == ["switch-release"], "重啟服務的只有這一步，且在遷移與種子成功之後"
+
+
+def test_deploy_groups_can_be_selected_and_the_host_lookup_comes_along_when_needed():
+    only_snapshot = plan.deploy_plan(target(), TAG, groups=("snapshot",))
+    assert [s.id for s in only_snapshot] == ["snapshot-db", "wait-snapshot-db"]
+    migrate_only = plan.deploy_plan(target(), TAG, groups=("migrate",))
+    assert migrate_only[0].id == "deploy-find-host" and {s.group for s in migrate_only} == {"prepare", "migrate"}
+    with pytest.raises(plan.PlanError, match="bogus"):
+        plan.deploy_plan(target(), TAG, groups=("bogus",))
+
+
+@pytest.mark.parametrize("tag", ["", "latest", "ABC1234", "abc123", "abc1234\n", "abc1234;rm", "abc 1234", "g" * 8, "a" * 41, None, 1234567])
+def test_the_image_tag_must_be_a_commit_short_code(tag):
+    with pytest.raises(plan.PlanError, match="提交短碼"):
+        plan.deploy_plan(target(), tag)
+    with pytest.raises(plan.PlanError, match="提交短碼"):
+        plan.rollback_plan(target(), tag)
+
+
+def test_every_on_host_command_goes_through_ssm_run_command_with_ascii_only_and_no_secret():
+    sends = [s for s in deploy_steps() + rollback_steps() if is_host_command(s)]
+    assert len(sends) == 7 + 2, "部署 7 個（建置、映像檢查、遷移、版本檢查、種子、切換、池檢查）與回復 2 個（切換、池檢查）"
+    for step in sends:
+        body = json.loads(step.input_json)
+        assert body["DocumentName"] == "AWS-RunShellScript" and body["InstanceIds"] == ["{{instance-id}}"], step.id
+        assert "file://{{input_file}}" in step.argv and "--cli-input-json" in step.argv
+        assert step.capture == f"{step.id}-command-id"
+        assert all(ord(char) < 128 for char in step.input_json), f"{step.id}：傳給 AWS 的 JSON 只能用 ASCII（Windows 以系統地區編碼讀 file://）"
+        text = script_text(step)
+        assert "--with-decryption" not in text and not any(var in text for var in plan.SECRET_VARS), step.id
+        assert not plan.SECRET_REFERENCE.search(step.input_json), step.id
+
+
+def test_the_host_lookup_needs_the_name_both_tags_and_the_running_state_and_exactly_one_match():
+    for step in (by_id(deploy_steps())["deploy-find-host"], by_id(rollback_steps())["rollback-find-host"]):
+        find = " ".join(step.argv)
+        for required in ("Name=tag:Name,Values=rac-demo-staging-host", "Name=tag:Project,Values=rac-demo",
+                         "Name=tag:Environment,Values=staging", "Name=instance-state-name,Values=running"):
+            assert required in find, (step.id, required)
+        assert step.capture == "instance-id" and step.group == "prepare"
+        assert "length(Reservations[].Instances[])" in " ".join(step.verify[0].argv) and step.verify[0].expect == "1"
+
+
+def test_each_on_host_command_is_followed_by_a_wait_step_that_fails_fast_on_a_failed_command():
+    steps = deploy_steps() + rollback_steps()
+    sends = [s for s in steps if is_host_command(s)]
+    waits = {s.id: s for s in steps if s.poll and s.poll.argv[1:3] == ("ssm", "get-command-invocation")}
+    assert set(waits) == {f"wait-{send.id}" for send in sends}
+    for send in sends:
+        wait = waits[f"wait-{send.id}"]
+        assert "{{" + send.capture + "}}" in wait.poll.argv and "{{instance-id}}" in wait.poll.argv
+        assert wait.poll.expect == "Success" and wait.argv == ()
+        assert {"Failed", "Cancelled", "TimedOut"} <= set(wait.poll_fail)
+        assert 0 < wait.interval_seconds < wait.timeout_seconds
+        execution = int(json.loads(send.input_json)["Parameters"]["executionTimeout"][0])
+        assert wait.timeout_seconds > execution, f"{send.id}：等待要比命令本身的逾時久，否則命令還在跑就先放棄"
+    assert waits["wait-build-image"].timeout_seconds >= 25 * 60, "建置映像要給足時間"
+
+
+def test_the_snapshot_is_named_per_tag_tagged_skipped_when_it_exists_and_waited_for():
+    steps = by_id(deploy_steps())
+    snapshot = steps["snapshot-db"]
+    name = f"rac-demo-staging-db-pre-{TAG}"
+    assert plan.snapshot_name(target(), TAG) == name
+    assert argument_after(snapshot.argv, "--db-snapshot-identifier") == name
+    assert argument_after(snapshot.argv, "--db-instance-identifier") == "rac-demo-staging-db"
+    assert {("Project", "rac-demo"), ("Environment", "staging")} <= set(tags_in(json.loads(argument_after(snapshot.argv, "--tags"))))
+    assert snapshot.exists_argv and snapshot.exists_nonempty and snapshot.resource in plan.DEPLOY_RESOURCES
+    wait = steps["wait-snapshot-db"]
+    assert wait.poll.expect == "available" and "failed" in wait.poll_fail and name in wait.poll.argv
+    assert wait.timeout_seconds >= 20 * 60
+    assert plan.snapshot_name(target(), OTHER_TAG) != name
+
+
+def test_the_source_comes_from_the_commit_not_the_working_tree_and_is_uploaded_encrypted_to_the_transfer_bucket():
+    steps = by_id(deploy_steps())
+    archive = steps["archive-source"]
+    assert archive.argv[:3] == ("git", "archive", "--format=tar.gz") and archive.argv[-1] == TAG, "從提交取出，不是工作目錄：未提交的檔案與 .env 不會進來"
+    output = option_values(list(archive.argv), "--output")[0]
+    assert output == f"{plan.LOCAL_ARCHIVE_DIR}/source-{TAG}.tar.gz" and plan.LOCAL_ARCHIVE_DIR.startswith("build/")
+    assert "build/" in (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8-sig").splitlines()
+    upload = steps["upload-source"]
+    bucket = plan.names(target()).bucket
+    assert upload.argv[:3] == ("aws", "s3", "cp") and upload.argv[3] == output
+    assert upload.argv[4] == f"s3://{bucket}/source/{TAG}.tar.gz" and argument_after(upload.argv, "--sse") == "AES256"
+    assert upload.verify[0].expect == "AES256"
+
+
+def test_the_image_is_built_on_the_host_from_that_object_tagged_with_the_commit_and_older_images_are_kept():
+    text = script_text(by_id(deploy_steps())["build-image"])
+    bucket = plan.names(target()).bucket
+    assert f"s3://{bucket}/source/{TAG}.tar.gz" in text and f"--tag rac-app:{TAG}" in text
+    assert "--region ap-southeast-2" in text, "主機上的 aws 指令也明確指定雪梨區域"
+    assert "mktemp -d /var/tmp" in text and "trap" in text, "建置用的暫存目錄在持久磁碟（/tmp 是記憶體）並在結束時清除"
+    for forbidden in ("rmi", "prune", "docker rm ", "--no-cache"):
+        assert forbidden not in text, f"前一版映像要保留供回復：{forbidden}"
+
+
+def test_the_image_check_expects_a_non_root_user_and_no_env_or_git_directory_in_the_image():
+    steps = by_id(deploy_steps())
+    assert steps["wait-check-image"].verify[0].expect == f"{plan.IMAGE_USER_ID} clean"
+    text = script_text(steps["check-image"])
+    assert "--pull=never" in text and f"rac-app:{TAG}" in text and "-e /app/.env" in text and "-e /app/.git" in text
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8-sig")
+    assert f"--uid {plan.IMAGE_USER_ID}" in dockerfile and f"WORKDIR {plan.APP_DIR}\n" in dockerfile and "USER app" in dockerfile
+
+
+def test_migration_runs_in_a_one_off_container_with_the_pools_hardening_and_never_downgrades():
+    steps = by_id(deploy_steps())
+    migrate = script_lines(steps["migrate-db"])
+    assert migrate[2] == "/usr/local/sbin/rac-render-env-app" and f"RAC_IMAGE_TAG={TAG}" in migrate
+    run = next(line for line in migrate if line.startswith("/usr/bin/docker run"))
+    tokens = shlex.split(run)
+    pool_tokens = exec_tokens(plan.pool_unit(plan.POOLS[0]))
+    assert tokens[-3:] == ["alembic", "upgrade", "head"] and "rac-app:${RAC_IMAGE_TAG}" in tokens
+    assert option_values(tokens, "--env-file") == option_values(pool_tokens, "--env-file")
+    for shared in ("--rm", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pull=never"):
+        assert shared in tokens, shared
+    assert not any(t.startswith("--publish") for t in tokens)
+    assert "downgrade" not in whole_plan_text(deploy_steps()).lower()
+    head = script_text(steps["check-migration-head"])
+    assert steps["wait-check-migration-head"].verify[0].expect == "1"
+    assert "alembic current" in head and "(head)" in head
+    seed = script_text(steps["seed-scripts"])
+    assert "flask --app wsgi seed-scripts" in seed and "alembic" not in seed
+
+
+def test_switching_the_release_checks_the_image_first_keeps_the_previous_tag_and_restarts_only_the_two_pools():
+    lines = script_lines(by_id(deploy_steps())["switch-release"])
+    text = "\n".join(lines)
+    assert lines[0] == "set -eu"
+    inspect_at = next(i for i, line in enumerate(lines) if f"image inspect rac-app:{TAG}" in line)
+    write_at = next(i for i, line in enumerate(lines) if "release.env.new" in line and ">" in line)
+    assert inspect_at < write_at, "映像不存在時，在改任何檔案之前就要失敗"
+    assert "cp -p release.env release.previous.env" in text and f"grep -qx 'RAC_IMAGE_TAG={TAG}' release.env" in text
+    assert "mv -f release.env.new release.env" in text, "原子替換"
+    assert lines[-1] == "systemctl restart rac-cs.service rac-rpg.service"
+    assert "rac-caddy" not in text and "rac-job" not in text and "alembic" not in text
+    assert plan.PREVIOUS_RELEASE_ENV_PATH == "/etc/rac/release.previous.env" and plan.RELEASE_ENV_PATH == "/etc/rac/release.env"
+
+
+def test_the_pool_check_probes_both_loopback_ports_and_expects_the_new_image_in_both_containers():
+    steps = by_id(deploy_steps())
+    text = script_text(steps["check-pools"])
+    for pool in plan.POOLS:
+        assert str(pool.port) in text and f"inspect --format '{{{{.Config.Image}}}}' {pool.container}" in text
+    assert "http://127.0.0.1:$port/readyz" in text and "curl -fsS" in text and "exit 1" in text
+    assert steps["wait-check-pools"].verify[0].expect == f"rac-app:{TAG} rac-app:{TAG}"
+    assert "0.0.0.0" not in text
+
+
+def test_the_new_plans_use_only_aws_and_one_git_command_and_always_name_the_sydney_region():
+    steps = deploy_steps() + rollback_steps() + teardown_steps()
+    for step in steps:
+        for argv in commands(step):
+            if argv[0] == "git":
+                assert step.id == "archive-source"
+                continue
+            assert argv[0] == "aws" and "--region=ap-southeast-2" in argv, (step.id, argv[:3])
+    services = {argv[1] for step in steps for argv in commands(step) if argv[0] == "aws"}
+    assert services <= {"sts", "budgets", "sns", "ec2", "iam", "s3", "s3api", "ssm", "rds", "cloudwatch", "resourcegroupstaggingapi"}
+
+
+def test_step_ids_are_unique_across_the_build_deploy_rollback_and_teardown_plans():
+    ids = [s.id for s in (*full_plan(), *deploy_steps(), *rollback_steps(), *teardown_steps())]
+    assert len(ids) == len(set(ids))
+
+
+def test_every_placeholder_in_the_new_plans_is_captured_by_an_earlier_step():
+    for steps in (deploy_steps(), rollback_steps(), teardown_steps(True), teardown_steps(False), teardown_steps(None)):
+        assert_placeholders_resolve(steps)
+
+
+def test_nothing_in_the_new_plans_mentions_production_or_a_secret_value():
+    for steps in (deploy_steps(), rollback_steps(), teardown_steps()):
+        text = whole_plan_text(steps)
+        assert "production" not in text.lower()
+        assert not re.search(r"AKIA[0-9A-Z]{16}|--master-user-password|--password|--value\b|--secret-string|--with-decryption", text)
+
+
+@pytest.mark.parametrize("make", [deploy_steps, rollback_steps])
+def test_the_host_scripts_pass_a_bash_syntax_check(make):
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法做語法檢查（不算通過）")
+    scripts = host_scripts(make())
+    assert scripts
+    for step_id, text in scripts.items():
+        result = subprocess.run([bash, "-n"], input=(text + "\n").encode("ascii"), capture_output=True, timeout=60)
+        assert result.returncode == 0, (step_id, result.stderr.decode("utf-8", "replace"))
+
+
+# 回復
+
+
+def test_rollback_only_switches_the_image_tag_and_restarts_the_pools_without_touching_the_database():
+    steps = rollback_steps()
+    assert [s.id for s in steps] == ["rollback-find-host", "rollback-switch-release", "wait-rollback-switch-release",
+                                      "rollback-check-pools", "wait-rollback-check-pools"]
+    assert [s.group for s in steps] == ["prepare", "restart", "restart", "verify", "verify"]
+    text = whole_plan_text(steps).lower()
+    for forbidden in ("alembic", "downgrade", "migrate", "seed-scripts", "snapshot", "restore", "docker build", "s3 cp", "delete", "rds"):
+        assert forbidden not in text, forbidden
+    assert script_lines(by_id(steps)["rollback-switch-release"]) == plan._switch_release_lines(OTHER_TAG)
+    assert by_id(steps)["wait-rollback-check-pools"].verify[0].expect == f"rac-app:{OTHER_TAG} rac-app:{OTHER_TAG}"
+
+
+def test_rollback_to_an_image_that_is_not_on_the_host_fails_before_any_file_changes():
+    lines = script_lines(by_id(rollback_steps())["rollback-switch-release"])
+    assert lines[0] == "set -eu" and lines[1].endswith(f"image inspect rac-app:{OTHER_TAG} >/dev/null")
+    assert not any("release.env" in line for line in lines[:2])
+
+
+def test_deploy_and_rollback_switch_the_release_with_the_same_script():
+    assert script_lines(by_id(deploy_steps(OTHER_TAG))["switch-release"]) == script_lines(by_id(rollback_steps(OTHER_TAG))["rollback-switch-release"])
+
+
+# 拆除
+
+
+def test_teardown_requires_an_explicit_choice_about_the_final_snapshot_and_has_no_default():
+    parameter = inspect.signature(plan.teardown_plan).parameters["final_snapshot"]
+    assert parameter.default is inspect.Parameter.empty and parameter.kind is inspect.Parameter.KEYWORD_ONLY
+    with pytest.raises(TypeError):
+        plan.teardown_plan(target())
+
+
+def test_without_a_choice_the_rds_deletion_step_prints_no_command_and_no_other_step_deletes_the_database():
+    steps = teardown_steps(None)
+    rds = by_id(steps)["td-delete-rds"]
+    assert rds.blocked and rds.argv == () and rds.exists_argv is None and "最終快照" in rds.title
+    assert "delete-db-instance" not in whole_plan_text(steps)
+
+
+def test_choosing_to_keep_the_final_snapshot_names_it_by_date_and_never_skips_it():
+    steps = teardown_steps(True)
+    rds = by_id(steps)["td-delete-rds"]
+    assert argument_after(rds.argv, "--final-db-snapshot-identifier") == "rac-demo-staging-db-final-20261231"
+    assert "--skip-final-snapshot" not in rds.argv and argument_after(rds.argv, "--db-instance-identifier") == "rac-demo-staging-db"
+    assert not rds.blocked
+
+
+def test_choosing_not_to_keep_it_skips_the_final_snapshot_and_names_none():
+    argv = by_id(teardown_steps(False))["td-delete-rds"].argv
+    assert "--skip-final-snapshot" in argv and "--final-db-snapshot-identifier" not in argv
+
+
+@pytest.mark.parametrize("choice", [0, 1, "yes", "", "True", [], 2.0])
+def test_an_ambiguous_final_snapshot_choice_is_rejected(choice):
+    with pytest.raises(plan.PlanError, match="final_snapshot"):
+        plan.teardown_plan(target(), final_snapshot=choice)
+
+
+def test_keeping_a_final_snapshot_needs_a_date_so_the_name_is_unique():
+    with pytest.raises(plan.PlanError, match="日期"):
+        plan.teardown_plan(target(), final_snapshot=True)
+    assert plan.teardown_plan(target(), final_snapshot=False)           # 不保留時不需要日期
+
+
+def test_every_deleting_step_looks_the_resource_up_by_tag_first_and_is_skipped_when_nothing_matches():
+    steps = teardown_steps(False)
+    deleting = deleting_steps(steps)
+    # 告警、主機、Elastic IP、RDS、子網路群組、兩個安全群組、五個 IAM 步驟、儲存貯體、每個機密參數、SNS 主題、預算
+    assert len(deleting) == 3 + 1 + 1 + 2 + 5 + 1 + len(plan.parameter_names(target())) + 2
+    for step in deleting:
+        assert step.run_if_found and step.exists_nonempty and step.exists_argv, step.id
+        find = " ".join(step.exists_argv)
+        by_filter = "Name=tag:Project,Values=rac-demo" in find and "Name=tag:Environment,Values=staging" in find
+        by_query = "Key=='Project' && Value=='rac-demo'" in find and "Key=='Environment' && Value=='staging'" in find
+        assert by_filter or by_query, (step.id, find)
+        assert not any(verb in find for verb in ("delete", "terminate", "release", "remove", "detach", "create")), f"{step.id}：查詢必須是唯讀的"
+    assert {s.id for s in steps if s.run_if_found} == {s.id for s in deleting}, "只有刪除步驟走「查到才執行」"
+
+
+def test_the_ownership_query_needs_both_tags_to_match():
+    assert plan._owned("Tags") == "Tags[?Key=='Environment' && Value=='staging'] && Tags[?Key=='Project' && Value=='rac-demo'].Value"
+    assert plan._owned("Role.Tags").startswith("Role.Tags[?Key=='Environment'") and " && Role.Tags[?Key=='Project'" in plan._owned("Role.Tags")
+
+
+def test_teardown_deletes_only_names_from_the_plan_and_never_uses_wildcards_or_broad_commands():
+    steps = teardown_steps(True)
+    n = plan.names(target())
+    text = " ".join(command for step in steps for command in (" ".join(argv) for argv in commands(step)))      # 只掃指令，不掃步驟 id 與說明
+    for field_name, value in n.__dict__.items():
+        if field_name not in ("ssm_prefix", "eip", "host"):          # 主機與 Elastic IP 以標籤查詢，不靠名稱
+            assert value in text, f"拆除計畫沒有提到建立過的資源 {field_name}={value}"
+    for var in plan.parameter_names(target()):
+        assert plan.parameter_name(var) in text
+    for step in deleting_steps(steps):
+        assert "*" not in " ".join(step.argv), step.id
+    for forbidden in ("delete-vpc", "delete-subnet ", "delete-snapshot", "delete-db-snapshot", "delete-db-cluster", "delete-parameters",
+                      "delete-bucket", "delete-key-pair", "delete-launch-template", "deregister", "delete-security-group-rules"):
+        assert forbidden not in text, forbidden
+    assert next(s for s in steps if s.argv[1:3] == ("s3", "rb")).argv[3] == f"s3://{n.bucket}"
+
+
+def test_teardown_covers_every_resource_type_the_build_plan_creates():
+    built = {s.resource for s in full_plan() if s.resource}
+    operations = {(s.argv[1], s.argv[2]) for s in deleting_steps(teardown_steps(False))}
+    expected = {
+        "budget": ("budgets", "delete-budget"), "sns-topic": ("sns", "delete-topic"), "security-group": ("ec2", "delete-security-group"),
+        "iam-role": ("iam", "delete-role"), "instance-profile": ("iam", "delete-instance-profile"), "s3-bucket": ("s3", "rb"),
+        "ssm-parameter": ("ssm", "delete-parameter"), "db-subnet-group": ("rds", "delete-db-subnet-group"),
+        "rds-instance": ("rds", "delete-db-instance"), "ec2-instance": ("ec2", "terminate-instances"),
+        "elastic-ip": ("ec2", "release-address"), "cloudwatch-alarm": ("cloudwatch", "delete-alarms"),
+    }
+    assert set(expected) == built == set(plan.ALLOWED_RESOURCES)
+    assert set(expected.values()) <= operations
+
+
+def test_teardown_order_respects_dependencies_and_removes_the_budget_last():
+    steps = teardown_steps(True)
+    assert_in_order(steps, "td-delete-ec2-alarm", "td-terminate-ec2", "td-wait-ec2-terminated", "td-release-eip", "td-delete-rds",
+                    "td-wait-rds-deleted", "td-delete-db-subnet-group", "td-delete-db-sg", "td-delete-host-sg")
+    assert_in_order(steps, "td-wait-ec2-terminated", "td-delete-host-sg")
+    assert_in_order(steps, "td-wait-rds-deleted", "td-delete-db-sg")
+    assert_in_order(steps, "td-remove-role-from-profile", "td-delete-instance-profile", "td-delete-role-policy", "td-detach-ssm-policy", "td-delete-role")
+    assert_in_order(steps, "td-delete-ec2-alarm", "td-delete-sns-topic", "td-delete-budget", "td-list-remaining-snapshots", "td-wait-tagged-resources-gone")
+    assert [s.group for s in steps] == sorted((s.group for s in steps), key=plan.TEARDOWN_GROUPS.index)
+    last_delete = max(positions(steps, *(s.id for s in deleting_steps(steps))))
+    assert positions(steps, "td-delete-budget")[0] == last_delete, "預算最後刪，拆除期間費用告警仍有效"
+    parameter_ids = [s.id for s in steps if s.id.startswith("td-delete-parameter-")]
+    assert parameter_ids and len(parameter_ids) == len(plan.parameter_names(target()))
+
+
+def test_teardown_never_deletes_snapshots_but_lists_them_and_the_final_check_ignores_them():
+    steps = by_id(teardown_steps(True))
+    listing = steps["td-list-remaining-snapshots"]
+    assert listing.capture == "remaining-snapshots" and not listing.run_if_found and "--snapshot-type" in listing.argv
+    wait = steps["td-wait-tagged-resources-gone"]
+    assert wait.poll.expect == "0" and "':snapshot:'" in " ".join(wait.poll.argv) and wait.timeout_seconds and wait.interval_seconds
+    assert len(wait.verify) >= 6 and all(check.expect == "0" for check in wait.verify)
+
+
+def test_teardown_waits_for_the_host_and_the_database_to_disappear_with_a_timeout():
+    steps = by_id(teardown_steps(True))
+    for step_id, minimum in (("td-wait-ec2-terminated", 300), ("td-wait-rds-deleted", 25 * 60)):
+        step = steps[step_id]
+        assert step.argv == () and step.poll.expect == "0" and step.timeout_seconds >= minimum and 0 < step.interval_seconds < step.timeout_seconds

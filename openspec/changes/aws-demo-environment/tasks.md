@@ -9,8 +9,8 @@
 - [x] 1.3 資源步驟：預算與 SNS、安全群組（對外只開 80／443，沒有 22）、IAM 角色與執行個體設定檔（讀取權限限本專案的參數路徑）、S3 傳檔儲存貯體、RDS（不公開、加密、備份保留 7 天、只允許主機安全群組）、EC2（IMDSv2 強制、gp3 20 GB、無金鑰對）、Elastic IP、SSM 參數；測試：資源清單只含規格允許的類型、建立 RDS 與 EC2 的步驟在沒有 `--accept-cost` 時不輸出指令、預算步驟有兩個門檻且通知對象沒有預設值
 - [x] 1.4 主機檔案產生函式：Caddyfile（`/api/game/*` 分流到 RPG 池、`flush_interval -1`、客服池其餘）、`rac-cs`／`rac-rpg`／`rac-caddy` 單元（回送位址綁定、非 root、`--cap-drop=ALL`、`no-new-privileges`、`Restart=always`、日誌循環）、機密取出腳本（寫到記憶體檔案系統、`0600`）；測試：應用程式埠不綁 `0.0.0.0`、沒有 `TrustServerCertificate`、兩個池使用各自的 gunicorn 設定、Caddyfile 對串流路徑沒有 `encode`
 - [x] 1.5 排程產生：把 `SCHEDULED_COMMANDS` 的 cron 運算式轉成 `OnCalendar`（只支援實際用到的三種形式，其他形式丟錯，時區 Asia/Taipei，`Persistent=true`）；測試：與 `SCHEDULED_COMMANDS` 逐項一致、沒有手動類指令、不支援的運算式會失敗
-- [ ] 1.6 部署、回復與 `teardown` 步驟：快照 → 建置 → 遷移 → 重啟 → 驗證的順序；回復只重啟前一版標籤、沒有降級遷移；`teardown` 只選帶標籤的資源、RDS 刪除要求明確選擇最終快照（沒有預設）；測試：順序、回復內容、`teardown` 的清單範圍
-- [ ] 1.7 文件：在 `docs/營運與部署-operations.md` 新增「AWS 展示環境」章節的拓撲圖（Mermaid）、元件表與步驟總表（與 `Step` 清單一致）；執行 `tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
+- [x] 1.6 部署、回復與 `teardown` 步驟：快照 → 建置 → 遷移 → 重啟 → 驗證的順序；回復只重啟前一版標籤、沒有降級遷移；`teardown` 只選帶標籤的資源、RDS 刪除要求明確選擇最終快照（沒有預設）；測試：順序、回復內容、`teardown` 的清單範圍
+- [x] 1.7 文件：在 `docs/營運與部署-operations.md` 新增「AWS 展示環境」章節的拓撲圖（Mermaid）、元件表與步驟總表（與 `Step` 清單一致）；執行 `tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
 
 ## 2. 執行器（預設預覽、逐步確認）
 

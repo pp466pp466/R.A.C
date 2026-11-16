@@ -35,6 +35,7 @@ flowchart LR
     RC3A["RC-3a rpg-entry-ui<br/>選劇本與存檔清單、序章、聯繫、創角畫面（已封存 2026-11-11）"]:::done
     RC3["RC-3b rpg-game-ui<br/>/game 頁面、串流、記事簿面板（已封存 2026-11-12）"]:::done
     OP["onboarding-polish<br/>條款、使用守則、分步精靈（尚未排程）"]:::plan
+    AWS["RC-4 前半 aws-demo-environment<br/>AWS 雪梨展示環境（單機、RDS、兩池分流、可整批拆除）"]:::active
     RC4["RC-4 rpg-ops-loadtest<br/>串流壓測與監控"]:::plan
     RC5["RC-5 rpg-persona-library<br/>性格原型庫"]:::plan
     RC6["RC-6 external-data-gateway<br/>外部資料閘道（共用能力）"]:::plan
@@ -64,6 +65,8 @@ flowchart LR
     WL --> PH
     RC9 --> PP --> PH
     C4C --> RC6
+    C5B --> AWS
+    RC3 --> AWS --> RC4
 
     classDef done fill:#1f3d2b,stroke:#4c9a6a,color:#e2e4e9
     classDef active fill:#3d2f1f,stroke:#ff6b35,color:#e2e4e9
@@ -88,6 +91,7 @@ flowchart LR
 | staging-deployment（C-5b） | **已完成並封存**（2026-11-02，commit `311cf8b`：18／18 項；pytest 5664、Node 175、容器驗收 95／95；主規格新增 4 個：local-rehearsal、staging-verification、fake-model-server、development-tunnel，補充 app-configuration、load-testing） | 2026-11-02（`openspec validate --strict` 通過；本機容器預演兩輪、冒煙驗收對真實通道 9 項通過、告警信經 Brevo 確認送達，見 README「驗收紀錄（C-5b）」） | 依使用者決定（**沒有可計費的 Google Cloud 專案**）只做程式、文件與**本機單人預演，不花錢**：以 `APP_ENV=staging`、SQLite 檔案、經 ngrok 的 https 網址在本機預演，驗證 HSTS、`__Host-` cookie、CSRF、冒煙驗收腳本、Google 登入（沿用現有實作，**不使用 Firebase**；首次登入仍須年齡確認）與營運告警信的真實寄送（Brevo SMTP，寄給使用者自己）；新增 `GEMINI_BASE_URL`（production 拒絕）與假模型伺服器 `loadtest/fake_llm/`、階梯式加壓、開發用 `TRUST_PROXY_HEADERS`；WSL 的 Docker 能啟動時做條件式的本機容器預演（結果**不是容量依據**）。驗收紀錄分「本機預演已驗證」與「必須在雲端驗證（尚未做）」兩欄，關卡不因預演通過。使用者已提供 Brevo 的 SMTP 登入名稱與寄件者、ngrok 固定網域、預備環境專用的 OAuth 用戶端，並人工驗收了 Google 登入與告警信。`.env.staging` 與 `staging.vars` 已整理（被忽略）。**預演發現的後續項目**：Google 登入流程的調整（畫面只有 Google 與條款、生日登入後補填、回訪一鍵、保持登入，會牽動 AGENTS.md 第 10 節）尚未立案 |
 | google-first-login（①） | **已封存**（2026-11-03，實作 commit `35020b7`：25／26 項；封存時新增 4 個主規格 `account-lockout`、`admin-two-step-login`、`lockout-appeals`、`post-login-age-confirmation`，修改 10 個既有規格；pytest 6050、Node 197、容器驗收 109／109、`openspec validate --strict` 通過；第 8.3 項瀏覽器人工驗收封存時未做（使用者同意照樣封存），**同日封存後補做並逐項通過，26／26**，結果見 README） | 2026-11-03 | 玩家只用 Google 登入：登入頁只有 Google 按鈕與條款勾選框，生日與年齡區間改在登入後的 `/age` 補填（24 小時內未完成即刪除、未滿 13 歲立即抹除）；登入有效期改為閒置 30 天、每次使用就續期；帳號鎖定（5 次 Google 登入被拒或 10 次被訊息數上限擋下）與申訴頁、管理員後台解除；管理員每次先 Google 登入再輸入密碼，並可在密碼那一步寄重設信；登入後的預設頁面改為 `/cs`。**不移除**玩家端的密碼註冊與信箱驗證（② 才移除）。資料庫升到 `0010` |
 | remove-player-password-auth（②） | **已封存**（2026-11-03，24／24 項；封存時修改 17 個既有規格，合計新增 16、修改 27、移除 20 項需求；pytest 5585、Node 197、容器驗收 112／112、`openspec validate --specs` 48 項通過；第 8.5 項人工驗收使用者在場完成並逐項記入 README，沒做的項目也已列在「未驗證」） | 2026-11-03（實作 `174afb6`） | 移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`（淘汰：忽略並只警告一次）；玩家不收任何信；資料遷移 `0011` 清除玩家密碼、使曾有密碼者的登入狀態失效、把待驗證改為啟用，舊玩家以同信箱的 Google 登入即回到原帳號；客服提示詞改為 Google 登入；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie。**管理員的 Google 加密碼兩段式登入與重設密碼不變**。人工驗收中發現預演指令在未載入預演環境時會悄悄讀 `.env`、誤把開發用 SQL Server 升到 `0011`（無玩家資料，無損失），營運文件的預演步驟已加註 |
+| aws-demo-environment（RC-4 前半） | **實作中**（2026-11-16 立案 `2867733`；本機批次 A 至 C 完成後才會做雲端批次；尚未建立任何 AWS 資源） | — | 展示環境搬到 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100）：EC2 `t3.small` 跑客服池、RPG 串流池與 Caddy（`/api/game/*` 第一次真正分流），RDS SQL Server Express `db.t3.micro`，SSM Parameter Store 放機密，systemd 計時器排程，網域 `rac001.duckdns.org`；`scripts/aws_demo_plan.py`（純函式計畫）加 `scripts/aws_demo.py`（預設預覽、逐步確認、`--accept-cost`、`teardown`）。RC-4 因此拆成兩個 change：本 change 只建環境，`rpg-ops-loadtest` 以它為量測基礎；GCP 的 `cloud-staging-run` 擱置不動。展示環境是 `staging`，不是 production、也不是容量依據；缺口見營運文件「AWS 展示環境」 |
 | cloud-staging-run（C-5c） | 規劃完成，待實作（等前提） | 2026-11-02（規劃自原 C-5b 拆出） | **前提：使用者有可計費的 Google Cloud 專案**（已安裝並登入 `gcloud`、同意 Cloud SQL 的固定月費，N-9）。會產生雲端費用，每一步使用者在場確認（單步執行 `--only --yes`）：實際執行 C-5a 的腳本並把差異回寫、Cloud SQL（私有 IP、驗證伺服器憑證——失敗就停止，不退讓到 `TrustServerCertificate=yes`、備份與時間點還原、日誌保存 30 天）、平台告警六類各演練一次、隔離的壓測環境與 gunicorn 調整、Cloud SQL 複製的還原演練、`create-admin --password-env` |
 | production-launch（C-5d） | 規劃中 | — | production 資源與對外開放真實會員；需要使用者決定：自有網域與信件的 SPF／DKIM／DMARC、法務覆核、模型供應商方案決定（客服 Gemini、RPG OpenRouter）、入口層 IP 限流是否補做、成年驗證方式（成人模式；已決定為切換時勾選確認，待法務確認，見 report.md 的 U-28）；上線前要重新確認供應商條款與年齡規則。**「只留 Google 登入」尚未立案**（見專案記憶：管理員的密碼重新驗證有衝突） |
 | order-integration（C-6） | 規劃中 | — | 新增 `order_query`、`refund_request` 兩個意圖與對應實體 |

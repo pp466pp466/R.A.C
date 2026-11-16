@@ -217,6 +217,46 @@ def test_the_operations_doc_covers_every_environment_and_every_maintenance_comma
     assert [command for command in commands if command not in text] == [], "營運與部署-operations.md 沒有提到維運指令"
 
 
+def aws_demo_section() -> str:
+    text = read("營運與部署-operations.md")
+    start = text.index("## 8. AWS 展示環境")
+    return text[start:text.index("\n---\n", start)]
+
+
+def test_the_aws_demo_section_lists_exactly_the_steps_the_plan_module_produces_in_the_same_order():
+    """步驟總表與 scripts/aws_demo_plan.py 的 Step 清單逐組一致（多列、少列或順序不同都會失敗）。"""
+    from datetime import date
+
+    from tests.support.scripts import load_script
+
+    plan = load_script("aws_demo_plan")
+    target = plan.Target(account_id="123456789012", notify_emails=("ops@example.com",))
+    plans = {
+        "build_plan": plan.build_plan(target, accept_cost=True),
+        "deploy_plan": plan.deploy_plan(target, "abc1234"),
+        "rollback_plan": plan.rollback_plan(target, "abc1234"),
+        "teardown_plan": plan.teardown_plan(target, final_snapshot=True, today=date(2026, 12, 31)),
+    }
+    produced: dict[tuple[str, str], list[str]] = {}
+    for kind, steps in plans.items():
+        for step in steps:
+            produced.setdefault((kind, step.group), []).append(step.id)
+    documented: dict[tuple[str, str], list[str]] = {}
+    for line in aws_demo_section().splitlines():
+        cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
+        if len(cells) == 4 and cells[0].strip("`") in plans:
+            documented[(cells[0].strip("`"), cells[1])] = re.findall(r"`([^`]+)`", cells[2])
+    assert sum(len(ids) for ids in produced.values()) >= 80, "沒有掃到預期數量的步驟，檢查可能是空洞的"
+    assert documented == produced, "營運與部署-operations.md 第 8 節的步驟總表與計畫模組不一致"
+
+
+def test_the_aws_demo_section_states_the_limits_and_what_has_not_been_verified():
+    section = aws_demo_section()
+    for phrase in ("不是 production", "不含真實會員資料", "不是容量依據", "未達", "尚未對真實 AWS 執行", "沒有對真實的 AWS"):
+        assert phrase in section, f"AWS 展示環境一節沒有載明：{phrase}"
+    assert [block for block in mermaid_blocks(section) if block.lstrip().startswith("flowchart")], "AWS 展示環境一節沒有拓撲圖"
+
+
 # ---- 前端 --------------------------------------------------------------------------------------
 
 
