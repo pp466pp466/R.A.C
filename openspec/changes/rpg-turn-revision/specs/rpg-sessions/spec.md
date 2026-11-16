@@ -1,7 +1,7 @@
 ## ADDED Requirements
 
 ### Requirement: 回合的修訂欄位
-回合 SHALL 帶有修訂資料：`revision`（從 1 起，每次成功的修訂加 1）、`regen_count`（目前這份輸入已成功重新生成的次數，編輯後歸零）、修訂認領時間（無認領時為空）與回合前快照（見回合引擎）。這些欄位 SHALL 為可為空或有預設值（舊資料列與舊版程式照常運作）；舊資料列的 `revision` 視為 1、`regen_count` 視為 0、快照為空。修訂 SHALL NOT 改變回合的序號、輪數與 `client_msg_id`。
+回合 SHALL 帶有修訂資料：`revision`（從 1 起，每次成功的修訂加 1）、`regen_count`（目前這回合已成功修訂〔重新生成或編輯〕的次數，每次成功加 1、不歸零）、修訂認領時間（無認領時為空）與回合前快照（見回合引擎）。這些欄位 SHALL 為可為空或有預設值（舊資料列與舊版程式照常運作）；舊資料列的 `revision` 視為 1、`regen_count` 視為 0、快照為空。修訂 SHALL NOT 改變回合的序號、輪數與 `client_msg_id`。
 
 #### Scenario: 新回合的預設值
 - **WHEN** 新回合建立

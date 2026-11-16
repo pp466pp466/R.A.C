@@ -6,11 +6,12 @@
 > ③ 第 3 組（服務、串流與端點：共用狀態階段的重構、`begin_revision`、`RevisionRunner`、兩個端點、匯出與刪除連動）
 > ④ 第 4 組（前端：API、同步、`game-revision.js`、樣板與名稱約定）
 > ⑤ 第 5 組（政策頁、驗收腳本、瀏覽器實測、破壞驗證、全套測試與設計文件）
+> ⑥ 第 6 組（規則變更：編輯共用免費次數，2026-11-16 驗收實測回饋；先於 5.3 的重驗與 5.4 至 5.7 執行）
 >
-> 批與批之間的相依：① → ② → ③ → ④ → ⑤。每批只跑相關測試，全套測試留到 5.5。
+> 批與批之間的相依：① → ② → ③ → ④ → ⑤ 的 5.1、5.2（已完成）→ ⑥ → ⑤ 的 5.3 至 5.7。每批只跑相關測試，全套測試留到 5.5。
 > 測試約定：Node 測試以 `node --test "tests/js/**/*.test.js"`；pytest 用 `.venv\Scripts\python.exe -m pytest`，連真實 SQL Server `project_test` 的測試同時只能有一個 pytest 行程；背景跑全套時輸出存檔、不接 `tail`。Windows 主控台是 cp950，Node 與 pytest 的輸出導到 scratchpad 檔案再讀。
 > 約定：`app/` 內不得出現 Raw SQL（`tests/architecture/test_no_raw_sql.py`）；所有 Repository 方法簽名帶 `user_id`；日誌只記內部編號、列舉與整數，**絕不記錄理由、行動、劇情與快照**；Windows 下檔案換行 LF／CRLF 混用，改檔後用 Python 數 lone-CR 驗證；遷移 `.py` 為 UTF-8，不含方言專屬原生 SQL。
-> 不改 AGENTS.md（RA-17 已寫入）；管理員的回饋檢視頁不在此 change。
+> AGENTS.md 7.8 已於 2026-11-16 依驗收實測回饋修訂（`437a5f5`：重新生成與編輯共用每回合前 2 次免費、編輯不歸零；其餘 RA-17 的內容不變）；管理員的回饋檢視頁不在此 change。
 
 ## 1. 資料、設定與契約
 
@@ -49,8 +50,18 @@
 
 - [x] 5.1 `app/templates/legal/privacy.html`、`terms.html`、`app/services/legal.py`：依 `auth-pages` delta 補理由回饋與遊戲幣帳本的告知、重新生成與編輯的規則，`CURRENT_TERMS_VERSION` 提高一版。驗證：`tests/test_legal.py` 與 `tests/test_auth_pages*.py` 擴充通過；頁面為繁體中文、`lang="zh-Hant-TW"`、沒有外部資源。
 - [x] 5.2 驗收環境：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 補修訂情境（重新生成給出與原回應不同的文字、被擋一次／兩次、中斷、慢速、狀態呼叫失敗；以行動文字的關鍵字觸發，編輯可改關鍵字），並新增 HTTP 驗收腳本 `scripts/acceptance_rpg_revision.py`（比照 `acceptance_rpg_notebook.py`）打驗收環境的兩個端點，檢查事件序列、扣幣與帳本、免費次數、`revision`、失敗保留舊內容與退幣、並行 409、`last_turn`。驗證：假模型的單元測試通過；腳本對本機驗收環境全數通過（輸出記錄於 README）。
-- [ ] 5.3 瀏覽器實測（由使用者親自做，環境 `..\newprojet-acceptance\start-acceptance.ps1`，不加 `-Reset`，避開 5000 埠）：項目——按鈕只出現在最後一輪、免費次數遞減與第 3 次收費、理由 Modal 條件與說明、編輯確認 Modal 的提醒與餘額不足、串流中氣泡與成功替換、被擋／中斷後舊內容還原與通知、兩個分頁同時操作的 409 與畫面以後端為準、串流中重新整理、IndexedDB 沒有理由、手機寬度 Modal 不溢出、已完結存檔沒有按鈕、打字機與輸入法。驗證：使用者回報後把觀察結果寫入 README「驗收紀錄」；沒有回報的項目如實註明。
-- [ ] 5.4 正式破壞驗證（暫時腳本放 scratchpad、每次還原後位元比對，每項至少一個測試失敗；沒失敗的補測試再重跑）：①認領不檢查 `revision`；②`replace_turn` 不檢查 `attempt`；③付費鍵不含 `attempt`；④失敗路徑不退款；⑤失敗時仍使 `regen_count` 加 1；⑥成功路徑不清認領；⑦快照不在下一輪完成時清除／被擋的下一輪也清除；⑧狀態階段失敗仍替換；⑨理由寫進 `contents` 或 `system_instruction`；⑩日誌事件帶理由；⑪`in-flight` 白名單帶理由；⑫編輯沒有歸零 `regen_count`；⑬修訂觸發記事簿抓取；⑭匯出缺回饋；⑮前端失敗不還原舊內容。驗證：結果表記入 README。
+- [ ] 5.3 瀏覽器實測（由使用者親自做，環境 `..\newprojet-acceptance\start-acceptance.ps1`，不加 `-Reset`，避開 5000 埠）：項目——按鈕只出現在最後一輪、免費次數遞減與第 3 次收費、理由 Modal 條件與說明、編輯確認 Modal 的提醒與餘額不足、串流中氣泡與成功替換、被擋／中斷後舊內容還原與通知、兩個分頁同時操作的 409 與畫面以後端為準、串流中重新整理、IndexedDB 沒有理由、手機寬度 Modal 不溢出、已完結存檔沒有按鈕、打字機與輸入法。驗證：使用者回報後把觀察結果寫入 README「驗收紀錄」；沒有回報的項目如實註明。（2026-11-16 首輪實測：使用者回報除編輯費用規則外其餘沒有問題、沒有逐項列舉；編輯相關項目——與重新生成共用免費次數、免費次數內不扣幣、用完後收費與餘額不足、Modal 文案——待第 6 組完成後在 6.5 重驗，本項隨之勾選。）
+- [ ] 5.4 正式破壞驗證（暫時腳本放 scratchpad、每次還原後位元比對，每項至少一個測試失敗；沒失敗的補測試再重跑）：①認領不檢查 `revision`；②`replace_turn` 不檢查 `attempt`；③付費鍵不含 `attempt`；④失敗路徑不退款；⑤失敗時仍使 `regen_count` 加 1；⑥成功路徑不清認領；⑦快照不在下一輪完成時清除／被擋的下一輪也清除；⑧狀態階段失敗仍替換；⑨理由寫進 `contents` 或 `system_instruction`；⑩日誌事件帶理由；⑪`in-flight` 白名單帶理由；⑫編輯成功沒有使 `regen_count` 加 1（或使它歸零）、免費次數內的編輯仍預扣；⑬修訂觸發記事簿抓取；⑭匯出缺回饋；⑮前端失敗不還原舊內容。驗證：結果表記入 README。
 - [ ] 5.5 全套測試與驗證：全套 `pytest -q`（背景執行、輸出存檔、期間不改被測試讀取的檔案）、`node --test "tests/js/**/*.test.js"`、`openspec validate rpg-turn-revision --strict`。驗證：筆數與失敗數記入 README；若 README 寫死筆數，同步 `tests/test_readme.py` 的斷言。
-- [ ] 5.6 `docs/RPG.md`：7.8 標註已實作並補實作時的決定（認領欄位、快照、費用鍵、編輯不換 `client_msg_id`、重新生成時狀態呼叫失敗＝失敗、結局那一輪不可動、被擋與中斷不算最後一輪、斷線的免費次數規則）；7.15.2 與 7.15.7 的「2c 時再議」改為已決（鍵沿用 `attempt`）；7.16.4 註記普通回合的斷線仍待觀察；7.17.1 的 1、7.17.4 與 7.17.7 ⑤ 的 2c 待決事項改為已決並指向本 change；`docs/路線圖-roadmap.md` 的 RC-2c 狀態與日期；`README.md`（設計重點、檔案與測試表、驗收紀錄）。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py` 通過。
+- [ ] 5.6 `docs/RPG.md`：7.8 標註已實作並補實作時的決定（認領欄位、快照、費用鍵、編輯不換 `client_msg_id`、重新生成時狀態呼叫失敗＝失敗、結局那一輪不可動、被擋與中斷不算最後一輪、斷線的免費次數規則、編輯與重新生成共用免費次數〔2026-11-16 規範修訂〕）；7.15.2 與 7.15.7 的「2c 時再議」改為已決（鍵沿用 `attempt`）；7.16.4 註記普通回合的斷線仍待觀察；7.17.1 的 1、7.17.4 與 7.17.7 ⑤ 的 2c 待決事項改為已決並指向本 change；`docs/路線圖-roadmap.md` 的 RC-2c 狀態與日期；`README.md`（設計重點、檔案與測試表、驗收紀錄）。驗證：`tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py` 通過。
 - [ ] 5.7 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`：資料模型、系統架構、前端結構、營運與部署〔新設定鍵與日誌事件〕、帳號與安全〔政策頁〕、路線圖），讓圖、表與程式一致，並讓 `tests/test_design_docs.py` 通過。驗證：`tests/test_design_docs.py` 通過；各文件標頭的「對應 change」含 `rpg-turn-revision`。
+
+## 6. 規則變更：編輯共用免費次數（2026-11-16，驗收實測回饋；先於 5.3 的重驗與 5.4 至 5.7 執行）
+
+> 依據：AGENTS.md 7.8 已修訂（`437a5f5`）。已勾選的 1.x 至 5.2 是舊規則（編輯一律付費並歸零）下的實作；本組只改與費用、計次有關的部分，不重做其餘。重新生成的分類加理由流程維持原樣。
+
+- [ ] 6.1 後端：`GameService.begin_revision`：兩種操作共用 `regen_count < rpg_free_regenerations()` 判斷是否免費，免費者不預扣、不檢查餘額（編輯也是），付費者才預扣與檢查餘額，`RevisionPlan` 的是否免費與費用對編輯同樣依此決定；`SessionRepository.replace_turn`：成功的編輯與重新生成一律使 `regen_count` 加 1（刪除「編輯歸零」的分支與參數）；`RevisionRunner._done_data`：編輯的 `free_left` 改為 `free_left_of(limit, regen_count + 1)`；`_last_turn_view`：`regenerate_cost` 與 `edit_cost` 在還有免費次數時都是 0。驗證：依新規則**刻意修改**並說明的既有測試——`tests/test_game_service_revision.py`、`test_rpg_revision_runner.py`、`test_game_revision_endpoints.py`、`test_session_repository*.py` 的 `replace_turn` 案例、`test_rpg_revision_flow.py`（含 SQL Server `project_test`）；新增案例：重新生成與編輯混用的前兩次免費且帳本不變、第三次無論哪種操作都付費、免費次數內餘額為 0 仍可編輯、編輯成功後 `regen_count` 加 1 且之後的重新生成照樣付費（不歸零）、付費編輯失敗退回且不計次、日誌 `rpg.revision_started` 對編輯也依是否免費標示 `free`／`paid`。
+- [ ] 6.2 前端：`game-labels.js`、`game-state.js`、`game-revision.js`、`session.html`：「編輯」旁與「重新生成」旁同樣顯示「免費還剩 N 次」，用完後改顯示幣價；編輯 Modal 在免費次數內說明「這次編輯免費（免費還剩 N 次）」並移除「免費次數會歸零」的提醒，需付費時才提醒消耗遊戲幣並顯示餘額；`editInsufficient` 只在需付費且餘額不足時為真；`commitLocal` 與 `done.free_left`、`last_turn` 的更新對編輯同理。重新生成 Modal（分類＋理由）維持原樣。驗證：`tests/js/game-revision.test.js`、`game-labels.test.js`、`game-state.test.js`、`game-template.test.js`、`game.test.js` 依新規則刻意修改並新增案例（免費次數內餘額不足可送出編輯、需付費且餘額不足停用、編輯旁的文案隨免費次數變化、成功後免費次數遞減不歸零）；`tests/js/support/game-contract.js` 名稱約定與 `tests/test_game_pages.py` 的樣板守門同步。
+- [ ] 6.3 政策頁：`terms.html` 的「重新生成與編輯最後一輪」一條改為共用免費次數、編輯在免費次數內不扣幣、編輯不使次數歸零；`CURRENT_TERMS_VERSION` 提高為 `2026-11-16-draft-7`。驗證：`tests/test_legal_pages.py`（含版本釘選與條款的字句）、`tests/test_auth_pages.py`、`tests/test_legal.py` 通過；條文仍不寫死幣價與免費次數。
+- [ ] 6.4 驗收環境與腳本：`scripts/acceptance_rpg_revision.py` 的案例依新規則調整——journey（一輪 → 重新生成免費 → 編輯免費 → 再重新生成付費淨扣 30 → 再編輯付費淨扣 30，每次檢查 `free_left`、`revision`、帳本）、failures（付費編輯的失敗案例要先用完兩次免費）、rejections 與 coins（免費次數內餘額不足仍可編輯；付費且餘額不足 → 409 `insufficient_coins`）；`scripts/rpg_acceptance_harness.py` 不需修改（以關鍵字決定行為）。驗證：`tests/test_acceptance_rpg_scripts.py` 通過；腳本對本機驗收環境全數通過（結果記入 README「驗收紀錄」）。
+- [ ] 6.5 重驗：請使用者重啟驗收環境後，在瀏覽器重驗編輯相關項目（編輯在免費次數內不扣幣、與重新生成共用次數、免費用完後編輯收費與餘額不足、Modal 文案）。驗證：使用者回報後記入 README「驗收紀錄」；沒有回報的項目如實註明；5.3 隨之勾選。

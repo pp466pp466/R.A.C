@@ -35,7 +35,7 @@
 | 欄位 | 型別 | 意義 |
 |---|---|---|
 | `revision` | int，預設 1 | 每次成功修訂加 1；前端用它偵測並行與覆寫快取 |
-| `regen_count` | int，預設 0 | 目前這份輸入已成功重新生成幾次；成功的重新生成加 1，成功的編輯歸零 |
+| `regen_count` | int，預設 0 | 目前這回合已成功修訂（重新生成或編輯）幾次；每次成功加 1，不歸零（2026-11-16 修訂，見 D3） |
 | `revising_started_at` | datetime，可為空 | 認領時間；空或逾時＝沒有人在修訂 |
 | `state_before_json` | JSON，可為空 | 回合前快照（見 D4） |
 
@@ -61,7 +61,7 @@ rowcount 0 時再讀一次區分 `revision_conflict`（revision 已變）與 `tu
 | 端點 | 本文 | 開始前的檢查順序 |
 |---|---|---|
 | `…/turns/<client_msg_id>/regenerate/stream` | `expected_revision`、`category`、`reason` | 閘門 → 驗證本文 → 擁有者與回合（404）→ `revision`（409 `revision_conflict`）→ 可修訂（409 `not_revisable`）→ 全站預算（503 `system_busy`）→ 認領＋（付費者）預扣＋回饋列，同一個 SAVEPOINT |
-| `…/turns/<client_msg_id>/edit/stream` | `expected_revision`、`action` | 同上，驗證本文時改用 `clean_action`，並加規則層（422 `input_blocked`）與「與原行動不同」（422） |
+| `…/turns/<client_msg_id>/edit/stream` | `expected_revision`、`action` | 同上，驗證本文時改用 `clean_action`，並加規則層（422 `input_blocked`）與「與原行動不同」（422）；編輯在免費次數內不預扣、不要求餘額，需付費時才可能回 409 `insufficient_coins` |
 
 錯誤代碼只用既有加上兩個新的：`revision_conflict`、`not_revisable`（皆 409，繁體中文訊息；`not_revisable` 帶 `reason` 列舉）；其餘沿用 `turn_in_progress`、`insufficient_coins`、`system_busy`、`input_blocked`、validation。`insufficient_coins` 時整個 SAVEPOINT 復原，**不留認領、不留回饋列**。
 
@@ -70,11 +70,12 @@ rowcount 0 時再讀一次區分 `revision_conflict`（revision 已變）與 `tu
 
 ### D3 費用、免費次數與預扣鍵
 
-- **免費次數**＝設定表 `rpg.free_regenerations`（RPG 組，0 至 20，初始 2，遷移寫入，每次現讀，`flask set-rpg-setting` 修改並稽核）。認領時：`regen_count < 免費次數` 才免費。因為認領互斥，不會有兩個請求同時搶到最後一次免費。
-- **何時算用掉**：成功替換時 `regen_count + 1`（編輯則歸零）。失敗、被擋、中斷不動它。（決定 4：斷線時若文字已完整、收尾完成就算用掉，否則不算——與 `TurnRunner._on_close` 的規則一致。）
-- **付費**：重新生成超過免費次數、以及所有編輯，呼叫 `wallet.hold(key=turn:{存檔}:{client_msg_id}:{attempt}, model_key="standard")`，`attempt` 是認領後的新值。`attempt` 從不減少，所以：原回合的鍵（attempt 1）與修訂的鍵不同；退回過的修訂鍵不會被下一次撿回；逾時被接手的新認領用更新的鍵。付費與免費重新生成使用同一套鍵格式，免費者只是不呼叫 `hold`。
-- **結算／退回**：成功→`settle`；失敗、被擋、中斷、被接手→`refund`（已有的 `HoldAlreadyRefunded` 容忍規則照用）。沒有預扣的免費重新生成，失敗時只釋放認領。
+- **免費次數**＝設定表 `rpg.free_regenerations`（RPG 組，0 至 20，初始 2，遷移寫入，每次現讀，`flask set-rpg-setting` 修改並稽核）。認領時：`regen_count < 免費次數` 才免費，重新生成與編輯共用同一個次數。因為認領互斥，不會有兩個請求同時搶到最後一次免費。
+- **何時算用掉**：成功替換時 `regen_count + 1`（重新生成與編輯相同，不歸零）。失敗、被擋、中斷不動它。（決定 4：斷線時若文字已完整、收尾完成就算用掉，否則不算——與 `TurnRunner._on_close` 的規則一致。）
+- **付費**：超過免費次數的修訂（重新生成或編輯），呼叫 `wallet.hold(key=turn:{存檔}:{client_msg_id}:{attempt}, model_key="standard")`，`attempt` 是認領後的新值。`attempt` 從不減少，所以：原回合的鍵（attempt 1）與修訂的鍵不同；退回過的修訂鍵不會被下一次撿回；逾時被接手的新認領用更新的鍵。付費與免費的修訂使用同一套鍵格式，免費者只是不呼叫 `hold`。
+- **結算／退回**：成功→`settle`；失敗、被擋、中斷、被接手→`refund`（已有的 `HoldAlreadyRefunded` 容忍規則照用）。沒有預扣的免費修訂（重新生成或編輯），失敗時只釋放認領。
 - 帳本種類沿用既有的預扣（顯示為「冒險回合」）；新增專屬種類要改 W1 的錢包契約與記錄頁，不在此 change（見 Open Questions）。
+- **2026-11-16 修訂（驗收實測回饋，AGENTS.md 7.8 已於 `437a5f5` 修訂）**：編輯原本一律付費並使次數歸零，改為與重新生成共用每回合前 N 次免費，成功才計次，編輯不歸零。備選：①編輯永遠免費且不計次——拒絕：改一個字就能無限重抽；②共用但編輯仍歸零——拒絕：重新生成與編輯交替可以刷出無限免費。程式影響（tasks 第 6 組）：`begin_revision` 兩種操作用同一個免費判斷，免費者不預扣也不檢查餘額；`replace_turn` 不再有歸零分支；`done.free_left` 與 `last_turn.edit_cost` 對編輯同理；前端 Modal 依是否免費改文案。
 
 ### D4 回合前快照與回滾：「先還原再套用」
 
@@ -98,7 +99,7 @@ rowcount 0 時再讀一次區分 `revision_conflict`（revision 已變）與 `tu
    - 狀態階段 `ok=False`（呼叫失敗、驗證失敗）＝修訂失敗（決定 3；AGENTS.md「通過審查與狀態驗證才替換」）。
    - 成功：單一短交易呼叫 `replace_turn`＋`wallet.settle`＋回饋列標 `applied`＋（提議結局時）`end_session`。
    - `GeneratorExit`：文字已完整（`_narration` 有值）則收尾，否則釋放認領並退款（與 `_on_close` 相同形狀）。
-3. `replace_turn(user_id, public_id, client_msg_id, *, expected_revision, attempt, llm_raw_response, structured_result, user_action=None, regen_count_delta/reset, world_changes, expected_version, end_story)`：一個條件式 UPDATE `WHERE id AND turn_status='complete' AND revision=:expected AND attempt=:attempt AND revising_started_at IS NOT NULL`，`SET revision=revision+1, revising_started_at=NULL, llm_raw_response=…, structured_result=…`；rowcount≠1 拋出 `InvalidTurnTransitionError`（→ `turn_superseded`）。世界狀態用既有 `update_world_state`（版本比對失敗 → 整個交易復原，由 Runner 轉為修訂失敗）。
+3. `replace_turn(user_id, public_id, client_msg_id, *, expected_revision, attempt, llm_raw_response, structured_result, user_action=None, regen_count_delta（重新生成與編輯成功都加 1，不歸零）, world_changes, expected_version, end_story)`：一個條件式 UPDATE `WHERE id AND turn_status='complete' AND revision=:expected AND attempt=:attempt AND revising_started_at IS NOT NULL`，`SET revision=revision+1, revising_started_at=NULL, llm_raw_response=…, structured_result=…`；rowcount≠1 拋出 `InvalidTurnTransitionError`（→ `turn_superseded`）。世界狀態用既有 `update_world_state`（版本比對失敗 → 整個交易復原，由 Runner 轉為修訂失敗）。
 
 - 備選：讓 `TurnRunner` 加一個 `mode`。拒絕：收尾與失敗路徑的分支會讓一個本來單純的類別變成兩套邏輯交錯，且回合的既有測試很難證明沒被影響。
 
@@ -121,7 +122,7 @@ rowcount 0 時再讀一次區分 `revision_conflict`（revision 已變）與 `tu
 ### D8 玩家端的資料：`revision` 與 `last_turn`
 
 - `turn_view` 加 `revision`；`done` 事件加 `revision` 與 `free_left`（見 spec）；重送事件同步。
-- `session_snapshot` 加 `last_turn`（見 `rpg-sessions` delta）：`revisable` 與原因由與 D1 相同的函式計算，避免畫面與端點判斷不一致。幣價取自 `RuntimeLimits`（現讀）。這讓前端不必自己推論「哪一輪是最後一輪、免費還剩幾次」。
+- `session_snapshot` 加 `last_turn`（見 `rpg-sessions` delta）：`revisable` 與原因由與 D1 相同的函式計算，避免畫面與端點判斷不一致。幣價取自 `RuntimeLimits`（現讀）；`regenerate_cost` 與 `edit_cost` 在還有免費次數時都是 0，用完後都是一輪的幣價。這讓前端不必自己推論「哪一輪是最後一輪、免費還剩幾次」。
 - 初始狀態（頁面控制器）加 `revision_limits: {reason_min: 5, reason_max: 50, categories: […]}`，前端不寫死數字。
 
 ### D9 前端
@@ -142,7 +143,7 @@ rowcount 0 時再讀一次區分 `revision_conflict`（revision 已變）與 `tu
 
 ## Risks / Trade-offs
 
-- **重新生成可被當成「抽卡」** → 前兩次免費、之後收費、理由必填且保存供營運檢視；`rpg.free_regenerations` 現讀可即時調整；中斷的普通回合仍可免費重來，列為觀察項（7.16.4），不在此處處理。
+- **重新生成可被當成「抽卡」** → 前兩次（重新生成與編輯合計）免費、之後收費、重新生成的理由必填且保存供營運檢視；`rpg.free_regenerations` 現讀可即時調整；中斷的普通回合仍可免費重來，列為觀察項（7.16.4），不在此處處理。
 - **快照讓每個新回合多寫一份世界狀態 JSON**（寫入量增加、最多保留一份）→ 世界狀態本來就有大小上限；下一輪完成即清除；若 RC-4 的負載測試顯示壓力，快照可改存壓縮或差異，介面不變。
 - **認領後 worker 死掉**→ 認領逾時（與預扣相同）後可被接手，舊預扣由逾時規則退回；回饋列在接手時標 `failed`。逾時前玩家看到「處理中」，最長約 3 分鐘。
 - **重構 `_state_phase` 可能改變普通回合的行為** → 搬移前後以既有的 `rpg_turn_runner` 測試與日誌掃描逐項比對；搬移單獨成為一個任務與一個驗證點。
