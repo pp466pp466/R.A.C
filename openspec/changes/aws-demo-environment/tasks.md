@@ -11,13 +11,14 @@
 - [x] 1.5 排程產生：把 `SCHEDULED_COMMANDS` 的 cron 運算式轉成 `OnCalendar`（只支援實際用到的三種形式，其他形式丟錯，時區 Asia/Taipei，`Persistent=true`）；測試：與 `SCHEDULED_COMMANDS` 逐項一致、沒有手動類指令、不支援的運算式會失敗
 - [x] 1.6 部署、回復與 `teardown` 步驟：快照 → 建置 → 遷移 → 重啟 → 驗證的順序；回復只重啟前一版標籤、沒有降級遷移；`teardown` 只選帶標籤的資源、RDS 刪除要求明確選擇最終快照（沒有預設）；測試：順序、回復內容、`teardown` 的清單範圍
 - [x] 1.7 文件：在 `docs/營運與部署-operations.md` 新增「AWS 展示環境」章節的拓撲圖（Mermaid）、元件表與步驟總表（與 `Step` 清單一致）；執行 `tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
+- [ ] 1.8 `teardown_plan` 的快照處理（design D14）：新增參數 `delete_snapshots`（`None`＝尚未決定，`td-delete-snapshots` 是沒有指令的 `blocked` 佔位；元組＝要刪的部署前快照名單，產生 `td-delete-snapshot-<名稱>` 步驟，排在 `td-wait-rds-deleted` 之後，每步先以標籤查詢把關）；名稱必須是 `<資料庫>-pre-<提交短碼>`，最終快照與其他名稱丟 `PlanError`；`snapshot_name()` 與列出快照的唯讀步驟（`td-list-remaining-snapshots` 沿用，改為也供執行器取得名單）；測試：未決定時沒有刪快照指令、被指定保留的不在名單、最終快照與別的資料庫的快照被拒、保留最終快照時也能刪部署前快照、每個刪除都先以標籤查詢、既有的拆除測試仍通過；營運文件第 8 節（規則與步驟總表）同步；`tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
 
 ## 2. 執行器（預設預覽、逐步確認）
 
 - [ ] 2.1 新增 `scripts/aws_demo.py`：預設只預覽、`--execute` 逐步確認、`--only STEP --yes` 單步、`--accept-cost`、`--region` 守門；呼叫一律以引數清單，runner 可注入；`tests/test_aws_demo_script.py` 以假 runner 驗證：預設沒有呼叫、拒絕即停止、單步只執行一步、輸出與引數沒有機密值
 - [ ] 2.2 機密寫入：值來自 `--secrets-file`（本機被忽略的檔案）或隨機產生（`SECRET_KEY`、資料庫密碼），經暫存檔（權限限本人、用後刪除）傳給 `aws ssm put-parameter`；`DATABASE_URL` 由腳本以 URL 編碼組成；測試：值不出現在引數、輸出與例外訊息，暫存檔一定被刪除（含失敗時）
 - [ ] 2.3 輪詢等待（RDS、快照、SSM 命令）有上限與逾時訊息；DuckDNS 更新用標準函式庫呼叫、權杖來自環境變數、任何輸出與例外都不含權杖或含權杖的網址；測試覆蓋逾時與權杖不外洩
-- [ ] 2.4 `teardown` 執行：只刪帶標籤的資源、逐步確認；測試以假 runner 驗證不會刪到未標籤的資源
+- [ ] 2.4 `teardown` 執行：只刪帶標籤的資源、逐步確認；執行器先唯讀列出部署前快照（D14），要求使用者明確回覆要保留的例外（或「沒有例外」），之後才以 `delete_snapshots` 重新產生計畫；沒有回覆就不輸出刪除快照的指令；測試以假 runner 驗證不會刪到未標籤的資源、被指定保留的快照與最終快照不被刪
 - [ ] 2.5 文件：營運文件補執行器的用法、步驟的人工確認點與 `--accept-cost` 說明；`tests/test_design_docs.py` 通過
 
 ## 3. 資料庫初始化腳本
