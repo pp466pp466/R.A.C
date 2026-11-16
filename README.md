@@ -1356,8 +1356,9 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | 工具 | 用途 |
 |---|---|
 | `python scripts/acceptance_rpg_turn.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …]` | HTTP 驗收（68 項）：對本機驗收環境走完一位新玩家的整段旅程（年齡確認與首登贈幣 → 開存檔 → 第 0 幕 → 正常、被擋、中斷、重送、客戶端斷線、結局、餘額不足與簽到 → 帳本一致 → 存檔隔離 → 日誌沒有劇情），逐項輸出「通過」「失敗」「未驗證」。**只接受本機位址**（localhost、127.0.0.1），腳本不含機密。結束代碼：沒有失敗為 0、有失敗為 1、位址不是本機為 2 |
-| `scripts/rpg_acceptance_harness.py` | 驗收用的測試替身：假的 RPG 模型（OpenAI 相容，串流、狀態呼叫、記事簿抓取與 `GET /_status` 計數；動作文字的關鍵字 `測試被擋一次`、`測試被擋兩次`、`測試中斷`、`測試慢速`、`測試結局`，以及記事簿的 `測試記事簿超量`、`測試記事簿放棄`、`測試記事簿違規`、`測試記事簿慢速` 決定行為）與「建立全新玩家」小幫手（`GET /fresh/rpg[?coins=N]`，`coins` 是額外補給的付費幣、上限 5000）。本機驗收環境（專案之外的 `newprojet-acceptance`）與 `scripts/verify_container.py` 的容器驗收共用同一份 |
+| `scripts/rpg_acceptance_harness.py` | 驗收用的測試替身：假的 RPG 模型（OpenAI 相容，串流、狀態呼叫、記事簿抓取與 `GET /_status` 計數；動作文字的關鍵字 `測試被擋一次`、`測試被擋兩次`、`測試中斷`、`測試慢速`、`測試結局`，以及記事簿的 `測試記事簿超量`、`測試記事簿放棄`、`測試記事簿違規`、`測試記事簿慢速`、修訂（重新生成與編輯最後一輪）的 `測試重生`、`測試重生被擋一次`、`測試重生被擋兩次`、`測試重生中斷`、`測試重生慢速`、`測試重生狀態失敗`、`測試編輯`、`測試狀態失敗` 決定行為；`GET /_status` 另有 `marker_calls`，計算請求內容含「驗收理由標記」的次數，用來證明重新生成的理由沒有送進模型）與「建立全新玩家」小幫手（`GET /fresh/rpg[?coins=N]`，`coins` 是額外補給的付費幣、上限 5000）。本機驗收環境（專案之外的 `newprojet-acceptance`）與 `scripts/verify_container.py` 的容器驗收共用同一份 |
 | `python scripts/acceptance_rpg_notebook.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only basic,full,abandon,rules,eof] [--assert-eof]` | 記事簿的 HTTP 驗收（rpg-notebook 任務 5.1、5.2，開發伺服器加日誌 112 項，約 90 秒）：五個案例各用一位全新玩家——`basic`（11 輪：第 10 輪後仍空、`done` 先到而抓取 5 秒後才完成並在客戶端離開後仍完成、遊戲幣與帳本沒有異動，接著玩家編輯、版本衝突、太長、規則層命中、清空、未登入／缺 CSRF／他人 404）、`full`（31 輪：超量而已滿、原文再儲存被拒、已滿時不呼叫模型、刪到容量以內才能儲存、AI 恢復更新）、`abandon`（精簡重試後仍超過而放棄）、`rules`（規則層整次放棄）、`eof`（11 輪、慢速、第 11 輪不提早離開：量 `done` 到伺服器結束回應的間隔與結束當下的記事簿；`--assert-eof` 才把「間隔小於 1 秒、結束當下仍是空的」當通過條件，容器內的 gunicorn 驗收使用，開發伺服器預設只記錄數字）。提供 `--server-log` 時另驗 `rpg.notebook_*` 事件、模型呼叫的用途 `rpg_notebook` 與整段日誌沒有記事簿文字。同樣只接受本機位址、不含機密、結束代碼同上 |
+| `python scripts/acceptance_rpg_revision.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only journey,privacy,failures,conflicts,rejections,coins,notebook]` | 重新生成與編輯最後一輪的 HTTP 驗收（rpg-turn-revision 任務 5.2，開發伺服器加日誌 176 項，約 80 秒）：七個案例各用一位全新玩家——`journey`（一輪 → 兩次免費重新生成、帳本不動 → 第三次付費淨扣 30 → 編輯淨扣 30 且免費次數歸零 → 再重新生成又免費；每次替換後輪數與序號不變、`revision` 加 1、世界狀態是「還原再套用」）、`privacy`（理由帶標記文字，重新生成的所有模型呼叫都不含它；先以對照回合確認偵測有效）、`failures`（被擋一次自動重生、被擋兩次、上游中斷、狀態呼叫失敗、付費編輯被擋與狀態失敗後退回且再付費只淨扣一次、串流中途斷線釋放認領：都保留舊內容且不消耗免費次數）、`conflicts`（修訂進行中同一個 `expected_revision`、編輯與新行動都得到 409 `turn_in_progress`，完成後以舊的 `expected_revision` 得到 `revision_conflict`）、`rejections`（`not_last`、`ended`、404、驗證、規則層、未登入與缺 CSRF）、`coins`（餘額不足仍可免費重新生成，第三次付費得到 409 `insufficient_coins`）、`notebook`（第 11 輪修訂後記事簿與抓取呼叫不變）。提供 `--server-log` 時另驗 `rpg.revision_*` 事件的筆數、種類與失敗原因，以及整段日誌沒有理由、行動、劇情與被擋的句子。同樣只接受本機位址、不含機密、結束代碼同上 |
 | `python scripts/acceptance_rpg_real_model.py --base-url http://localhost:5011 [--server-log …] [--notebook]` | **真實模型驗證**（人工執行、不是自動測試）：對第二個應用程式行程（用 `.env` 的 OpenRouter 設定，資料庫用驗收環境的；要讀日誌就把該行程的輸出導向檔案）各跑一次第 0 幕與三個回合，輸出首字與整段時間、字數、狀態事件與日誌事件。`--notebook`（rpg-notebook 任務 5.3）改為走 11 輪（向小幫手補給 330 付費幣），第 11 輪結束後輪詢記事簿，輸出條數與各條字數（對照提示詞的 5 條、50 字）、耗時與全文，並統計日誌事件。只送劇本內建內容與寫死的示範行動，沒有個資 |
 
 ### 驗收紀錄（rpg-turn-engine，2026-11-10，已提交 `70e6786`，已封存）
@@ -1380,6 +1381,10 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | **正式模型與提示詞** | 只驗證了免費的 nemotron；時間、字數（偏長）與品質（重複段落、錯字）要在最終選定的模型上驗收 |
 | **多 worker 容量與全站同時串流上限** | 屬 RC-4（壓測）；每個進行中的串流多佔一條上游讀取執行緒，gunicorn 的 `workers`／`threads` 是初始值 |
 | **畫面** | 屬 RC-3（打字機、轉場文字、逾時與重送） |
+
+### 驗收紀錄（rpg-turn-revision，進行中；本節由任務 5.2 起，5.3 至 5.5 的結果續寫於此）
+
+**假模型與 HTTP 驗收（任務 5.2，2026-11-16）**：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 補了修訂情境（重新生成給出與原回應不同的文字與另一個世界狀態、被擋一次／兩次、中斷、慢速、狀態呼叫失敗；編輯的新行動以 `測試編輯` 辨認，既有的回合關鍵字可直接放進新行動），並新增 `scripts/acceptance_rpg_revision.py`。假模型與腳本的單元測試在 `tests/test_acceptance_rpg_scripts.py`（62 → 97 項通過，新增 35 項：關鍵字與呼叫次數的對照表、用**真正的**狀態提示詞確認假模型找得到「本回合行動」、關鍵字不與回合與記事簿的關鍵字互相包含、腳本與假模型的常數一致、假的修訂劇情通過真正的規則層、遠端位址一律拒絕）。腳本對一個**私有的本機驗收實例**（另開的埠 5110／5111／5112 與獨立的 SQLite，沒有動使用者的 5010 驗收環境；Werkzeug 開發伺服器加假 RPG 模型）執行並附 `--server-log`：**journey 40 項、其餘六個案例 136 項，共 176 項通過、0 失敗、0 未驗證**。**尚未對使用者的驗收環境（5010）執行**：該環境要重啟才會載入新的假模型。
 
 ## RPG 記事簿（rpg-notebook）
 

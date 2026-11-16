@@ -10,7 +10,21 @@
 含「狀態記錄員」是狀態呼叫；其餘（主角的模型層審查等）一律通過（子類可覆寫 `review`）。動作文字裡的關鍵字決定行為，約定見
 `acceptance_rpg_turn.py`（劇情與狀態）與 `acceptance_rpg_notebook.py`（記事簿）的說明：
 測試被擋一次、測試被擋兩次、測試中斷、測試慢速、測試結局；測試記事簿超量、測試記事簿放棄、測試記事簿違規、測試記事簿慢速。
-`GET /_status` 回傳呼叫計數（串流、狀態、記事簿抓取、上游被關閉的次數）。
+`GET /_status` 回傳呼叫計數（串流、狀態、記事簿抓取、上游被關閉的次數，以及請求內容含「驗收理由標記」的次數 marker_calls）。
+
+**修訂**（重新生成與編輯最後一輪，rpg-turn-revision）：同一段動作文字第幾次被串流呼叫由計數決定（原本那一輪是第 1 次，所以重新生成
+一定是第 2 次起；被擋後的自動重生也各算一次）。關鍵字只在行動帶「測試重生」或「測試編輯」時生效，其餘行動的行為與先前完全相同：
+
+    測試重生         第 2 次起的劇情是另一段文字（含「重新生成後」），狀態呼叫提議另一個地點與 2 個月（原本那一輪是山門與 1 個月）
+    測試重生被擋一次 第 2 次呼叫含必擋的句子，自動重生（第 3 次）正常
+    測試重生被擋兩次 第 2、3 次呼叫都含必擋的句子（最終被擋）；之後的重新生成正常
+    測試重生中斷     第 2 次呼叫送出一句就關閉連線；之後正常
+    測試重生慢速     第 2 次起每秒一句、共 12 句
+    測試重生狀態失敗 第 2 次起的狀態呼叫回 500（劇情本身正常，修訂因狀態階段失敗而保留舊內容）
+    測試編輯         編輯後的新行動：劇情是另一段文字（含「編輯後」），狀態呼叫提議第三個地點與 3 個月
+    測試狀態失敗     這段行動的所有狀態呼叫都回 500（編輯的新行動用；普通回合的狀態失敗只是不更新世界）
+
+編輯的新行動是全新的文字（第 1 次呼叫），所以既有的「測試被擋一次／被擋兩次／中斷／慢速」可以直接放進新行動；編輯可以改關鍵字。
 
 **記事簿抓取**看的是視窗內（抓取呼叫的資料區塊「最近的回合」）所有玩家行動，任何一輪帶關鍵字就生效：
 預設回 3 條各約 26 字的條目（開頭是「第 N 至 M 輪」，所以不同視窗的條目不會被去重）；`超量` 回 5 條各 440 字（合計 2204 字：超過免費會員的
@@ -31,6 +45,7 @@ import secrets
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
@@ -46,6 +61,19 @@ OPENING_SENTENCES = ("晨霧之中，山門緩緩開啟。", "遠處傳來悠長
 SLOW_SENTENCES = tuple(f"第 {n} 段緩慢的描述，山路繼續向前延伸。" for n in range(1, 13))
 BAD_SENTENCE = "十歲的少女與他做愛。"
 
+# 修訂（重新生成與編輯最後一輪）：與 `acceptance_rpg_revision.py` 約定的關鍵字與數字
+KW_REGEN, KW_EDIT = "測試重生", "測試編輯"
+KW_REGEN_BLOCK_ONCE, KW_REGEN_BLOCK_TWICE = "測試重生被擋一次", "測試重生被擋兩次"
+KW_REGEN_CUT, KW_REGEN_SLOW, KW_REGEN_STATE_FAIL = "測試重生中斷", "測試重生慢速", "測試重生狀態失敗"
+KW_STATE_FAIL = "測試狀態失敗"
+REGEN_SENTENCES = ("重新生成後，晨霧散去，山門前換了一番景象。", "守門的弟子換了一個人，向你抱拳行禮。", "你轉身朝後山的小徑走去。")
+EDIT_SENTENCES = ("編輯後的行動讓故事轉了個彎。", "你推開藏經閣沉重的木門。", "滿架的古籍散發著淡淡的墨香。")
+REGEN_SLOW_SENTENCES = tuple(f"重新生成後的第 {n} 段緩慢描述，山路繼續向前延伸。" for n in range(1, 13))
+REASON_MARKER = "驗收理由標記"             # 重新生成的理由放這段文字；任何送到模型的請求帶它，`/_status` 的 marker_calls 就加 1（理由不得進模型）
+STATE_NORMAL = {"elapsed_months": 1, "current_location": "青雲宗山門", "status_summary": "你剛踏入山門。"}
+STATE_REGEN = {"elapsed_months": 2, "current_location": "青雲宗後山", "status_summary": "你轉往後山。"}
+STATE_EDIT = {"elapsed_months": 3, "current_location": "青雲宗藏經閣", "status_summary": "你走進藏經閣。"}
+
 # 記事簿抓取（與 `acceptance_rpg_notebook.py` 約定的數字；字數對照免費會員：容量 2000、預備空間 500）
 NOTEBOOK_SYSTEM_MARKER = "記事簿記錄員"              # 抓取呼叫的系統指令（rpg_notebook_prompt）自稱的角色
 NOTEBOOK_CONDENSE_LABEL = "上次的條目"                # 只有「精簡重試」的使用者內容才有這個資料區塊
@@ -59,7 +87,7 @@ NOTEBOOK_FILLER = "山門前的石階共有九百九十九級，每一級都刻�
 FRESH_COINS_MAX = 5000
 
 RPG_LOCK = threading.Lock()
-RPG_STATS = {"stream_calls": 0, "state_calls": 0, "capture_calls": 0, "upstream_closed": 0}
+RPG_STATS = {"stream_calls": 0, "state_calls": 0, "capture_calls": 0, "upstream_closed": 0, "marker_calls": 0}
 RPG_ATTEMPTS: dict[str, int] = {}
 
 
@@ -95,6 +123,9 @@ class FakeRpgModel(BaseHTTPRequestHandler):
         except ValueError:
             return self._send(400, {"error": {"message": "bad json"}})
         messages = body.get("messages", [])
+        if REASON_MARKER in json.dumps(body, ensure_ascii=False):
+            with RPG_LOCK:
+                RPG_STATS["marker_calls"] = RPG_STATS.get("marker_calls", 0) + 1       # 單元測試的夾具可能少這個鍵
         text = "\n".join(m.get("content", "") for m in messages if m.get("role") == "user" and isinstance(m.get("content"), str))
         system = messages[0].get("content", "") if messages and isinstance(messages[0].get("content"), str) else ""
         if body.get("stream") is True:
@@ -128,16 +159,19 @@ class FakeRpgModel(BaseHTTPRequestHandler):
             if action is not None:
                 RPG_ATTEMPTS[action] = RPG_ATTEMPTS.get(action, 0) + 1
             attempt = RPG_ATTEMPTS.get(action, 1) if action is not None else 1
-        sentences: list[str] = list(OPENING_SENTENCES if action is None else STORY_SENTENCES)
+        revision = revision_behaviour(action, attempt)
+        sentences: list[str] = list(OPENING_SENTENCES if action is None else (revision.sentences or STORY_SENTENCES))
         pause, cut = 0.3, False
         if action is not None:
-            if "測試被擋兩次" in action or ("測試被擋一次" in action and attempt == 1):
+            if "測試被擋兩次" in action or ("測試被擋一次" in action and attempt == 1) or revision.blocked:
                 sentences.insert(1, BAD_SENTENCE)
             if "測試慢速" in action:
                 sentences, pause = list(SLOW_SENTENCES), 1.0
-            if "測試中斷" in action and attempt == 1:
+            if revision.slow:
+                sentences, pause = list(REGEN_SLOW_SENTENCES), 1.0
+            if ("測試中斷" in action and attempt == 1) or revision.cut:
                 sentences, cut = sentences[:1], True
-        label = "第 0 幕" if action is None else f"回合（第 {attempt} 次呼叫）"
+        label = "第 0 幕" if action is None else f"回合（第 {attempt} 次呼叫）" + (f"［{revision.kind}］" if revision.kind else "")
         print(f"[假模型] 串流 {label} -> {len(sentences)} 句" + ("，中途斷線" if cut else ""), flush=True)
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream; charset=utf-8")
@@ -158,13 +192,20 @@ class FakeRpgModel(BaseHTTPRequestHandler):
             print("[假模型] 串流 -> 應用程式已關閉連線", flush=True)
 
     def state_call(self, user_text: str) -> None:
+        action = state_action(user_text)
         with RPG_LOCK:
             RPG_STATS["state_calls"] += 1
+            attempt = RPG_ATTEMPTS.get(action, 1) if action is not None else 1      # 這個狀態呼叫對應的串流是第幾次呼叫
+        revision = revision_behaviour(action, attempt)
+        if revision.state_fail:
+            print(f"[假模型] 狀態呼叫 -> 失敗（500）［{revision.kind or '普通回合'}］", flush=True)
+            return self._send(500, {"error": {"message": "acceptance: state call failed"}})
         if "測試結局" in user_text:
             proposal: dict[str, Any] = {"elapsed_months": 2, "ending_proposed": True}
         else:
-            proposal = {"elapsed_months": 1, "current_location": "青雲宗山門", "status_summary": "你剛踏入山門。"}
-        print(f"[假模型] 狀態呼叫 -> {'結局' if proposal.get('ending_proposed') else '一般'}", flush=True)
+            proposal = dict({"regenerate": STATE_REGEN, "edit": STATE_EDIT}.get(revision.kind or "", STATE_NORMAL))
+        label = "結局" if proposal.get("ending_proposed") else (revision.kind or "一般")
+        print(f"[假模型] 狀態呼叫 -> {label}", flush=True)
         self._send(200, {
             "id": "acceptance", "object": "chat.completion", "model": "acceptance/fake-rpg",
             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps(proposal, ensure_ascii=False)}}],
@@ -185,6 +226,44 @@ class FakeRpgModel(BaseHTTPRequestHandler):
             "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": json.dumps({"entries": entries}, ensure_ascii=False)}}],
             "usage": {"prompt_tokens": 1200, "completion_tokens": 120},
         })
+
+
+@dataclass(frozen=True)
+class RevisionBehaviour:
+    """一段行動在「第 `attempt` 次呼叫」時的修訂行為。普通回合（行動沒有修訂關鍵字）全部是預設值：行為與沒有修訂功能時相同。"""
+
+    kind: str | None = None                    # "regenerate"、"edit" 或 None
+    sentences: tuple[str, ...] = ()            # 空：用預設的劇情句子
+    blocked: bool = False                      # 劇情含必擋的句子
+    cut: bool = False                          # 送出一句就關閉連線
+    slow: bool = False                         # 每秒一句
+    state_fail: bool = False                   # 狀態呼叫回 500
+
+
+def revision_behaviour(action: str | None, attempt: int) -> RevisionBehaviour:
+    """依行動文字的關鍵字與「這段行動第幾次被串流呼叫」決定修訂行為（純函式，不連網，單元測試直接呼叫）。
+
+    原本那一輪是第 1 次呼叫，所以重新生成一定是第 2 次起；被擋後的自動重生也各算一次。編輯的新行動是全新的文字（第 1 次呼叫），
+    因此編輯用 `測試編輯` 辨認，而不看次數。第 0 幕沒有行動，永遠是預設。"""
+    if action is None:
+        return RevisionBehaviour()
+    state_fail = KW_STATE_FAIL in action
+    if KW_EDIT in action:
+        return RevisionBehaviour(kind="edit", sentences=EDIT_SENTENCES, state_fail=state_fail)
+    if KW_REGEN not in action or attempt < 2:
+        return RevisionBehaviour(state_fail=state_fail)
+    return RevisionBehaviour(
+        kind="regenerate", sentences=REGEN_SENTENCES,
+        blocked=KW_REGEN_BLOCK_TWICE in action and attempt in (2, 3) or KW_REGEN_BLOCK_ONCE in action and attempt == 2,
+        cut=KW_REGEN_CUT in action and attempt == 2, slow=KW_REGEN_SLOW in action,
+        state_fail=state_fail or KW_REGEN_STATE_FAIL in action,
+    )
+
+
+def state_action(user_text: str) -> str | None:
+    """狀態呼叫的使用者內容裡「本回合行動」資料區塊的文字（沒有時為 None）。"""
+    match = re.search(r"【本回合行動】\n(.*?)\n【/本回合行動】", user_text, re.S)
+    return match.group(1) if match else None
 
 
 def capture_entries(user_text: str) -> tuple[list[str], bool]:

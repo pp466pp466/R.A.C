@@ -47,8 +47,8 @@
 
 ## 5. 政策頁、驗收與設計文件
 
-- [ ] 5.1 `app/templates/legal/privacy.html`、`terms.html`、`app/services/legal.py`：依 `auth-pages` delta 補理由回饋與遊戲幣帳本的告知、重新生成與編輯的規則，`CURRENT_TERMS_VERSION` 提高一版。驗證：`tests/test_legal.py` 與 `tests/test_auth_pages*.py` 擴充通過；頁面為繁體中文、`lang="zh-Hant-TW"`、沒有外部資源。
-- [ ] 5.2 驗收環境：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 補修訂情境（重新生成給出與原回應不同的文字、被擋一次／兩次、中斷、慢速、狀態呼叫失敗；以行動文字的關鍵字觸發，編輯可改關鍵字），並新增 HTTP 驗收腳本 `scripts/acceptance_rpg_revision.py`（比照 `acceptance_rpg_notebook.py`）打驗收環境的兩個端點，檢查事件序列、扣幣與帳本、免費次數、`revision`、失敗保留舊內容與退幣、並行 409、`last_turn`。驗證：假模型的單元測試通過；腳本對本機驗收環境全數通過（輸出記錄於 README）。
+- [x] 5.1 `app/templates/legal/privacy.html`、`terms.html`、`app/services/legal.py`：依 `auth-pages` delta 補理由回饋與遊戲幣帳本的告知、重新生成與編輯的規則，`CURRENT_TERMS_VERSION` 提高一版。驗證：`tests/test_legal.py` 與 `tests/test_auth_pages*.py` 擴充通過；頁面為繁體中文、`lang="zh-Hant-TW"`、沒有外部資源。
+- [x] 5.2 驗收環境：`scripts/rpg_acceptance_harness.py` 的 `FakeRpgModel` 補修訂情境（重新生成給出與原回應不同的文字、被擋一次／兩次、中斷、慢速、狀態呼叫失敗；以行動文字的關鍵字觸發，編輯可改關鍵字），並新增 HTTP 驗收腳本 `scripts/acceptance_rpg_revision.py`（比照 `acceptance_rpg_notebook.py`）打驗收環境的兩個端點，檢查事件序列、扣幣與帳本、免費次數、`revision`、失敗保留舊內容與退幣、並行 409、`last_turn`。驗證：假模型的單元測試通過；腳本對本機驗收環境全數通過（輸出記錄於 README）。
 - [ ] 5.3 瀏覽器實測（由使用者親自做，環境 `..\newprojet-acceptance\start-acceptance.ps1`，不加 `-Reset`，避開 5000 埠）：項目——按鈕只出現在最後一輪、免費次數遞減與第 3 次收費、理由 Modal 條件與說明、編輯確認 Modal 的提醒與餘額不足、串流中氣泡與成功替換、被擋／中斷後舊內容還原與通知、兩個分頁同時操作的 409 與畫面以後端為準、串流中重新整理、IndexedDB 沒有理由、手機寬度 Modal 不溢出、已完結存檔沒有按鈕、打字機與輸入法。驗證：使用者回報後把觀察結果寫入 README「驗收紀錄」；沒有回報的項目如實註明。
 - [ ] 5.4 正式破壞驗證（暫時腳本放 scratchpad、每次還原後位元比對，每項至少一個測試失敗；沒失敗的補測試再重跑）：①認領不檢查 `revision`；②`replace_turn` 不檢查 `attempt`；③付費鍵不含 `attempt`；④失敗路徑不退款；⑤失敗時仍使 `regen_count` 加 1；⑥成功路徑不清認領；⑦快照不在下一輪完成時清除／被擋的下一輪也清除；⑧狀態階段失敗仍替換；⑨理由寫進 `contents` 或 `system_instruction`；⑩日誌事件帶理由；⑪`in-flight` 白名單帶理由；⑫編輯沒有歸零 `regen_count`；⑬修訂觸發記事簿抓取；⑭匯出缺回饋；⑮前端失敗不還原舊內容。驗證：結果表記入 README。
 - [ ] 5.5 全套測試與驗證：全套 `pytest -q`（背景執行、輸出存檔、期間不改被測試讀取的檔案）、`node --test "tests/js/**/*.test.js"`、`openspec validate rpg-turn-revision --strict`。驗證：筆數與失敗數記入 README；若 README 寫死筆數，同步 `tests/test_readme.py` 的斷言。

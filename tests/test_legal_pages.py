@@ -102,7 +102,8 @@ def test_the_privacy_page_numbers_for_age_still_come_from_the_policy_not_the_tex
 
 
 def test_the_terms_version_names_the_new_draft_and_the_registration_records_it():
-    assert CURRENT_TERMS_VERSION == "2026-11-05-draft-5" and len(CURRENT_TERMS_VERSION) <= 40
+    # rpg-turn-revision 補了重新生成理由與遊戲幣帳本的告知，版本隨內容提高（只影響之後新註冊者記錄的版本）
+    assert CURRENT_TERMS_VERSION == "2026-11-16-draft-6" and len(CURRENT_TERMS_VERSION) <= 40
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
@@ -212,3 +213,71 @@ def test_the_age_numbers_in_the_new_terms_section_come_from_the_age_policy(clien
     html = client.get("/terms").get_data(as_text=True)
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
     assert "13 至 17 歲的使用者固定使用安全模式" in section and "我確定已滿 18 歲" in section        # 數字來自年齡政策
+
+
+# ---- 重新生成與編輯最後一輪（rpg-turn-revision）新增的揭露 ----------------------------------------------------
+
+def test_the_privacy_policy_says_the_regeneration_reason_goes_to_the_operators_never_to_the_ai_and_is_kept_with_the_save(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>1. 我們蒐集哪些資料</h2>", 1)[1].split("<h2>2.", 1)[0]
+    for needle in ("重新生成時填寫的分類與理由", "會提供營運團隊檢視", "不含您的帳號資料", "不會傳送給 AI", "不會出現在日誌", "請勿在理由中填寫真實的個人資料"):
+        assert needle in section, needle
+    table = retention_table(html)
+    (label,) = [key for key in table if key.startswith("重新生成時填寫的分類與理由")]
+    assert "與所屬存檔相同" in table[label] and "存檔刪除或帳號刪除時一併刪除" in table[label]
+
+
+def test_the_model_service_section_says_the_reason_is_not_sent_to_the_rpg_model(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>4. RPG 與劇本的資料會傳送至 RPG 模型服務</h2>", 1)[1].split("<h2>5.", 1)[0]
+    assert "分類與理由不會</strong>傳送至這個服務" in section and "不會成為 AI 的指令" in section
+
+
+def test_the_privacy_policy_says_the_wallet_and_ledger_stay_with_the_account_and_are_exported_and_deleted(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>1. 我們蒐集哪些資料</h2>", 1)[1].split("<h2>2.", 1)[0]
+    for needle in ("遊戲幣與帳本", "免費與付費兩種", "每一筆的種類、增減的金額與關聯的存檔", "隨帳號保存"):
+        assert needle in section, needle
+    table = retention_table(html)
+    (label,) = [key for key in table if key.startswith("遊戲幣餘額與帳本")]
+    assert "每筆的種類、金額與關聯的存檔" in label and "帳號存續期間" in table[label] and "刪除帳號時一併刪除" in table[label]
+    rights = html.split("<h2>6. 您的權利</h2>", 1)[1].split("<h2>7.", 1)[0]
+    for needle in ("遊戲幣的餘額與帳本", "重新生成時填寫的分類與理由", "遊戲幣錢包與帳本，無法復原", "含重新生成時填寫的理由"):
+        assert needle in rights, needle
+
+
+def test_the_privacy_policy_still_does_not_promise_payment_features(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    for forbidden in ("儲值", "訂閱", "付款紀錄", "退款"):
+        assert forbidden not in html, forbidden
+
+
+def test_the_terms_describe_the_regeneration_and_edit_rules(client):
+    html = client.get("/terms").get_data(as_text=True)
+    section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+    for needle in ("重新生成與編輯最後一輪", "最後一輪", "AI 的輸出不能直接修改", "下一輪開始後這一輪就不能再動", "前幾次重新生成免費",
+                   "每次消耗與一輪劇情相同的遊戲幣", "編輯同樣消耗一輪的遊戲幣", "免費重新生成次數歸零", "餘額不足時無法送出",
+                   "必須選擇分類並填寫", "理由會提供營運團隊檢視、不會送給 AI", "完整通過內容檢查", "原本的回應會保留", "不扣遊戲幣，也不消耗免費次數",
+                   "遊戲幣帳本會隨帳號一併刪除"):
+        assert needle in section, needle
+    assert "沒有成功產生回應" in section and "以遊戲內顯示為準" in section
+
+
+def test_the_reason_length_range_in_both_pages_comes_from_the_service_constants_not_from_the_text(client, monkeypatch):
+    from app.services.game_service import REASON_MAX, REASON_MIN
+
+    for path in ("/privacy", "/terms"):
+        assert f"{REASON_MIN} 至 {REASON_MAX} 字" in client.get(path).get_data(as_text=True), path
+    monkeypatch.setattr("app.controllers.auth_page_controller.REASON_MIN", 7)
+    monkeypatch.setattr("app.controllers.auth_page_controller.REASON_MAX", 63)
+    for path in ("/privacy", "/terms"):
+        html = client.get(path).get_data(as_text=True)
+        assert "7 至 63 字" in html and f"{REASON_MIN} 至 {REASON_MAX} 字" not in html, path
+
+
+def test_the_new_terms_text_hardcodes_no_coin_or_free_regeneration_numbers(client):
+    """幣價與免費次數存在設定表、可用指令調整；條款只講規則，數字以遊戲內顯示為準，所以不會與設定脫節。"""
+    html = client.get("/terms").get_data(as_text=True)
+    section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+    revision = section.split("<strong>遊戲幣</strong>", 1)[1].split("<strong>刪除帳號</strong>", 1)[0]
+    assert not re.search(r"\d+\s*(?:幣|枚)|前\s*\d+\s*次|第\s*\d+\s*次", revision)

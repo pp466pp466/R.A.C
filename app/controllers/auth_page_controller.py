@@ -21,6 +21,7 @@ from app.services.google_sign_in_service import (
     ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
 )
 from app.services.account_deletion_service import CONFIRM_TEXT
+from app.services.game_service import REASON_MAX, REASON_MIN
 from app.services.legal import CURRENT_TERMS_VERSION
 from app.services.registry import admin_password_reset_available, get_auth_service, get_google_sign_in_service
 
@@ -69,12 +70,14 @@ def _state(**extra) -> dict:
 
 
 def _legal_context() -> dict:
-    """條款與隱私權政策範本的共同變數：版本與年齡數字（範本內不得寫死年齡）。"""
+    """條款與隱私權政策範本的共同變數：版本、年齡數字與重新生成理由的字數範圍（範本內不得寫死這些數字）。"""
     policy = get_age_policy()
     return {
         "terms_version": CURRENT_TERMS_VERSION,
         "min_age": policy.min_register_age,
         "adult_age": policy.adult_age,
+        "reason_min": REASON_MIN,
+        "reason_max": REASON_MAX,
     }
 
 

@@ -1,5 +1,5 @@
-"""`scripts/acceptance_rpg_turn.py`、`scripts/acceptance_rpg_real_model.py` 與 `scripts/acceptance_rpg_notebook.py` 的自我檢查
-（rpg-turn-engine 任務 6.1、6.2；rpg-notebook 任務 5.1）。
+"""`scripts/acceptance_rpg_turn.py`、`scripts/acceptance_rpg_real_model.py`、`scripts/acceptance_rpg_notebook.py` 與
+`scripts/acceptance_rpg_revision.py` 的自我檢查（rpg-turn-engine 任務 6.1、6.2；rpg-notebook 任務 5.1；rpg-turn-revision 任務 5.2）。
 
 這幾個腳本是人工執行的驗收工具（對本機驗收環境），不在 pytest 裡執行完整旅程；這裡只驗證它們的安全邊界與事件解析：
 位址不是本機一律拒絕（腳本會建立玩家、花費遊戲幣，也會呼叫真實模型）、SSE 事件解析正確、`stop_after` 會中途關閉連線；
@@ -528,3 +528,181 @@ def test_the_notebook_observation_says_so_when_the_notebook_stays_empty(monkeypa
     monkeypatch.setattr(real_script, "NOTEBOOK_WAIT_SECONDS", 0)
     real_script.observe_notebook(_FakeApp([{"text": "", "length": 0}]), "save", real_script.time.monotonic())
     assert "仍是空的" in capsys.readouterr().out
+
+
+# ---- 修訂（重新生成與編輯最後一輪，rpg-turn-revision 任務 5.2）-----------------------------------------------------------
+
+revision_script = load("acceptance_rpg_revision")
+
+
+@pytest.mark.parametrize("args", [["--base-url", "http://example.com:5010"], ["--helper-url", "https://localhost:5001"], ["--model-url", "http://10.1.2.3:5002"]])
+def test_the_revision_script_refuses_to_run_against_a_remote_address_before_sending_anything(args, capsys):
+    assert revision_script.main(args) == 2
+    assert "拒絕執行" in capsys.readouterr().err
+
+
+def test_the_revision_script_refuses_an_unknown_case_name_before_sending_anything(capsys):
+    assert revision_script.main(["--only", "journey,nonsense"]) == 2
+    assert "nonsense" in capsys.readouterr().err
+
+
+REGEN = dict(kind="regenerate", sentences=harness.REGEN_SENTENCES)
+
+
+@pytest.mark.parametrize("action,attempt,expected", [
+    (None, 1, harness.RevisionBehaviour()),                                                   # 第 0 幕沒有行動
+    ("普通 驗收 a", 2, harness.RevisionBehaviour()),                                          # 沒有關鍵字：重送與自動重生的行為不變
+    ("測試重生 驗收 a", 1, harness.RevisionBehaviour()),                                      # 原本那一輪（第 1 次呼叫）是普通回合
+    ("測試重生 驗收 a", 2, harness.RevisionBehaviour(**REGEN)),
+    ("測試重生 驗收 a", 5, harness.RevisionBehaviour(**REGEN)),
+    ("測試重生被擋一次 驗收 a", 2, harness.RevisionBehaviour(**REGEN, blocked=True)),
+    ("測試重生被擋一次 驗收 a", 3, harness.RevisionBehaviour(**REGEN)),
+    ("測試重生被擋兩次 驗收 a", 2, harness.RevisionBehaviour(**REGEN, blocked=True)),
+    ("測試重生被擋兩次 驗收 a", 3, harness.RevisionBehaviour(**REGEN, blocked=True)),
+    ("測試重生被擋兩次 驗收 a", 4, harness.RevisionBehaviour(**REGEN)),                       # 最終被擋之後的下一次正常
+    ("測試重生中斷 驗收 a", 2, harness.RevisionBehaviour(**REGEN, cut=True)),
+    ("測試重生中斷 驗收 a", 3, harness.RevisionBehaviour(**REGEN)),
+    ("測試重生慢速 驗收 a", 1, harness.RevisionBehaviour()),
+    ("測試重生慢速 驗收 a", 2, harness.RevisionBehaviour(**REGEN, slow=True)),
+    ("測試重生慢速 驗收 a", 3, harness.RevisionBehaviour(**REGEN, slow=True)),
+    ("測試重生狀態失敗 驗收 a", 1, harness.RevisionBehaviour()),                              # 原本那一輪的狀態呼叫正常
+    ("測試重生狀態失敗 驗收 a", 2, harness.RevisionBehaviour(**REGEN, state_fail=True)),
+    ("測試編輯 驗收 a", 1, harness.RevisionBehaviour(kind="edit", sentences=harness.EDIT_SENTENCES)),
+    ("測試編輯 測試狀態失敗 驗收 a", 1, harness.RevisionBehaviour(kind="edit", sentences=harness.EDIT_SENTENCES, state_fail=True)),
+    ("測試狀態失敗 驗收 a", 1, harness.RevisionBehaviour(state_fail=True)),
+])
+def test_the_revision_behaviour_follows_the_keyword_and_the_call_number(action, attempt, expected):
+    assert harness.revision_behaviour(action, attempt) == expected
+
+
+def test_the_revision_keywords_cannot_be_mistaken_for_the_turn_or_notebook_keywords():
+    """關鍵字是子字串比對：修訂的關鍵字不得包含（或被包含於）回合與記事簿的關鍵字，否則一個行動會同時觸發兩種行為。
+    修訂家族內部的包含（`測試重生` 是 `測試重生被擋一次` 的一部分）是刻意的：細項都帶 `測試重生`。"""
+    other = ("測試被擋一次", "測試被擋兩次", "測試中斷", "測試慢速", "測試結局",
+             harness.KW_NOTEBOOK_OVER, harness.KW_NOTEBOOK_ABANDON, harness.KW_NOTEBOOK_VIOLATION, harness.KW_NOTEBOOK_SLOW)
+    revision = (harness.KW_REGEN, harness.KW_EDIT, harness.KW_REGEN_BLOCK_ONCE, harness.KW_REGEN_BLOCK_TWICE, harness.KW_REGEN_CUT,
+                harness.KW_REGEN_SLOW, harness.KW_REGEN_STATE_FAIL, harness.KW_STATE_FAIL)
+    for keyword in revision:
+        assert not any(keyword in turn or turn in keyword for turn in other), keyword
+    assert all(keyword.startswith(harness.KW_REGEN) for keyword in revision[2:7])
+    assert harness.KW_STATE_FAIL not in harness.KW_REGEN_STATE_FAIL and harness.KW_EDIT not in harness.KW_REGEN
+
+
+def test_the_revision_script_and_the_harness_agree_on_keywords_marks_and_world_numbers():
+    from app.models.rpg_session import REGEN_CATEGORIES
+
+    s = revision_script
+    assert (s.KW_REGEN, s.KW_EDIT, s.KW_REGEN_BLOCK_ONCE, s.KW_REGEN_BLOCK_TWICE, s.KW_REGEN_CUT, s.KW_REGEN_SLOW, s.KW_REGEN_STATE_FAIL, s.KW_STATE_FAIL) == (
+        harness.KW_REGEN, harness.KW_EDIT, harness.KW_REGEN_BLOCK_ONCE, harness.KW_REGEN_BLOCK_TWICE, harness.KW_REGEN_CUT, harness.KW_REGEN_SLOW,
+        harness.KW_REGEN_STATE_FAIL, harness.KW_STATE_FAIL)
+    assert s.KW_BLOCK_TWICE == "測試被擋兩次" and s.KW_ENDING == "測試結局" and s.REASON_MARKER == harness.REASON_MARKER
+    assert s.REGEN_MARK in harness.REGEN_SENTENCES[0] and s.EDIT_MARK in harness.EDIT_SENTENCES[0]
+    assert not any(s.REGEN_MARK in sentence or s.EDIT_MARK in sentence for sentence in harness.STORY_SENTENCES)        # 普通劇情不含修訂的標記
+    assert (s.NORMAL_WORLD, s.REGEN_WORLD, s.EDIT_WORLD) == tuple(
+        (state["elapsed_months"], state["current_location"]) for state in (harness.STATE_NORMAL, harness.STATE_REGEN, harness.STATE_EDIT))
+    assert len({s.NORMAL_WORLD, s.REGEN_WORLD, s.EDIT_WORLD}) == 3
+    assert s.CATEGORIES == REGEN_CATEGORIES and s.TURN_COST == 30
+
+
+def test_the_script_assumptions_match_the_application_defaults():
+    from app.services.runtime_limits import COIN_TURN_COST_PREFIX, LIMIT_SPECS, RPG_FREE_REGENERATIONS_KEY
+
+    assert revision_script.FREE_REGENERATIONS == LIMIT_SPECS[RPG_FREE_REGENERATIONS_KEY].default
+    assert revision_script.TURN_COST == LIMIT_SPECS[f"{COIN_TURN_COST_PREFIX}.standard"].default
+
+
+def test_the_revision_texts_pass_the_real_output_rule_layer():
+    """假的修訂劇情必須一定通過真正的規則層，否則驗收的「成功」案例會被自己擋下。"""
+    from app.services import rpg_output_rules
+
+    for sentences in (harness.REGEN_SENTENCES, harness.EDIT_SENTENCES, harness.REGEN_SLOW_SENTENCES, harness.STORY_SENTENCES):
+        previous = None
+        for sentence in sentences:
+            assert not rpg_output_rules.evaluate([sentence], previous, tier="standard", characters=()).blocked, sentence
+            previous = sentence
+    assert harness.REASON_MARKER not in "".join(harness.REGEN_SENTENCES + harness.EDIT_SENTENCES + harness.STORY_SENTENCES)
+
+
+def _state_request(action: str, *, system: str = "你是文字冒險遊戲的「狀態記錄員」。") -> dict:
+    """用應用程式**真正的**狀態呼叫內容（含「本回合行動」資料區塊）組出請求。"""
+    from app.services.rpg_context import build_state_context
+    from tests.support.protagonist import protagonist as make_protagonist
+    from tests.support.rpg_pure import MARKER, SCRIPT, world
+
+    _, contents = build_state_context(
+        script=SCRIPT, world=world(), protagonist=make_protagonist("旅人", 18), action=action, narration="劇情。", turn_number=1, ending_due=False, marker=MARKER,
+    )
+    text = "\n".join(part for content in contents for part in content.parts)
+    return {"model": "m", "stream": False, "messages": [{"role": "system", "content": system}, {"role": "user", "content": text}]}
+
+
+def _proposal(raw: bytes) -> dict:
+    return json.loads(json.loads(raw)["choices"][0]["message"]["content"])
+
+
+def test_the_fake_model_finds_the_action_in_the_real_state_prompt():
+    for action in ("普通 驗收 a", "測試重生 驗收 b", "多行\n行動 驗收 c"):
+        assert harness.state_action(_state_request(action)["messages"][1]["content"]) == action
+    assert harness.state_action("沒有資料區塊") is None
+
+
+def test_the_revision_state_call_proposes_another_world_only_after_the_regeneration_stream(fake_model):
+    action = "測試重生 驗收 s1"
+    for attempt, expected in ((1, harness.STATE_NORMAL), (2, harness.STATE_REGEN)):
+        harness.RPG_ATTEMPTS[action] = attempt                                                  # 串流呼叫已發生 attempt 次
+        assert _proposal(_post(fake_model, _state_request(action))) == expected
+    harness.RPG_ATTEMPTS["測試編輯 驗收 s2"] = 1
+    assert _proposal(_post(fake_model, _state_request("測試編輯 驗收 s2"))) == harness.STATE_EDIT
+    assert _proposal(_post(fake_model, _state_request("普通 驗收 s3"))) == harness.STATE_NORMAL    # 沒有關鍵字：與修訂功能出現之前相同
+    assert json.loads(_post_status(fake_model))["state_calls"] == 4
+
+
+def test_the_state_failure_keywords_answer_500_and_the_others_do_not(fake_model):
+    import http.client
+
+    def status_of(action: str) -> int:
+        connection = http.client.HTTPConnection(fake_model.split("//")[1].split(":")[0], int(fake_model.rsplit(":", 1)[1]), timeout=10)
+        connection.request("POST", "/v1/chat/completions", json.dumps(_state_request(action), ensure_ascii=False).encode("utf-8"), {"Content-Type": "application/json"})
+        try:
+            return connection.getresponse().status
+        finally:
+            connection.close()
+
+    harness.RPG_ATTEMPTS.update({"測試重生狀態失敗 驗收 f1": 2, "測試重生狀態失敗 驗收 f2": 1})
+    assert status_of("測試重生狀態失敗 驗收 f1") == 500          # 重新生成（第 2 次呼叫）的狀態呼叫失敗
+    assert status_of("測試重生狀態失敗 驗收 f2") == 200          # 原本那一輪的狀態呼叫正常
+    assert status_of("測試編輯 測試狀態失敗 驗收 f3") == 500
+    assert status_of("普通 驗收 f4") == 200
+
+
+def test_the_fake_model_streams_a_different_story_on_the_regeneration_call_and_leaves_ordinary_actions_alone(fake_model):
+    action = "測試重生 驗收 g1"
+    first, second = _texts(_post(fake_model, _action_request(action))), _texts(_post(fake_model, _action_request(action)))
+    assert first == ["甲。", "乙。"] and second == list(harness.REGEN_SENTENCES)
+    assert _texts(_post(fake_model, _action_request("測試編輯 驗收 g2"))) == list(harness.EDIT_SENTENCES)
+    plain = [_texts(_post(fake_model, _action_request("普通 驗收 g3"))) for _ in range(3)]
+    assert plain == [["甲。", "乙。"]] * 3                                                       # 重送與自動重生的普通行動不受影響
+
+
+def test_the_regeneration_block_cut_and_slow_cases_happen_on_the_documented_calls(fake_model):
+    once = [_texts(_post(fake_model, _action_request("測試重生被擋一次 驗收 h1"))) for _ in range(3)]
+    assert [harness.BAD_SENTENCE in texts for texts in once] == [False, True, False]            # 第 1 次是原本那一輪、第 2 次被擋、第 3 次（自動重生）正常
+    twice = [_texts(_post(fake_model, _action_request("測試重生被擋兩次 驗收 h2"))) for _ in range(4)]
+    assert [harness.BAD_SENTENCE in texts for texts in twice] == [False, True, True, False]
+    cut = [_post(fake_model, _action_request("測試重生中斷 驗收 h3")) for _ in range(3)]
+    assert [b"[DONE]" in raw for raw in cut] == [True, False, True]
+    slow = [_texts(_post(fake_model, _action_request("測試重生慢速 驗收 h4"))) for _ in range(3)]
+    assert [len(texts) for texts in slow] == [2, 12, 12] and all(text.startswith("重新生成後的第") for text in slow[1])
+
+
+def test_a_request_carrying_the_reason_marker_is_counted_and_others_are_not(fake_model):
+    _post(fake_model, _action_request("沒有標記 驗收 m1"))
+    assert json.loads(_post_status(fake_model)).get("marker_calls", 0) == 0
+    _post(fake_model, _action_request(f"{harness.REASON_MARKER} 驗收 m2"))
+    _post(fake_model, _action_request("我的理由", system=f"系統指令也算：{harness.REASON_MARKER}"))
+    assert json.loads(_post_status(fake_model))["marker_calls"] == 2
+
+
+def test_the_harness_status_reports_the_marker_counter():
+    assert harness.RPG_STATS.keys() >= {"stream_calls", "state_calls", "capture_calls", "upstream_closed", "marker_calls"}
+    assert isinstance(harness.REASON_MARKER, str) and len(harness.REASON_MARKER) >= 4

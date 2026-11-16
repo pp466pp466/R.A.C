@@ -178,9 +178,9 @@ class NotebookAcceptance:
         r.check(f"餘額為首登贈幣加補給（{SIGNUP_GRANT} + {coins}）", balance == SIGNUP_GRANT + coins, f"{balance}（驗收環境的小幫手是否支援 ?coins=）")
         return player
 
-    def start_save(self, player: Player) -> str | None:
+    def start_save(self, player: Player, which: str = "endless") -> str | None:
         r = self.r
-        version = player.versions["endless"]
+        version = player.versions[which]
         setup = player.client.call("GET", f"/api/sessions/setup/{version}")
         characters = setup.json.get("characters") or []
         if not r.check("創角資料可讀、有可聯繫的人物", setup.status == 200 and bool(characters), f"{setup.status}"):
