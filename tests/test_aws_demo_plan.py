@@ -5,10 +5,14 @@
 import inspect
 import json
 import re
+import shlex
+import shutil
+import subprocess
 from datetime import date
 
 import pytest
 
+from app import cli
 from app.config import PROJECT_ROOT
 from tests.support.scripts import load_script
 
@@ -596,3 +600,381 @@ def test_cost_estimate_fits_inside_the_credit_and_states_that_prices_change():
     assert "價格會變" in lines and "帳單頁" in lines and "2026-12-31" in lines
     for label, _ in plan.COST_ITEMS:
         assert label in lines
+
+
+# ---- 1.4 主機檔案：Caddyfile、rac-* 單元、機密取出腳本 ----------------------------------------------------
+
+
+def host_files(**overrides) -> dict:
+    return {f.path: f for f in plan.host_files(target(**overrides), PLAIN)}
+
+
+def exec_tokens(unit_text: str, key: str = "ExecStart") -> list[str]:
+    """單元檔裡某個指令行的引數（反斜線接續的行先合併）。"""
+    joined = unit_text.replace("\\\n", " ")
+    line = next(l for l in joined.splitlines() if l.startswith(key + "="))
+    return shlex.split(line[len(key) + 1:])
+
+
+def option_values(tokens: list[str], flag: str) -> list[str]:
+    return [t.split("=", 1)[1] for t in tokens if t.startswith(flag + "=")]
+
+
+def pool_units() -> dict:
+    return {pool.container: plan.pool_unit(pool) for pool in plan.POOLS}
+
+
+def app_container_units() -> dict:
+    """所有跑應用程式映像的單元：兩個池與每個排程工作的服務。"""
+    units = dict(pool_units())
+    units.update({name: text for name, text in plan.scheduled_units().items() if name.endswith(".service")})
+    return units
+
+
+def test_host_files_are_utf8_lf_without_bom_and_have_unique_absolute_paths():
+    files = plan.host_files(target(), PLAIN)
+    assert len({f.path for f in files}) == len(files)
+    for f in files:
+        assert f.path.startswith("/") and f.mode in ("0644", "0755"), f.path
+        assert "\r" not in f.content and f.content.endswith("\n") and not f.content.startswith("\ufeff"), f.path
+        f.content.encode("utf-8")           # 不得含無法編碼的字元（例如孤立代理字元）
+
+
+def test_host_files_list_the_caddyfile_env_scripts_and_every_unit():
+    files = host_files()
+    jobs = {f"/etc/systemd/system/rac-job-{c}.{kind}" for c in cli.SCHEDULED_COMMANDS for kind in ("service", "timer")}
+    assert set(files) == {
+        "/etc/rac/Caddyfile", "/etc/rac/plain.env",
+        "/usr/local/sbin/rac-render-env-app", "/usr/local/sbin/rac-render-env-bootstrap",
+        "/etc/systemd/system/rac-cs.service", "/etc/systemd/system/rac-rpg.service", "/etc/systemd/system/rac-caddy.service",
+    } | jobs
+    assert "/etc/rac/release.env" not in files, "版本標籤在部署時才寫入"
+    assert files["/usr/local/sbin/rac-render-env-app"].mode == "0755" and files["/etc/rac/Caddyfile"].mode == "0644"
+
+
+def test_host_directories_keep_certificates_on_a_private_persistent_path():
+    modes = dict(plan.HOST_DIRECTORIES)
+    assert modes["/var/lib/rac/caddy"] == "0700"
+    assert modes["/etc/rac"] == "0755"
+    assert not any(path.startswith("/run") or path.startswith("/tmp") for path in modes)
+
+
+def test_caddyfile_routes_game_paths_to_the_rpg_pool_and_the_rest_to_the_customer_service_pool():
+    text = plan.caddyfile(target())
+    assert re.search(r"^rac001\.duckdns\.org \{$", text, re.M)
+    game = re.search(r"@game path /api/game/\*\n\s+handle @game \{\n(.*?)\n    \}\n", text, re.S)
+    assert game, "RPG 路徑必須有自己的分流區塊"
+    assert re.findall(r"reverse_proxy (\S+)", game.group(1)) == ["127.0.0.1:8082"]
+    assert "flush_interval -1" in game.group(1)
+    rest = text.split("handle {", 1)[1]
+    assert re.findall(r"reverse_proxy (\S+)", rest) == ["127.0.0.1:8081"]
+    assert "flush_interval" not in rest, "只有串流的池關閉緩衝"
+    assert len(re.findall(r"reverse_proxy", text)) == 2
+
+
+def test_caddyfile_does_not_compress_buffer_or_time_out_the_stream_and_keeps_app_headers():
+    text = plan.caddyfile(target())
+    assert not re.search(r"\b(encode|timeouts?|read_timeout|write_timeout|response_header_timeout|transport)\b", text), text
+    assert not re.search(r"\bheader(_up|_down)?\b", text), "入口不得改寫或移除應用程式送出的 HSTS 與安全標頭"
+    assert not re.search(r"\b(tls internal|auto_https off|http_port|https_port)\b", text), "憑證自動簽發與標準連接埠不得被關閉"
+
+
+def test_caddyfile_uses_the_target_domain_and_a_malformed_domain_cannot_reach_it():
+    assert plan.caddyfile(target(domain="demo.example.org")).count("demo.example.org") == 1
+    for bad in ("rac001.duckdns.org\n", "rac001.duckdns.org {\n}", "rac001.duckdns.org\r\n", "a b.example.com", "{evil}.example.com"):
+        with pytest.raises(plan.PlanError):
+            target(domain=bad)
+
+
+def test_resource_names_and_account_ids_reject_a_trailing_newline():
+    with pytest.raises(plan.PlanError):
+        plan.assert_name("rac-name\n")
+    with pytest.raises(plan.PlanError, match="account_id"):
+        target(account_id=ACCOUNT + "\n")
+
+
+def test_each_pool_runs_its_own_gunicorn_config_in_its_own_container():
+    units = pool_units()
+    dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8-sig")
+    for container, config, other in (("rac-cs", "gunicorn.conf.py", "gunicorn.rpg.conf.py"), ("rac-rpg", "gunicorn.rpg.conf.py", "gunicorn.conf.py")):
+        tokens = exec_tokens(units[container])
+        assert tokens[-4:] == ["gunicorn", "--config", config, "wsgi:app"], container
+        assert other not in units[container].replace(config, ""), "兩個池不得共用設定"
+        assert (PROJECT_ROOT / config).is_file() and config in dockerfile, f"{config} 必須存在且被映像帶入"
+        assert option_values(tokens, "--name") == [container]
+
+
+def test_application_ports_are_published_on_loopback_only_and_match_the_proxy_targets():
+    published = []
+    for container, text in pool_units().items():
+        tokens = exec_tokens(text)
+        mappings = option_values(tokens, "--publish")
+        assert len(mappings) == 1 and "-p" not in tokens and "--publish-all" not in tokens and "-P" not in tokens, container
+        host, host_port, container_port = mappings[0].split(":")
+        assert host == "127.0.0.1", f"{container}：應用程式埠只能綁回送位址"
+        assert container_port == "8080", "映像的 PORT 預設是 8080"
+        published.append(host_port)
+        assert "0.0.0.0" not in text
+    assert sorted(published) == ["8081", "8082"] and len(set(published)) == 2
+    assert sorted(re.findall(r"reverse_proxy 127\.0\.0\.1:(\d+)", plan.caddyfile(target()))) == sorted(published)
+    for text in app_container_units().values():
+        assert "--network=host" not in text and "--network host" not in text
+
+
+def test_app_containers_are_hardened_run_as_the_image_user_and_keep_secrets_off_the_command_line():
+    for name, text in app_container_units().items():
+        tokens = exec_tokens(text)
+        assert tokens[:3] == ["/usr/bin/docker", "run", "--rm"], name
+        for required in ("--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pull=never"):
+            assert required in tokens, (name, required)
+        # 沒有覆寫使用者（沿用映像的非 root）、沒有額外權限或命名空間共用、沒有經 -e／--env 把值放進命令列
+        assert not any(t.startswith(("--user", "-u", "--privileged", "--cap-add", "--env=", "--env", "-e", "--pid", "--ipc", "--uts",
+                                     "--security-opt=seccomp", "--security-opt=apparmor", "--device", "--volume", "-v"))
+                       for t in tokens if t != "--env-file" and not t.startswith("--env-file=")), (name, tokens)
+        assert option_values(tokens, "--env-file") == ["/etc/rac/plain.env", "/run/rac/app.env"], "機密只經記憶體檔案系統上的環境檔"
+        assert option_values(tokens, "--log-opt") == ["max-size=10m", "max-file=3"] and option_values(tokens, "--log-driver") == ["json-file"]
+        assert any(t.startswith("--tmpfs=/dev/shm:") for t in tokens), "gunicorn 的 worker_tmp_dir 是 /dev/shm"
+        assert tokens.index("rac-app:${RAC_IMAGE_TAG}") > tokens.index("--read-only"), "選項都在映像名稱之前"
+
+
+def test_app_containers_use_the_tag_from_release_env_and_the_rds_ca_bundle_read_only():
+    for name, text in app_container_units().items():
+        assert "EnvironmentFile=/etc/rac/release.env" in text, name
+        assert "rac-app:${RAC_IMAGE_TAG}" in exec_tokens(text)
+        mounts = option_values(exec_tokens(text), "--mount")
+        assert mounts == ["type=bind,source=/etc/rac/rds-ca-bundle.pem,target=/etc/rac/rds-ca-bundle.pem,readonly"], name
+    assert plan.RDS_CA_BUNDLE_PATH == "/etc/rac/rds-ca-bundle.pem"
+
+
+def test_release_env_file_holds_only_a_valid_image_tag():
+    assert plan.release_env_file("a1b2c3d") == "RAC_IMAGE_TAG=a1b2c3d\n"
+    assert plan.release_env_file("rollback-2026.11.16") == "RAC_IMAGE_TAG=rollback-2026.11.16\n"
+    for bad in ("", "Bad Tag", "x\ny", "-start", "a:b", "A1B2", "a" * 129, "a b", "$(id)"):
+        with pytest.raises(plan.PlanError, match="映像標籤"):
+            plan.release_env_file(bad)
+
+
+def test_pool_and_caddy_services_restart_always_start_after_docker_and_are_independent():
+    units = {**pool_units(), "rac-caddy": plan.caddy_unit()}
+    for name, text in units.items():
+        assert "Restart=always" in text and "RestartSec=5" in text, name
+        assert "Requires=docker.service" in text and "WantedBy=multi-user.target" in text, name
+        assert "--restart" not in text, "重啟只由 systemd 負責，不與 Docker 的重啟政策並存"
+    for name in ("rac-cs", "rac-rpg"):
+        other = "rac-rpg" if name == "rac-cs" else "rac-cs"
+        assert other not in units[name], f"{name} 不得依賴另一個池：停止一個池不能影響另一個"
+    caddy = units["rac-caddy"]
+    assert "Wants=network-online.target rac-cs.service rac-rpg.service" in caddy
+    assert not re.search(r"^(Requires|BindsTo|PartOf)=.*rac-(cs|rpg)", caddy, re.M), "入口只是弱依賴：池停止時入口不跟著停"
+
+
+def test_pool_services_wait_long_enough_for_gunicorn_to_finish_in_flight_requests():
+    for pool, graceful in ((plan.POOLS[0], 30), (plan.POOLS[1], 60)):
+        text = plan.pool_unit(pool)
+        stop = int(re.search(r"docker stop --time=(\d+)", text).group(1))
+        timeout = int(re.search(r"^TimeoutStopSec=(\d+)$", text, re.M).group(1))
+        assert stop > graceful and timeout > stop, pool.container
+    for config, graceful in (("gunicorn.conf.py", 30), ("gunicorn.rpg.conf.py", 60)):
+        assert f"graceful_timeout = {graceful}" in (PROJECT_ROOT / config).read_text(encoding="utf-8-sig")
+
+
+def test_caddy_runs_on_the_host_network_with_a_single_capability_and_persistent_certificate_storage():
+    text = plan.caddy_unit()
+    tokens = exec_tokens(text)
+    assert "--network=host" in tokens and "--read-only" in tokens and "--cap-drop=ALL" in tokens
+    assert option_values(tokens, "--cap-add") == ["NET_BIND_SERVICE"]
+    assert "--security-opt=no-new-privileges" in tokens and "--privileged" not in tokens
+    assert "type=bind,source=/etc/rac/Caddyfile,target=/etc/caddy/Caddyfile,readonly" in option_values(tokens, "--mount")
+    assert "type=bind,source=/var/lib/rac/caddy,target=/data" in option_values(tokens, "--mount"), "憑證與帳戶資料在持久路徑，容器重建不重新簽發"
+    assert tokens[-1].startswith("caddy:") and not any(t.startswith("--publish") for t in tokens)
+    assert option_values(tokens, "--log-opt") == ["max-size=10m", "max-file=3"]
+
+
+def test_no_host_file_disables_certificate_verification_or_widens_trust_or_leaks_a_secret():
+    text = "\n".join(f.content for f in plan.host_files(target(with_secrets=("OPENROUTER_API_KEY",)), PLAIN))
+    for forbidden in ("TrustServerCertificate", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "TRUST_PROXY_HEADERS", "--privileged", "0.0.0.0",
+                      SECRET_SENTINEL):
+        assert forbidden not in text, forbidden
+    assert not re.search(r"AKIA[0-9A-Z]{16}|--password|--value\b|--secret-string", text)
+
+
+def test_plain_env_file_has_only_plain_settings_and_never_a_secret_name():
+    text = plan.plain_env_file(target(), PLAIN)
+    lines = text.splitlines()
+    assert lines == sorted(lines) and "APP_ENV=staging" in lines and "BASE_URL=https://rac001.duckdns.org" in lines
+    assert not {line.split("=", 1)[0] for line in lines} & (set(plan.SECRET_VARS) | set(plan.DB_ONLY_SECRETS))
+    with pytest.raises(plan.PlanError, match="換行"):
+        plan.plain_env_file(target(), {**PLAIN, "LOG_LEVEL": "INFO\nSECRET_KEY=x"})
+    with pytest.raises(plan.PlanError, match="OPENROUTER_API_KEY"):
+        plan.plain_env_file(target(), {**PLAIN, "OPENROUTER_API_KEY": SECRET_SENTINEL})
+
+
+def names_block(script: str) -> list[str]:
+    return re.search(r"^NAMES=\(\n(.*?)\n\)$", script, re.S | re.M).group(1).split()
+
+
+def test_the_app_unit_script_fetches_only_app_parameters_and_never_the_rds_master_password():
+    t = target(with_secrets=("OPENROUTER_API_KEY",))
+    app = plan.render_env_script(t, "app")
+    assert names_block(app) == list(plan.unit_parameter_names(t, "app"))
+    for forbidden in plan.DB_ONLY_SECRETS:
+        assert forbidden not in app
+    bootstrap = plan.render_env_script(t, "bootstrap")
+    assert names_block(bootstrap) == list(plan.DB_ONLY_SECRETS)
+    assert not set(names_block(bootstrap)) & set(names_block(app))
+    assert 'OUT="/run/rac/app.env"' in app and 'OUT="/run/rac/bootstrap.env"' in bootstrap
+    with pytest.raises(plan.PlanError, match="batch"):
+        plan.render_env_script(t, "batch")
+    with pytest.raises(plan.PlanError, match="batch"):
+        plan.render_env_script_path("batch")
+
+
+def test_the_script_reads_the_same_ssm_path_the_plan_creates_and_the_role_policy_allows():
+    t = target(with_secrets=("OPENROUTER_API_KEY",))
+    script = plan.render_env_script(t, "app")
+    prefix = re.search(r'^PREFIX="([^"]+)"$', script, re.M).group(1)
+    assert prefix == plan.SSM_PREFIX == "/rac-demo/staging"
+    assert re.search(r'^REGION="ap-southeast-2"$', script, re.M)
+    for var in names_block(script):
+        assert plan.parameter_name(var) == f"{prefix}/{var}"
+    allowed = plan.role_policy_document(t)["Statement"][0]["Resource"]
+    assert allowed == f"arn:aws:ssm:ap-southeast-2:{ACCOUNT}:parameter{prefix}/*"
+    assert "--with-decryption" in script and "--region" in script
+
+
+def test_the_script_writes_secrets_only_to_a_private_file_on_the_memory_filesystem_and_prints_no_values():
+    script = plan.render_env_script(target(), "app")
+    assert script.startswith("#!/bin/bash\n") and "set -euo pipefail" in script and "umask 077" in script
+    assert 'chmod 0600 "$tmp"' in script and 'install -d -m 0700 -o root -g root "$RUN_DIR"' in script
+    assert re.search(r'stat -f -c %T "\$RUN_DIR"\)" != "tmpfs"', script), "不是記憶體檔案系統就必須中止"
+    assert 'mktemp "$RUN_DIR/' in script and 'mv -f "$tmp" "$OUT"' in script, "先寫暫存檔再原子改名，避免另一個單元讀到半個檔案"
+    assert not re.search(r"set -[a-z]*x|set -o xtrace|\bxtrace\b", script), "不得開啟指令追蹤（會印出值）"
+    redirections = re.findall(r">>?\s*(\S+)", script)
+    assert set(redirections) <= {'"$tmp"', "&2", "&1"}, f"只能寫到暫存檔與標準錯誤：{redirections}"
+    for line in script.splitlines():
+        if "$value" in line:
+            assert re.search(r'^\s*(if !? ?value=|if \[ -z|case "\$value"|printf \'%s=%s\\n\' "\$name" "\$value" >> "\$tmp")', line), f"值只能用於判斷與寫入暫存檔：{line}"
+        if "echo" in line:
+            assert ">&2" in line and "$value" not in line
+    code = "\n".join(line for line in script.splitlines() if not line.lstrip().startswith("#"))
+    for path in ("/var/", "/home", "/root", "/etc/", "/opt", "/tmp"):
+        assert path not in code, f"機密不得寫到持久路徑：{path}"
+
+
+def usable_bash() -> str | None:
+    path = shutil.which("bash")
+    if not path:
+        return None
+    try:
+        probe = subprocess.run([path, "-c", "echo ok"], capture_output=True, encoding="utf-8", errors="replace", timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    return path if probe.returncode == 0 and probe.stdout.strip() == "ok" else None
+
+
+@pytest.mark.parametrize("unit", plan.UNITS)
+def test_the_render_scripts_pass_a_bash_syntax_check(unit):
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法做語法檢查（不算通過）")
+    result = subprocess.run([bash, "-n"], input=plan.render_env_script(target(), unit).encode("utf-8"), capture_output=True, timeout=60)
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+
+
+# ---- 1.5 排程：由 SCHEDULED_COMMANDS 產生 systemd 計時器 ---------------------------------------------------
+
+
+@pytest.mark.parametrize("cron, expected", [
+    ("*/5 * * * *", "*-*-* *:0/5:00 Asia/Taipei"),
+    ("*/1 * * * *", "*-*-* *:0/1:00 Asia/Taipei"),
+    ("*/59 * * * *", "*-*-* *:0/59:00 Asia/Taipei"),
+    ("0 * * * *", "*-*-* *:00:00 Asia/Taipei"),
+    ("0 3 * * *", "*-*-* 03:00:00 Asia/Taipei"),
+    ("20 3 * * *", "*-*-* 03:20:00 Asia/Taipei"),
+    ("40 3 * * *", "*-*-* 03:40:00 Asia/Taipei"),
+    ("59 23 * * *", "*-*-* 23:59:00 Asia/Taipei"),
+    ("0 0 * * *", "*-*-* 00:00:00 Asia/Taipei"),
+])
+def test_the_three_supported_cron_forms_become_on_calendar_in_taipei_time(cron, expected):
+    assert plan.cron_to_on_calendar(cron) == expected
+
+
+@pytest.mark.parametrize("cron", [
+    "", "@daily", "*/0 * * * *", "*/60 * * * *", "*/5 * * * 1", "*/5 1 * * *", "0 3 1 * *", "0 3 * 1 *", "0 3 * * 1",
+    "0 */2 * * *", "5 * * * *", "0,30 * * * *", "1-5 * * * *", "60 3 * * *", "0 24 * * *", "0 3 * * * ", " 0 3 * * *", "0 3 * *",
+    "*/5 * * * *\n", "0 3 * * *\n",
+])
+def test_any_other_cron_form_is_rejected_instead_of_being_converted_wrongly(cron):
+    with pytest.raises(plan.PlanError, match="cron"):
+        plan.cron_to_on_calendar(cron)
+
+
+def timers() -> dict:
+    return {name: text for name, text in plan.scheduled_units().items() if name.endswith(".timer")}
+
+
+def services() -> dict:
+    return {name: text for name, text in plan.scheduled_units().items() if name.endswith(".service")}
+
+
+def test_generated_schedule_matches_scheduled_commands_item_by_item():
+    assert set(timers()) == {f"rac-job-{c}.timer" for c in cli.SCHEDULED_COMMANDS}
+    assert set(services()) == {f"rac-job-{c}.service" for c in cli.SCHEDULED_COMMANDS}
+    for command, cron in cli.SCHEDULED_COMMANDS.items():
+        timer, service = timers()[f"rac-job-{command}.timer"], services()[f"rac-job-{command}.service"]
+        assert f"OnCalendar={plan.cron_to_on_calendar(cron)}\n" in timer, command
+        assert f"Unit=rac-job-{command}.service\n" in timer, command
+        assert exec_tokens(service)[-4:] == ["flask", "--app", "wsgi", command], command
+        assert f"cron {cron}" in timer.splitlines()[1], "說明列寫出原本的 cron 運算式，方便對照"
+
+
+def test_no_manual_command_is_scheduled():
+    generated = " ".join(plan.scheduled_units())
+    for manual in cli.MANUAL_COMMANDS:
+        assert f"rac-job-{manual}" not in generated, manual
+    for forbidden in ("create-admin", "replay-deletions", "seed-scripts"):
+        assert forbidden not in "\n".join(plan.scheduled_units().values())
+    with pytest.raises(plan.PlanError, match="人工類"):
+        plan.scheduled_units({"create-admin": "0 3 * * *"})
+
+
+def test_an_unsupported_expression_in_the_list_fails_generation():
+    with pytest.raises(plan.PlanError, match="cron"):
+        plan.scheduled_units({"check-alerts": "*/5 * * * *", "weekly-thing": "0 3 * * 1"})
+
+
+def test_a_command_added_to_the_list_gets_a_schedule_without_changing_the_plan(monkeypatch):
+    monkeypatch.setattr(plan, "SCHEDULED_COMMANDS", {**cli.SCHEDULED_COMMANDS, "new-nightly-job": "15 4 * * *"})
+    units = plan.scheduled_units()
+    assert "OnCalendar=*-*-* 04:15:00 Asia/Taipei\n" in units["rac-job-new-nightly-job.timer"]
+    assert exec_tokens(units["rac-job-new-nightly-job.service"])[-4:] == ["flask", "--app", "wsgi", "new-nightly-job"]
+    assert {f.path for f in plan.host_files(target(), PLAIN)} >= {"/etc/systemd/system/rac-job-new-nightly-job.timer"}
+
+
+def test_timers_use_taipei_time_and_catch_up_after_the_host_was_off():
+    for name, text in timers().items():
+        assert re.search(r"^OnCalendar=.* Asia/Taipei$", text, re.M), name
+        assert "Persistent=true" in text and "WantedBy=timers.target" in text, name
+    daily = [text for text in timers().values() if re.search(r"OnCalendar=\*-\*-\* \d\d:\d\d:00", text)]
+    assert len(daily) == 3 and all("OnCalendar=*-*-* 03:" in text for text in daily), "每日工作在台灣時間凌晨 3 點"
+
+
+def test_scheduled_jobs_run_once_with_the_same_image_environment_and_hardening_as_the_pools():
+    pool_tokens = exec_tokens(plan.pool_unit(plan.POOLS[0]))
+    for name, text in services().items():
+        tokens = exec_tokens(text)
+        assert "Type=oneshot" in text and "Restart" not in text and "[Install]" not in text, name
+        assert "TimeoutStartSec=900" in text and "ExecStartPre=/usr/local/sbin/rac-render-env-app" in text, name
+        assert not any(t.startswith("--publish") for t in tokens), "排程工作不對外開任何連接埠"
+        assert option_values(tokens, "--env-file") == option_values(pool_tokens, "--env-file"), name
+        for shared in ("--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pull=never", "rac-app:${RAC_IMAGE_TAG}"):
+            assert shared in tokens, (name, shared)
+        assert option_values(tokens, "--name")[0].startswith("rac-job-")
+
+
+def test_job_names_pass_the_name_guard_and_never_contain_production():
+    with pytest.raises(plan.PlanError, match="production"):
+        plan.job_unit_name("production-cleanup")
+    with pytest.raises(plan.PlanError):
+        plan.job_unit_name("Bad_Name")
+    assert all("production" not in name for name in plan.scheduled_units())

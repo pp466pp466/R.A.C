@@ -12,6 +12,8 @@
   （權限限本人、用後刪除）交給 `file://{{input_file}}`，不進命令列、輸出與日誌。
 - 建立計費資源的步驟（`billing=True`）在沒有 `accept_cost` 時不輸出指令（`blocked=True`），只留說明。
 - 預設使用預設 VPC（Free plan 新帳號都有），不建立 NAT 閘道、負載平衡器或第二台主機。
+- 主機檔案（Caddyfile、`rac-*` 單元、機密取出腳本、排程計時器；task 1.4、1.5）也是純函式：回傳字串（UTF-8、LF、不含 BOM），
+  由執行器經 SSM 放到主機；字串內只有機密的**名稱**與 SSM 路徑，沒有任何機密值。
 
 佔位符（`{{…}}`）：
 - `{{名稱}}`：先前某個步驟用 `capture` 存下的標準輸出（例如 `{{host-sg-id}}`）；執行器在執行時代入。
@@ -37,6 +39,8 @@ for _path in (str(SCRIPTS_DIR), str(PROJECT_ROOT)):
 from launch_plan import (  # noqa: E402 - 需要先把 scripts 與專案根目錄放進 sys.path
     EMAIL_PATTERN, NOT_DEPLOYED, OBSOLETE_VARS, PLAIN_VARS, REQUIRED_PLAIN, REQUIRED_SECRETS, SECRET_VARS,
 )
+# 排程清單的單一來源是 app.cli（launch_plan 也從這裡取）；人工類清單只用來擋下被誤放進排程的指令
+from app.cli import MANUAL_COMMANDS, SCHEDULED_COMMANDS  # noqa: E402
 
 __all__ = [
     "NOT_DEPLOYED", "OBSOLETE_VARS", "PLAIN_VARS", "REQUIRED_PLAIN", "REQUIRED_SECRETS", "SECRET_VARS",
@@ -167,7 +171,7 @@ def assert_name(name: str, *, what: str = "名稱") -> str:
     """資源名稱守門：小寫英數與連字號、長度合理、不得含 production。回傳原值。"""
     if FORBIDDEN_NAME_PART in name.lower():
         raise PlanError(f"{what}不得含 {FORBIDDEN_NAME_PART}：展示環境不是 production")
-    if not NAME_PATTERN.match(name):
+    if not NAME_PATTERN.fullmatch(name):          # fullmatch：`$` 會放行結尾多一個換行
         raise PlanError(f"{what}只能是小寫英數與連字號（2 至 63 字）")
     return name
 
@@ -175,12 +179,12 @@ def assert_name(name: str, *, what: str = "名稱") -> str:
 def validate_target(target: Target) -> None:
     if target.region != REGION:
         raise PlanError(f"只接受雪梨區域 {REGION}（收到 {target.region or '空值'}）")
-    if not ACCOUNT_PATTERN.match(target.account_id or ""):
+    if not ACCOUNT_PATTERN.fullmatch(target.account_id or ""):
         raise PlanError("account_id 必須是 12 位數字的 AWS 帳號編號")
     domain = target.domain or ""
     if FORBIDDEN_NAME_PART in domain.lower():
         raise PlanError(f"網域不得含 {FORBIDDEN_NAME_PART}：展示環境不是 production")
-    if not DOMAIN_PATTERN.match(domain) or len(domain) > 253:
+    if not DOMAIN_PATTERN.fullmatch(domain) or len(domain) > 253:   # 網域會原樣放進 Caddyfile，換行不得通過
         raise PlanError("網域必須是小寫的完整網域名稱（不含通訊協定與路徑）")
     if not isinstance(target.budget_usd, int) or isinstance(target.budget_usd, bool) or target.budget_usd < 1:
         raise PlanError("budget_usd 必須是正整數")
@@ -656,3 +660,350 @@ def _without_command(step: Step) -> Step:
         return step
     return replace(step, argv=(), input_json=None, exists_argv=None, verify=(), blocked=True,
                    title=f"{step.title}——需要 --accept-cost 才會輸出建立指令（執行器會先顯示預估費用）")
+
+
+# ---- 主機檔案（task 1.4、1.5）：Caddyfile、rac-* 單元、機密取出腳本、排程計時器 -----------------------------
+# 每個函式只回傳字串；寫到主機是執行器的事。字串內沒有機密值（機密只以名稱與 SSM 路徑出現）。
+
+HOST_CONFIG_DIR = "/etc/rac"            # 非機密的設定：Caddyfile、一般設定、版本標籤、RDS 的 CA 套件
+RUN_DIR = "/run/rac"                    # 記憶體檔案系統（tmpfs）：機密環境檔只存在這裡（design D6）
+CADDY_DATA_DIR = "/var/lib/rac/caddy"   # Caddy 的憑證與帳戶資料（持久；容器重建不重新簽發）
+SBIN_DIR = "/usr/local/sbin"
+UNIT_DIR = "/etc/systemd/system"
+CADDYFILE_PATH = f"{HOST_CONFIG_DIR}/Caddyfile"
+PLAIN_ENV_PATH = f"{HOST_CONFIG_DIR}/plain.env"        # 一般設定（非機密，可放持久磁碟）
+RELEASE_ENV_PATH = f"{HOST_CONFIG_DIR}/release.env"    # 目前使用的映像標籤；部署與回復只改這個檔案（task 1.6）
+# design D7 候選 A：RDS 的 CA 套件放在主機、唯讀掛進容器；DATABASE_URL 的 ServerCertificate 指向容器內同一路徑
+RDS_CA_BUNDLE_PATH = f"{HOST_CONFIG_DIR}/rds-ca-bundle.pem"
+HOST_DIRECTORIES = ((HOST_CONFIG_DIR, "0755"), (CADDY_DATA_DIR, "0700"))   # 主機初始化要先建立的目錄（路徑、權限）
+
+DOCKER = "/usr/bin/docker"
+APP_IMAGE_REPO = "rac-app"
+IMAGE_TAG_VAR = "RAC_IMAGE_TAG"
+APP_IMAGE_REF = f"{APP_IMAGE_REPO}:${{{IMAGE_TAG_VAR}}}"     # rac-app:${RAC_IMAGE_TAG}，由 systemd 以 release.env 展開
+IMAGE_TAG_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]{0,127}")
+CADDY_IMAGE = "caddy:2"                 # 官方映像的主版本標籤（展示環境接受浮動的次版本；要固定時改這個常數）
+STREAM_PATH_PREFIX = "/api/game/"       # RPG 的 SSE 串流與其餘 RPG API（design D5）
+SCHEDULE_TIMEZONE = "Asia/Taipei"
+JOB_TIMEOUT_SECONDS = 900               # 排程工作單次最長 15 分鐘（check-alerts 每 5 分鐘一次，不應重疊）
+
+_TMPFS_OPTIONS = "rw,nosuid,nodev,size=64m"
+_LOG_OPTIONS = ("--log-driver=json-file", "--log-opt=max-size=10m", "--log-opt=max-file=3")   # 限制容器日誌大小，免得磁碟耗盡
+
+
+@dataclass(frozen=True)
+class HostFile:
+    path: str
+    mode: str           # 八進位權限字串，例如 "0644"
+    content: str
+
+
+@dataclass(frozen=True)
+class Pool:
+    key: str
+    container: str
+    port: int                    # 只發布在主機的回送位址
+    gunicorn_config: str
+    description: str
+    stop_seconds: int            # docker stop 的等待秒數：大於該池 gunicorn 的 graceful_timeout（30／60）
+
+
+POOLS = (
+    Pool("cs", "rac-cs", 8081, "gunicorn.conf.py", "客服池", 45),
+    Pool("rpg", "rac-rpg", 8082, "gunicorn.rpg.conf.py", "RPG 串流池", 75),
+)
+
+
+def _pool(key: str) -> Pool:
+    return next(pool for pool in POOLS if pool.key == key)
+
+
+def _text_file(lines: list[str]) -> str:
+    """主機檔案一律 LF 換行、結尾有換行。"""
+    return "\n".join(lines) + "\n"
+
+
+def _exec_start(chunks: list[str]) -> str:
+    """systemd 的 ExecStart：依用途分成幾行（以反斜線接續），沒有 shell；每一行內以空白分隔引數。"""
+    return "ExecStart=" + " \\\n    ".join(chunks)
+
+
+def _app_run_args(name: str, command: tuple[str, ...], *, publish: str | None = None) -> list[str]:
+    """應用程式容器（兩個池與排程工作共用）：非 root（沿用映像的使用者）、唯讀根檔案系統、丟掉所有 capability、
+    不得提權、限制日誌；機密環境檔來自記憶體檔案系統。`--pull=never`：標籤不存在時直接失敗，不去公開倉庫找同名映像。"""
+    chunks = [f"{DOCKER} run --rm --name={name} --pull=never"]
+    if publish is not None:
+        chunks.append(f"--publish={publish}")
+    chunks += [
+        f"--env-file={PLAIN_ENV_PATH} --env-file={RUN_DIR}/app.env",
+        f"--read-only --tmpfs=/dev/shm:{_TMPFS_OPTIONS} --tmpfs=/tmp:{_TMPFS_OPTIONS}",
+        "--cap-drop=ALL --security-opt=no-new-privileges",
+        " ".join(_LOG_OPTIONS),
+        f"--mount=type=bind,source={RDS_CA_BUNDLE_PATH},target={RDS_CA_BUNDLE_PATH},readonly",
+        f"{APP_IMAGE_REF} {' '.join(command)}",
+    ]
+    return chunks
+
+
+def caddyfile(target: Target) -> str:
+    """入口設定：`/api/game/*` 到 RPG 池且關閉回應緩衝（`flush_interval -1`），其餘到客服池。
+    不對任何路徑壓縮（壓縮會緩衝串流）；Caddy 預設自動簽發憑證、啟用 HTTP/2、把 HTTP 導向 HTTPS，
+    且預設不對上游設逾時（不會切斷長串流）、會覆寫（不信任）用戶端送來的 X-Forwarded-*，與應用程式的單層 ProxyFix 相符。
+    `admin off`：入口用主機網路，關閉本機管理介面以縮小攻擊面（換設定以重啟單元為準）。"""
+    rpg, cs = _pool("rpg"), _pool("cs")
+    return _text_file([
+        "# 由 scripts/aws_demo_plan.py 產生，不要手動修改。",
+        "{",
+        "    admin off",
+        "}",
+        "",
+        f"{target.domain} {{",
+        f"    @game path {STREAM_PATH_PREFIX}*",
+        "    handle @game {",
+        f"        reverse_proxy 127.0.0.1:{rpg.port} {{",
+        "            flush_interval -1",
+        "        }",
+        "    }",
+        "    handle {",
+        f"        reverse_proxy 127.0.0.1:{cs.port}",
+        "    }",
+        "}",
+    ])
+
+
+def pool_unit(pool: Pool) -> str:
+    """客服池或 RPG 池的 systemd 單元：只發布在回送位址（沒有任何對外的連接埠）、`Restart=always`。"""
+    return _text_file([
+        "[Unit]",
+        f"Description=rac 展示環境：{pool.description}（{pool.gunicorn_config}）",
+        "Requires=docker.service",
+        "After=docker.service network-online.target",
+        "Wants=network-online.target",
+        "",
+        "[Service]",
+        "Type=simple",
+        "Restart=always",
+        "RestartSec=5",
+        f"TimeoutStopSec={pool.stop_seconds + 15}",
+        f"EnvironmentFile={RELEASE_ENV_PATH}",
+        f"ExecStartPre={SBIN_DIR}/rac-render-env-app",
+        f"ExecStartPre=-{DOCKER} rm -f {pool.container}",
+        _exec_start(_app_run_args(pool.container, ("gunicorn", "--config", pool.gunicorn_config, "wsgi:app"),
+                                  publish=f"127.0.0.1:{pool.port}:8080")),
+        f"ExecStop={DOCKER} stop --time={pool.stop_seconds} {pool.container}",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+    ])
+
+
+def caddy_unit() -> str:
+    """入口的 systemd 單元。容器內是 root，但丟掉所有 capability 只留綁定 80／443 所需的一個，並禁止提權與唯讀根檔案系統：
+    非 root 加上禁止提權時，檔案 capability 不會生效，綁不了 80／443。"""
+    chunks = [
+        f"{DOCKER} run --rm --name=rac-caddy --network=host",
+        f"--read-only --tmpfs=/config:{_TMPFS_OPTIONS}",
+        "--cap-drop=ALL --cap-add=NET_BIND_SERVICE --security-opt=no-new-privileges",
+        " ".join(_LOG_OPTIONS),
+        f"--mount=type=bind,source={CADDYFILE_PATH},target=/etc/caddy/Caddyfile,readonly",
+        f"--mount=type=bind,source={CADDY_DATA_DIR},target=/data",
+        CADDY_IMAGE,
+    ]
+    return _text_file([
+        "[Unit]",
+        "Description=rac 展示環境：入口（Caddy，HTTPS 與分流）",
+        "Requires=docker.service",
+        "After=docker.service network-online.target rac-cs.service rac-rpg.service",
+        "Wants=network-online.target rac-cs.service rac-rpg.service",
+        "",
+        "[Service]",
+        "Type=simple",
+        "Restart=always",
+        "RestartSec=5",
+        "TimeoutStopSec=30",
+        f"ExecStartPre=-{DOCKER} rm -f rac-caddy",
+        _exec_start(chunks),
+        f"ExecStop={DOCKER} stop --time=15 rac-caddy",
+        "",
+        "[Install]",
+        "WantedBy=multi-user.target",
+    ])
+
+
+def release_env_file(tag: str) -> str:
+    """`release.env` 的內容：目前使用的映像標籤。部署與回復只改這個檔案後重啟單元（task 1.6）。"""
+    if not IMAGE_TAG_PATTERN.fullmatch(tag or ""):
+        raise PlanError("映像標籤只能是小寫英數、底線、句點與連字號（最長 128 字）")
+    return f"{IMAGE_TAG_VAR}={tag}\n"
+
+
+def plain_env_file(target: Target, plain: dict[str, str]) -> str:
+    """一般設定的環境檔（非機密）。docker 的環境檔每行一個 `名稱=值`，所以值不得含換行。"""
+    settings = plain_settings(target, plain)
+    for name, value in settings.items():
+        if any(char in value for char in "\r\n\x00"):
+            raise PlanError(f"一般設定 {name} 的值不得含換行或空字元")
+    return "".join(f"{name}={value}\n" for name, value in settings.items())
+
+
+_RENDER_ENV_TEMPLATE = r"""#!/bin/bash
+# 由 scripts/aws_demo_plan.py 產生（單元：@UNIT@），不要手動修改；這個檔案本身不含任何機密值。
+# 從 SSM 參數取出本單元需要的機密，寫到記憶體檔案系統上、只有擁有者可讀的環境檔。
+# 環境檔不寫入持久磁碟、映像、日誌或命令列；這個腳本不會印出任何值。
+set -euo pipefail
+umask 077
+
+REGION="@REGION@"
+PREFIX="@PREFIX@"
+RUN_DIR="@RUN_DIR@"
+OUT="@OUT@"
+NAMES=(
+@NAMES@
+)
+
+install -d -m 0700 -o root -g root "$RUN_DIR"
+if [ "$(stat -f -c %T "$RUN_DIR")" != "tmpfs" ]; then
+  echo "rac-render-env：$RUN_DIR 不是記憶體檔案系統，中止（機密不得寫到持久磁碟）" >&2
+  exit 1
+fi
+
+tmp="$(mktemp "$RUN_DIR/.@UNIT@.env.XXXXXX")"
+trap 'rm -f "$tmp"' EXIT
+
+for name in "${NAMES[@]}"; do
+  if ! value="$(aws ssm get-parameter --region "$REGION" --name "$PREFIX/$name" --with-decryption --query Parameter.Value --output text)"; then
+    echo "rac-render-env：取不到參數 $name" >&2
+    exit 1
+  fi
+  if [ -z "$value" ] || [ "$value" = "None" ]; then
+    echo "rac-render-env：參數 $name 是空的" >&2
+    exit 1
+  fi
+  case "$value" in
+    *$'\n'*|*$'\r'*)
+      echo "rac-render-env：參數 $name 的值含換行，無法寫入環境檔" >&2
+      exit 1
+      ;;
+  esac
+  printf '%s=%s\n' "$name" "$value" >> "$tmp"
+done
+
+chmod 0600 "$tmp"
+mv -f "$tmp" "$OUT"
+trap - EXIT
+"""
+
+
+def render_env_script_path(unit: str) -> str:
+    if unit not in UNITS:
+        raise PlanError(f"不認得的單元：{unit}（只有 {'、'.join(UNITS)}）")
+    return f"{SBIN_DIR}/rac-render-env-{unit}"
+
+
+def render_env_script(target: Target, unit: str) -> str:
+    """機密取出腳本：只取該單元需要的參數（應用程式單元不含 RDS 主要使用者密碼，design D8）。"""
+    parameter_names_for_unit = unit_parameter_names(target, unit)         # 單元不認得時丟 PlanError
+    replacements = {
+        "@UNIT@": unit, "@REGION@": target.region, "@PREFIX@": SSM_PREFIX, "@RUN_DIR@": RUN_DIR,
+        "@OUT@": f"{RUN_DIR}/{unit}.env", "@NAMES@": "\n".join(f"  {name}" for name in parameter_names_for_unit),
+    }
+    script = _RENDER_ENV_TEMPLATE
+    for token, value in replacements.items():
+        script = script.replace(token, value)
+    return script
+
+
+# ---- 排程計時器（task 1.5）----------------------------------------------------------------------------
+
+_CRON_EVERY_N_MINUTES = re.compile(r"\*/(\d{1,2}) \* \* \* \*")
+_CRON_HOURLY = "0 * * * *"
+_CRON_DAILY = re.compile(r"(\d{1,2}) (\d{1,2}) \* \* \*")
+
+
+def cron_to_on_calendar(cron: str) -> str:
+    """把 cron 運算式轉成 systemd 的 OnCalendar（含時區）。只支援 `SCHEDULED_COMMANDS` 實際用到的三種形式：
+    `*/N * * * *`（每 N 分鐘）、`0 * * * *`（每小時整點）、`M H * * *`（每日 H:M）；其他形式一律丟錯，
+    使日後新增不支援的運算式時測試先失敗，而不是被悄悄轉成錯的時間。"""
+    if cron == _CRON_HOURLY:
+        return f"*-*-* *:00:00 {SCHEDULE_TIMEZONE}"
+    every = _CRON_EVERY_N_MINUTES.fullmatch(cron)
+    if every:
+        minutes = int(every.group(1))
+        if not 1 <= minutes <= 59:
+            raise PlanError(f"不支援的 cron 運算式（分鐘間隔需介於 1 至 59）：{cron}")
+        return f"*-*-* *:0/{minutes}:00 {SCHEDULE_TIMEZONE}"
+    daily = _CRON_DAILY.fullmatch(cron)
+    if daily:
+        minute, hour = int(daily.group(1)), int(daily.group(2))
+        if minute > 59 or hour > 23:
+            raise PlanError(f"不支援的 cron 運算式（時間超出範圍）：{cron}")
+        return f"*-*-* {hour:02d}:{minute:02d}:00 {SCHEDULE_TIMEZONE}"
+    raise PlanError(f"不支援的 cron 運算式（只支援 */N * * * *、0 * * * *、M H * * *）：{cron}")
+
+
+def job_unit_name(command: str) -> str:
+    return assert_name(f"rac-job-{command}", what="排程工作的名稱")
+
+
+def job_service(command: str) -> str:
+    """一個排程指令的單次服務：同映像、同環境檔，`docker run --rm`，`flask --app wsgi <指令>`。"""
+    name = job_unit_name(command)
+    return _text_file([
+        "[Unit]",
+        f"Description=rac 排程工作：{command}",
+        "Requires=docker.service",
+        "After=docker.service network-online.target",
+        "Wants=network-online.target",
+        "",
+        "[Service]",
+        "Type=oneshot",
+        f"TimeoutStartSec={JOB_TIMEOUT_SECONDS}",
+        f"EnvironmentFile={RELEASE_ENV_PATH}",
+        f"ExecStartPre={SBIN_DIR}/rac-render-env-app",
+        f"ExecStartPre=-{DOCKER} rm -f {name}",
+        _exec_start(_app_run_args(name, ("flask", "--app", "wsgi", command))),
+    ])
+
+
+def job_timer(command: str, cron: str) -> str:
+    """計時器：時區 Asia/Taipei；`Persistent=true` 讓關機期間錯過的工作在開機後補跑一次。"""
+    name = job_unit_name(command)
+    return _text_file([
+        "[Unit]",
+        f"Description=rac 排程：{command}（cron {cron}，{SCHEDULE_TIMEZONE}）",
+        "",
+        "[Timer]",
+        f"OnCalendar={cron_to_on_calendar(cron)}",
+        "Persistent=true",
+        f"Unit={name}.service",
+        "",
+        "[Install]",
+        "WantedBy=timers.target",
+    ])
+
+
+def scheduled_units(scheduled: dict[str, str] | None = None) -> dict[str, str]:
+    """由 `SCHEDULED_COMMANDS` 產生的全部排程單元（檔名 → 內容）。沒有給清單時取應用程式的清單，
+    所以清單新增指令時產生的排程隨之包含它；人工類指令（`MANUAL_COMMANDS`）出現在清單裡就丟錯。"""
+    commands = SCHEDULED_COMMANDS if scheduled is None else scheduled
+    units: dict[str, str] = {}
+    for command, cron in commands.items():
+        if command in MANUAL_COMMANDS:
+            raise PlanError(f"人工類指令不得排程：{command}")
+        units[f"{job_unit_name(command)}.service"] = job_service(command)
+        units[f"{job_unit_name(command)}.timer"] = job_timer(command, cron)
+    return units
+
+
+def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
+    """要放到主機的全部檔案（路徑、權限、內容），順序固定。不含 `release.env`（部署時才寫，見 `release_env_file`）。
+    環境檔的目錄（`HOST_DIRECTORIES`）與 RDS 的 CA 套件由主機初始化負責。"""
+    files = [
+        HostFile(CADDYFILE_PATH, "0644", caddyfile(target)),
+        HostFile(PLAIN_ENV_PATH, "0644", plain_env_file(target, plain)),
+    ]
+    files += [HostFile(render_env_script_path(unit), "0755", render_env_script(target, unit)) for unit in UNITS]
+    files += [HostFile(f"{UNIT_DIR}/{pool.container}.service", "0644", pool_unit(pool)) for pool in POOLS]
+    files.append(HostFile(f"{UNIT_DIR}/rac-caddy.service", "0644", caddy_unit()))
+    files += [HostFile(f"{UNIT_DIR}/{name}", "0644", content) for name, content in scheduled_units().items()]
+    return tuple(files)
