@@ -1,0 +1,75 @@
+# Tasks
+
+> 分批與交接依 `openspec-batch-workflow`：apply 之前先確認分組。第 1 至 3 組是本機的程式與測試（不花錢、不碰 AWS）；第 4 組起是**只能在使用者在場時**對真實 AWS 執行的步驟，每個計費或不可逆的步驟都要使用者明確確認。
+
+## 1. 計畫模組（純函式，不呼叫任何 AWS 指令）
+
+- [ ] 1.1 新增 `scripts/aws_demo_plan.py` 的 `Target`、`Step`、命名與標籤規則、區域守門（只接受 `ap-southeast-2`）、名稱不得含 `production`；`tests/test_aws_demo_plan.py` 驗證：其他區域被拒、名稱守門、每個資源都帶標籤
+- [ ] 1.2 變數歸類從 `scripts/launch_plan.py` 匯入（`SECRET_VARS`、`PLAIN_VARS`、`NOT_DEPLOYED`、`OBSOLETE_VARS`），產生機密參數名稱清單與一般設定；測試：`.env.example` 的每個變數恰好屬於一類、計畫輸出沒有任何機密值、應用程式單元的參數不含 RDS 主要使用者密碼
+- [ ] 1.3 資源步驟：預算與 SNS、安全群組（對外只開 80／443，沒有 22）、IAM 角色與執行個體設定檔（讀取權限限本專案的參數路徑）、S3 傳檔儲存貯體、RDS（不公開、加密、備份保留 7 天、只允許主機安全群組）、EC2（IMDSv2 強制、gp3 20 GB、無金鑰對）、Elastic IP、SSM 參數；測試：資源清單只含規格允許的類型、建立 RDS 與 EC2 的步驟在沒有 `--accept-cost` 時不輸出指令、預算步驟有兩個門檻且通知對象沒有預設值
+- [ ] 1.4 主機檔案產生函式：Caddyfile（`/api/game/*` 分流到 RPG 池、`flush_interval -1`、客服池其餘）、`rac-cs`／`rac-rpg`／`rac-caddy` 單元（回送位址綁定、非 root、`--cap-drop=ALL`、`no-new-privileges`、`Restart=always`、日誌循環）、機密取出腳本（寫到記憶體檔案系統、`0600`）；測試：應用程式埠不綁 `0.0.0.0`、沒有 `TrustServerCertificate`、兩個池使用各自的 gunicorn 設定、Caddyfile 對串流路徑沒有 `encode`
+- [ ] 1.5 排程產生：把 `SCHEDULED_COMMANDS` 的 cron 運算式轉成 `OnCalendar`（只支援實際用到的三種形式，其他形式丟錯，時區 Asia/Taipei，`Persistent=true`）；測試：與 `SCHEDULED_COMMANDS` 逐項一致、沒有手動類指令、不支援的運算式會失敗
+- [ ] 1.6 部署、回復與 `teardown` 步驟：快照 → 建置 → 遷移 → 重啟 → 驗證的順序；回復只重啟前一版標籤、沒有降級遷移；`teardown` 只選帶標籤的資源、RDS 刪除要求明確選擇最終快照（沒有預設）；測試：順序、回復內容、`teardown` 的清單範圍
+- [ ] 1.7 文件：在 `docs/營運與部署-operations.md` 新增「AWS 展示環境」章節的拓撲圖（Mermaid）、元件表與步驟總表（與 `Step` 清單一致）；執行 `tests/test_design_docs.py` 與 `tests/test_aws_demo_plan.py` 通過
+
+## 2. 執行器（預設預覽、逐步確認）
+
+- [ ] 2.1 新增 `scripts/aws_demo.py`：預設只預覽、`--execute` 逐步確認、`--only STEP --yes` 單步、`--accept-cost`、`--region` 守門；呼叫一律以引數清單，runner 可注入；`tests/test_aws_demo_script.py` 以假 runner 驗證：預設沒有呼叫、拒絕即停止、單步只執行一步、輸出與引數沒有機密值
+- [ ] 2.2 機密寫入：值來自 `--secrets-file`（本機被忽略的檔案）或隨機產生（`SECRET_KEY`、資料庫密碼），經暫存檔（權限限本人、用後刪除）傳給 `aws ssm put-parameter`；`DATABASE_URL` 由腳本以 URL 編碼組成；測試：值不出現在引數、輸出與例外訊息，暫存檔一定被刪除（含失敗時）
+- [ ] 2.3 輪詢等待（RDS、快照、SSM 命令）有上限與逾時訊息；DuckDNS 更新用標準函式庫呼叫、權杖來自環境變數、任何輸出與例外都不含權杖或含權杖的網址；測試覆蓋逾時與權杖不外洩
+- [ ] 2.4 `teardown` 執行：只刪帶標籤的資源、逐步確認；測試以假 runner 驗證不會刪到未標籤的資源
+- [ ] 2.5 文件：營運文件補執行器的用法、步驟的人工確認點與 `--accept-cost` 說明；`tests/test_design_docs.py` 通過
+
+## 3. 資料庫初始化腳本
+
+- [ ] 3.1 新增 `scripts/aws_demo_bootstrap_db.py`（在主映像內以一次性容器執行）：用主要使用者不存在才建立資料庫與專屬登入並授予擁有者角色，可重複執行；名稱經白名單驗證、密碼從環境變數讀取、不寫入日誌；`tests/` 驗證名稱驗證與語句產生（不連資料庫），並以 `TEST_SQLSERVER_URL` 的本機 SQL Server 做一次冪等整合測試（連線不可得時標為跳過而不是通過）
+- [ ] 3.2 一次性探測腳本（同一個容器內執行 `SELECT 1`）：使用應用程式的連線設定，輸出只有成功或失敗與錯誤類別，不含密碼；測試驗證輸出不含連線字串
+
+## 4. 雲端執行 A：預算、網路、機密、RDS 與 EC2（使用者在場、費用確認）
+
+- [ ] 4.1 前提確認並記錄（不含機密）：`aws sts get-caller-identity` 的帳號、區域 `ap-southeast-2`、通知信箱、DuckDNS 權杖已放入環境變數、`--secrets-file` 內容齊全；使用者看過 D12 的費用估算並明確同意 `--accept-cost`
+- [ ] 4.2 預覽完整計畫後，逐步執行預算與 SNS、安全群組、IAM 角色、S3 儲存貯體、SSM 參數；每一步以唯讀指令驗證（標籤、規則、政策範圍）並記錄；使用者確認 SNS 訂閱信
+- [ ] 4.3 建立 RDS（等待可用，期間進行 4.4）；驗證：不公開、加密、備份保留天數、安全群組只有主機來源
+- [ ] 4.4 建立 EC2 與 Elastic IP、主機初始化（交換檔、docker、機密取出腳本與單元檔放置）；驗證：只能經 SSM 連入、沒有 22、`/run/rac` 為記憶體檔案系統
+- [ ] 4.5 發現的 AWS CLI 與主機指令差異全部回寫到 `scripts/aws_demo_plan.py` 並補測試，結果記入 README「驗收紀錄（aws-demo-environment）」
+
+## 5. 資料庫初始化、憑證探測與遷移
+
+- [ ] 5.1 執行資料庫初始化（3.1），再執行憑證探測（3.2）使用候選 A（`ServerCertificate` 加 RDS CA 套件，唯讀掛載）；**成功才繼續**
+- [ ] 5.2 若 A 失敗：停止並回報使用者；採用候選 B 之前先以 `/openspec-update-change` 修訂本 change（design D7、tasks、必要的規格），經使用者同意後再改 `Dockerfile`；禁止 `TrustServerCertificate=yes` 與行程範圍的 `SSL_CERT_FILE`。若 A 成功，記錄實際採用的連線字串型態（不含密碼）到營運文件
+- [ ] 5.3 在主機上建置映像（`git archive HEAD` 經 S3、標記提交短碼），確認映像內沒有 `.env`、以非 root 執行
+- [ ] 5.4 建立 RDS 快照，執行 `alembic upgrade head`，驗證 `alembic current` 為最新版（`0018`），再執行 `seed-scripts`；任何一步失敗即停止，不啟動服務
+- [ ] 5.5 互動步驟：使用者在 SSM 終端機執行 `create-admin`（密碼自己輸入，不經腳本與對話）
+
+## 6. 服務、入口與網域
+
+- [ ] 6.1 啟動客服池與 RPG 池（`rac-cs`、`rac-rpg`），驗證兩者都以非 root、各用自己的 gunicorn 設定、只綁回送位址；記錄兩個池的常駐記憶體與 `free -m`
+- [ ] 6.2 把 `rac001.duckdns.org` 指向 Elastic IP（執行器的 DuckDNS 步驟，使用者確認），啟動 Caddy 並確認憑證簽發、HTTP/2、HTTP 導向 HTTPS；驗證應用程式的 HSTS 與安全標頭經入口仍在
+- [ ] 6.3 驗證分流：`/api/game/…` 由 RPG 池處理、其餘由客服池；停止客服池時 RPG 池的 `/healthz` 仍正常；從主機外部直連應用程式埠被拒絕
+- [ ] 6.4 驗證串流不被緩衝：用 `scripts/acceptance_rpg_turn.py` 的串流情境（或等效的最小請求）經入口量測第一個事件與心跳的到達時間；若入口緩衝，修正 Caddy 設定並補測試（記錄 `scripts/acceptance_rpg_turn.py` 只接受本機位址，需要另寫最小的串流探測或在主機內對回送位址執行並記錄限制）
+- [ ] 6.5 文件：營運文件補入口設定、憑證與分流的實際結果；更新 `docs/營運與部署-operations.md` 中「`/api/game/` 分流待部署」的敘述與缺口表；`tests/test_design_docs.py` 通過
+
+## 7. 排程與有限的監控
+
+- [ ] 7.1 安裝排程單元（1.5 產生），驗證 `systemctl list-timers` 與清單一致、手動執行一次 `check-alerts` 成功；`systemctl --failed` 為空
+- [ ] 7.2 建立 EC2 狀態檢查告警；使用者確認 SNS 訂閱；以 `aws cloudwatch set-alarm-state` 觸發一次並確認信件送達（演練後恢復狀態）
+- [ ] 7.3 告警信驗證：在展示環境製造一項告警條件（`.invalid` 測試帳號）並執行 `check-alerts`，由使用者確認信件送達、是否進垃圾郵件匣；沒收到則標為未驗證並記錄檢查過的地方；驗證後清除測試資料
+- [ ] 7.4 在營運文件列出展示環境未達 production 的缺口（5xx、外部探測、寄信失敗與排程失敗的平台告警、備份保留 30 天與跨區域、日誌保存 30 天），每項附原因與重新評估時機
+
+## 8. 驗收
+
+- [ ] 8.1 `scripts/staging_smoke.py https://rac001.duckdns.org` 全部通過（模型呼叫略過）；需要登入的項目由使用者在自己的 SSM 終端機以 `scripts/mint_test_sessions.py` 簽出 cookie 後提供（不經對話貼出明文時標為「未驗證」，不算通過）；驗收後清除測試玩家
+- [ ] 8.2 Google 登入人工驗收（使用者本人）：把 `https://rac001.duckdns.org/auth/google/callback` 加入預備環境專用的 OAuth 用戶端，驗證新使用者未勾選條款不建立帳號、勾選後完成年齡確認、回訪一鍵登入、管理員 Google 加密碼；Google 不接受該網域時標為未通過並回報，不放寬任何檢查
+- [ ] 8.3 小規模真實模型連通性驗證：以 `scripts/acceptance_rpg_real_model.py` 的做法（或手動）完成一次劇本開存檔與一回合、一次客服對話；只記錄是否成功與生成時間，不當容量依據；確認一般與成人模式沒有使用免費模型的設定
+- [ ] 8.4 在 README 新增「驗收紀錄（aws-demo-environment）」：分欄列出已驗證與未驗證項目、日期、資源清單與仍在計費的項目、每日費用觀察；確認 `GET /readyz` 不回傳內部細節
+
+## 9. 收尾
+
+- [ ] 9.1 依 `docs/README.md` 的對照表更新受影響的設計文件（營運與部署、路線圖：新增本 change 並說明 RC-4 拆成兩個 change、`rpg-ops-loadtest` 以本環境為量測基礎），複查各文件標頭的「對應 change」，並執行 `tests/test_design_docs.py` 通過
+- [ ] 9.2 全套測試通過（`pytest` 與 Node 測試），確認沒有修改 `app/`、`Dockerfile`、`gunicorn*.conf.py`、migration 與 AGENTS.md（除非 5.2 已先經使用者同意修訂）
+
+## Workflow follow-up
+
+- 封存前請使用者核對 README 的驗收紀錄與仍在計費的資源；封存後更新路線圖的狀態與日期。
+- 展示期結束（2026-12-31）後執行 `teardown`，或決定保留環境給 `rpg-ops-loadtest`（design 的 Open Questions）。
+- 每個階段結束更新 HANDOFF.md（不進 commit）。
