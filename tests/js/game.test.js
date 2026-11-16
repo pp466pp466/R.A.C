@@ -467,7 +467,7 @@ function revisionGame({ indexedDB = null, lastTurn = {} } = {}) {
         id: STATE.session.id, title: '青雲問道', content_tier: 'safe', status: 'active', ended: false, version: 1, completed_turns: 2,
         opening: { state: 'ready', text: '第零幕。' }, world: { elapsed_months: 0, location: '山門', summary: '', goals: [], places: [], protagonist_age: 16 },
         notebook: { version: 0, length: 0, capacity: 2000, full: false },
-        last_turn: Object.assign({ client_msg_id: 't2', seq: 2, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 30 }, lastTurn),
+        last_turn: Object.assign({ client_msg_id: 't2', seq: 2, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 0 }, lastTurn),
       } } });
     }
     if (/\/turns$/.test(request.url)) {
@@ -513,7 +513,7 @@ test('mounting the real page shows the revision buttons under the last turn of t
   assert.equal(page.reviseKey.value, 'turn:t2');
   assert.equal(page.reviseDisabled.value, false);
   assert.equal(page.regenerateNote.value, '免費還剩 2 次');
-  assert.equal(page.editNote.value, '30 幣');
+  assert.equal(page.editNote.value, '免費還剩 2 次');                                // 編輯與重新生成共用同一組免費次數
   assert.deepEqual(Array.from(page.items.value.filter((item) => item.key === page.reviseKey.value).map((item) => item.story)), ['劇情2']);
   assert.deepEqual(game.logs, []);
   assert.deepEqual(game.storageWrites, []);

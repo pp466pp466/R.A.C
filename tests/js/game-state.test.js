@@ -1013,8 +1013,11 @@ test('reasonProblem never echoes the reason itself', () => {
 });
 
 test('lastTurnView keeps the known fields with the right types, and the reason only from the enumeration', () => {
-  const view = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 2, revisable: true, reason: null, free_left: 1, regenerate_cost: 0, edit_cost: 30, extra: 'x' });
-  assert.deepEqual(view, { clientMsgId: 'c9', seq: 9, revision: 2, revisable: true, reason: '', freeLeft: 1, regenerateCost: 0, editCost: 30 });
+  // 還有免費次數時重新生成與編輯的幣價都是 0（共用免費次數，2026-11-16 規則修訂）；用完才都是一輪的幣價
+  const view = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 2, revisable: true, reason: null, free_left: 1, regenerate_cost: 0, edit_cost: 0, extra: 'x' });
+  assert.deepEqual(view, { clientMsgId: 'c9', seq: 9, revision: 2, revisable: true, reason: '', freeLeft: 1, regenerateCost: 0, editCost: 0 });
+  const usedUp = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 3, revisable: true, reason: null, free_left: 0, regenerate_cost: 30, edit_cost: 30 });
+  assert.deepEqual(usedUp, { clientMsgId: 'c9', seq: 9, revision: 3, revisable: true, reason: '', freeLeft: 0, regenerateCost: 30, editCost: 30 });
   const blocked = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 1, revisable: false, reason: 'ended', free_left: 0, regenerate_cost: 30, edit_cost: 30 });
   assert.equal(blocked.revisable, false);
   assert.equal(blocked.reason, 'ended');

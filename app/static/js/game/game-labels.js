@@ -272,15 +272,15 @@
   /* 修訂用的固定文字；不認得的鍵退回通用說明。 */
   function revisionText(key) { return labelOf(REVISION_TEXTS, key, REVISION_TEXTS.unavailable); }
 
-  /* 「重新生成」旁的說明：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。 */
+  /* 「重新生成」與「編輯」旁的說明（兩者共用同一組免費次數，2026-11-16 規則修訂）：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。 */
   function revisionRegenerateNote(freeLeft, cost) {
     if (isCount(freeLeft) && freeLeft > 0) { return '免費還剩 ' + freeLeft + ' 次'; }
     if (isCount(cost) && cost > 0) { return cost + ' 幣'; }
     return '';
   }
 
-  /* 「編輯」旁的說明：一輪的幣價；缺值時不顯示數字。 */
-  function revisionEditNote(cost) { return isCount(cost) && cost > 0 ? cost + ' 幣' : ''; }
+  /* 「編輯」旁的說明：與「重新生成」旁相同（共用免費次數，用完顯示一輪的幣價）。 */
+  function revisionEditNote(freeLeft, cost) { return revisionRegenerateNote(freeLeft, cost); }
 
   /* 重新生成 Modal 的費用說明（免費或會消耗多少、目前餘額）。數字不確定的部分不寫出來。 */
   function revisionRegenerateCostLine(freeLeft, cost, balance) {
@@ -289,13 +289,15 @@
     return price + (isCount(balance) ? '（目前餘額 ' + balance + ' 幣）。' : '。');
   }
 
-  /* 編輯 Modal 的餘額與費用說明；餘額不足時改說明不足並指向簽到。 */
-  function revisionEditCostLine(cost, balance, insufficient) {
+  /* 編輯 Modal 的費用說明（與重新生成共用免費次數）：還有免費次數時只說明免費（不提餘額，也不要求餘額）；
+     需要付費時提醒會消耗遊戲幣、原本那輪已扣的幣不退，並顯示費用與目前餘額；餘額不足時改說明不足並指向簽到。數字不確定的部分不寫出來。 */
+  function revisionEditCostLine(freeLeft, cost, balance, insufficient) {
+    if (isCount(freeLeft) && freeLeft > 0) { return '這次編輯免費（免費還剩 ' + freeLeft + ' 次）。'; }
     var price = isCount(cost) && cost > 0 ? cost + ' 幣' : '遊戲幣';
     if (insufficient) {
       return '遊戲幣不足' + (isCount(balance) ? '：目前餘額 ' + balance + ' 幣，' : '，') + '這次編輯需要 ' + price + '。可以先簽到領取免費遊戲幣。';
     }
-    return '這次編輯需要 ' + price + (isCount(balance) ? '，目前餘額 ' + balance + ' 幣。' : '。');
+    return '這次編輯會消耗' + (isCount(cost) && cost > 0 ? ' ' + price : price) + '，原本那輪已扣的幣不退' + (isCount(balance) ? '（目前餘額 ' + balance + ' 幣）。' : '。');
   }
 
   /* 不能重新生成或編輯的原因（`last_turn.reason` 的列舉）；不認得的退回通用說明。 */

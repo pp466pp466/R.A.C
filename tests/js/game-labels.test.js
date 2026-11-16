@@ -310,9 +310,20 @@ test('the regenerate note shows the free count while there is one, the price onc
   assert.equal(Game.revisionRegenerateNote(0, 0), '');                                       // 幣價 0 不是有意義的價格
 });
 
-test('the edit note is the price of one turn, and empty when the price is unknown', () => {
-  assert.equal(Game.revisionEditNote(30), '30 幣');
-  for (const junk of [0, -1, 1.5, '30', NaN, null, undefined]) { assert.equal(Game.revisionEditNote(junk), '', String(junk)); }
+// 2026-11-16 規則修訂：編輯與重新生成共用同一組每回合免費次數，所以「編輯」旁的說明與「重新生成」旁完全相同。
+test('the edit note shares the free count with the regenerate note: the remaining free times first, the price once they are used up, and nothing when neither is certain', () => {
+  assert.equal(Game.revisionEditNote(2, 30), '免費還剩 2 次');
+  assert.equal(Game.revisionEditNote(1, 30), '免費還剩 1 次');
+  assert.equal(Game.revisionEditNote(1, 0), '免費還剩 1 次');                                 // 免費次數內伺服器給的編輯幣價是 0，不影響顯示
+  assert.equal(Game.revisionEditNote(0, 30), '30 幣');
+  assert.equal(Game.revisionEditNote(0, 45), '45 幣');
+  assert.equal(Game.revisionEditNote(0, null), '');
+  assert.equal(Game.revisionEditNote(null, 30), '30 幣');
+  assert.equal(Game.revisionEditNote(null, null), '');
+  for (const junk of [-1, 1.5, '2', NaN, undefined]) { assert.equal(Game.revisionEditNote(junk, junk), '', String(junk)); }
+  for (const [freeLeft, cost] of [[2, 30], [1, 30], [0, 30], [0, null], [null, 30], [null, null], [0, 0], [3, 0]]) {
+    assert.equal(Game.revisionEditNote(freeLeft, cost), Game.revisionRegenerateNote(freeLeft, cost), `${freeLeft}/${cost}`);   // 兩個按鈕旁永遠一致
+  }
 });
 
 test('the regenerate modal says whether it is free or what it costs, and leaves out a number it does not know', () => {
@@ -324,13 +335,32 @@ test('the regenerate modal says whether it is free or what it costs, and leaves 
   assert.ok(!/undefined|null|NaN/.test(Game.revisionRegenerateCostLine(undefined, undefined, undefined)));
 });
 
-test('the edit modal shows the balance and the price, and when the balance is short says so and points to the daily check-in', () => {
-  assert.equal(Game.revisionEditCostLine(30, 230, false), '這次編輯需要 30 幣，目前餘額 230 幣。');
-  assert.equal(Game.revisionEditCostLine(30, null, false), '這次編輯需要 30 幣。');
-  const short = Game.revisionEditCostLine(30, 10, true);
+test('the edit modal says it is free while there are free times left, without asking about the balance', () => {
+  assert.equal(Game.revisionEditCostLine(2, 0, 230, false), '這次編輯免費（免費還剩 2 次）。');
+  assert.equal(Game.revisionEditCostLine(1, 30, 230, false), '這次編輯免費（免費還剩 1 次）。');
+  for (const balance of [0, 10, 230, null, undefined]) {                                       // 餘額多少都不影響：免費次數內不要求餘額，也不提餘額
+    const line = Game.revisionEditCostLine(1, 30, balance, false);
+    assert.equal(line, '這次編輯免費（免費還剩 1 次）。', String(balance));
+    assert.ok(!line.includes('餘額') && !line.includes('消耗') && !line.includes('不退'), String(balance));
+  }
+  assert.ok(!Game.revisionEditCostLine(2, 30, 0, true).includes('不足'), '免費次數內即使被誤傳「不足」也不顯示不足');   // 免費優先：防呆
+});
+
+test('once the free times are used up the edit modal reminds that it consumes game coins and that the coins already spent on the turn are not refunded, with the price and the balance', () => {
+  const line = Game.revisionEditCostLine(0, 30, 230, false);
+  assert.equal(line, '這次編輯會消耗 30 幣，原本那輪已扣的幣不退（目前餘額 230 幣）。');
+  assert.equal(Game.revisionEditCostLine(0, 30, null, false), '這次編輯會消耗 30 幣，原本那輪已扣的幣不退。');
+  assert.equal(Game.revisionEditCostLine(0, null, 230, false), '這次編輯會消耗遊戲幣，原本那輪已扣的幣不退（目前餘額 230 幣）。');
+  assert.equal(Game.revisionEditCostLine(null, 30, 230, false), line);                         // 免費次數不確定：照需付費說明（真正是否收費由伺服器決定）
+  assert.ok(!line.includes('歸零'), '編輯不再使免費次數歸零');
+});
+
+test('when the free times are used up and the balance is short the edit modal says so and points to the daily check-in', () => {
+  const short = Game.revisionEditCostLine(0, 30, 10, true);
   assert.ok(short.includes('遊戲幣不足') && short.includes('目前餘額 10 幣') && short.includes('需要 30 幣') && short.includes('簽到'));
-  assert.ok(Game.revisionEditCostLine(null, null, true).includes('簽到'));
-  assert.ok(!/undefined|null|NaN/.test(Game.revisionEditCostLine(undefined, undefined, true)));
+  assert.ok(Game.revisionEditCostLine(0, null, null, true).includes('簽到'));
+  assert.ok(!/undefined|null|NaN/.test(Game.revisionEditCostLine(undefined, undefined, undefined, true)));
+  assert.ok(!/undefined|null|NaN/.test(Game.revisionEditCostLine(undefined, undefined, undefined, false)));
 });
 
 test('every not-revisable reason has its own explanation; an unknown reason has the general one and never shows the raw value', () => {

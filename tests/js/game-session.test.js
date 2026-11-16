@@ -869,12 +869,12 @@ test('the whole flow writes nothing to the console or to browser storage, and th
 
 // ---- 重新生成與編輯最後一輪的接點（rpg-turn-revision 4.4）----------------------------------------------------
 
-const LAST_TURN = { client_msg_id: 't2', seq: 2, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 30 };
+const LAST_TURN = { client_msg_id: 't2', seq: 2, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 0 };   // 還有免費次數：兩種操作的幣價都是 0（2026-11-16 規則修訂）
 const twoTurns = () => [turnView(1, 't1', '行動1', '劇情1', { revision: 1 }), turnView(2, 't2', '行動2', '劇情2', { revision: 1 })];
 
 test('the last-turn information of the snapshot is kept in memory in a fixed shape, follows every later snapshot, and a missing or broken one means "unknown"', async () => {
   const h = await ready({ turns: twoTurns(), session: { completed_turns: 2, last_turn: LAST_TURN } });
-  assert.deepEqual(plain(h.session.lastTurn.value), { clientMsgId: 't2', seq: 2, revision: 1, revisable: true, reason: '', freeLeft: 2, regenerateCost: 0, editCost: 30 });
+  assert.deepEqual(plain(h.session.lastTurn.value), { clientMsgId: 't2', seq: 2, revision: 1, revisable: true, reason: '', freeLeft: 2, regenerateCost: 0, editCost: 0 });
   h.server.session.last_turn = Object.assign({}, LAST_TURN, { revision: 2, free_left: 1 });
   await sendAction(h, '再往前', normalTurn({ seq: 3, clientMsgId: 'msg-1', story: '第三輪。' }));
   await h.until(() => h.calls.snapshot.length >= 2, '完成後重讀快照');

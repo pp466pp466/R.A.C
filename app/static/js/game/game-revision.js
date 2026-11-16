@@ -15,8 +15,10 @@
  *   已完結、閘門非空、後端說不可修訂（`ended`、`not_last`）時不顯示；離線、串流中或修訂中、有一筆還沒確認的行動、`in_progress`、`no_snapshot` 時停用並說明原因。
  * - **重新生成 Modal**：必須選分類並填理由（字數範圍取自初始狀態，以 Unicode 字元計）才能送出；說明「理由會提供營運團隊檢視，不會送給 AI」。
  *   **理由與分類只存在記憶體**（Modal 的狀態與請求本文）：不進 IndexedDB、不進任何瀏覽器儲存、不進主控台、不進通知與錯誤訊息；取消不送出任何請求。
- * - **編輯 Modal**：以原行動預填，提醒會再次消耗遊戲幣、原本那輪已扣的幣不退、免費重新生成次數會歸零，並顯示餘額與費用；餘額不足、空白、超過字數、與原行動相同時不能送出
- *   （餘額不足時說明並可用既有的每日簽到）。字數與空白檢查與送出新行動一致（`Game.actionProblem`）。
+ * - **編輯 Modal**：以原行動預填。編輯與重新生成**共用同一組每回合免費次數**（2026-11-16 規則修訂）：還有免費次數時說明「這次編輯免費（免費還剩 N 次）」，不要求餘額；
+ *   免費次數用完才提醒會消耗遊戲幣、原本那輪已扣的幣不退，並顯示費用與餘額。空白、超過字數、與原行動相同時不能送出，**需付費且餘額不足**時也不能送出
+ *   （說明並可用既有的每日簽到；免費次數內餘額為 0 仍可送出，免費次數不確定時由伺服器決定）。字數與空白檢查與送出新行動一致（`Game.actionProblem`）。
+ *   成功的編輯與重新生成一樣用掉一次免費次數（`done.free_left` 減 1，不歸零）。
  * - **流程**：先寫在途紀錄（種類與 `expected_revision`，編輯另含新行動；**不含理由與分類**）-> `TurnStream.run`（`…/turns/<client_msg_id>/regenerate|edit/stream`）->
  *   事件到氣泡（新文字以打字機顯示在最後一輪的覆蓋層，舊內容原封不動留在歷史裡）-> `finally`：不論結果都從最後一輪的前一個序號起重讀、重讀快照、恢復按鈕。
  *   成功（`done` 為 complete／ended）以後端內容覆寫；被擋、錯誤、逾時、中斷、取消都拿掉覆蓋層就還原舊內容，並以 Toast 說明（確定的失敗一律說「已保留原本的回應，沒有扣遊戲幣、
@@ -134,7 +136,7 @@
     function freeLeft() { var last = host.lastTurn.value; return last ? last.freeLeft : null; }
 
     var regenerateNote = computed(function () { return visible.value ? Game.revisionRegenerateNote(freeLeft(), priceOf(KIND_REGENERATE)) : ''; });
-    var editNote = computed(function () { return visible.value ? Game.revisionEditNote(priceOf(KIND_EDIT)) : ''; });
+    var editNote = computed(function () { return visible.value ? Game.revisionEditNote(freeLeft(), priceOf(KIND_EDIT)) : ''; });
 
     // ---- 重新生成 Modal -----------------------------------------------------------------------------
     var regenerateOptions = computed(function () {
@@ -167,7 +169,10 @@
       var now = target.value;
       return now && trim(editDraft.value) === trim(now.action) ? Game.revisionText('edit_unchanged') : '';
     });
+    /* 只有「確定免費次數已用完（為 0）、需要付費、且餘額低於幣價」才算不足：免費次數內（餘額為 0 也一樣）不要求餘額；
+       免費次數、幣價或餘額不確定時前端不擋，由伺服器決定（需付費而不足時回 409 `insufficient_coins`）。 */
     var editInsufficient = computed(function () {
+      if (freeLeft() !== 0) { return false; }
       var price = priceOf(KIND_EDIT);
       var balance = wallet.balance.value;
       return isCount(price) && isCount(balance) && balance < price;
@@ -178,7 +183,7 @@
       var rejection = editRejection.value;
       return rejection && rejection.draft === editDraft.value ? rejection.message : '';
     });
-    var editCostLine = computed(function () { return Game.revisionEditCostLine(priceOf(KIND_EDIT), wallet.balance.value, editInsufficient.value); });
+    var editCostLine = computed(function () { return Game.revisionEditCostLine(freeLeft(), priceOf(KIND_EDIT), wallet.balance.value, editInsufficient.value); });
 
     // ---- 小工具 -------------------------------------------------------------------------------------
     function newController() { return typeof deps.AbortController === 'function' ? new deps.AbortController() : null; }

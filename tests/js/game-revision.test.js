@@ -17,8 +17,9 @@ const REASON = '這段劇情重複又無聊的標記字樣';
 const CATEGORY = 'repetitive_or_dull';
 const NEW_STORY = '新的劇情：你推開了後門。';
 
+// 後端契約（2026-11-16 規則修訂）：還有免費次數時，重新生成與編輯的幣價都是 0；用完才是一輪的幣價。
 const lastTurnOf = (extra) => Object.assign({
-  client_msg_id: 't3', seq: 3, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 30,
+  client_msg_id: 't3', seq: 3, revision: 1, revisable: true, reason: null, free_left: 2, regenerate_cost: 0, edit_cost: 0,
 }, extra);
 
 const threeTurns = () => [
@@ -50,7 +51,8 @@ function revisionPlan({ kind = 'regenerate', story = NEW_STORY, revision = 1, fr
       stored.story = story;
       stored.revision = revision + 1;
       if (action !== undefined) { stored.action = action; }
-      server.session.last_turn = Object.assign({}, server.session.last_turn, { revision: revision + 1, free_left: freeLeft, regenerate_cost: freeLeft > 0 ? 0 : 30 });
+      const cost = freeLeft > 0 ? 0 : 30;
+      server.session.last_turn = Object.assign({}, server.session.last_turn, { revision: revision + 1, free_left: freeLeft, regenerate_cost: cost, edit_cost: cost });
     },
   };
 }
@@ -89,14 +91,23 @@ async function edit(h, plan, action = '改成走後門') {
 
 // ---- 按鈕只在最後一輪 -------------------------------------------------------------------------------------
 
-test('only the last of three complete turns has the buttons, and they are usable with the free count and the price shown beside them', async () => {
+test('only the last of three complete turns has the buttons, and they are usable with the shared free count shown beside both of them', async () => {
   const h = await ready();
   assert.equal(h.revision.reviseKey.value, 'turn:t3');
   assert.deepEqual(h.timeline().filter((item) => item.key === h.revision.reviseKey.value).map((item) => item.clientMsgId), ['t3']);   // 其他回合、第 0 幕不會是這個 key
   assert.equal(h.revision.reviseDisabled.value, false);
   assert.equal(h.revision.reviseHint.value, '');
   assert.equal(h.revision.regenerateNote.value, '免費還剩 2 次');
-  assert.equal(h.revision.editNote.value, '30 幣');
+  assert.equal(h.revision.editNote.value, '免費還剩 2 次');                          // 編輯與重新生成共用同一組免費次數
+});
+
+test('the edit note follows the free count exactly like the regenerate note: it shows the remaining free times, then the price', async () => {
+  const one = await ready({ session: { last_turn: lastTurnOf({ free_left: 1 }) } });
+  assert.equal(one.revision.regenerateNote.value, '免費還剩 1 次');
+  assert.equal(one.revision.editNote.value, '免費還剩 1 次');
+  const none = await ready({ session: { last_turn: lastTurnOf({ free_left: 0, regenerate_cost: 30, edit_cost: 30 }) } });
+  assert.equal(none.revision.regenerateNote.value, '30 幣');
+  assert.equal(none.revision.editNote.value, '30 幣');
 });
 
 test('once the free count is used up the regenerate note shows the price instead, and the price comes from the wallet rather than a constant', async () => {
@@ -363,7 +374,7 @@ test('the in-flight record handed to the store never carries the reason or the c
   const original = h.store.setInflight;
   h.store.setInflight = (id, entry) => { handed.push(JSON.stringify(entry)); return original(id, entry); };
   await regenerate(h, revisionPlan());
-  await edit(h, revisionPlan({ kind: 'edit', revision: 2, freeLeft: 2, action: '改成走後門' }));
+  await edit(h, revisionPlan({ kind: 'edit', revision: 2, freeLeft: 0, action: '改成走後門' }));
   assert.equal(handed.length, 2);
   for (const entry of handed) { for (const marker of [REASON, CATEGORY, 'reason', 'category']) { assert.ok(!entry.includes(marker), marker); } }
   assert.ok(handed[1].includes('改成走後門'));                                       // 編輯的新行動在紀錄裡（重新整理後判定要用）
@@ -386,14 +397,14 @@ test('a success is kept on screen even when the re-read after it fails: the new 
 
 // ---- 編輯 -------------------------------------------------------------------------------------------------
 
-test('the edit modal is prefilled with the original action and shows the cost and the balance; the original text is not a change', async () => {
+test('the edit modal is prefilled with the original action and says the edit is free while there are free times left; the original text is not a change', async () => {
   const h = await ready();
   assert.equal(h.revision.openEdit(), true);
   assert.equal(h.revision.editOpen.value, true);
   assert.equal(h.revision.editDraft.value, '行動3');
   assert.equal(h.revision.editCanSubmit.value, false);
   assert.equal(h.revision.editHint.value, Labels.revisionText('edit_unchanged'));
-  assert.equal(h.revision.editCostLine.value, '這次編輯需要 30 幣，目前餘額 230 幣。');
+  assert.equal(h.revision.editCostLine.value, '這次編輯免費（免費還剩 2 次）。');
   assert.equal(h.revision.editInsufficient.value, false);
   assert.equal(h.revision.editCount.value, '3 / 1000');
   h.revision.editDraft.value = '  行動3  ';                                          // 頭尾空白不算改動
@@ -419,8 +430,32 @@ test('an empty or too long edit cannot be sent, with the same checks as sending 
   assert.equal(await h.revision.submitEdit().then(() => 0), 0);                    // 只確認可以走到送出（下面的測試檢查請求）
 });
 
-test('with a balance below the price the edit cannot be sent and the modal says so and points to the daily check-in', async () => {
-  const h = await ready({ wallet: { total: 10 } });
+const USED_UP = () => ({ last_turn: lastTurnOf({ free_left: 0, regenerate_cost: 30, edit_cost: 30 }) });
+
+test('with free times left the edit can be sent even when the balance is below the price or zero, and the modal does not mention the balance', async () => {
+  for (const total of [10, 0]) {
+    const h = await ready({ wallet: { total } });
+    h.revision.openEdit();
+    h.revision.editDraft.value = '走後門';
+    assert.equal(h.revision.editInsufficient.value, false, `balance ${total}`);
+    assert.equal(h.revision.editCanSubmit.value, true, `balance ${total}`);
+    assert.equal(h.revision.editCostLine.value, '這次編輯免費（免費還剩 2 次）。');
+    assert.ok(!h.revision.editCostLine.value.includes('不足') && !h.revision.editCostLine.value.includes('餘額'));
+  }
+});
+
+test('with the free times used up the edit modal reminds that it consumes game coins, that the coins already spent are not refunded, and shows the price and the balance', async () => {
+  const h = await ready({ session: USED_UP() });
+  h.revision.openEdit();
+  h.revision.editDraft.value = '走後門';
+  assert.equal(h.revision.editCostLine.value, '這次編輯會消耗 30 幣，原本那輪已扣的幣不退（目前餘額 230 幣）。');
+  assert.equal(h.revision.editInsufficient.value, false);
+  assert.equal(h.revision.editCanSubmit.value, true);
+  assert.ok(!h.revision.editCostLine.value.includes('歸零'));
+});
+
+test('with the free times used up and a balance below the price the edit cannot be sent and the modal says so and points to the daily check-in', async () => {
+  const h = await ready({ wallet: { total: 10 }, session: USED_UP() });
   h.revision.openEdit();
   h.revision.editDraft.value = '走後門';
   assert.equal(h.revision.editInsufficient.value, true);
@@ -431,19 +466,36 @@ test('with a balance below the price the edit cannot be sent and the modal says 
   assert.equal(h.revision.editCanSubmit.value, true);
 });
 
-test('an unknown balance or price never blocks the edit on the client (the server decides)', async () => {
-  const h = await ready({ wallet: { total: 230, cost: null }, session: { last_turn: lastTurnOf({ edit_cost: null }) } });
+test('the balance check follows the free count while the modal is open: using the last free time turns a zero balance into a blocked edit', async () => {
+  const h = await ready({ wallet: { total: 0 }, session: { last_turn: lastTurnOf({ free_left: 1 }) } });
+  h.revision.openEdit();
+  h.revision.editDraft.value = '走後門';
+  assert.equal(h.revision.editCanSubmit.value, true);
+  h.session.lastTurn.value = Object.assign({}, h.session.lastTurn.value, { freeLeft: 0, regenerateCost: 30, editCost: 30 });   // 例如另一個分頁用掉最後一次，快照重讀之後
+  assert.equal(h.revision.editInsufficient.value, true);
+  assert.equal(h.revision.editCanSubmit.value, false);
+});
+
+test('an unknown free count, balance or price never blocks the edit on the client (the server decides)', async () => {
+  const h = await ready({ wallet: { total: 230, cost: null }, session: { last_turn: lastTurnOf({ free_left: 0, regenerate_cost: null, edit_cost: null }) } });
   h.server.walletFailure = failureInfo(0, 'network', { kind: 'network' });
   h.revision.openEdit();
   h.revision.editDraft.value = '走後門';
   assert.equal(h.revision.editInsufficient.value, false);
   assert.equal(h.revision.editCanSubmit.value, true);
+  const unknownFree = await ready({ wallet: { total: 0 } });
+  unknownFree.revision.openEdit();
+  unknownFree.revision.editDraft.value = '走後門';
+  unknownFree.session.lastTurn.value = Object.assign({}, unknownFree.session.lastTurn.value, { freeLeft: null, editCost: 30 });   // 不知道還有沒有免費次數：不在前端擋
+  assert.equal(unknownFree.revision.editInsufficient.value, false);
+  assert.equal(unknownFree.revision.editCanSubmit.value, true);
+  assert.ok(!/undefined|null|NaN/.test(unknownFree.revision.editCostLine.value + unknownFree.revision.editNote.value));
 });
 
 test('an edit sends the new action with the same client_msg_id, shows the new action in the bubble while it streams, and keeps it in the in-flight record', async () => {
   const h = await ready();
   const observed = [];
-  const plan = revisionPlan({ kind: 'edit', story: '你從後門溜了進去。', freeLeft: 2, action: '改成走後門' });
+  const plan = revisionPlan({ kind: 'edit', story: '你從後門溜了進去。', freeLeft: 1, action: '改成走後門' });
   plan.events.splice(2, 0, async () => { observed.push({ bubble: plain(bubble(h)), record: await h.store.getInflight(SESSION_ID) }); });
   await edit(h, plan);
   const call = h.calls.streams[0];
@@ -454,10 +506,45 @@ test('an edit sends the new action with the same client_msg_id, shows the new ac
   assert.deepEqual(plain(observed[0].record), { client_msg_id: 't3', action: '改成走後門', created_at: '2026-11-12T12:00:00.000Z', kind: 'edit', expected_revision: 1 });
   assert.equal(bubble(h).action, '改成走後門');
   assert.equal(bubble(h).story, '你從後門溜了進去。');
-  assert.equal(h.revision.regenerateNote.value, '免費還剩 2 次');                     // 編輯使免費次數歸零重來
+  assert.equal(h.revision.regenerateNote.value, '免費還剩 1 次');                     // 編輯用掉一次免費次數（2 → 1），不歸零
+  assert.equal(h.revision.editNote.value, '免費還剩 1 次');
   assert.equal(await h.store.getInflight(SESSION_ID), null);
   assert.equal(h.revision.editOpen.value, false);
   assert.equal(h.revision.editDraft.value, '');
+});
+
+test('an edit and a regenerate use the same free count: two operations in either order use it up and the third one shows the price, on both buttons and in both modals', async () => {
+  for (const order of [['edit', 'regenerate'], ['regenerate', 'edit'], ['edit', 'edit'], ['regenerate', 'regenerate']]) {
+    const h = await ready();
+    let revision = 1;
+    let freeLeft = 2;
+    for (const kind of order) {
+      freeLeft -= 1;
+      const plan = revisionPlan({ kind, revision, freeLeft, story: `第 ${revision + 1} 版的劇情。`, action: kind === 'edit' ? `改過的行動${revision}` : undefined });
+      if (kind === 'edit') { await edit(h, plan, `改過的行動${revision}`); } else { await regenerate(h, plan); }
+      revision += 1;
+      assert.equal(h.revision.regenerateNote.value, freeLeft > 0 ? `免費還剩 ${freeLeft} 次` : '30 幣', order.join('>'));
+      assert.equal(h.revision.editNote.value, h.revision.regenerateNote.value, order.join('>'));               // 兩個按鈕旁永遠一致
+    }
+    assert.deepEqual(h.calls.streams.map((call) => call.body.expected_revision), [1, 2], order.join('>'));
+    h.revision.openEdit();                                                                                   // 用完之後：編輯 Modal 改為需付費的說明
+    assert.equal(h.revision.editCostLine.value, '這次編輯會消耗 30 幣，原本那輪已扣的幣不退（目前餘額 230 幣）。', order.join('>'));
+    h.revision.closeEdit();
+    h.revision.openRegenerate();
+    assert.equal(h.revision.regenerateCostLine.value, '這次重新生成會消耗 30 遊戲幣（目前餘額 230 幣）。', order.join('>'));
+    h.revision.closeRegenerate();
+  }
+});
+
+test('a free edit is sent and completes with a zero balance, and the free count goes down by one', async () => {
+  const h = await ready({ wallet: { total: 0 } });
+  await edit(h, revisionPlan({ kind: 'edit', freeLeft: 1, coins: 0, action: '改成走後門' }));
+  assert.equal(h.calls.streams.length, 1);
+  assert.deepEqual(h.calls.streams[0].body, { expected_revision: 1, action: '改成走後門' });
+  assert.equal(bubble(h).action, '改成走後門');
+  assert.equal(h.revision.editNote.value, '免費還剩 1 次');
+  assert.deepEqual(h.toasts, []);
+  assert.equal(h.wallet.balance.value, 0);
 });
 
 test('the edit action is trimmed before it is sent and shown as plain text: markup in it is never interpreted', async () => {
@@ -624,7 +711,7 @@ test('not-revisable because something is in progress keeps the buttons but disab
 });
 
 test('insufficient coins on the server opens the wallet modal that says the original response is kept, and nothing else changes', async () => {
-  const h = await ready({ wallet: { total: 230 } });
+  const h = await ready({ wallet: { total: 230 }, session: USED_UP() });             // 免費次數用完的付費編輯（餘額在這個瞬間被別處花掉，所以伺服器仍回 409）
   await edit(h, rejection(409, 'insufficient_coins', { balance: 10, needed: 30 }));
   assert.equal(h.wallet.coinModalOpen.value, true);
   assert.match(h.wallet.coinModalText.value, /目前餘額 10 幣/);

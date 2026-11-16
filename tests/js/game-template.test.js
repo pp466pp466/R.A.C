@@ -172,11 +172,13 @@ test('the regenerate modal is a self-made Vue modal that explains where the reas
   assert.ok(!/(?<![\w.-])\d+(?![\w.-])/.test(block.replace(/status-code="[^"]*"/, '').replace(/class="[^"]*"/g, '')), '理由字數範圍與幣價只能來自程式的狀態，樣板不寫死數字');
 });
 
-test('the edit modal reminds about the second charge, the lost refund and the reset of the free count, shows the balance line, and offers the check-in only when the balance is short', () => {
+test('the edit modal takes its free-or-paid explanation from one computed line, no longer carries the old fixed reminder or the reset of the free count, and offers the check-in only when the balance is short', () => {
   const html = read(TEMPLATE);
   const block = modalBlock(html, 'editOpen');
-  for (const phrase of ['再次消耗遊戲幣', '原本那輪已扣的幣不退', '免費重新生成次數會歸零']) { assert.ok(block.includes(phrase), phrase); }
-  assert.ok(block.includes('{{ editCostLine }}'));
+  // 2026-11-16 規則修訂：編輯與重新生成共用免費次數、編輯不歸零；免費或需付費的說明（含「原本那輪已扣的幣不退」）由 editCostLine 依免費次數決定，樣板不再寫死提醒。
+  for (const phrase of ['再次消耗遊戲幣', '原本那輪已扣的幣不退', '免費重新生成次數會歸零', '歸零']) { assert.ok(!block.includes(phrase), phrase); }
+  assert.equal(block.split('{{ editCostLine }}').length - 1, 1);
+  assert.ok(/<p[^>]*role="status"[^>]*>\{\{ editCostLine \}\}<\/p>/.test(block));
   assert.ok(/<textarea[^>]*v-model="editDraft"/.test(block));
   assert.ok(/<button v-if="editInsufficient"[^>]*@click="claimCheckin"/.test(block));
   assert.ok(/:disabled="!editCanSubmit"[^>]*@click="submitEdit"/.test(block));
