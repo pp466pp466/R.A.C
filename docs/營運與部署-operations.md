@@ -482,7 +482,7 @@ flowchart LR
 | 映像 | 在主機上以 `git archive <提交短碼>` 的壓縮檔（經 S3）建置，標記 `rac-app:<提交短碼>`；不含 `.env`，以非 root（uid 10001）執行；前一版映像保留供回復 | `deploy_plan()` |
 | 預算與告警 | Budgets：季度 US$75，實際花費 60% 與 90% 兩個門檻寄信；CloudWatch：EC2 狀態檢查連續失敗通知 SNS 主題；收件人由呼叫者提供，沒有預設值 | `build_plan()` 的 `budget` 與 `alarms` 組 |
 
-主機上要放的檔案共 17 個（`host_files()`：Caddyfile、`plain.env`、兩支取出腳本、三個常駐單元、五個排程的各一對 `.service`／`.timer`）。**主機初始化**（建立 `/etc/rac` 與 `/var/lib/rac/caddy`、2 GB 交換檔、安裝並啟動 docker、放置 RDS 的 CA 套件、經 SSM 放置上述檔案、`systemctl daemon-reload` 與啟用單元）**尚未列為計畫步驟**，待決定是新增一組步驟，或在第一次雲端執行時現場撰寫後回寫。
+主機上要放的檔案共 17 個（`host_files()`：Caddyfile、`plain.env`、兩支取出腳本、三個常駐單元、五個排程的各一對 `.service`／`.timer`）。**主機初始化**（建立 `/etc/rac` 與 `/var/lib/rac/caddy`、2 GB 交換檔、安裝並啟動 docker、放置 RDS 的 CA 套件、經 SSM 放置上述檔案、`systemctl daemon-reload` 與啟用單元）**不預先寫成計畫步驟**（使用者 2026-11-16 決定）：第一次雲端執行時在 SSM 上現場撰寫並逐步確認，之後回寫成 `host-init` 計畫步驟與測試（task 4.5）；部署計畫假設這些已完成。
 
 ### 步驟總表
 

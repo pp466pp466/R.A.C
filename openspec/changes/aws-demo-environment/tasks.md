@@ -30,20 +30,22 @@
 - [ ] 4.1 前提確認並記錄（不含機密）：`aws sts get-caller-identity` 的帳號、區域 `ap-southeast-2`、通知信箱、DuckDNS 權杖已放入環境變數、`--secrets-file` 內容齊全；使用者看過 D12 的費用估算並明確同意 `--accept-cost`
 - [ ] 4.2 預覽完整計畫後，逐步執行預算與 SNS、安全群組、IAM 角色、S3 儲存貯體、SSM 參數；每一步以唯讀指令驗證（標籤、規則、政策範圍）並記錄；使用者確認 SNS 訂閱信
 - [ ] 4.3 建立 RDS（等待可用，期間進行 4.4）；驗證：不公開、加密、備份保留天數、安全群組只有主機來源
-- [ ] 4.4 建立 EC2 與 Elastic IP、主機初始化（交換檔、docker、機密取出腳本與單元檔放置）；驗證：只能經 SSM 連入、沒有 22、`/run/rac` 為記憶體檔案系統
-- [ ] 4.5 發現的 AWS CLI 與主機指令差異全部回寫到 `scripts/aws_demo_plan.py` 並補測試，結果記入 README「驗收紀錄（aws-demo-environment）」
+- [ ] 4.4 建立 EC2 與 Elastic IP、主機初始化（交換檔、docker、機密取出腳本與單元檔放置）；驗證：只能經 SSM 連入、沒有 22、`/run/rac` 為記憶體檔案系統。**主機初始化沒有預先寫成計畫步驟**（使用者 2026-11-16 決定：不先猜，現場撰寫）：在這一步以 SSM 逐步撰寫並確認——建立 `HOST_DIRECTORIES`、2 GB 交換檔、安裝並啟動 docker、取得 RDS 的 CA 套件放到 `RDS_CA_BUNDLE_PATH`、放置 `host_files()` 的檔案（含繁體中文內容，以 base64 傳，不直接放進 `commands` 的 JSON）、`systemctl daemon-reload` 與啟用單元與計時器
+- [ ] 4.5 發現的 AWS CLI 與主機指令差異全部回寫到 `scripts/aws_demo_plan.py` 並補測試（含 4.4 現場撰寫的主機初始化：寫成 `host-init` 計畫步驟與測試，營運文件第 8 節的步驟總表同步），結果記入 README「驗收紀錄（aws-demo-environment）」
 
-## 5. 資料庫初始化、憑證探測與遷移
+## 5. 映像建置、資料庫初始化、憑證探測與遷移
 
-- [ ] 5.1 執行資料庫初始化（3.1），再執行憑證探測（3.2）使用候選 A（`ServerCertificate` 加 RDS CA 套件，唯讀掛載）；**成功才繼續**
-- [ ] 5.2 若 A 失敗：停止並回報使用者；採用候選 B 之前先以 `/openspec-update-change` 修訂本 change（design D7、tasks、必要的規格），經使用者同意後再改 `Dockerfile`；禁止 `TrustServerCertificate=yes` 與行程範圍的 `SSL_CERT_FILE`。若 A 成功，記錄實際採用的連線字串型態（不含密碼）到營運文件
-- [ ] 5.3 在主機上建置映像（`git archive HEAD` 經 S3、標記提交短碼），確認映像內沒有 `.env`、以非 root 執行
-- [ ] 5.4 建立 RDS 快照，執行 `alembic upgrade head`，驗證 `alembic current` 為最新版（`0018`），再執行 `seed-scripts`；任何一步失敗即停止，不啟動服務
+> 第一次部署**分組執行**（`deploy_plan(groups=…)`，`prepare` 會自動帶上）：5.1 用 `build` 組；5.4 用 `snapshot`、`migrate` 組；`restart`、`verify` 組**不在本組執行**，留到 5.5 `create-admin` 之後與 6.1 一起。資料庫初始化與探測要在主映像內以一次性容器執行，所以映像（5.1）先於它們（5.2）；例行的後續部署則一次跑完整份計畫（快照 → 建置 → 遷移 → 重啟 → 驗證）。
+
+- [ ] 5.1 在主機上建置映像（`deploy_plan` 的 `build` 組：`git archive <提交短碼>` 經 S3、標記提交短碼），確認映像內沒有 `.env`、以非 root 執行
+- [ ] 5.2 執行資料庫初始化（3.1），再執行憑證探測（3.2）使用候選 A（`ServerCertificate` 加 RDS CA 套件，唯讀掛載）；**成功才繼續**
+- [ ] 5.3 若 A 失敗：停止並回報使用者；採用候選 B 之前先以 `/openspec-update-change` 修訂本 change（design D7、tasks、必要的規格），經使用者同意後再改 `Dockerfile`；禁止 `TrustServerCertificate=yes` 與行程範圍的 `SSL_CERT_FILE`。若 A 成功，記錄實際採用的連線字串型態（不含密碼）到營運文件
+- [ ] 5.4 建立 RDS 快照，執行 `alembic upgrade head`，驗證 `alembic current` 為最新版（`0018`），再執行 `seed-scripts`（`deploy_plan` 的 `snapshot`、`migrate` 組）；任何一步失敗即停止，不啟動服務
 - [ ] 5.5 互動步驟：使用者在 SSM 終端機執行 `create-admin`（密碼自己輸入，不經腳本與對話）
 
 ## 6. 服務、入口與網域
 
-- [ ] 6.1 啟動客服池與 RPG 池（`rac-cs`、`rac-rpg`），驗證兩者都以非 root、各用自己的 gunicorn 設定、只綁回送位址；記錄兩個池的常駐記憶體與 `free -m`
+- [ ] 6.1 在 5.5 之後啟動客服池與 RPG 池（`rac-cs`、`rac-rpg`；`deploy_plan` 的 `restart`、`verify` 組），驗證兩者都以非 root、各用自己的 gunicorn 設定、只綁回送位址；記錄兩個池的常駐記憶體與 `free -m`
 - [ ] 6.2 把 `rac001.duckdns.org` 指向 Elastic IP（執行器的 DuckDNS 步驟，使用者確認），啟動 Caddy 並確認憑證簽發、HTTP/2、HTTP 導向 HTTPS；驗證應用程式的 HSTS 與安全標頭經入口仍在
 - [ ] 6.3 驗證分流：`/api/game/…` 由 RPG 池處理、其餘由客服池；停止客服池時 RPG 池的 `/healthz` 仍正常；從主機外部直連應用程式埠被拒絕
 - [ ] 6.4 驗證串流不被緩衝：用 `scripts/acceptance_rpg_turn.py` 的串流情境（或等效的最小請求）經入口量測第一個事件與心跳的到達時間；若入口緩衝，修正 Caddy 設定並補測試（記錄 `scripts/acceptance_rpg_turn.py` 只接受本機位址，需要另寫最小的串流探測或在主機內對回送位址執行並記錄限制）
@@ -66,7 +68,7 @@
 ## 9. 收尾
 
 - [ ] 9.1 依 `docs/README.md` 的對照表更新受影響的設計文件（營運與部署、路線圖：新增本 change 並說明 RC-4 拆成兩個 change、`rpg-ops-loadtest` 以本環境為量測基礎），複查各文件標頭的「對應 change」，並執行 `tests/test_design_docs.py` 通過
-- [ ] 9.2 全套測試通過（`pytest` 與 Node 測試），確認沒有修改 `app/`、`Dockerfile`、`gunicorn*.conf.py`、migration 與 AGENTS.md（除非 5.2 已先經使用者同意修訂）
+- [ ] 9.2 全套測試通過（`pytest` 與 Node 測試），確認沒有修改 `app/`、`Dockerfile`、`gunicorn*.conf.py`、migration 與 AGENTS.md（除非 5.3 已先經使用者同意修訂）
 
 ## Workflow follow-up
 
