@@ -1305,8 +1305,8 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | 端點 | 方法 | 說明 |
 |---|---|---|
 | `/api/game/sessions/<session_id>/turns/stream` | POST | 一個回合。本文 `{"client_msg_id": "1 至 64 字", "action": "1 至 1000 字"}`，回應 `text/event-stream`。已 `complete` 的 `client_msg_id` 重送回傳既有劇情（不呼叫模型、不碰錢包）；`interrupted`／`blocked` 的編號可重送（嘗試序號加 1，預扣用新的鍵） |
-| `/api/game/sessions/<session_id>/turns/<client_msg_id>/regenerate/stream` | POST | 重新生成**最後一輪**的 AI 回應（rpg-turn-revision）。本文 `{"expected_revision": 1, "category": "五個分類之一", "reason": "5 至 50 字"}`，回應 `text/event-stream`（事件同回合；`meta` 帶 `kind`、`attempt` 與修訂前的 `revision`，`done` 帶修訂後的 `revision` 與 `free_left`）。前 2 次免費（設定表 `rpg.free_regenerations`），之後每次一輪的幣價；失敗、被擋、中斷時舊內容原樣保留並退回預扣、不消耗免費次數。理由只進回饋表，不進模型與日誌 |
-| `/api/game/sessions/<session_id>/turns/<client_msg_id>/edit/stream` | POST | 編輯**最後一輪**的玩家輸入後重送。本文 `{"expected_revision": 1, "action": "1 至 1000 字"}`，回應 `text/event-stream`；一律預扣一輪的幣價，成功後該回合的免費重新生成次數歸零；新行動須不同於原行動（422）並通過規則層（422 `input_blocked`）；`client_msg_id` 不變 |
+| `/api/game/sessions/<session_id>/turns/<client_msg_id>/regenerate/stream` | POST | 重新生成**最後一輪**的 AI 回應（rpg-turn-revision）。本文 `{"expected_revision": 1, "category": "五個分類之一", "reason": "5 至 50 字"}`，回應 `text/event-stream`（事件同回合；`meta` 帶 `kind`、`attempt` 與修訂前的 `revision`，`done` 帶修訂後的 `revision` 與 `free_left`）。每回合前 2 次修訂免費（與編輯共用同一組次數，設定表 `rpg.free_regenerations`；免費者不預扣、不需要餘額），之後每次一輪的幣價；失敗、被擋、中斷時舊內容原樣保留並退回預扣、不消耗免費次數。理由只進回饋表，不進模型與日誌 |
+| `/api/game/sessions/<session_id>/turns/<client_msg_id>/edit/stream` | POST | 編輯**最後一輪**的玩家輸入後重送。本文 `{"expected_revision": 1, "action": "1 至 1000 字"}`，回應 `text/event-stream`；與重新生成共用每回合前 2 次免費（免費次數內不預扣、不需要餘額），之後每次預扣一輪的幣價（原本那輪已扣的幣不退），成功不使免費次數歸零；新行動須不同於原行動（422）並通過規則層（422 `input_blocked`）；`client_msg_id` 不變 |
 | `/api/game/sessions/<session_id>/opening/stream` | POST | 第 0 幕（開場），沒有本文欄位。已 `ready`／`fallback` 回傳既有文字、不重新生成；`pending` 取得生成權；他人正在生成回 409 `opening_in_progress`。不扣遊戲幣、不寫回合 |
 | `/api/game/sessions/<session_id>` | GET | 存檔狀態：狀態與是否已完結、第 0 幕（狀態與文字）、世界狀態的玩家視圖（經過月數、地點、摘要、進行中目標、去過的地點、主角年齡；**不含 NPC 角色卡與隱藏特質**）、已完成輪數、版本、記事簿的用量摘要（`notebook`：版本、字數、容量、是否已滿；**不含全文**）。已完結的存檔仍可讀 |
 | `/api/game/sessions/<session_id>/turns` | GET | 回合清單，依 `seq` 遞增。查詢參數 `since_seq`（預設 0，增量同步）與 `limit`（預設與上限 200）；回應 `{turns, has_more}`。只有 `complete` 的回合含劇情；被擋、中斷與生成中的回合只有狀態（`story: null`），被擋的文字永遠不離開伺服器 |
@@ -1339,7 +1339,7 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 - **狀態呼叫失敗不影響文字**：回合照常完成並結算，世界狀態不變（`state.updated: false`）。壽終年齡由 Service 判定，狀態呼叫失敗也照樣完結；模型提議的結局只有自訂結局的劇本才生效。
 - **供應商自己的安全過濾擋下**視為失敗（`error` 事件、退款），不走轉場重生；轉場重生只給伺服器自己的審查層命中。
 - **日誌**：只有內部編號、列舉與整數（`rpg.turn_started`、`rpg.turn_completed`、`rpg.turn_blocked`、`rpg.turn_interrupted`、`rpg.turn_failed`、`rpg.state_failed`、`rpg.session_ended`、`rpg.opening_started`／`ready`／`fallback`／`reset`／`taken_over`）；行動、劇情、世界狀態、NPC 名稱、被擋文字與標記字串都不進日誌（`tests/test_rpg_flow.py` 掃描整段旅程的日誌）。
-- **設定**：`rpg.max_months_per_turn` 存於資料庫，`flask --app wsgi set-rpg-setting`／`show-rpg-settings`（人工類指令，見上節）；`OPENROUTER_REASONING` 控制推理（預設 `false`）。
+- **設定**：`rpg.max_months_per_turn` 與 `rpg.free_regenerations`（每回合前幾次修訂免費，重新生成與編輯共用，rpg-turn-revision）存於資料庫，`flask --app wsgi set-rpg-setting`／`show-rpg-settings`（人工類指令，見上節）；`OPENROUTER_REASONING` 控制推理（預設 `false`）。
 
 ### 部署順序
 
@@ -1358,7 +1358,7 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | `python scripts/acceptance_rpg_turn.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …]` | HTTP 驗收（68 項）：對本機驗收環境走完一位新玩家的整段旅程（年齡確認與首登贈幣 → 開存檔 → 第 0 幕 → 正常、被擋、中斷、重送、客戶端斷線、結局、餘額不足與簽到 → 帳本一致 → 存檔隔離 → 日誌沒有劇情），逐項輸出「通過」「失敗」「未驗證」。**只接受本機位址**（localhost、127.0.0.1），腳本不含機密。結束代碼：沒有失敗為 0、有失敗為 1、位址不是本機為 2 |
 | `scripts/rpg_acceptance_harness.py` | 驗收用的測試替身：假的 RPG 模型（OpenAI 相容，串流、狀態呼叫、記事簿抓取與 `GET /_status` 計數；動作文字的關鍵字 `測試被擋一次`、`測試被擋兩次`、`測試中斷`、`測試慢速`、`測試結局`，以及記事簿的 `測試記事簿超量`、`測試記事簿放棄`、`測試記事簿違規`、`測試記事簿慢速`、修訂（重新生成與編輯最後一輪）的 `測試重生`、`測試重生被擋一次`、`測試重生被擋兩次`、`測試重生中斷`、`測試重生慢速`、`測試重生狀態失敗`、`測試編輯`、`測試狀態失敗` 決定行為；`GET /_status` 另有 `marker_calls`，計算請求內容含「驗收理由標記」的次數，用來證明重新生成的理由沒有送進模型）與「建立全新玩家」小幫手（`GET /fresh/rpg[?coins=N]`，`coins` 是額外補給的付費幣、上限 5000）。本機驗收環境（專案之外的 `newprojet-acceptance`）與 `scripts/verify_container.py` 的容器驗收共用同一份 |
 | `python scripts/acceptance_rpg_notebook.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only basic,full,abandon,rules,eof] [--assert-eof]` | 記事簿的 HTTP 驗收（rpg-notebook 任務 5.1、5.2，開發伺服器加日誌 112 項，約 90 秒）：五個案例各用一位全新玩家——`basic`（11 輪：第 10 輪後仍空、`done` 先到而抓取 5 秒後才完成並在客戶端離開後仍完成、遊戲幣與帳本沒有異動，接著玩家編輯、版本衝突、太長、規則層命中、清空、未登入／缺 CSRF／他人 404）、`full`（31 輪：超量而已滿、原文再儲存被拒、已滿時不呼叫模型、刪到容量以內才能儲存、AI 恢復更新）、`abandon`（精簡重試後仍超過而放棄）、`rules`（規則層整次放棄）、`eof`（11 輪、慢速、第 11 輪不提早離開：量 `done` 到伺服器結束回應的間隔與結束當下的記事簿；`--assert-eof` 才把「間隔小於 1 秒、結束當下仍是空的」當通過條件，容器內的 gunicorn 驗收使用，開發伺服器預設只記錄數字）。提供 `--server-log` 時另驗 `rpg.notebook_*` 事件、模型呼叫的用途 `rpg_notebook` 與整段日誌沒有記事簿文字。同樣只接受本機位址、不含機密、結束代碼同上 |
-| `python scripts/acceptance_rpg_revision.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only journey,privacy,failures,conflicts,rejections,coins,notebook]` | 重新生成與編輯最後一輪的 HTTP 驗收（rpg-turn-revision 任務 5.2，開發伺服器加日誌 176 項，約 80 秒）：七個案例各用一位全新玩家——`journey`（一輪 → 兩次免費重新生成、帳本不動 → 第三次付費淨扣 30 → 編輯淨扣 30 且免費次數歸零 → 再重新生成又免費；每次替換後輪數與序號不變、`revision` 加 1、世界狀態是「還原再套用」）、`privacy`（理由帶標記文字，重新生成的所有模型呼叫都不含它；先以對照回合確認偵測有效）、`failures`（被擋一次自動重生、被擋兩次、上游中斷、狀態呼叫失敗、付費編輯被擋與狀態失敗後退回且再付費只淨扣一次、串流中途斷線釋放認領：都保留舊內容且不消耗免費次數）、`conflicts`（修訂進行中同一個 `expected_revision`、編輯與新行動都得到 409 `turn_in_progress`，完成後以舊的 `expected_revision` 得到 `revision_conflict`）、`rejections`（`not_last`、`ended`、404、驗證、規則層、未登入與缺 CSRF）、`coins`（餘額不足仍可免費重新生成，第三次付費得到 409 `insufficient_coins`）、`notebook`（第 11 輪修訂後記事簿與抓取呼叫不變）。提供 `--server-log` 時另驗 `rpg.revision_*` 事件的筆數、種類與失敗原因，以及整段日誌沒有理由、行動、劇情與被擋的句子。同樣只接受本機位址、不含機密、結束代碼同上 |
+| `python scripts/acceptance_rpg_revision.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only journey,privacy,failures,conflicts,rejections,coins,notebook]` | 重新生成與編輯最後一輪的 HTTP 驗收（rpg-turn-revision 任務 5.2 與規則修訂後的 6.4，開發伺服器加日誌 181 項，約 80 秒）：七個案例各用一位全新玩家——`journey`（一輪 → 重新生成免費 → 編輯免費、帳本不動 → 重新生成付費淨扣 30 → 編輯付費淨扣 30 → 再重新生成仍付費；重新生成與編輯共用免費次數、編輯不歸零；每次替換後輪數與序號不變、`revision` 加 1、世界狀態是「還原再套用」）、`privacy`（理由帶標記文字，重新生成的所有模型呼叫都不含它；先以對照回合確認偵測有效）、`failures`（被擋一次自動重生、被擋兩次、上游中斷、狀態呼叫失敗、免費編輯被擋兩次沒有預扣且次數不變、付費編輯被擋與狀態失敗後退回且再付費只淨扣一次、串流中途斷線釋放認領：都保留舊內容且不消耗免費次數）、`conflicts`（修訂進行中同一個 `expected_revision`、編輯與新行動都得到 409 `turn_in_progress`，完成後以舊的 `expected_revision` 得到 `revision_conflict`）、`rejections`（`not_last`、`ended`、404、驗證、規則層、未登入與缺 CSRF）、`coins`（餘額不足一輪時，免費次數內的編輯與重新生成都仍可進行，用完後兩者都得到 409 `insufficient_coins`）、`notebook`（第 11 輪修訂後記事簿與抓取呼叫不變）。提供 `--server-log` 時另驗 `rpg.revision_*` 事件的筆數、種類與失敗原因，以及整段日誌沒有理由、行動、劇情與被擋的句子。同樣只接受本機位址、不含機密、結束代碼同上 |
 | `python scripts/acceptance_rpg_real_model.py --base-url http://localhost:5011 [--server-log …] [--notebook]` | **真實模型驗證**（人工執行、不是自動測試）：對第二個應用程式行程（用 `.env` 的 OpenRouter 設定，資料庫用驗收環境的；要讀日誌就把該行程的輸出導向檔案）各跑一次第 0 幕與三個回合，輸出首字與整段時間、字數、狀態事件與日誌事件。`--notebook`（rpg-notebook 任務 5.3）改為走 11 輪（向小幫手補給 330 付費幣），第 11 輪結束後輪詢記事簿，輸出條數與各條字數（對照提示詞的 5 條、50 字）、耗時與全文，並統計日誌事件。只送劇本內建內容與寫死的示範行動，沒有個資 |
 
 ### 驗收紀錄（rpg-turn-engine，2026-11-10，已提交 `70e6786`，已封存）
@@ -1381,6 +1381,43 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | **正式模型與提示詞** | 只驗證了免費的 nemotron；時間、字數（偏長）與品質（重複段落、錯字）要在最終選定的模型上驗收 |
 | **多 worker 容量與全站同時串流上限** | 屬 RC-4（壓測）；每個進行中的串流多佔一條上游讀取執行緒，gunicorn 的 `workers`／`threads` 是初始值 |
 | **畫面** | 屬 RC-3（打字機、轉場文字、逾時與重送） |
+
+## RPG 重新生成與編輯（rpg-turn-revision）
+
+change `rpg-turn-revision`（RC-2c）。玩家只能對**最後一輪**重新生成 AI 的回應，或編輯該輪的玩家輸入後重送；AI 的輸出玩家不能直接修改。端點與開始前的錯誤代碼見上方「RPG 回合引擎」的端點表（兩個 `…/regenerate/stream`、`…/edit/stream`）；規範在 AGENTS.md 第 7、10、11 節（2026-11-16 修訂：編輯與重新生成共用每回合前 2 次免費，`437a5f5`）；設計見 `openspec/changes/rpg-turn-revision/design.md`（D1 至 D10），流程圖見 [docs/系統架構-architecture.md](docs/系統架構-architecture.md) 的「RPG 修訂」，決定紀錄見 [docs/RPG.md](docs/RPG.md) 7.8.1。**尚未封存**（剩 5.5 全套測試）。
+
+### 設計重點
+
+- **費用與免費次數**：每個回合前 `rpg.free_regenerations`（預設 2，範圍 0 至 20，資料庫設定表、每次現讀、`flask set-rpg-setting` 修改並稽核）次修訂免費，**重新生成與編輯共用同一組次數**；免費者不預扣、不檢查餘額，之後每次預扣一輪的幣價（30，原本那輪已扣的幣不退）；**成功才計次**（`memory_logs.regen_count` 加 1），失敗、被擋、中斷不動它；編輯成功**不使次數歸零**。預扣鍵沿用 `turn:{存檔}:{client_msg_id}:{attempt}`，每次認領 `attempt` 加 1，所以退回過的鍵不會被撿回。
+- **認領與並行**：回合列在修訂期間保持 `complete`（舊內容一直可讀），以單一條件式 UPDATE 認領（`revision = expected_revision`、未逾時的認領互斥）；修訂進行中不能開始新回合、下一輪生成中也不能修訂；認領逾時與預扣逾時相同（`coin.hold_timeout_seconds`），逾時可被接手；兩個裝置同時按時只有一個成功，另一個得到 409 `revision_conflict` 或 `turn_in_progress`，畫面以後端為準。
+- **回合前快照與回滾**：每個新回合開始時把回合前的世界狀態存成 `memory_logs.state_before_json`（只留最後一輪，下一輪**完成**時清除，被擋與中斷的下一輪不清）；修訂以快照為世界、以不含目標回合的最近 10 輪為歷史重建上下文，成功時整份取代六個世界欄位（版本加 1）。遷移前建立的回合沒有快照＝不可修訂（`not_revisable`、`no_snapshot`）。
+- **原子替換**：新回應須完整通過逐句輸出審查**與**狀態驗證才在單一短交易內替換（回合內容、`revision` 加 1、世界狀態、預扣結算、回饋列 `applied`，必要時完結存檔）；失敗、被擋（自動重生一次，仍被擋則放棄）、模型失敗、狀態階段失敗、玩家中斷、被接手時舊內容與世界狀態原樣保留、退回預扣、釋放認領。新文字完整且通過審查之後才斷線，收尾照常完成。**編輯不換新的 `client_msg_id`**：冪等靠 `expected_revision` 加認領。
+- **理由只供營運檢視**：重新生成必須選五個分類之一（`setting_mismatch`、`repetitive_or_dull`、`typo_or_quality`、`blocked_transition`、`other`，繁體中文名稱在前端；正式文案仍待使用者確認）並填 5 至 50 字的理由（NFC、去除控制字元、以 Unicode 字元計；常數在 `game_service.py`，前端從頁面初始狀態的 `revision_limits` 讀）。理由與分類**只存進 `turn_regenerations`**（失敗與被擋的也留），不進任何模型呼叫與 `system_instruction`、不進日誌、不進 IndexedDB 與主控台；被取代的行動與劇情不保存；隨存檔與帳號刪除、納入個人資料匯出（JSON 的 `regenerations`、CSV 的 `turn_regenerations.csv`）。**沒有任何管理員讀取路徑**（管理員的「重新生成回饋」檢視頁是後續小 change）。
+- **前端**（`game-revision.js`）：按鈕只在最後一輪的氣泡下方，「重新生成」與「編輯」旁都顯示「免費還剩 N 次」（用完改顯示幣價）；重新生成 Modal 要分類加理由，編輯 Modal 在免費次數內只說明免費、不要求餘額，需付費時才提醒消耗遊戲幣並顯示餘額、不足時停用送出鈕並指向每日簽到；新文字進最後一輪氣泡的覆蓋層，失敗一律拿掉覆蓋層還原舊內容並以 Toast 說明；`finally` 一律重讀最後一輪（`catchUp` 的 `fromSeq`）並恢復按鈕；**從不自動重送**；理由與分類只在 Modal 的記憶體狀態與請求本文。
+- **日誌**：`rpg.revision_started`、`rpg.revision_completed`、`rpg.revision_failed`（種類、嘗試序號、是否免費、幣數、字數、延遲、失敗原因列舉；沒有理由、行動與劇情）。
+- **記事簿不受影響**：抓取視窗永遠不含最後一輪，所以修訂不讀寫記事簿，兩個修訂端點也不掛記事簿抓取。
+
+### 部署順序
+
+1. 備份資料庫，執行 `alembic upgrade head`（遷移 `0018_rpg_turn_revision`，全部是 expand：`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新表 `turn_regenerations`，設定表補 `rpg.free_regenerations` 一列）。本機開發的 `project` 與 Azure 都尚未升級到 `0018`，新程式上線前要先備份再升級。
+2. 部署新版程式；舊版程式在新結構上可運作（不認識新欄位與新表）。
+3. 回復（downgrade）只在還沒有真實資料時使用，有資料時以備份還原。
+
+### 檔案與測試
+
+| 檔案 | 內容 |
+|---|---|
+| `app/services/game_service.py`（`begin_revision`、`RevisionPlan`、`last_turn`）、`rpg_revision_runner.py`（`RevisionRunner`）、`rpg_state_phase.py`（兩種 Runner 共用的狀態階段） | 開始前的檢查順序與認領、串流與收尾、可修訂判斷與 `last_turn` 視圖 |
+| `app/repositories/session_repository.py`（`claim_revision`、`release_revision`、`replace_turn`、`complete_turns_before`、`revision_state`）、`turn_regeneration_repository.py` | 全部是條件式 UPDATE；回饋列只能由 `pending` 轉出一次；所有方法帶 `user_id` |
+| `app/controllers/game_api_controller.py`、`game_page_controller.py`（`revision_limits`）、`personal_export_service.py`、`app/observability/rpg_events.py`、`app/services/runtime_limits.py`、`migrations/versions/20261112_0018_rpg_turn_revision.py` | 兩個端點、初始狀態、匯出、日誌事件、設定鍵與遷移 |
+| `app/static/js/game/game-revision.js`、`game-labels.js`、`game-state.js`、`game-sync.js`、`game-store.js`、`game-session.js`、`app/templates/game/session.html`、`app/static/css/game.css`、`app/templates/legal/{terms,privacy}.html` | 按鈕與兩個 Modal、固定文字與失敗對照、在途紀錄與重讀、樣板與樣式、政策頁（`CURRENT_TERMS_VERSION` 為 `2026-11-16-draft-7`） |
+| `tests/test_session_repository_revision.py`、`test_turn_regeneration_repository.py`、`test_game_service_revision.py`、`test_rpg_revision_runner.py`、`test_game_revision_endpoints.py`、`test_rpg_revision_flow.py`（含 SQL Server `project_test`）、`test_errors_revision.py`、`test_personal_export_regenerations.py`、`test_rpg_events.py`、`test_migrations.py` | 儲存庫、Service、Runner、端點、端到端、錯誤、匯出、日誌與遷移 |
+| `tests/js/game-revision.test.js`、`game-labels.test.js`、`game-state.test.js`、`game-sync.test.js`、`game-store.test.js`、`game-template.test.js`、`game.test.js`、`game-session.test.js` | 前端的按鈕可用性、Modal、流程與失敗還原、同步與在途紀錄、樣板與名稱約定 |
+| `scripts/acceptance_rpg_revision.py`、`scripts/rpg_acceptance_harness.py`、`tests/test_acceptance_rpg_scripts.py` | HTTP 驗收與假模型的修訂情境（見上方「驗收工具」） |
+
+### 已知限制
+
+- ①理由的五個分類的繁體中文名稱仍待使用者確認一次（不影響資料結構）。②隱私權政策沒有明寫「遊玩時的行動與劇情歷史」也送往 RPG 模型服務，列入法務覆核。③**普通回合的斷線**（串流中途斷線可退幣後同編號重送，等於免費重來）沒有納入免費次數，先觀察中斷比例（`docs/RPG.md` 7.16.4）。④管理員檢視回饋、第 0 幕的重新生成、對更早回合動手、ledger 專屬的帳本種類都不在這個 change。⑤前端中止不代表後端中止：玩家取消後後端仍可能替換成功，所以畫面只說「以伺服器上的內容為準」並重讀；重讀不到時維持「不確定」的說明。⑥認領後 worker 死掉時，玩家最長約 3 分鐘（`coin.hold_timeout_seconds`）看到「處理中」，逾時後可被接手。⑦瀏覽器實測由使用者回報沒有問題，但沒有逐項列舉細節與截圖（見下方驗收紀錄）。
 
 ### 驗收紀錄（rpg-turn-revision，進行中；本節由任務 5.2 起，5.3、5.4 已記入，5.5 的結果續寫於此）
 

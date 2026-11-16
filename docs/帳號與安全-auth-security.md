@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-11 ｜ 對應 change：rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -95,6 +95,7 @@ sequenceDiagram
 ```
 
 - 已有帳號者登入不需要勾選條款；沒有帳號而沒勾條款不建立帳號，導回 `/login?error=terms_required`。
+- **政策頁與條款版本**：`/terms`、`/privacy` 是應用程式內的繁體中文頁面（沒有外部資源），版本字串 `CURRENT_TERMS_VERSION`（`app/services/legal.py`，目前 `2026-11-16-draft-7`）由伺服器決定，只影響之後新註冊者記錄的 `terms_version`，不強迫既有使用者重新同意。rpg-turn-revision 補了：服務條款「重新生成與編輯最後一輪」一條（重新生成與編輯**共用**每回合前幾次免費、免費次數內不扣幣也不需要餘額、用完後每次消耗一輪的幣、原本那輪已扣的幣不退、餘額不足無法送出、編輯不使免費次數歸零；條文不寫死幣價與次數）；隱私權政策補玩家於重新生成時填寫的理由（供營運團隊檢視、不送給 AI、隨存檔與帳號刪除、納入匯出）與遊戲幣錢包與帳本的保存。尚待處理：隱私權政策沒有明寫「遊玩時的行動與劇情歷史」也送往 RPG 模型服務，列入法務覆核。
 - 已存在的帳號（已綁定或以信箱合併）登入時**不會**被順便標記為已確認年齡。
 - 已辨識出帳號卻被拒絕（帳號停用、已綁定另一個 Google 身分）會計入帳號鎖定的計次（第 7b 節）；無法辨識身分的失敗與還沒有帳號的 Google 身分不計。
 - 開發與正式環境使用不同的 OAuth 用戶端；失敗一律導回 `/login?error=<固定代碼>`，Google 回傳的任何文字都不會進入網址或頁面。
@@ -199,6 +200,10 @@ flowchart TD
 | `/api/sessions` | POST | 是 | 開存檔：主角與錨定事實的驗證、規則層與模型層審查通過才寫入；管理員與各會員等級不豁免年齡閘門 |
 | `/api/game/sessions/<id>/turns/stream` | POST | 是 | RPG 回合的事件串流；先完成年齡確認並通過閘門，非擁有者與不存在同為 404，開始前的失敗（含餘額不足 409）一律是 JSON；預扣在回合開始時（rpg-turn-stream） |
 | `/api/game/sessions/<id>/opening/stream` | POST | 是 | 第 0 幕的事件串流；不扣遊戲幣，已完成者回傳既有文字 |
+
+| `/api/game/sessions/<id>/turns/<client_msg_id>/regenerate/stream` | POST | 是 | 重新生成最後一輪的 AI 回應（rpg-turn-revision）；CSRF 與 Origin、年齡閘門，非擁有者與不存在同為 404；本文 `expected_revision`、分類與理由（理由只進回饋表，不進模型）；開始前的失敗（409 `revision_conflict`、`not_revisable`、`turn_in_progress`、`insufficient_coins`）一律是 JSON；免費次數內不預扣 |
+
+| `/api/game/sessions/<id>/turns/<client_msg_id>/edit/stream` | POST | 是 | 編輯最後一輪的玩家輸入後重送；存取規則同上，行動須過規則層（422）；與重新生成共用每回合的免費次數，免費次數內不預扣也不檢查餘額，需付費時才可能回 409 `insufficient_coins` |
 | `/api/game/sessions/<id>` | GET | 是 | 存檔狀態與世界狀態的玩家視圖（不含 NPC 角色卡）；已完結仍可讀 |
 | `/api/game/sessions/<id>/turns` | GET | 是 | 回合清單（`since_seq` 增量）；被擋與中斷的回合不含文字 |
 | `/api/game/sessions/<id>/notebook` | GET | 是 | 記事簿全文與用量；非擁有者與不存在同為 404；已完結仍可讀；禁止快取；管理員沒有任何讀取記事簿的功能 |

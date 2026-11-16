@@ -1132,7 +1132,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 9 | `llm_raw_response` | NVARCHAR(max) | 否 | — | — | 劇情原文；中斷時保留已收到的片段；被擋的回合存最後一次被擋時已收到的文字（含命中的那句）；中斷或被擋的回合超過 14 天清為空字串。 |
 | 10 | `structured_result` | NVARCHAR(max)（JSON） | 是 | — | — | 回合的結構化結果（結構見第 7 節）；被擋的回合存被擋的類別。 |
 | 11 | `revision` | INTEGER | 否 | `'1'` | — | 修訂版本（從 1 起）：每次成功重新生成或編輯加 1；前端用它偵測並行修訂並覆寫本機暫存。0018 新增，既有回合為 1。 |
-| 12 | `regen_count` | INTEGER | 否 | `'0'` | — | 這份輸入已成功重新生成幾次，決定下一次是否免費（前 `rpg.free_regenerations` 次免費）：成功的重新生成加 1，成功的編輯歸零；失敗、被擋與中斷不動它。0018 新增，既有回合為 0。 |
+| 12 | `regen_count` | INTEGER | 否 | `'0'` | — | 這個回合已成功修訂（重新生成或編輯）幾次，決定下一次是否免費（前 `rpg.free_regenerations` 次免費，兩種操作共用）：每次成功的重新生成或編輯都加 1，不歸零；失敗、被擋與中斷不動它。0018 新增，既有回合為 0。 |
 | 13 | `revising_started_at` | DATETIME2(6) | 是 | — | — | 修訂的認領時間（UTC）：空值或已逾時（同 `coin.hold_timeout_seconds`）＝沒有人在修訂；認領時 `attempt` 同時加 1。0018 新增，不回填。 |
 | 14 | `state_before_json` | NVARCHAR(max)（JSON） | 是 | — | — | 回合前的世界快照（結構見第 7 節）：開始回合時寫入，下一輪完成時清為空值，所以全存檔最多一個回合有；遷移之前建立的回合沒有（不可修訂）。個資（玩家文字衍生）。0018 新增。 |
 | 15 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
@@ -1162,7 +1162,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 5 | `kind` | NVARCHAR(10) | 否 | — | — | 種類：regenerate（重新生成）｜edit（編輯輸入後重送）。 |
 | 6 | `category` | NVARCHAR(30) | 是 | — | — | 玩家選的分類（五類之一，見第 6 節）；編輯沒有分類，為空值。 |
 | 7 | `reason` | NVARCHAR(max) | 是 | — | — | 玩家填的理由（個資；NFC 並去除控制字元後 5 至 50 字）；編輯沒有，為空值。只供營運檢視，不進模型呼叫、system_instruction 與日誌。 |
-| 8 | `is_free` | BIT | 否 | — | — | 是否為免費的重新生成（沒有預扣遊戲幣）；編輯一律為否。 |
+| 8 | `is_free` | BIT | 否 | — | — | 是否為免費的修訂（沒有預扣遊戲幣）：重新生成與編輯共用同一組免費次數，兩種操作在免費次數內都為是。 |
 | 9 | `result` | NVARCHAR(10) | 否 | — | — | 結果：pending（已認領、尚未收尾）｜applied（新回應已替換舊回應）｜failed（失敗、中斷或被接手，保留舊內容）｜blocked（新回應被審查擋下，保留舊內容）；理由先寫入，失敗的理由也保留。 |
 | 10 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）；與認領同一個交易寫入。 |
 | 11 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；標記結果時更新。 |
@@ -1270,7 +1270,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `wallet_entries.resolution` | `settled`｜`refunded` | 只有預扣列使用，只能從空值設定一次：settled＝已結算；refunded＝已退回。 |
 | `sessions.opening_state` | `pending`｜`generating`｜`ready`｜`fallback` | pending＝尚未生成（或客戶端斷線後退回）；generating＝有一個請求正在生成（超過 90 秒可被接手）；ready＝已生成並保存；fallback＝生成失敗或被擋，改用劇本的初始對話（沒有則只顯示背景故事）。空值（遷移之前建立的存檔）視同 fallback。 |
 | `memory_logs.turn_status` | `streaming`｜`complete`｜`interrupted`｜`blocked` | 見下方「回合狀態」。 |
-| `turn_regenerations.kind` | `regenerate`｜`edit` | regenerate＝重新生成最後一輪的 AI 回應（前幾次免費，之後每次消耗一輪的幣價）；edit＝編輯最後一輪的玩家輸入後重送（消耗一輪的幣價，並使免費次數歸零）。 |
+| `turn_regenerations.kind` | `regenerate`｜`edit` | regenerate＝重新生成最後一輪的 AI 回應；edit＝編輯最後一輪的玩家輸入後重送。兩種操作共用同一組免費次數（前幾次免費，之後每次消耗一輪的幣價，原本那輪已扣的幣不退），編輯成功不使免費次數歸零。 |
 | `turn_regenerations.category` | `setting_mismatch`｜`repetitive_or_dull`｜`typo_or_quality`｜`blocked_transition`｜`other` | 重新生成時玩家選的分類：setting_mismatch＝不符設定；repetitive_or_dull＝劇情重複或無趣；typo_or_quality＝錯字或文字品質；blocked_transition＝被轉場擋掉；other＝其他。對應 `docs/RPG.md` 7.8 暫定的五類，繁體中文文案在前端；編輯沒有分類。 |
 | `turn_regenerations.result` | `pending`｜`applied`｜`failed`｜`blocked` | pending＝已認領、尚未收尾；applied＝新回應已替換舊回應；failed＝失敗、中斷或被接手，保留舊內容；blocked＝新回應被審查擋下，保留舊內容。 |
 
@@ -1350,7 +1350,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `coin.free_cap` | 免費幣上限（只限制新發放）；預設 1000，範圍 0 至 1000000 |
 | `coin.hold_timeout_seconds` | 預扣逾時秒數（超過仍未結算者在該玩家下一次存取錢包時退回）；預設 180，範圍 60 至 1800 |
 | `rpg.max_months_per_turn` | RPG 回合引擎：單一回合最多推進幾個遊戲內月份（模型提議的月數超過時以此為上限）；預設 24，範圍 0 至 240；以 `flask set-rpg-setting` 修改 |
-| `rpg.free_regenerations` | RPG 回合引擎：每個回合前幾次重新生成免費（第 N+1 次起每次消耗一輪的幣價；編輯使次數歸零）；預設 2，範圍 0 至 20；以 `flask set-rpg-setting` 修改 |
+| `rpg.free_regenerations` | RPG 回合引擎：每個回合前幾次修訂免費（重新生成與編輯共用同一組次數，第 N+1 次起每次消耗一輪的幣價；編輯不使次數歸零）；預設 2，範圍 0 至 20；以 `flask set-rpg-setting` 修改 |
 
 ### 6.6 刪除原因（`deletion_tombstones.reason`）
 
@@ -1714,3 +1714,4 @@ flowchart TD
 | 2026-11-12 | 新增 | 資料表 `turn_regenerations`（11 欄，1 個唯一約束 `uq_turn_regenerations_session_turn_attempt`，1 個外鍵 `session_id`→`sessions.id` CASCADE） | 玩家重新生成時選的分類與填的理由（供營運檢視）與每次修訂的結果；不存被取代的行動與劇情；隨存檔與帳號抹除、納入個人資料匯出；新表 21 張、欄位共 249 個 | `0018_rpg_turn_revision` |
 | 2026-11-12 | 新增 | `runtime_limits` 的一列初始資料（`rpg.free_regenerations` = 2） | 每個回合前幾次重新生成免費；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋；`runtime_limits` 由 16 列變 17 列 | `0018_rpg_turn_revision` |
 | 2026-11-16 | 文件 | 本文件 | 校對並補充：以 `tests/test_project_db_schema_doc.py` 與 `tests/test_design_docs.py` 確認與 ORM 一致；對照實際的 `project`（唯讀，只查詢版本與結構計數，不讀任何資料列）：`alembic_version` 為 `0017_story_preference`、20 張資料表、234 個欄位、17 個外鍵、`runtime_limits` 16 列，與第 1 節的記載一致；新增第 10.1 節「流程與資料表的對應」（登入與註冊、客服對話）。**沒有結構變更、沒有遷移、沒有套用到 `project`**；`0018_rpg_turn_revision` 仍待備份後套用 | 本文件；`docs/1.0簡報.md` |
+| 2026-11-16 | 文件 | 本文件 | 同步 rpg-turn-revision 的規則修訂（AGENTS.md 第 7 節「玩家重新生成與編輯輸入」，`437a5f5`）：編輯由「一律付費並使免費次數歸零」改為與重新生成共用每回合前 N 次免費、成功才計次、編輯不歸零；修訂 `memory_logs.regen_count`（第 5 節欄位說明，成功的重新生成與編輯都加 1）、`turn_regenerations.is_free`（第 5 節欄位說明，編輯在免費次數內也是免費）、`turn_regenerations.kind`（第 7 節固定值）與 `rpg.free_regenerations`（`runtime_limits` 的初始資料說明）四處的語意。**只是語意說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：欄位型別、預設值與 `0018_rpg_turn_revision` 的內容都不變 | 本文件 |

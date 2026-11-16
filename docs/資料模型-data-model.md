@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-12 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0018_rpg_turn_revision` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0018_rpg_turn_revision` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -148,7 +148,7 @@ erDiagram
         text user_action "個資"
         text llm_raw_response "劇情原文 中斷或被擋超過 14 天清為空字串"
         int revision "修訂版本 每次成功重新生成或編輯加 1 預設 1"
-        int regen_count "這份輸入已成功重新生成幾次 編輯歸零 預設 0"
+        int regen_count "這個回合已成功修訂幾次 重新生成與編輯共用 不歸零 預設 0"
         datetime revising_started_at "修訂的認領時間 空值或逾時表示沒有人在修訂 可為空"
         json state_before_json "回合前的世界快照 下一輪完成時清為空值 個資 可為空"
     }
@@ -160,7 +160,7 @@ erDiagram
         string kind "regenerate 或 edit"
         string category "五類之一 編輯為空 可為空"
         text reason "玩家填的理由 個資 只供營運檢視 編輯為空 可為空"
-        bool is_free "是否免費重新生成"
+        bool is_free "是否免費修訂 兩種操作共用免費次數"
         string result "pending applied failed blocked"
     }
     lock_strikes {

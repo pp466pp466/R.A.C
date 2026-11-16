@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-12 ｜ 對應 change：rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -353,7 +353,7 @@ flowchart TD
 
 - **為什麼回合保持 `complete`**：所有「只有 `complete` 才計入輪數、上下文與重播」的查詢都不必改；失敗時什麼都不用還原。代價是需要認領欄位（`revising_started_at`、`attempt`）與 `revision` 來偵測並行與逾時接手。
 - **先還原再套用**：每個新回合開始時把當下的世界狀態存成該回合的 `state_before_json`（下一輪完成時清除，全存檔最多一份）；修訂以快照為世界、以「輪數小於目標輪數的最近 10 輪」為歷史重建上下文，寫回時整份取代六個世界欄位，所以原本那輪造成的變化自然被覆蓋，不需要逐欄反向運算。
-- **預扣鍵與免費次數**：重新生成前 `rpg.free_regenerations`（現讀，初始 2）次免費（不預扣），之後與所有編輯用 `turn:{存檔}:{client_msg_id}:{attempt}` 預扣；`attempt` 只增不減，所以退回過的鍵不會被撿回，也不會與原回合已結算的鍵相同。次數以成功替換為準（`regen_count` 只在成功時加 1，編輯歸零）。
+- **預扣鍵與免費次數**：每個回合前 `rpg.free_regenerations`（現讀，初始 2）次修訂免費（重新生成與編輯共用同一組次數；免費者不預扣、不檢查餘額），之後不論重新生成或編輯都用 `turn:{存檔}:{client_msg_id}:{attempt}` 預扣；`attempt` 只增不減，所以退回過的鍵不會被撿回，也不會與原回合已結算的鍵相同。次數以成功替換為準（`regen_count` 只在成功時加 1，重新生成與編輯相同、不歸零）。
 - **互斥**：修訂的認領未逾時期間，同存檔的 `turns/stream` 回 409 `turn_in_progress`；下一輪生成中，修訂回 409 `not_revisable`（`in_progress`）。認領逾時與預扣逾時相同（`coin.hold_timeout_seconds`，現讀），逾時後可被接手，過時執行者的 `replace_turn` 因 `attempt` 不符而失敗並送出 `turn_superseded`。
 - **隱私**：理由與分類只存入 `turn_regenerations`，不進任何模型呼叫、日誌與前端本機暫存；被取代的行動與劇情不保存；日誌只有 `rpg.revision_started`／`completed`／`failed` 的內部編號、列舉與整數。
 
