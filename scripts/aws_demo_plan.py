@@ -16,7 +16,9 @@
   由執行器經 SSM 放到主機；字串內只有機密的**名稱**與 SSM 路徑，沒有任何機密值。
 - 部署、回復與拆除（task 1.6）各是一份獨立的計畫（`deploy_plan`、`rollback_plan`、`teardown_plan`），與 `build_plan` 的步驟 id 不重複：
   部署依序快照 → 建置 → 遷移 → 重啟 → 驗證（第一次部署在建置與遷移之間多一組 `db-init`：資料庫初始化與憑證探測，在遷移與重啟之間多一組
-  `create-admin`：使用者自己在 SSM 終端機建立首位管理員；兩組都用 `--group` 明確執行，例行部署的整份計畫不含它們）；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
+  `create-admin`：使用者自己在 SSM 終端機建立首位管理員；驗證之後多三組 `ingress`：啟動 Caddy 並驗證憑證、HTTP/2、導向與安全標頭，`routing`：暫停客服池驗證
+  入口的分流（驗完立刻恢復），`schedule`：啟動排程計時器、手動跑一次 `check-alerts`、核對計時器清單與失敗單元；這五組都用 `--group` 明確執行，
+  例行部署的整份計畫不含它們）；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
   拆除每一步都先以**帶標籤的查詢**找出資源，沒有符合才略過，所以不會碰到帳號中的其他資源。
   在主機上執行的命令一律走 SSM Run Command（`send-command` 之後接 `wait-…` 步驟輪詢結果），內容只用 ASCII
   （`file://` 的 JSON 在 Windows 以系統地區編碼讀取，繁體中文會變成亂碼）。
@@ -52,6 +54,8 @@ from launch_plan import (  # noqa: E402 - 需要先把 scripts 與專案根目�
 )
 # 排程清單的單一來源是 app.cli（launch_plan 也從這裡取）；人工類清單只用來擋下被誤放進排程的指令
 from app.cli import MANUAL_COMMANDS, SCHEDULED_COMMANDS  # noqa: E402
+# 安全標頭的單一來源是應用程式本身：入口驗證要求這些標頭經 Caddy 後仍在，名稱與值不在這裡另寫一份
+from app.security.security_headers import BASE_HEADERS, HSTS_VALUE  # noqa: E402
 
 __all__ = [
     "NOT_DEPLOYED", "OBSOLETE_VARS", "PLAIN_VARS", "REQUIRED_PLAIN", "REQUIRED_SECRETS", "SECRET_VARS",
@@ -727,6 +731,8 @@ IMAGE_TAG_VAR = "RAC_IMAGE_TAG"
 APP_IMAGE_REF = f"{APP_IMAGE_REPO}:${{{IMAGE_TAG_VAR}}}"     # rac-app:${RAC_IMAGE_TAG}，由 systemd 以 release.env 展開
 IMAGE_TAG_PATTERN = re.compile(r"[a-z0-9][a-z0-9_.-]{0,127}")
 CADDY_IMAGE = "caddy:2"                 # 官方映像的主版本標籤（展示環境接受浮動的次版本；要固定時改這個常數）
+CADDY_CONTAINER = "rac-caddy"           # 入口的容器名稱（單元的 `--name`、`docker rm -f` 與 `docker stop` 共用）
+CADDY_UNIT = f"{CADDY_CONTAINER}.service"
 STREAM_PATH_PREFIX = "/api/game/"       # RPG 的 SSE 串流與其餘 RPG API（design D5）
 SCHEDULE_TIMEZONE = "Asia/Taipei"
 JOB_TIMEOUT_SECONDS = 900               # 排程工作單次最長 15 分鐘（check-alerts 每 5 分鐘一次，不應重疊）
@@ -847,7 +853,7 @@ def caddy_unit() -> str:
     """入口的 systemd 單元。容器內是 root，但丟掉所有 capability 只留綁定 80／443 所需的一個，並禁止提權與唯讀根檔案系統：
     非 root 加上禁止提權時，檔案 capability 不會生效，綁不了 80／443。"""
     chunks = [
-        f"{DOCKER} run --rm --name=rac-caddy --network=host",
+        f"{DOCKER} run --rm --name={CADDY_CONTAINER} --network=host",
         f"--read-only --tmpfs=/config:{_TMPFS_OPTIONS}",
         "--cap-drop=ALL --cap-add=NET_BIND_SERVICE --security-opt=no-new-privileges",
         " ".join(_LOG_OPTIONS),
@@ -867,9 +873,9 @@ def caddy_unit() -> str:
         "Restart=always",
         "RestartSec=5",
         "TimeoutStopSec=30",
-        f"ExecStartPre=-{DOCKER} rm -f rac-caddy",
+        f"ExecStartPre=-{DOCKER} rm -f {CADDY_CONTAINER}",
         _exec_start(chunks),
-        f"ExecStop={DOCKER} stop --time=15 rac-caddy",
+        f"ExecStop={DOCKER} stop --time=15 {CADDY_CONTAINER}",
         "",
         "[Install]",
         "WantedBy=multi-user.target",
@@ -1050,7 +1056,7 @@ def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
     ]
     files += [HostFile(render_env_script_path(unit), "0755", render_env_script(target, unit)) for unit in UNITS]
     files += [HostFile(f"{UNIT_DIR}/{pool.container}.service", "0644", pool_unit(pool)) for pool in POOLS]
-    files.append(HostFile(f"{UNIT_DIR}/rac-caddy.service", "0644", caddy_unit()))
+    files.append(HostFile(f"{UNIT_DIR}/{CADDY_UNIT}", "0644", caddy_unit()))
     files += [HostFile(f"{UNIT_DIR}/{name}", "0644", content) for name, content in scheduled_units().items()]
     return tuple(files)
 
@@ -1060,10 +1066,13 @@ def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
 # 在主機上執行的命令走 SSM Run Command：`send-command` 的 JSON 經暫存檔傳入、輸出存成命令編號，接著一個 `wait-…` 步驟輪詢結果。
 # 傳給 AWS 的 JSON 只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`），所以主機上的腳本訊息都是英文。
 
-DEPLOY_GROUPS = ("prepare", "snapshot", "build", "db-init", "migrate", "create-admin", "restart", "verify")
-# 快照 → 建置 → （首次）資料庫初始化與探測 → 遷移 → （首次）建立首位管理員 → 重啟 → 驗證
-FIRST_DEPLOY_GROUPS = ("db-init", "create-admin")   # 只在第一次部署以 `--group` 明確執行：`db-init` 用 RDS 主要使用者建立專屬資料庫與登入（design D8）、
-                                                    # `create-admin` 由使用者在 SSM 終端機建立首位管理員（design D9）；例行部署都不重做
+DEPLOY_GROUPS = ("prepare", "snapshot", "build", "db-init", "migrate", "create-admin", "restart", "verify", "ingress", "routing", "schedule")
+# 快照 → 建置 → （首次）資料庫初始化與探測 → 遷移 → （首次）建立首位管理員 → 重啟 → 驗證 → （首次）啟動入口 → （首次）驗證分流 → （首次）啟動排程
+FIRST_DEPLOY_GROUPS = ("db-init", "create-admin", "ingress", "routing", "schedule")   # 只在第一次部署以 `--group` 明確執行：`db-init` 用 RDS 主要使用者建立專屬資料庫與登入（design D8）、
+                                                    # `create-admin` 由使用者在 SSM 終端機建立首位管理員（design D9）、`ingress` 啟動 Caddy 並驗證憑證與標頭（task 6.2）、
+                                                    # `routing` 暫停客服池驗證入口的分流（task 6.3；會讓客服暫時中斷，所以不放進例行部署）、
+                                                    # `schedule` 啟動排程計時器並手動跑一次 check-alerts（task 7.1）；例行部署都不重做
+                                                    # （兩個池由例行部署重啟，入口與計時器一直在跑）
 ROUTINE_DEPLOY_GROUPS = tuple(group for group in DEPLOY_GROUPS if group not in FIRST_DEPLOY_GROUPS)   # `deploy_plan` 沒指定 groups 時的整份計畫
 ROLLBACK_GROUPS = ("prepare", "restart", "verify")
 TEARDOWN_GROUPS = ("compute", "database", "snapshots", "network", "iam", "storage", "notify", "verify")
@@ -1386,6 +1395,246 @@ def _pool_hardening_title() -> str:
     return f"唯讀驗證兩個池：行程以非 root（UID {IMAGE_USER_ID}）執行、各用自己的 gunicorn 設定、只綁回送位址"
 
 
+# ---- 入口與排程（task 6.2、7.1）：`ingress`、`schedule` 組，只在第一次部署以 `--group` 明確執行 -----------------------------
+# 兩組都是本機撰寫、尚未對真實主機執行（第 3、5 批的雲端執行才算驗證）；主機腳本只用 ASCII、POSIX sh 相容、沒有機密值。
+# 第一次寫 `check-pool-hardening` 時被真實的 `docker top` 擋下過一次（見營運文件「啟動兩個池」），所以測試裡的假指令
+# （`curl`、`systemctl`、`docker`、`openssl`）一律比照真的嚴格：不認得的子指令或選項就失敗。
+
+INGRESS_CHECK_PATH = "/healthz"                     # 入口驗證用的端點：不碰資料庫、不需登入；回應帶應用程式的安全標頭
+INGRESS_START_WAIT_SECONDS = 30                     # 重啟入口之後等容器進入執行狀態的上限（每秒看一次）
+INGRESS_TLS_ATTEMPTS = 30                           # 等憑證簽發完成：每 5 秒試一次，最多 150 秒（首次簽發通常數十秒內）
+INGRESS_TLS_INTERVAL_SECONDS = 5
+INGRESS_CURL_TIMEOUT_SECONDS = 10
+HTTP_PORT, HTTPS_PORT = 80, 443
+REDIRECT_STATUSES = ("301", "302", "307", "308")    # Caddy 的自動導向用哪一個狀態碼由實際執行記錄；這裡只要求是永久或暫時導向
+ALERT_COMMAND = "check-alerts"                      # 手動跑一次的排程指令（task 7.1）：它是排程清單裡頻率最高的一項
+
+
+def ingress_headers() -> tuple[str, ...]:
+    """入口後必須仍在的回應標頭（小寫的 `名稱: 值`）：應用程式在 staging 送的 HSTS 與四個安全標頭（見 `app/security/security_headers.py`）。"""
+    return tuple(f"{name}: {value}".lower() for name, value in {"Strict-Transport-Security": HSTS_VALUE, **BASE_HEADERS}.items())
+
+
+def _ingress_start_lines() -> list[str]:
+    """拉取入口映像（失敗在這裡就看得見，而不是單元默默重試）、重啟 `rac-caddy.service`（讀取目前的 Caddyfile；`admin off`，沒有熱重載），
+    再等容器進入執行狀態。單元是 `Type=simple`：`systemctl restart` 在程序一建立就回來，所以要自己確認容器真的在跑。"""
+    running = f"$({DOCKER} inspect --format '{{{{.State.Running}}}}' {CADDY_CONTAINER} 2>/dev/null || true)"
+    return [
+        "set -eu", "export HOME=/root",
+        f"{DOCKER} pull --quiet {CADDY_IMAGE} >/dev/null",
+        f"systemctl restart {CADDY_UNIT}",
+        "running=0",
+        f"for attempt in $(seq 1 {INGRESS_START_WAIT_SECONDS}); do",
+        f'  if [ "{running}" = true ]; then running=1; break; fi',
+        "  sleep 1",
+        "done",
+        f'if [ "$running" != 1 ]; then echo "{CADDY_CONTAINER} container is not running" >&2; exit 1; fi',
+        "echo ingress=running",
+    ]
+
+
+def _ingress_check_lines(target: Target) -> list[str]:
+    """在主機內驗證入口，但**仍經過 Caddy**：用 `curl --resolve <網域>:<埠>:127.0.0.1` 連回送位址（不依賴主機連自己的 Elastic IP 是否通；
+    網域與 SNI 仍是展示網域，所以憑證要真的簽給它、被系統憑證庫信任）。順序：①HTTPS 在最多 150 秒內回 200，並且是 HTTP/2、憑證驗證結果為 0
+    （等簽發完成）；②HTTP 只回導向到同網域 HTTPS 的 301、302、307 或 308；③回應標頭含 HSTS 與四個安全標頭（`ingress_headers()`，缺哪個就印哪個）。
+    憑證的簽發者與到期日只印在標準錯誤供記錄（公開資訊，不參與驗證）。任何一項不符以 1 結束，標準輸出只有成功時的固定一行。"""
+    domain = target.domain
+    url = f"https://{domain}{INGRESS_CHECK_PATH}"
+
+    def resolve(port: int) -> str:
+        return f"--resolve {domain}:{port}:127.0.0.1"
+
+    timeout = f"--max-time {INGRESS_CURL_TIMEOUT_SECONDS}"
+    https_format = "%{http_version} %{http_code} %{ssl_verify_result}"
+    redirect_format = "%{http_code} %{redirect_url}"
+    return [
+        "set -eu", "export HOME=/root",
+        "ok=0",
+        f"for attempt in $(seq 1 {INGRESS_TLS_ATTEMPTS}); do",
+        "  rc=0",
+        f"  out=\"$(curl -fsS {timeout} {resolve(HTTPS_PORT)} -o /dev/null -w '{https_format}' {url} 2>/dev/null)\" || rc=$?",
+        '  if [ "$rc" = 0 ]; then ok=1; break; fi',
+        f"  sleep {INGRESS_TLS_INTERVAL_SECONDS}",
+        "done",
+        'if [ "$ok" != 1 ]; then echo "https is not ready: curl exit $rc" >&2; exit 1; fi',
+        'if [ "$out" != "2 200 0" ]; then echo "https mismatch: [$out] (expect http version, status, certificate verify result)" >&2; exit 1; fi',
+        f"openssl s_client -connect 127.0.0.1:{HTTPS_PORT} -servername {domain} </dev/null 2>/dev/null | openssl x509 -noout -issuer -enddate >&2 || true",
+        f"redirect=\"$(curl -sS {timeout} {resolve(HTTP_PORT)} -o /dev/null -w '{redirect_format}' http://{domain}{INGRESS_CHECK_PATH})\"",
+        'code="${redirect%% *}"; location="${redirect#* }"',
+        f'case "$code" in {"|".join(REDIRECT_STATUSES)}) ;; *) echo "redirect mismatch: [$redirect]" >&2; exit 1;; esac',
+        f'if [ "$location" != "{url}" ]; then echo "redirect mismatch: [$redirect]" >&2; exit 1; fi',
+        f"headers=\"$(curl -sS {timeout} {resolve(HTTPS_PORT)} -D - -o /dev/null {url} | tr -d '\\r' | tr 'A-Z' 'a-z')\"",
+        "missing=0",
+        "want() { if ! printf '%s\\n' \"$headers\" | grep -qxF \"$1\"; then echo \"missing header: $1\" >&2; missing=$((missing + 1)); fi; }",
+        *(f"want '{header}'" for header in ingress_headers()),
+        '[ "$missing" = 0 ] || exit 1',
+        f'echo "{_ingress_check_expect()}"',
+    ]
+
+
+def _ingress_check_expect() -> str:
+    return f"ingress tls=ok http=2 redirect=https headers={len(ingress_headers())}"
+
+
+def _ingress_start_title() -> str:
+    return (f"拉取 {CADDY_IMAGE} 並重啟入口 {CADDY_UNIT}（讀取目前的 Caddyfile；等容器進入執行狀態；入口沒有熱重載，"
+            "所以設定變更也用這一步套用）")
+
+
+def _ingress_check_title(target: Target) -> str:
+    return (f"驗證入口（在主機內以 --resolve 連回送位址，仍經 Caddy）：https://{target.domain}{INGRESS_CHECK_PATH} 在 "
+            f"{INGRESS_TLS_ATTEMPTS * INGRESS_TLS_INTERVAL_SECONDS} 秒內以有效憑證回 200 且是 HTTP/2；HTTP 導向同網域的 HTTPS；"
+            "HSTS 與四個安全標頭經入口仍在（憑證簽發者與到期日印在標準錯誤供記錄）")
+
+
+# ---- 分流驗證（task 6.3）：`routing` 組，只在第一次部署以 `--group` 明確執行 ------------------------------------------------
+# 兩個池跑的是同一份應用程式（只差 gunicorn 設定），任何一個都能回應任何路徑，所以回應本身分不出是誰處理的。
+# 唯一站得住腳的依據是**暫停客服池**：被暫停的池沒有人在聽，入口導向它的請求只能得到 Caddy 自己的 502；
+# 導向 RPG 池的請求照常得到應用程式的回應。兩個方向都在同一次暫停裡看見，就證明了分流。
+
+ROUTING_GAME_PATH = f"{STREAM_PATH_PREFIX}sessions/1"   # 導向 RPG 池的路徑；未登入時應用程式回 401（不碰資料庫），所以不需要 cookie
+ROUTING_CS_PATH = "/api/cs/conversations"               # 導向客服池的 API 路徑；未登入同樣回 401
+ROUTING_ANON_STATUS = "401"
+ROUTING_PAUSED_STATUS = "502"                           # 上游沒有在聽時，Caddy 自己回的 Bad Gateway
+ROUTING_DIRECT_TIMEOUT_SECONDS = 5
+ROUTING_READY_ATTEMPTS = 30                             # 恢復客服池之後等它的 /readyz：每 5 秒一次，最多 150 秒
+ROUTING_READY_INTERVAL_SECONDS = 5
+ROUTING_TIMEOUT_SECONDS = 600                           # 最壞情況：前後各 3 次入口請求、停止、恢復後最多 300 秒的等待，仍放得進
+
+
+def _routing_check_lines(target: Target) -> list[str]:
+    """暫停客服池驗證入口的分流（task 6.3）；**一定恢復**（不論中途哪裡失敗）。順序：
+    ①兩個池在回送位址上 `/healthz` 都回 200；②暫停前，入口的三條路徑都有正常的應用程式回應（`/healthz` 200，兩條 API 路徑未登入 401）；
+    ③`systemctl stop` 客服池；④暫停中：非 `/api/game/` 的兩條路徑回 502（由客服池處理，它沒人在聽）、`/api/game/` 路徑仍回 401（由 RPG 池處理）、
+    RPG 池的 `/healthz` 仍回 200、客服池的回送位址連不上；⑤`systemctl start` 客服池並等它的 `/readyz` 回 200（最多 150 秒）；⑥恢復後三條路徑回到暫停前的狀態碼。
+    全部經 Caddy（`--resolve` 到回送位址）；只用 GET、不需要 cookie。恢復用 `trap`：任何失敗、`HUP`、`INT`、`TERM` 都先把客服池啟動再結束；
+    `restored` 在 `systemctl stop` 之前就設為 0，所以連 stop 本身半途失敗也會恢復。"""
+    domain = target.domain
+    cs, rpg = _pool("cs"), _pool("rpg")
+    unit = f"{cs.container}.service"
+    direct = ROUTING_DIRECT_TIMEOUT_SECONDS
+
+    def direct_curl(pool: Pool, path: str) -> str:
+        return f'curl -fsS --max-time {direct} -o /dev/null "http://127.0.0.1:{pool.port}{path}"'
+
+    def expect(phase: str, path: str, status: str) -> str:
+        return f"expect {phase} {path} {status}"
+
+    return [
+        "set -eu", "export HOME=/root",
+        f"code() {{ curl -sS --max-time {INGRESS_CURL_TIMEOUT_SECONDS} --resolve {domain}:{HTTPS_PORT}:127.0.0.1 -o /dev/null -w '%{{http_code}}' \"https://{domain}$1\" 2>/dev/null || true; }}",
+        'expect() { got="$(code "$2")"; if [ "$got" != "$3" ]; then echo "routing mismatch: $1 $2 got=[$got] want=[$3]" >&2; exit 1; fi; }',
+        "restored=1",
+        f'restore() {{ if [ "$restored" != 1 ]; then restored=1; systemctl start {unit} || echo "{unit} could not be started again" >&2; fi; }}',
+        "trap restore EXIT",
+        "trap 'exit 1' HUP INT TERM",
+        *(f'if ! {direct_curl(pool, INGRESS_CHECK_PATH)}; then echo "{pool.container} is not healthy before the pause" >&2; exit 1; fi' for pool in (cs, rpg)),
+        expect("before", INGRESS_CHECK_PATH, "200"),
+        expect("before", ROUTING_CS_PATH, ROUTING_ANON_STATUS),
+        expect("before", ROUTING_GAME_PATH, ROUTING_ANON_STATUS),
+        "restored=0",
+        f"systemctl stop {unit}",
+        expect("paused", INGRESS_CHECK_PATH, ROUTING_PAUSED_STATUS),
+        expect("paused", ROUTING_CS_PATH, ROUTING_PAUSED_STATUS),
+        expect("paused", ROUTING_GAME_PATH, ROUTING_ANON_STATUS),
+        f'if ! {direct_curl(rpg, INGRESS_CHECK_PATH)}; then echo "{rpg.container} is not healthy while {unit} is stopped" >&2; exit 1; fi',
+        f'if {direct_curl(cs, INGRESS_CHECK_PATH)} 2>/dev/null; then echo "{cs.container} still answers while {unit} is stopped" >&2; exit 1; fi',
+        f"systemctl start {unit}",
+        "restored=1",
+        "ready=0",
+        f"for attempt in $(seq 1 {ROUTING_READY_ATTEMPTS}); do",
+        f"  if {direct_curl(cs, POOL_READY_PATH)}; then ready=1; break; fi",
+        f"  sleep {ROUTING_READY_INTERVAL_SECONDS}",
+        "done",
+        f'if [ "$ready" != 1 ]; then echo "{cs.container} is not ready after the restart" >&2; exit 1; fi',
+        expect("after", INGRESS_CHECK_PATH, "200"),
+        expect("after", ROUTING_CS_PATH, ROUTING_ANON_STATUS),
+        expect("after", ROUTING_GAME_PATH, ROUTING_ANON_STATUS),
+        f'echo "{_routing_check_expect()}"',
+    ]
+
+
+def _routing_check_expect() -> str:
+    return f"routing game={_pool('rpg').key} other={_pool('cs').key} paused={ROUTING_PAUSED_STATUS} rpg=200 restored=ok"
+
+
+def _routing_check_title(target: Target) -> str:
+    cs, rpg = _pool("cs"), _pool("rpg")
+    return (f"驗證分流（會暫時暫停{cs.description} {cs.container}.service，驗完立刻恢復；暫停期間客服不可用）：經入口（--resolve 連回送位址）確認暫停前三條路徑正常；"
+            f"暫停後 {INGRESS_CHECK_PATH} 與 {ROUTING_CS_PATH} 回 {ROUTING_PAUSED_STATUS}（客服池處理）、{ROUTING_GAME_PATH} 仍回 {ROUTING_ANON_STATUS}（{rpg.description}處理）、"
+            f"{rpg.description}的 {INGRESS_CHECK_PATH} 仍回 200、客服池的回送位址連不上；啟動客服池並等 {POOL_READY_PATH} 回 200，三條路徑回到暫停前的狀態碼；"
+            "任何一步失敗或被中斷都先恢復客服池")
+
+
+def schedule_timers() -> tuple[str, ...]:
+    """由 `SCHEDULED_COMMANDS` 產生的計時器檔名（排序）。啟動、核對與計畫產生的單元共用同一份來源。"""
+    return tuple(sorted(name for name in scheduled_units() if name.endswith(".timer")))
+
+
+def alert_service_name() -> str:
+    """手動執行的服務單元名稱；`check-alerts` 不在排程清單裡時丟錯，免得驗證的是一個不存在的單元。"""
+    if ALERT_COMMAND not in SCHEDULED_COMMANDS:
+        raise PlanError(f"{ALERT_COMMAND} 不在排程清單裡")
+    return f"{job_unit_name(ALERT_COMMAND)}.service"
+
+
+def _schedule_start_lines() -> list[str]:
+    """啟動全部排程計時器（主機初始化只 `enable`、沒有啟動）。計時器是 `Persistent=true`，但第一次啟動沒有上次執行的紀錄，不會補跑。
+    輸出作用中的計時器數。"""
+    timers = " ".join(schedule_timers())
+    return [
+        "set -eu", "export HOME=/root",
+        f"systemctl start {timers}",
+        f'echo "timers-active=$(systemctl is-active {timers} | grep -cx active || true)"',
+    ]
+
+
+def _schedule_run_lines() -> list[str]:
+    """手動跑一次 `check-alerts`：啟動它的 oneshot 服務並等它結束（與計時器觸發的是同一個服務單元，同映像、同環境檔、同強化）。
+    失敗時把該單元最後 20 行日誌印到標準錯誤（日誌依規範不含機密與個資）再以 1 結束；成功時印出 systemd 記錄的結果與結束代碼。"""
+    service = alert_service_name()
+    return [
+        "set -eu", "export HOME=/root",
+        f"if ! systemctl start {service}; then",
+        f"  journalctl -u {service} -n 20 --no-pager -o cat >&2 || true",
+        "  exit 1",
+        "fi",
+        f'echo "{ALERT_COMMAND} result=$(systemctl show -P Result {service}) status=$(systemctl show -P ExecMainStatus {service})"',
+    ]
+
+
+def _schedule_run_expect() -> str:
+    return f"{ALERT_COMMAND} result=success status=0"
+
+
+def _schedule_check_lines() -> list[str]:
+    """三項唯讀核對：①作用中的 `rac-job-*.timer` 恰好等於排程清單產生的那些；②每個計時器都有下一次觸發的時間；
+    ③`systemctl --failed` 沒有任何失敗單元（整台主機，不只 rac-*；不符時印出單元名稱）。排序一律用 `LC_ALL=C`，與 Python 的排序一致。"""
+    timers = schedule_timers()
+    count = len(timers)
+    return [
+        "set -eu", "export HOME=/root",
+        f'expected="{" ".join(timers)}"',
+        "actual=\"$(systemctl list-units --type=timer --state=active --no-legend --plain 'rac-job-*.timer' | awk '{print $1}' | LC_ALL=C sort | paste -sd' ' -)\"",
+        "nexts=0",
+        "for timer in $expected; do",
+        '  next="$(systemctl show -P NextElapseUSecRealtime "$timer")"',
+        '  if [ -n "$next" ] && [ "$next" != "n/a" ]; then nexts=$((nexts + 1)); fi',
+        "done",
+        "failed=\"$(systemctl --failed --no-legend --plain | awk '{print $1}' | paste -sd' ' -)\"",
+        f'if [ "$actual" != "$expected" ] || [ "$nexts" != {count} ] || [ -n "$failed" ]; then',
+        '  echo "schedule mismatch: timers=[$actual] next=$nexts failed=[$failed]" >&2',
+        "  exit 1",
+        "fi",
+        f'echo "{_schedule_check_expect()}"',
+    ]
+
+
+def _schedule_check_expect() -> str:
+    count = len(schedule_timers())
+    return f"timers={count} next={count} failed=0"
+
+
 # ---- 主機初始化（task 4.4 在主機上現場撰寫並逐項驗證，4.5 回寫成 `build_plan` 的 `host-init` 組）---------------------------
 # 六段，每段一個 SSM 步驟加一個等待步驟，順序固定：A 系統 → B 憑證 → C 檔案 → D 單元 → E 機密取出檢查 → F 停用 sshd。
 # 每一段都能重複執行（做過的不重做、結果相同）；沒有任何一段啟動 rac-* 單元（啟動屬於部署與排程階段）。
@@ -1494,7 +1743,7 @@ def rds_ca_bundle_url(target: Target) -> str:
 
 def host_enabled_units() -> tuple[str, ...]:
     """主機初始化要啟用（enable）但**不啟動**的單元：兩個池、Caddy 與每個排程的計時器（排程的 .service 由計時器觸發，不單獨啟用）。"""
-    return (*(f"{pool.container}.service" for pool in POOLS), "rac-caddy.service",
+    return (*(f"{pool.container}.service" for pool in POOLS), CADDY_UNIT,
             *(name for name in scheduled_units() if name.endswith(".timer")))
 
 
@@ -1587,7 +1836,7 @@ def snapshot_name(target: Target, tag: str) -> str:
 
 def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] | None = None) -> list[Step]:
     """新版部署：資料庫快照 → 建置映像 → 遷移 → 重啟兩個池 → 驗證（每個階段一組，順序固定；`groups` 只取其中幾組，
-    沒指定時是例行部署的整份計畫 `ROUTINE_DEPLOY_GROUPS`，**不含**只在第一次部署執行的 `db-init`）。
+    沒指定時是例行部署的整份計畫 `ROUTINE_DEPLOY_GROUPS`，**不含**只在第一次部署執行的 `db-init`、`create-admin`、`ingress`、`routing`、`schedule`）。
 
     - `tag` 是要部署的提交短碼：原始碼以 `git archive <tag>` 取出（只含已提交內容，不含 .env），經傳檔儲存貯體到主機建置，
       先建基底映像 `rac-app-base:<tag>`，再加一層主機上的 RDS CA 套件，標記為 `rac-app:<tag>`（design D7），前一版的映像保留供回復。
@@ -1684,8 +1933,30 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] | None = No
         target, "check-pool-hardening", "verify", _pool_hardening_title(),
         _pool_hardening_lines(), timeout=120, expect=_pool_hardening_expect())
 
+    steps["ingress"] += [
+        *_ssm_steps(target, "start-ingress", "ingress", _ingress_start_title(), _ingress_start_lines(), timeout=300, expect="ingress=running"),
+        *_ssm_steps(target, "check-ingress", "ingress", _ingress_check_title(target), _ingress_check_lines(target),
+                    timeout=INGRESS_TLS_ATTEMPTS * (INGRESS_TLS_INTERVAL_SECONDS + INGRESS_CURL_TIMEOUT_SECONDS) + 120,
+                    expect=_ingress_check_expect()),
+    ]
+
+    steps["routing"] += _ssm_steps(
+        target, "check-routing", "routing", _routing_check_title(target), _routing_check_lines(target),
+        timeout=ROUTING_TIMEOUT_SECONDS, expect=_routing_check_expect())
+
+    steps["schedule"] += [
+        *_ssm_steps(target, "start-timers", "schedule", f"啟動 {len(schedule_timers())} 個排程計時器（主機初始化只 enable、沒有啟動），輸出作用中的計時器數",
+                    _schedule_start_lines(), timeout=120, expect=f"timers-active={len(schedule_timers())}"),
+        *_ssm_steps(target, "run-check-alerts", "schedule",
+                    f"手動跑一次 {ALERT_COMMAND}（啟動與計時器相同的服務單元並等它結束；失敗時印出該單元最後 20 行日誌）",
+                    _schedule_run_lines(), timeout=JOB_TIMEOUT_SECONDS + 60, expect=_schedule_run_expect()),
+        *_ssm_steps(target, "check-schedule", "schedule",
+                    "唯讀核對排程：作用中的 rac-job 計時器恰好等於排程清單、每個都有下一次觸發時間，且 systemctl --failed 沒有任何失敗單元",
+                    _schedule_check_lines(), timeout=120, expect=_schedule_check_expect()),
+    ]
+
     selected = set(groups)
-    if selected & {"build", "db-init", "migrate", "create-admin", "restart", "verify"}:
+    if selected & {"build", "db-init", "migrate", "create-admin", "restart", "verify", "ingress", "routing", "schedule"}:
         selected.add("prepare")             # 在主機上執行的命令都要實例編號；找主機是唯讀的，所以一律自動帶上
     plan: list[Step] = []
     for group in DEPLOY_GROUPS:

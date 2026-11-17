@@ -554,6 +554,51 @@ def test_declining_the_manual_step_stops_before_the_cleanup_and_yes_cannot_answe
     assert refused.code == demo.EXIT_DECLINED and any("--yes 不能代替人工動作" in prompt for prompt in refused.prompts)
 
 
+def ingress_schedule_runner(outputs):
+    runner = FakeAws().with_identity()
+    runner.when("describe-instances", "length(Reservations", out="1")
+    runner.when("describe-instances", out="i-0host")
+    runner.when("send-command", out="cmd-1")
+    runner.when("StandardOutputContent", out=outputs)
+    runner.when("get-command-invocation", out="Success")
+    return runner
+
+
+INGRESS_AND_SCHEDULE = (
+    ("ingress", ("start-ingress", "check-ingress"), ["ingress=running\n", "ingress tls=ok http=2 redirect=https headers=5\n"], "systemctl restart rac-caddy.service"),
+    ("routing", ("check-routing",), ["routing game=rpg other=cs paused=502 rpg=200 restored=ok\n"], "systemctl stop rac-cs.service"),
+    ("schedule", ("start-timers", "run-check-alerts", "check-schedule"),
+     ["timers-active=5\n", "check-alerts result=success status=0\n", "timers=5 next=5 failed=0\n"], "systemctl start rac-job-check-alerts.service"),
+)
+
+
+@pytest.mark.parametrize("group,shown,outputs,marker", INGRESS_AND_SCHEDULE)
+def test_the_ingress_and_schedule_groups_are_not_in_a_routine_deploy_and_run_only_through_ssm_with_their_fixed_output_lines(group, shown, outputs, marker):
+    routine = invoke(DEPLOY)
+    assert not any(name in routine.text for name in ("start-ingress", "check-ingress", "check-routing", "start-timers", "run-check-alerts", "check-schedule"))
+    preview = invoke([*DEPLOY, "--group", group])
+    assert preview.code == 0 and preview.runner.calls == [] and "找出主機" in preview.text
+    assert all(name in preview.text for name in shown) and "migrate-db" not in preview.text and "switch-release" not in preview.text
+    runner = ingress_schedule_runner(outputs)
+    result = invoke([*DEPLOY, "--group", group, "--execute"], runner=runner)
+    assert result.code == 0, result.text + result.err
+    bodies = [json.loads(body)["Parameters"]["commands"] for body in runner.bodies if body]
+    assert len(bodies) == len(shown) and any(marker in line for lines in bodies for line in lines)
+    assert all(call[0] == "aws" for call in runner.calls) and runner.destructive() == []
+
+
+def test_a_wrong_output_line_from_the_routing_check_stops_the_run():
+    runner = ingress_schedule_runner(["routing game=rpg other=cs paused=502 rpg=200 restored=no\n"])
+    result = invoke([*DEPLOY, "--group", "routing", "--execute"], runner=runner)
+    assert result.code != 0, "固定輸出行不符（沒有恢復）時整段停止，不當成通過"
+
+
+def test_a_wrong_output_line_from_the_ingress_check_stops_the_run():
+    runner = ingress_schedule_runner(["ingress=running\n", "ingress tls=ok http=1.1 redirect=https headers=5\n"])
+    result = invoke([*DEPLOY, "--group", "ingress", "--execute"], runner=runner)
+    assert result.code != 0, "固定輸出行不符時整段停止，不當成通過"
+
+
 def test_the_default_deploy_tag_comes_from_git_and_a_bad_tag_is_refused():
     result = invoke(["deploy", *BASE], tag="deadbee")
     assert result.code == 0 and "deadbee" in result.text

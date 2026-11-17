@@ -48,9 +48,11 @@
 
 ## 6. 服務、入口與網域
 
+> **2026-11-17 補充（第 2 批，本機，不新增任務編號，同 5.2 的做法）**：`deploy_plan` 新增兩個只在第一次部署以 `--group` 明確執行的組（例行部署不含；排在 `verify` 之後）：`ingress`（`start-ingress`、`check-ingress`，對應 6.2：啟動 Caddy，在主機內以 `--resolve` 連回送位址、仍經 Caddy，驗證憑證、HTTP/2、HTTP 導向 HTTPS 與 HSTS／四個安全標頭）與 `schedule`（`start-timers`、`run-check-alerts`、`check-schedule`，對應 7.1：啟動五個計時器、手動跑一次 `check-alerts`、核對計時器清單與 `systemctl --failed`）。6.4 另寫 `scripts/aws_demo_probe_stream.py`（只用標準函式庫；必須加 `--allow-model-call`；開一個測試存檔並量測第 0 幕串流各事件的到達時間，判斷入口有沒有緩衝）。這三項在本機以嚴格的假指令與本機假伺服器測試；雲端執行後的差異回寫成計畫步驟與測試。**第 3 批（2026-11-17，雲端）**：`ingress` 組已對真實主機執行並通過（第一次就成功，沒有需要回寫的差異），6.2 勾選；6.3 的分流驗證在現場找到依據（暫停客服池：兩個池跑同一份應用程式，回應本身分不出誰處理，只有「沒人在聽」的池能區分）後回寫成第三個第一次部署專用的組 `routing`（`check-routing`，一定恢復客服池），對真實主機執行通過，6.3 勾選。`schedule` 組與探測腳本尚未對真實主機執行，所以 6.4、7.1 仍未勾選。
+
 - [x] 6.1 在 5.5 之後啟動客服池與 RPG 池（`rac-cs`、`rac-rpg`；`deploy_plan` 的 `restart`、`verify` 組），驗證兩者都以非 root、各用自己的 gunicorn 設定、只綁回送位址；記錄兩個池的常駐記憶體與 `free -m`
-- [ ] 6.2 把 `rac001.duckdns.org` 指向 Elastic IP（執行器的 DuckDNS 步驟，使用者確認），啟動 Caddy 並確認憑證簽發、HTTP/2、HTTP 導向 HTTPS；驗證應用程式的 HSTS 與安全標頭經入口仍在
-- [ ] 6.3 驗證分流：`/api/game/…` 由 RPG 池處理、其餘由客服池；停止客服池時 RPG 池的 `/healthz` 仍正常；從主機外部直連應用程式埠被拒絕
+- [x] 6.2 把 `rac001.duckdns.org` 指向 Elastic IP（執行器的 DuckDNS 步驟，使用者確認），啟動 Caddy 並確認憑證簽發、HTTP/2、HTTP 導向 HTTPS；驗證應用程式的 HSTS 與安全標頭經入口仍在
+- [x] 6.3 驗證分流：`/api/game/…` 由 RPG 池處理、其餘由客服池；停止客服池時 RPG 池的 `/healthz` 仍正常；從主機外部直連應用程式埠被拒絕
 - [ ] 6.4 驗證串流不被緩衝：用 `scripts/acceptance_rpg_turn.py` 的串流情境（或等效的最小請求）經入口量測第一個事件與心跳的到達時間；若入口緩衝，修正 Caddy 設定並補測試（記錄 `scripts/acceptance_rpg_turn.py` 只接受本機位址，需要另寫最小的串流探測或在主機內對回送位址執行並記錄限制）
 - [ ] 6.5 文件：營運文件補入口設定、憑證與分流的實際結果；更新 `docs/營運與部署-operations.md` 中「`/api/game/` 分流待部署」的敘述與缺口表；`tests/test_design_docs.py` 通過
 

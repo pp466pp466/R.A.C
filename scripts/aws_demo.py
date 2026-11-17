@@ -17,6 +17,10 @@
     python scripts/aws_demo.py deploy --account-id ... --tag abc1234 --group build --execute   # 第一次部署分組執行
     python scripts/aws_demo.py deploy --account-id ... --tag abc1234 --group create-admin --execute
         # 第一次部署：先乾跑，再列出要在 SSM 終端機自己輸入的指令（人工步驟；密碼不經腳本與對話），最後清理環境檔
+    python scripts/aws_demo.py deploy --account-id ... --tag abc1234 --group ingress --execute
+        # 第一次部署：啟動 Caddy（拉取映像並重啟），驗證憑證、HTTP/2、HTTP 導向 HTTPS、HSTS 與安全標頭經入口仍在
+    python scripts/aws_demo.py deploy --account-id ... --tag abc1234 --group schedule --execute
+        # 第一次部署：啟動排程計時器，手動跑一次 check-alerts，核對計時器清單與 systemctl --failed
     python scripts/aws_demo.py rollback --account-id ... --tag abc1234 --execute    # 只把兩個池換回舊標籤，不動資料庫
     python scripts/aws_demo.py teardown --account-id ... --no-final-snapshot --execute
         # 拆除：必須明確選 --final-snapshot 或 --no-final-snapshot；先列出部署前快照並要求你回覆要保留的例外
@@ -760,7 +764,7 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--vars-file", help=f"一般設定（非機密，KEY=VALUE；例如 {VARS_FILE_HINT}，不進版本庫）：主機初始化放置 plain.env 時使用，沒有它那一步被擋下")
     provision.add_argument("--accept-cost", action="store_true", help="同意建立計費資源（沒有它，RDS、EC2、Elastic IP 的步驟不輸出指令）")
 
-    deploy = sub.add_parser("deploy", parents=[common], help="部署：快照、建置映像、遷移、重啟兩個池、驗證（第一次另有 --group db-init：資料庫初始化與憑證探測；--group create-admin：人工建立首位管理員）")
+    deploy = sub.add_parser("deploy", parents=[common], help="部署：快照、建置映像、遷移、重啟兩個池、驗證（第一次另有 --group db-init：資料庫初始化與憑證探測；--group create-admin：人工建立首位管理員；--group ingress：啟動入口並驗證；--group routing：暫停客服池驗證分流並恢復；--group schedule：啟動排程計時器並驗證）")
     with_steps(deploy, plan.DEPLOY_GROUPS)
     deploy.add_argument("--tag", help="要部署的提交短碼（7 至 40 位小寫十六進位）；省略時取目前 git 的短提交")
 
@@ -800,8 +804,8 @@ def _build_steps(
         narrowed = plan.build_plan(target, accept_cost=args.accept_cost, groups=groups, plain=plain) if groups else catalog
     elif args.command == "deploy":
         tag = args.tag or tag_default()
-        catalog = plan.deploy_plan(target, tag, groups=plan.DEPLOY_GROUPS)         # 整份目錄含只在第一次部署的 db-init、create-admin（--only 與擷取值的唯讀取回用）
-        narrowed = plan.deploy_plan(target, tag, groups=groups) if groups else plan.deploy_plan(target, tag)   # 沒指定 --group 時是例行部署，不含 db-init、create-admin
+        catalog = plan.deploy_plan(target, tag, groups=plan.DEPLOY_GROUPS)         # 整份目錄含只在第一次部署的 db-init、create-admin、ingress、routing、schedule（--only 與擷取值的唯讀取回用）
+        narrowed = plan.deploy_plan(target, tag, groups=groups) if groups else plan.deploy_plan(target, tag)   # 沒指定 --group 時是例行部署，不含第一次部署才執行的組
         notes.append(f"映像標籤 {tag}；原始碼來自 git archive（只含已提交的內容，不含 .env 與未提交的變更）。")
     elif args.command == "rollback":
         catalog = narrowed = plan.rollback_plan(target, args.tag)

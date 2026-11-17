@@ -16,6 +16,7 @@ import pytest
 
 from app import cli
 from app.config import PROJECT_ROOT
+from app.security import security_headers
 from tests.support.scripts import load_script
 
 plan = load_script("aws_demo_plan")
@@ -1136,8 +1137,9 @@ def test_the_image_tag_must_be_a_commit_short_code(tag):
 
 def test_every_on_host_command_goes_through_ssm_run_command_with_ascii_only_and_no_secret():
     sends = [s for s in all_deploy_steps() + rollback_steps() if is_host_command(s)]
-    assert len(sends) == 12 + 3, ("部署 12 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、建立管理員的乾跑、清理、切換、池檢查、池的執行方式驗證）"
-                                  "與回復 3 個（切換、池檢查、池的執行方式驗證）；人工建立管理員的那一步不在其中（它不經 SSM Run Command）")
+    assert len(sends) == 12 + 6 + 3, ("部署 12 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、建立管理員的乾跑、清理、切換、池檢查、池的執行方式驗證）"
+                                      "加入口 2 個（啟動、驗證）、分流驗證 1 個（暫停客服池）與排程 3 個（啟動計時器、手動跑一次 check-alerts、核對）、回復 3 個（切換、池檢查、池的執行方式驗證）；"
+                                      "人工建立管理員的那一步不在其中（它不經 SSM Run Command）")
     for step in sends:
         body = json.loads(step.input_json)
         assert body["DocumentName"] == "AWS-RunShellScript" and body["InstanceIds"] == ["{{instance-id}}"], step.id
@@ -1373,7 +1375,7 @@ def test_the_db_init_group_sits_between_the_build_and_the_migration_and_is_not_p
     steps = all_deploy_steps()
     assert [s.id for s in steps if s.group == "db-init"] == list(DB_INIT_IDS)
     assert_in_order(steps, "wait-check-image", *DB_INIT_IDS, "migrate-db")
-    assert plan.FIRST_DEPLOY_GROUPS == ("db-init", "create-admin")
+    assert plan.FIRST_DEPLOY_GROUPS == ("db-init", "create-admin", "ingress", "routing", "schedule")
     assert plan.ROUTINE_DEPLOY_GROUPS == tuple(g for g in plan.DEPLOY_GROUPS if g not in plan.FIRST_DEPLOY_GROUPS)
     assert not set(DB_INIT_IDS) & {s.id for s in deploy_steps()}, "例行部署不用主要使用者重做資料庫初始化"
     assert [s.id for s in plan.deploy_plan(target(), TAG, groups=plan.ROUTINE_DEPLOY_GROUPS)] == [s.id for s in deploy_steps()]
@@ -1797,6 +1799,699 @@ def test_the_pool_hardening_script_fails_without_the_fixed_line_when_a_pool_does
 def test_the_pool_hardening_script_fails_when_a_container_cannot_be_inspected():
     result = run_hardening_script(docker_fails=True)
     assert result["rc"] == 1 and result["out"].strip() == "" and "rac-cs hardening mismatch" in result["err"]
+
+
+# ---- 入口與排程（task 6.2、7.1）：`ingress`、`schedule` 組，只在第一次部署以 `--group` 明確執行 -------------------------------
+# 兩組都是本機撰寫、尚未對真實主機執行：腳本在 bash 內以**嚴格的**假指令實際執行（不認得的選項或子指令就失敗；`docker top` 那次的教訓）
+
+INGRESS_IDS = ("start-ingress", "wait-start-ingress", "check-ingress", "wait-check-ingress")
+ROUTING_IDS = ("check-routing", "wait-check-routing")
+ROUTING_EXPECT = "routing game=rpg other=cs paused=502 rpg=200 restored=ok"
+SCHEDULE_IDS = ("start-timers", "wait-start-timers", "run-check-alerts", "wait-run-check-alerts", "check-schedule", "wait-check-schedule")
+INGRESS_START_EXPECT = "ingress=running"
+INGRESS_CHECK_EXPECT = "ingress tls=ok http=2 redirect=https headers=5"
+TIMERS = (
+    "rac-job-check-alerts.timer", "rac-job-execute-account-deletions.timer", "rac-job-purge-expired-data.timer",
+    "rac-job-purge-inactive-accounts.timer", "rac-job-purge-unconfirmed-accounts.timer",
+)
+DOMAIN = "rac001.duckdns.org"
+CHECK_ALERTS_SERVICE = "rac-job-check-alerts.service"
+
+
+def group_ids(steps, group):
+    return [s.id for s in steps if s.group == group]
+
+
+def test_the_ingress_and_schedule_groups_follow_the_verification_and_are_not_part_of_a_routine_deploy():
+    steps = all_deploy_steps()
+    assert plan.DEPLOY_GROUPS[-5:] == ("restart", "verify", "ingress", "routing", "schedule"), "入口、分流驗證與排程在驗證之後：兩個池先回 200 才啟動 Caddy，Caddy 起來才能驗分流"
+    assert group_ids(steps, "ingress") == list(INGRESS_IDS) and group_ids(steps, "schedule") == list(SCHEDULE_IDS)
+    assert group_ids(steps, "routing") == list(ROUTING_IDS)
+    assert_in_order(steps, "wait-check-pool-hardening", *INGRESS_IDS, *ROUTING_IDS, *SCHEDULE_IDS)
+    routine = {s.id for s in deploy_steps()}
+    assert not routine & {*INGRESS_IDS, *ROUTING_IDS, *SCHEDULE_IDS}, "例行部署不重啟入口、不暫停客服池、不重新啟動計時器"
+    assert tuple(s.id for s in deploy_steps()) == DEPLOY_PLAN_IDS
+    assert {s.group for s in rollback_steps()} == {"prepare", "restart", "verify"}, "回復不碰入口與排程"
+
+
+@pytest.mark.parametrize("group,ids", [("ingress", INGRESS_IDS), ("routing", ROUTING_IDS), ("schedule", SCHEDULE_IDS)])
+def test_selecting_only_the_ingress_routing_or_schedule_group_brings_the_host_lookup_along_and_nothing_else(group, ids):
+    selected = plan.deploy_plan(target(), TAG, groups=(group,))
+    assert [s.id for s in selected] == ["deploy-find-host", *ids]
+    assert_placeholders_resolve(selected)
+    assert {s.group for s in selected} == {"prepare", group}
+
+
+def test_the_ingress_steps_are_each_followed_by_a_wait_that_checks_the_fixed_output_line():
+    steps = by_id(all_deploy_steps())
+    assert steps["wait-start-ingress"].verify[0].expect == INGRESS_START_EXPECT
+    assert steps["wait-check-ingress"].verify[0].expect == INGRESS_CHECK_EXPECT == plan._ingress_check_expect()
+    assert plan.ingress_headers() == tuple(f"{name}: {value}".lower() for name, value in
+                                           {"Strict-Transport-Security": security_headers.HSTS_VALUE, **security_headers.BASE_HEADERS}.items()), (
+        "入口後要求的標頭就是應用程式送的那幾個，名稱與值只有一個來源")
+    assert len(plan.ingress_headers()) == 5 and "content-security-policy" not in " ".join(plan.ingress_headers()), "CSP 刻意不送，不要求它"
+    assert int(json.loads(steps["check-ingress"].input_json)["Parameters"]["executionTimeout"][0]) >= 30 * (5 + 10), "最壞情況的等待要放得進命令逾時"
+
+
+def test_the_caddy_unit_and_the_ingress_steps_share_one_container_and_unit_name():
+    assert plan.CADDY_CONTAINER == "rac-caddy" and plan.CADDY_UNIT == "rac-caddy.service"
+    unit = plan.caddy_unit()
+    assert f"--name={plan.CADDY_CONTAINER}" in unit and f"rm -f {plan.CADDY_CONTAINER}" in unit and f"stop --time=15 {plan.CADDY_CONTAINER}" in unit
+    assert f"systemctl restart {plan.CADDY_UNIT}" in script_text(by_id(all_deploy_steps())["start-ingress"])
+    assert plan.CADDY_UNIT in plan.host_enabled_units()
+
+
+# 假指令：全部寫進同一份記錄（`$d/calls`），測試用它確認呼叫的內容與次數
+
+BASH_HEAD = ['d="$(mktemp -d)"', 'sleep() { echo "sleep $*" >> "$d/calls"; }']
+
+FAKE_DOCKER_CADDY = r'''
+dockerfake() {
+  echo "docker $*" >> "$d/calls"
+  case "$1" in
+    pull) [ "$*" = "pull --quiet caddy:2" ] || return 2; [ "$(cat "$d/pull-rc")" = 0 ] || { echo "Error response from daemon: pull access denied" >&2; return 1; } ;;
+    inspect)
+      [ "$*" = "inspect --format {{.State.Running}} rac-caddy" ] || return 2
+      n=0; [ -f "$d/inspect-count" ] && n="$(cat "$d/inspect-count")"; n=$((n + 1)); echo "$n" > "$d/inspect-count"
+      if [ "$n" -le "$(cat "$d/inspect-false-until")" ]; then echo false; else cat "$d/running"; fi ;;
+    *) echo "docker: unknown command: $1" >&2; return 1 ;;
+  esac
+}
+'''
+
+FAKE_SYSTEMCTL = r'''
+systemctl() {
+  echo "systemctl $*" >> "$d/calls"
+  case "$1" in
+    restart) [ "$*" = "restart rac-caddy.service" ] || return 5; return "$(cat "$d/restart-rc")" ;;
+    start)
+      shift; [ $# -ge 1 ] || return 2
+      for u in "$@"; do case "$u" in rac-job-*.timer|rac-job-*.service) ;; *) echo "Failed to start $u: Unit not found." >&2; return 5;; esac; done
+      for u in "$@"; do case "$u" in *.service) return "$(cat "$d/service-start-rc")";; esac; done
+      return 0 ;;
+    is-active)
+      shift; rc=0
+      for u in "$@"; do st="$(awk -v u="$u" '$1 == u {print $2}' "$d/states")"; echo "${st:-inactive}"; [ "${st:-inactive}" = active ] || rc=3; done
+      return "$rc" ;;
+    show)
+      [ "$2" = -P ] || return 2
+      case "$3" in Result|ExecMainStatus|NextElapseUSecRealtime) ;; *) return 2;; esac
+      [ -n "$4" ] && [ $# -eq 4 ] || return 2
+      [ ! -f "$d/prop-$3-$4" ] || cat "$d/prop-$3-$4" ;;
+    list-units)
+      [ "$*" = "list-units --type=timer --state=active --no-legend --plain rac-job-*.timer" ] || return 2
+      cat "$d/listed" ;;
+    --failed)
+      [ "$*" = "--failed --no-legend --plain" ] || return 2
+      cat "$d/failed" ;;
+    *) echo "Unknown command verb $1." >&2; return 1 ;;
+  esac
+}
+journalctl() {
+  echo "journalctl $*" >> "$d/calls"
+  [ "$*" = "-u rac-job-check-alerts.service -n 20 --no-pager -o cat" ] || return 2
+  cat "$d/journal"
+}
+'''
+
+FAKE_CURL_OPENSSL = r'''
+curl() {
+  echo "curl $*" >> "$d/calls"
+  local resolve="" fmt="" url="" dump=0 fail=0 devnull=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -fsS) fail=1 ;;
+      -sS) ;;
+      --max-time) [ "$2" = 10 ] || return 2; shift ;;
+      --resolve) resolve="$2"; shift ;;
+      -o) [ "$2" = /dev/null ] || return 2; devnull=1; shift ;;
+      -w) fmt="$2"; shift ;;
+      -D) [ "$2" = - ] || return 2; dump=1; shift ;;
+      http://*|https://*) url="$1" ;;
+      *) echo "curl: option $1: is unknown" >&2; return 2 ;;
+    esac
+    shift
+  done
+  [ "$devnull" = 1 ] || return 2
+  local hostport="${url#*://}"; hostport="${hostport%%/*}"
+  local scheme="${url%%://*}" port=443
+  if [ "$scheme" = http ]; then port=80; fi
+  if [ "$resolve" != "$hostport:$port:127.0.0.1" ]; then echo "curl: (6) Could not resolve host: $hostport" >&2; return 6; fi
+  if [ "$scheme" = https ] && [ "$fmt" = '%{http_version} %{http_code} %{ssl_verify_result}' ]; then
+    local n=0; [ -f "$d/https-count" ] && n="$(cat "$d/https-count")"; n=$((n + 1)); echo "$n" > "$d/https-count"
+    if [ "$n" -le "$(cat "$d/https-fails")" ]; then return "$(cat "$d/https-rc")"; fi
+    local out; out="$(cat "$d/https-out")"; printf '%s' "$out"
+    local status; status="$(echo "$out" | awk '{print $2}')"
+    if [ "$fail" = 1 ] && [ "$status" -ge 400 ]; then return 22; fi
+    return 0
+  fi
+  if [ "$scheme" = http ] && [ "$fmt" = '%{http_code} %{redirect_url}' ]; then printf '%s' "$(cat "$d/redirect-out")"; return 0; fi
+  if [ "$scheme" = https ] && [ "$dump" = 1 ] && [ -z "$fmt" ]; then cat "$d/headers"; return 0; fi
+  echo "curl: unexpected invocation: $*" >&2; return 2
+}
+openssl() {
+  echo "openssl $*" >> "$d/calls"
+  case "$1" in
+    s_client) [ "$*" = "s_client -connect 127.0.0.1:443 -servername rac001.duckdns.org" ] || return 2; echo FAKE-CERTIFICATE ;;
+    x509) [ "$*" = "x509 -noout -issuer -enddate" ] || return 2; cat >/dev/null; echo "issuer=C = US, O = Fake CA, CN = F1"; echo "notAfter=Feb 15 00:00:00 2027 GMT" ;;
+    *) return 2 ;;
+  esac
+}
+'''
+
+
+def run_in_bash(body_lines, setup, fakes=""):
+    """在 bash 內執行主機腳本：`setup` 是寫入 `$d` 內各個檔案的行；回傳結束代碼、標準輸出、標準錯誤與假指令的呼叫記錄。"""
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法執行腳本（不算通過）")
+    body = "\n".join(body_lines).replace("/usr/bin/docker", "dockerfake")
+    script = "\n".join([
+        *BASH_HEAD, fakes, *setup, "(", body, ') > "$d/out" 2> "$d/err"',
+        'echo "rc=$?"', 'echo "---out"; cat "$d/out"', 'echo "---err"; cat "$d/err"', 'echo "---calls"; cat "$d/calls" 2>/dev/null || true', 'rm -rf "$d"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=120)
+    text = result.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+    assert result.returncode == 0, (text, result.stderr.decode("utf-8", "replace"))
+    head, rest = text.split("---out\n", 1)
+    out, rest = rest.split("---err\n", 1)
+    err, calls = rest.split("---calls\n", 1)
+    return {"rc": int(head.strip().split("=", 1)[1]), "out": out, "err": err, "calls": calls.splitlines()}
+
+
+def write_file(name, content):
+    return f"printf '%s' {shlex.quote(content)} > \"$d/{name}\""
+
+
+# -- 啟動入口 --------------------------------------------------------------------------------------------------
+
+def run_start_ingress(*, pull_rc=0, restart_rc=0, running="true", false_until=0):
+    setup = [write_file("pull-rc", str(pull_rc)), write_file("restart-rc", str(restart_rc)), write_file("running", running),
+             write_file("inspect-false-until", str(false_until))]
+    return run_in_bash(script_lines(by_id(all_deploy_steps())["start-ingress"]), setup, FAKE_DOCKER_CADDY + FAKE_SYSTEMCTL)
+
+
+def test_starting_the_ingress_pulls_the_image_first_restarts_the_unit_and_waits_for_the_container():
+    result = run_start_ingress()
+    assert result["rc"] == 0 and result["out"].strip() == INGRESS_START_EXPECT and result["err"] == ""
+    assert [c for c in result["calls"] if not c.startswith("sleep")] == [
+        "docker pull --quiet caddy:2", "systemctl restart rac-caddy.service", "docker inspect --format {{.State.Running}} rac-caddy"], (
+        "先拉映像（失敗就停在重啟之前），再重啟，最後才看容器")
+
+
+def test_starting_the_ingress_waits_up_to_thirty_seconds_for_the_container_to_run():
+    slow = run_start_ingress(false_until=4)
+    assert slow["rc"] == 0 and slow["out"].strip() == INGRESS_START_EXPECT and slow["calls"].count("sleep 1") == 4
+    never = run_start_ingress(running="false", false_until=0)
+    assert never["rc"] == 1 and never["out"].strip() == "" and "rac-caddy container is not running" in never["err"]
+    assert never["calls"].count("sleep 1") == 30 and sum(c.startswith("docker inspect") for c in never["calls"]) == 30
+
+
+def test_starting_the_ingress_stops_before_the_restart_when_the_image_cannot_be_pulled_and_when_the_restart_fails():
+    pull = run_start_ingress(pull_rc=1)
+    assert pull["rc"] == 1 and pull["out"].strip() == "" and "pull access denied" in pull["err"]
+    assert not any(c.startswith("systemctl") for c in pull["calls"]), "映像拉不到時不碰執行中的入口"
+    restart = run_start_ingress(restart_rc=1)
+    assert restart["rc"] == 1 and restart["out"].strip() == "" and not any(c.startswith("docker inspect") for c in restart["calls"])
+
+
+def test_the_ingress_start_script_only_pulls_restarts_and_inspects():
+    text = script_text(by_id(all_deploy_steps())["start-ingress"])
+    assert set(re.findall(r"/usr/bin/docker (\S+)", text)) == {"pull", "inspect"} and text.count("systemctl") == 1
+    for forbidden in ("--privileged", "rm ", "stop", "enable", "disable", "daemon-reload", "release.env", "app.env", "sudo", "--password"):
+        assert forbidden not in text, forbidden
+    assert text.isascii() and "caddy:2" in text
+
+
+# -- 驗證入口 --------------------------------------------------------------------------------------------------
+
+def header_dump(*, drop=(), replace=None, style="h2", extra=()):
+    """curl `-D -` 的標頭輸出（CRLF 結尾）。HTTP/2 的標頭名稱是小寫，HTTP/1.1 是原樣：兩種都要通過。"""
+    headers = {"Content-Type": "application/json", "Cache-Control": "no-store", "Strict-Transport-Security": security_headers.HSTS_VALUE,
+               **security_headers.BASE_HEADERS}
+    headers = {k: v for k, v in headers.items() if k.lower() not in {d.lower() for d in drop}}
+    headers.update(replace or {})
+    status = "HTTP/2 200 " if style == "h2" else "HTTP/1.1 200 OK"
+    lines = [status, *(f"{k.lower() if style == 'h2' else k}: {v}" for k, v in headers.items()), *extra]
+    return "\r\n".join(lines) + "\r\n\r\n"
+
+
+def run_check_ingress(*, fails=0, rc=7, https_out="2 200 0", redirect_out=f"308 https://{DOMAIN}/healthz", headers=None, target_domain=DOMAIN):
+    step = by_id(plan.deploy_plan(target(domain=target_domain), TAG, groups=("ingress",)))["check-ingress"]
+    setup = [write_file("https-fails", str(fails)), write_file("https-rc", str(rc)), write_file("https-out", https_out),
+             write_file("redirect-out", redirect_out), write_file("headers", header_dump() if headers is None else headers)]
+    return run_in_bash(script_lines(step), setup, FAKE_CURL_OPENSSL)
+
+
+def test_the_ingress_check_prints_the_fixed_line_when_https_http2_the_redirect_and_the_headers_all_match():
+    result = run_check_ingress()
+    assert result["rc"] == 0 and result["out"].strip() == INGRESS_CHECK_EXPECT
+    assert "issuer=C = US, O = Fake CA, CN = F1" in result["err"] and "notAfter=" in result["err"], "憑證的簽發者與到期日印在標準錯誤供記錄"
+    assert not any(c.startswith("sleep") for c in result["calls"]), "一次就成功不等待"
+
+
+@pytest.mark.parametrize("style", ["h2", "h1"])
+@pytest.mark.parametrize("status", ["301", "302", "307", "308"])
+def test_the_ingress_check_accepts_any_permanent_or_temporary_redirect_and_both_header_styles(status, style):
+    result = run_check_ingress(redirect_out=f"{status} https://{DOMAIN}/healthz", headers=header_dump(style=style))
+    assert result["rc"] == 0 and result["out"].strip() == INGRESS_CHECK_EXPECT
+
+
+def test_the_ingress_check_waits_for_the_certificate_and_gives_up_after_thirty_attempts():
+    late = run_check_ingress(fails=3, rc=35)
+    assert late["rc"] == 0 and late["out"].strip() == INGRESS_CHECK_EXPECT and late["calls"].count("sleep 5") == 3
+    never = run_check_ingress(fails=99, rc=35)
+    assert never["rc"] == 1 and never["out"].strip() == "" and "https is not ready: curl exit 35" in never["err"]
+    assert never["calls"].count("sleep 5") == 30 and sum("https://" in c and c.startswith("curl") for c in never["calls"]) == 30
+    assert not any("http://" in c for c in never["calls"]), "憑證沒好就不往下驗"
+
+
+@pytest.mark.parametrize("out,why", [
+    ("1.1 200 0", "沒有協商到 HTTP/2"), ("2 200 1", "憑證驗證結果不是 0"), ("3 200 0", "不是 HTTP/2"), ("2 204 0", "狀態碼不是 200"),
+    ("2 200", "格式不對"), ("", "沒有輸出"),
+])
+def test_the_ingress_check_fails_without_the_fixed_line_when_https_is_not_http2_with_a_verified_certificate(out, why):
+    result = run_check_ingress(https_out=out)
+    assert result["rc"] == 1 and INGRESS_CHECK_EXPECT not in result["out"] and result["out"].strip() == "", why
+    assert "https mismatch" in result["err"]
+
+
+def test_an_https_error_status_fails_the_curl_so_the_check_never_passes_on_a_bad_gateway():
+    result = run_check_ingress(https_out="2 502 0")
+    assert result["rc"] == 1 and result["out"].strip() == "" and "https is not ready: curl exit 22" in result["err"]
+
+
+@pytest.mark.parametrize("redirect_out,why", [
+    (f"200 ", "沒有導向（HTTP 直接回內容）"), (f"308 http://{DOMAIN}/healthz", "導向到 http"), ("308 https://other.example.com/healthz", "導向到別的網域"),
+    (f"308 https://{DOMAIN}/", "導向到別的路徑"), ("404 ", "狀態碼不對"), (f"303 https://{DOMAIN}/healthz", "303 不在接受的狀態碼內"), ("", "沒有輸出"),
+])
+def test_the_ingress_check_fails_when_plain_http_does_not_redirect_to_https_on_the_same_domain(redirect_out, why):
+    result = run_check_ingress(redirect_out=redirect_out)
+    assert result["rc"] == 1 and result["out"].strip() == "" and "redirect mismatch" in result["err"], why
+
+
+@pytest.mark.parametrize("name", ["Strict-Transport-Security", "X-Content-Type-Options", "Referrer-Policy", "X-Frame-Options", "Permissions-Policy"])
+def test_the_ingress_check_names_every_expected_header_that_is_missing(name):
+    result = run_check_ingress(headers=header_dump(drop=(name,)))
+    assert result["rc"] == 1 and result["out"].strip() == ""
+    wanted = next(h for h in plan.ingress_headers() if h.startswith(name.lower() + ":"))
+    assert f"missing header: {wanted}" in result["err"]
+    assert result["err"].count("missing header") == 1
+
+
+def test_the_ingress_check_requires_the_exact_hsts_value_and_lists_all_missing_headers_at_once():
+    weaker = run_check_ingress(headers=header_dump(replace={"Strict-Transport-Security": "max-age=0"}))
+    assert weaker["rc"] == 1 and "missing header: strict-transport-security: max-age=31536000" in weaker["err"]
+    none = run_check_ingress(headers="HTTP/2 200 \r\ncontent-type: application/json\r\n\r\n")
+    assert none["rc"] == 1 and none["err"].count("missing header") == 5
+
+
+def test_a_header_value_with_extra_text_is_not_accepted_as_the_expected_value():
+    result = run_check_ingress(headers=header_dump(replace={"X-Frame-Options": "DENY, SAMEORIGIN"}))
+    assert result["rc"] == 1 and "missing header: x-frame-options: deny" in result["err"]
+
+
+def test_the_ingress_check_goes_through_caddy_with_resolve_and_never_disables_verification_or_uses_dns():
+    lines = script_lines(by_id(all_deploy_steps())["check-ingress"])
+    text = "\n".join(lines)
+    curls = re.findall(r"\$\((curl [^|)]*)", text)
+    assert len(curls) == 3, "HTTPS 狀態、HTTP 導向與回應標頭各一次"
+    assert all(f"--resolve {DOMAIN}:" in line and ":127.0.0.1" in line for line in curls)
+    for forbidden in ("-k ", "--insecure", "--cacert", "--capath", "-L ", "--location", "--proxy", "--connect-to", "localhost", "8081", "8082", "--write-out"):
+        assert forbidden not in text, forbidden
+    assert f"--resolve {DOMAIN}:80:127.0.0.1" in text and f"--resolve {DOMAIN}:443:127.0.0.1" in text
+    assert text.isascii() and not re.search(r"systemctl|docker|rm |app\.env|release\.env|sudo", text), "驗證是唯讀的，只對入口送請求"
+    assert "-servername" in text and text.count("openssl ") == 2
+
+
+def test_the_ingress_check_uses_the_target_domain_for_the_url_the_resolve_and_the_expected_redirect():
+    result = run_check_ingress(target_domain="demo.example.org", redirect_out="308 https://demo.example.org/healthz")
+    assert result["rc"] == 0 and result["out"].strip() == INGRESS_CHECK_EXPECT, (
+        "假的 openssl 只接受展示網域所以這裡會失敗，但憑證資訊只是記錄、不參與驗證，不影響結果")
+    curls = [call for call in result["calls"] if call.startswith("curl")]
+    assert len(curls) == 3 and all("demo.example.org" in call and DOMAIN not in call for call in curls)
+    assert any("-servername demo.example.org" in call for call in result["calls"] if call.startswith("openssl"))
+    wrong = run_check_ingress(target_domain="demo.example.org", redirect_out=f"308 https://{DOMAIN}/healthz")
+    assert wrong["rc"] == 1 and "redirect mismatch" in wrong["err"], "導向到別的網域不算通過"
+
+
+# -- 驗證分流（task 6.3）：`routing` 組 ---------------------------------------------------------------------------
+# 暫停客服池是唯一能分辨「誰處理了請求」的做法（兩個池跑同一份應用程式）；腳本一定要恢復客服池，所以每一種失敗與中斷都要測。
+
+FAKE_ROUTING = r'''
+curl() {
+  echo "curl $*" >> "$d/calls"
+  local resolve="" fmt="" url="" fail=0 devnull=0 maxtime=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      -fsS) fail=1 ;;
+      -sS) ;;
+      --max-time) maxtime="$2"; shift ;;
+      --resolve) resolve="$2"; shift ;;
+      -o) [ "$2" = /dev/null ] || return 2; devnull=1; shift ;;
+      -w) fmt="$2"; shift ;;
+      http://*|https://*) url="$1" ;;
+      *) echo "curl: option $1: is unknown" >&2; return 2 ;;
+    esac
+    shift
+  done
+  [ "$devnull" = 1 ] || return 2
+  local rest="${url#*://}" hostport path
+  hostport="${rest%%/*}"; path="/${rest#*/}"
+  if [ "${url%%://*}" = https ]; then
+    [ "$maxtime" = 10 ] && [ "$fail" = 0 ] && [ "$fmt" = '%{http_code}' ] || { echo "curl: unexpected invocation: $*" >&2; return 2; }
+    if [ "$resolve" != "$hostport:443:127.0.0.1" ]; then echo "curl: (6) Could not resolve host: $hostport" >&2; printf 000; return 6; fi
+    local pool=cs
+    case "$path" in /api/game/*) pool=rpg ;; esac
+    case "$(cat "$d/misroute")" in
+      swap) if [ "$pool" = cs ]; then pool=rpg; else pool=cs; fi ;;
+      all-rpg) pool=rpg ;;
+      all-cs) pool=cs ;;
+    esac
+    if [ -f "$d/term-when-paused" ] && [ "$(cat "$d/cs-up")" = 0 ]; then kill -TERM "$(cat "$d/pid")"; fi
+    if [ "$(cat "$d/$pool-up")" != 1 ]; then printf 502; return 0; fi
+    case "$path" in
+      /healthz) printf '%s' "$(cat "$d/healthz-code")" ;;
+      /api/*) printf '%s' "$(cat "$d/api-code")" ;;
+      *) printf 404 ;;
+    esac
+    return 0
+  fi
+  [ "$maxtime" = 5 ] && [ "$fail" = 1 ] && [ -z "$resolve" ] && [ -z "$fmt" ] || { echo "curl: unexpected invocation: $*" >&2; return 2; }
+  local port="${hostport#127.0.0.1:}" pool
+  [ "$hostport" = "127.0.0.1:$port" ] || return 2
+  case "$port" in 8081) pool=cs ;; 8082) pool=rpg ;; *) echo "curl: (7) Failed to connect to $hostport" >&2; return 7 ;; esac
+  case "$path" in /healthz|/readyz) ;; *) echo "curl: unexpected path $path" >&2; return 2 ;; esac
+  if [ "$pool" = cs ] && [ -f "$d/cs-direct-answers" ]; then return 0; fi
+  if [ "$(cat "$d/$pool-up")" != 1 ]; then echo "curl: (7) Failed to connect to 127.0.0.1 port $port: Connection refused" >&2; return 7; fi
+  if [ "$pool" = rpg ] && [ -f "$d/rpg-direct-fails-when-paused" ] && [ "$(cat "$d/cs-up")" = 0 ]; then echo "curl: (22) The requested URL returned error: 500" >&2; return 22; fi
+  if [ "$pool" = cs ] && [ "$path" = /readyz ]; then
+    n=0; [ -f "$d/ready-count" ] && n="$(cat "$d/ready-count")"; n=$((n + 1)); echo "$n" > "$d/ready-count"
+    if [ "$n" -le "$(cat "$d/ready-fails")" ]; then echo "curl: (22) The requested URL returned error: 503" >&2; return 22; fi
+  fi
+  return 0
+}
+systemctl() {
+  echo "systemctl $*" >> "$d/calls"
+  case "$*" in
+    "stop rac-cs.service") if [ ! -f "$d/stop-noop" ]; then echo 0 > "$d/cs-up"; fi; return "$(cat "$d/stop-rc")" ;;
+    "start rac-cs.service")
+      local rc; rc="$(cat "$d/start-rc")"
+      if [ "$rc" = 0 ]; then echo 1 > "$d/cs-up"; fi
+      return "$rc" ;;
+    *) echo "Unknown command: $*" >&2; return 2 ;;
+  esac
+}
+'''
+
+ROUTING_DEFAULTS = {"cs-up": "1", "rpg-up": "1", "misroute": "none", "healthz-code": "200", "api-code": "401", "ready-fails": "0", "stop-rc": "0", "start-rc": "0"}
+
+
+def run_check_routing(files=None, flags=(), target_domain=DOMAIN):
+    step = by_id(plan.deploy_plan(target(domain=target_domain), TAG, groups=("routing",)))["check-routing"]
+    values = {**ROUTING_DEFAULTS, **(files or {})}
+    setup = [*(write_file(name, value) for name, value in values.items()), *(write_file(flag, "1") for flag in flags)]
+    return run_in_bash(['echo "$BASHPID" > "$d/pid"', *script_lines(step)], setup, FAKE_ROUTING)
+
+
+def via(path, domain=DOMAIN):
+    return f"curl -sS --max-time 10 --resolve {domain}:443:127.0.0.1 -o /dev/null -w %{{http_code}} https://{domain}{path}"
+
+
+def direct(port, path):
+    return f"curl -fsS --max-time 5 -o /dev/null http://127.0.0.1:{port}{path}"
+
+
+CS_API, GAME_API = "/api/cs/conversations", "/api/game/sessions/1"
+
+
+def non_sleep(result):
+    return [call for call in result["calls"] if not call.startswith("sleep")]
+
+
+def systemctl_calls(result):
+    return [call for call in result["calls"] if call.startswith("systemctl")]
+
+
+def test_the_routing_check_pauses_only_the_cs_pool_sees_both_directions_in_that_one_pause_and_restores_it():
+    result = run_check_routing()
+    assert result["rc"] == 0 and result["out"].strip() == ROUTING_EXPECT == plan._routing_check_expect() and result["err"] == ""
+    assert non_sleep(result) == [
+        direct(8081, "/healthz"), direct(8082, "/healthz"),                                         # 暫停前：兩個池各自健康
+        via("/healthz"), via(CS_API), via(GAME_API),                                                # 暫停前：三條路徑都有正常的應用程式回應
+        "systemctl stop rac-cs.service",
+        via("/healthz"), via(CS_API), via(GAME_API),                                                # 暫停中：兩條非 RPG 路徑 502、RPG 路徑仍 401
+        direct(8082, "/healthz"), direct(8081, "/healthz"),                                         # 暫停中：RPG 池健康、客服池連不上
+        "systemctl start rac-cs.service",
+        direct(8081, "/readyz"),                                                                    # 恢復：等客服池就緒
+        via("/healthz"), via(CS_API), via(GAME_API),                                                # 恢復後：回到暫停前的狀態碼
+    ]
+    assert systemctl_calls(result) == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service"], "只暫停客服池一次、恢復一次，沒有動 RPG 池或入口"
+    assert "sleep 5" not in result["calls"], "一次就緒不等待"
+
+
+def test_the_routing_check_waits_for_the_cs_pool_to_be_ready_again_and_gives_up_after_thirty_tries():
+    late = run_check_routing({"ready-fails": "3"})
+    assert late["rc"] == 0 and late["out"].strip() == ROUTING_EXPECT and late["calls"].count("sleep 5") == 3
+    never = run_check_routing({"ready-fails": "99"})
+    assert never["rc"] == 1 and never["out"].strip() == "" and "rac-cs is not ready after the restart" in never["err"]
+    assert never["calls"].count("sleep 5") == 30 and non_sleep(never).count(direct(8081, "/readyz")) == 30
+    assert systemctl_calls(never) == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service"], "已經啟動過就不再啟動；等不到就緒要回報，不是默默通過"
+    assert non_sleep(never)[-1] == direct(8081, "/readyz"), "沒有就緒就不驗恢復後的路徑"
+
+
+@pytest.mark.parametrize("files,message", [
+    ({"healthz-code": "502"}, "routing mismatch: before /healthz got=[502] want=[200]"),
+    ({"api-code": "200"}, "routing mismatch: before /api/cs/conversations got=[200] want=[401]"),
+    ({"rpg-up": "0"}, "rac-rpg is not healthy before the pause"),
+    ({"cs-up": "0"}, "rac-cs is not healthy before the pause"),
+])
+def test_the_routing_check_never_pauses_anything_when_the_starting_state_is_not_healthy(files, message):
+    result = run_check_routing(files)
+    assert result["rc"] == 1 and result["out"].strip() == "" and message in result["err"]
+    assert systemctl_calls(result) == [], "起點就不對時不暫停，也就沒有東西要恢復"
+
+
+@pytest.mark.parametrize("files,flags,message", [
+    ({"misroute": "swap"}, (), "routing mismatch: paused /healthz got=[200] want=[502]"),
+    ({"misroute": "all-rpg"}, (), "routing mismatch: paused /healthz got=[200] want=[502]"),
+    ({"misroute": "all-cs"}, (), "routing mismatch: paused /api/game/sessions/1 got=[502] want=[401]"),
+    ({}, ("stop-noop",), "routing mismatch: paused /healthz got=[200] want=[502]"),
+    ({}, ("rpg-direct-fails-when-paused",), "rac-rpg is not healthy while rac-cs.service is stopped"),
+    ({}, ("cs-direct-answers",), "rac-cs still answers while rac-cs.service is stopped"),
+])
+def test_a_wrong_routing_or_a_pause_that_did_not_take_effect_fails_and_still_restores_the_cs_pool(files, flags, message):
+    result = run_check_routing(files, flags)
+    assert result["rc"] == 1 and result["out"].strip() == "" and message in result["err"]
+    assert systemctl_calls(result) == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service"], "失敗時先把客服池啟動再結束"
+
+
+def test_the_cs_pool_is_started_again_when_the_stop_itself_fails_part_way():
+    result = run_check_routing({"stop-rc": "1"})
+    assert result["rc"] == 1 and result["out"].strip() == ""
+    assert systemctl_calls(result) == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service"], "restored 在 stop 之前就設為 0"
+    assert non_sleep(result)[-2:] == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service"], "stop 失敗後不繼續驗，直接恢復"
+
+
+def test_a_failing_start_is_retried_once_by_the_trap_and_reported():
+    result = run_check_routing({"start-rc": "1"})
+    assert result["rc"] == 1 and result["out"].strip() == "" and "rac-cs.service could not be started again" in result["err"]
+    assert systemctl_calls(result) == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service", "systemctl start rac-cs.service"], (
+        "第一次啟動失敗時 restored 仍是 0，結束時的 trap 再試一次並回報，不默默留下停止的客服池")
+
+
+def test_an_interrupt_while_the_cs_pool_is_paused_still_restores_it():
+    result = run_check_routing(flags=("term-when-paused",))
+    assert result["rc"] == 1 and result["out"].strip() == ""
+    assert systemctl_calls(result) == ["systemctl stop rac-cs.service", "systemctl start rac-cs.service"], "收到 TERM 時先恢復客服池再結束"
+    assert not any(call == direct(8081, "/readyz") for call in result["calls"]), "被中斷後不繼續往下驗"
+
+
+def test_the_routing_script_only_stops_and_starts_the_cs_pool_and_only_sends_anonymous_gets_through_caddy():
+    text = script_text(by_id(all_deploy_steps())["check-routing"])
+    assert text.isascii() and set(re.findall(r"systemctl (\w+) (\S+)", text)) == {("stop", "rac-cs.service"), ("start", "rac-cs.service")}
+    for forbidden in ("docker", "rm ", "rac-rpg.service", "rac-caddy", "systemctl restart", "enable", "disable", "daemon-reload", "sudo", "-k ", "--insecure", "--cacert", "-L ",
+                      "--location", "--proxy", "localhost", "cookie", "-H ", "-X ", "--data", "-d ", "--password", "app.env", "release.env"):
+        assert forbidden not in text, forbidden
+    curls = [line for line in script_lines(by_id(all_deploy_steps())["check-routing"]) if "curl " in line]
+    assert len(curls) == 1 + 2 + 2 + 1, "入口請求的函式一個、暫停前兩個池的直連、暫停中兩個直連、等就緒一個"
+    assert text.count(f"--resolve {DOMAIN}:443:127.0.0.1") == 1 and text.count("127.0.0.1:") == 5, "入口請求只有一個函式，直連只有那五處（都是回送位址）"
+    assert "trap restore EXIT" in text and "trap 'exit 1' HUP INT TERM" in text
+    lines = script_lines(by_id(all_deploy_steps())["check-routing"])
+    assert lines.index("restored=0") < lines.index("systemctl stop rac-cs.service") < lines.index("systemctl start rac-cs.service") < lines.index("restored=1", lines.index("restored=0")), (
+        "先標記要恢復、再停止；啟動成功之後才標記已恢復")
+
+
+def test_the_routing_check_uses_the_target_domain_for_every_request_through_the_ingress():
+    result = run_check_routing(target_domain="demo.example.org")
+    assert result["rc"] == 0 and result["out"].strip() == ROUTING_EXPECT
+    through = [call for call in result["calls"] if call.startswith("curl") and "https://" in call]
+    assert len(through) == 9 and all("demo.example.org" in call and DOMAIN not in call for call in through)
+    assert all(call == via(path, "demo.example.org") for call, path in zip(through, ["/healthz", CS_API, GAME_API] * 3))
+
+
+def test_the_probe_paths_are_split_by_the_same_prefix_as_the_caddyfile_and_are_anonymous_endpoints():
+    caddy = plan.caddyfile(target())
+    assert f"@game path {plan.STREAM_PATH_PREFIX}*" in caddy
+    assert plan.ROUTING_GAME_PATH.startswith(plan.STREAM_PATH_PREFIX), "這條路徑在 Caddyfile 裡導向 RPG 池"
+    assert not plan.ROUTING_CS_PATH.startswith(plan.STREAM_PATH_PREFIX) and not plan.INGRESS_CHECK_PATH.startswith(plan.STREAM_PATH_PREFIX), (
+        "另外兩條在 Caddyfile 裡導向客服池")
+    assert plan.ROUTING_GAME_PATH == GAME_API and plan.ROUTING_CS_PATH == CS_API
+    assert caddy.index(f"reverse_proxy 127.0.0.1:{plan._pool('rpg').port}") < caddy.index(f"reverse_proxy 127.0.0.1:{plan._pool('cs').port}")
+    assert plan.ROUTING_ANON_STATUS == "401" and plan.ROUTING_PAUSED_STATUS == "502"
+
+
+def test_the_routing_step_is_followed_by_a_wait_for_the_fixed_line_and_its_timeout_covers_the_worst_case():
+    steps = by_id(all_deploy_steps())
+    assert steps["wait-check-routing"].verify[0].expect == ROUTING_EXPECT
+    cs = plan._pool("cs")
+    worst = ((2 * plan.ROUTING_DIRECT_TIMEOUT_SECONDS + 3 * plan.INGRESS_CURL_TIMEOUT_SECONDS)                        # 暫停前
+             + cs.stop_seconds                                                                                      # 停止
+             + (3 * plan.INGRESS_CURL_TIMEOUT_SECONDS + 2 * plan.ROUTING_DIRECT_TIMEOUT_SECONDS)                    # 暫停中
+             + plan.ROUTING_READY_ATTEMPTS * (plan.ROUTING_READY_INTERVAL_SECONDS + plan.ROUTING_DIRECT_TIMEOUT_SECONDS)   # 等就緒
+             + 3 * plan.INGRESS_CURL_TIMEOUT_SECONDS)                                                               # 恢復後
+    assert int(json.loads(steps["check-routing"].input_json)["Parameters"]["executionTimeout"][0]) >= worst
+    assert steps["wait-check-routing"].timeout_seconds > worst
+    title = steps["check-routing"].title
+    assert "暫停" in title and "立刻恢復" in title and "客服不可用" in title, "標題要讓人在確認之前就知道會暫停客服"
+
+
+# -- 啟動排程 --------------------------------------------------------------------------------------------------
+
+def test_the_schedule_timers_come_from_the_scheduled_commands_list_and_follow_it_when_it_changes(monkeypatch):
+    assert plan.schedule_timers() == TIMERS and list(TIMERS) == sorted(TIMERS)
+    assert set(TIMERS) == {f"{plan.job_unit_name(command)}.timer" for command in cli.SCHEDULED_COMMANDS}
+    monkeypatch.setattr(plan, "SCHEDULED_COMMANDS", {**cli.SCHEDULED_COMMANDS, "purge-test-data": "30 4 * * *"})
+    assert "rac-job-purge-test-data.timer" in plan.schedule_timers() and len(plan.schedule_timers()) == 6
+    steps = by_id(plan.deploy_plan(target(), TAG, groups=("schedule",)))
+    assert "rac-job-purge-test-data.timer" in script_text(steps["start-timers"]) and steps["wait-check-schedule"].verify[0].expect == "timers=6 next=6 failed=0"
+    assert steps["wait-start-timers"].verify[0].expect == "timers-active=6"
+
+
+def test_the_manual_alert_run_needs_check_alerts_to_be_scheduled(monkeypatch):
+    monkeypatch.setattr(plan, "SCHEDULED_COMMANDS", {k: v for k, v in cli.SCHEDULED_COMMANDS.items() if k != "check-alerts"})
+    with pytest.raises(plan.PlanError, match="check-alerts"):
+        plan.deploy_plan(target(), TAG, groups=("schedule",))
+
+
+def test_the_schedule_steps_expect_fixed_output_lines():
+    steps = by_id(all_deploy_steps())
+    assert steps["wait-start-timers"].verify[0].expect == "timers-active=5"
+    assert steps["wait-run-check-alerts"].verify[0].expect == "check-alerts result=success status=0"
+    assert steps["wait-check-schedule"].verify[0].expect == "timers=5 next=5 failed=0" == plan._schedule_check_expect()
+    execution = int(json.loads(steps["run-check-alerts"].input_json)["Parameters"]["executionTimeout"][0])
+    assert execution > plan.JOB_TIMEOUT_SECONDS, "命令逾時要比服務自己的逾時久，失敗時才看得到服務的錯誤而不是 SSM 逾時"
+
+
+def run_start_timers(states):
+    setup = [write_file("states", "".join(f"{unit} {state}\n" for unit, state in states.items())), write_file("service-start-rc", "0")]
+    return run_in_bash(script_lines(by_id(all_deploy_steps())["start-timers"]), setup, FAKE_SYSTEMCTL)
+
+
+def test_starting_the_timers_starts_every_scheduled_timer_and_counts_the_active_ones():
+    result = run_start_timers({unit: "active" for unit in TIMERS})
+    assert result["rc"] == 0 and result["out"].strip() == "timers-active=5" and result["err"] == ""
+    assert result["calls"][0] == "systemctl start " + " ".join(TIMERS) and len(result["calls"]) == 2
+    one_down = run_start_timers({**{unit: "active" for unit in TIMERS}, TIMERS[2]: "failed"})
+    assert one_down["rc"] == 0 and one_down["out"].strip() == "timers-active=4", "沒有全部作用中時輸出的數字不符，等待步驟會因預期不符而停止"
+    none = run_start_timers({})
+    assert none["out"].strip() == "timers-active=0"
+
+
+def test_starting_the_timers_only_starts_timers_and_never_a_service_or_a_restart():
+    text = script_text(by_id(all_deploy_steps())["start-timers"])
+    assert re.findall(r"systemctl (\S+)", text) == ["start", "is-active"]
+    assert ".service" not in text and "enable" not in text and "restart" not in text and "daemon-reload" not in text and text.isascii()
+
+
+def run_check_alerts(*, start_rc=0, result="success", status="0", journal="journal-line-1\njournal-line-2\n"):
+    setup = [write_file("service-start-rc", str(start_rc)), write_file("journal", journal),
+             write_file(f"prop-Result-{CHECK_ALERTS_SERVICE}", result + "\n"), write_file(f"prop-ExecMainStatus-{CHECK_ALERTS_SERVICE}", status + "\n")]
+    return run_in_bash(script_lines(by_id(all_deploy_steps())["run-check-alerts"]), setup, FAKE_SYSTEMCTL)
+
+
+def test_the_manual_alert_run_starts_the_same_service_the_timer_triggers_and_prints_its_result():
+    result = run_check_alerts()
+    assert result["rc"] == 0 and result["out"].strip() == "check-alerts result=success status=0" and result["err"] == ""
+    assert f"systemctl start {CHECK_ALERTS_SERVICE}" in result["calls"] and not any(c.startswith("journalctl") for c in result["calls"])
+    assert f"Unit={CHECK_ALERTS_SERVICE}" in plan.scheduled_units()["rac-job-check-alerts.timer"], "手動執行的就是計時器觸發的那個服務"
+
+
+def test_a_failed_manual_alert_run_prints_the_last_journal_lines_and_no_success_line():
+    result = run_check_alerts(start_rc=1)
+    assert result["rc"] == 1 and result["out"].strip() == ""
+    assert "journal-line-1" in result["err"] and "journal-line-2" in result["err"]
+    assert f"journalctl -u {CHECK_ALERTS_SERVICE} -n 20 --no-pager -o cat" in result["calls"]
+    odd = run_check_alerts(result="exit-code", status="1")
+    assert odd["rc"] == 0 and odd["out"].strip() == "check-alerts result=exit-code status=1", "結果不是 success 時輸出不符，等待步驟會停止"
+
+
+def healthy_schedule(**overrides):
+    """假的 systemd 狀態：五個計時器作用中、各有下一次觸發時間、沒有失敗單元。"""
+    listed = "".join(f"{unit} loaded active waiting rac job {unit}\n" for unit in reversed(TIMERS))     # 故意倒序：腳本自己排序
+    values = {"listed": listed, "failed": "", "next": {unit: "Tue 2026-11-17 22:10:00 CST" for unit in TIMERS}}
+    values.update(overrides)
+    return values
+
+
+def run_check_schedule(values):
+    setup = [write_file("listed", values["listed"]), write_file("failed", values["failed"])]
+    setup += [write_file(f"prop-NextElapseUSecRealtime-{unit}", text + "\n") for unit, text in values["next"].items()]
+    return run_in_bash(script_lines(by_id(all_deploy_steps())["check-schedule"]), setup, FAKE_SYSTEMCTL)
+
+
+def test_the_schedule_check_passes_when_the_timers_match_have_a_next_run_and_nothing_failed():
+    result = run_check_schedule(healthy_schedule())
+    assert result["rc"] == 0 and result["out"].strip() == "timers=5 next=5 failed=0" and result["err"] == ""
+
+
+SCHEDULE_MISMATCHES = {
+    "a timer is not active": lambda v: {"listed": "".join(l for l in v["listed"].splitlines(True) if "purge-expired-data" not in l)},
+    "an unexpected timer is active": lambda v: {"listed": v["listed"] + "rac-job-ghost.timer loaded active waiting ghost\n"},
+    "no timer is active": lambda v: {"listed": ""},
+    "a timer has no next run": lambda v: {"next": {**v["next"], TIMERS[0]: ""}},
+    "a timer reports n/a": lambda v: {"next": {**v["next"], TIMERS[3]: "n/a"}},
+    "a unit has failed": lambda v: {"failed": "rac-job-purge-expired-data.service loaded failed failed rac job\n"},
+    "an unrelated unit has failed": lambda v: {"failed": "amazon-ssm-agent.service loaded failed failed ssm\n"},
+}
+
+
+@pytest.mark.parametrize("name", SCHEDULE_MISMATCHES)
+def test_the_schedule_check_fails_without_the_fixed_line_when_anything_does_not_match(name):
+    values = healthy_schedule()
+    result = run_check_schedule(healthy_schedule(**SCHEDULE_MISMATCHES[name](values)))
+    assert result["rc"] == 1 and result["out"].strip() == "" and "schedule mismatch" in result["err"], name
+
+
+def test_the_schedule_check_names_the_failed_units_and_the_active_timers_it_saw():
+    result = run_check_schedule(healthy_schedule(failed="amazon-ssm-agent.service loaded failed failed ssm\nfoo.service loaded failed failed foo\n"))
+    assert "failed=[amazon-ssm-agent.service foo.service]" in result["err"] and "next=5" in result["err"]
+    assert "timers=[" + " ".join(TIMERS) + "]" in result["err"]
+
+
+def test_the_schedule_check_is_read_only_and_sorts_in_the_c_locale():
+    text = script_text(by_id(all_deploy_steps())["check-schedule"])
+    assert set(re.findall(r"systemctl (\S+)", text)) == {"list-units", "show", "--failed"} and text.isascii()
+    for forbidden in ("start", "restart", "stop", "enable", "disable", "reset-failed", "daemon-reload", "kill", "mask"):
+        assert not re.search(rf"systemctl {forbidden}\b", text), forbidden
+    assert "LC_ALL=C sort" in text, "排序規則與 Python 的 sorted() 一致，否則不同語系的主機會把連字號排在不同位置"
+
+
+def test_the_fake_commands_are_as_strict_as_the_real_ones():
+    """假指令不認得的用法一律失敗（`docker top` 的教訓）：改壞腳本的旗標時，測試要先失敗，而不是被寬鬆的假指令放過。"""
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash")
+    probes = [
+        "systemctl show --value -p Result x", "systemctl show -P Unknown x", "systemctl list-units --type=timer", "systemctl --failed",
+        "systemctl restart other.service", "systemctl start rac-caddy.service", "curl -k https://x/", "curl --max-time 5 https://x/",
+        "dockerfake pull caddy:2", "dockerfake inspect rac-caddy", "openssl s_client -connect 1.2.3.4:443", "journalctl -u x",
+    ]
+    script = "\n".join([*BASH_HEAD, FAKE_DOCKER_CADDY, FAKE_SYSTEMCTL, FAKE_CURL_OPENSSL,
+                        *(f'{probe} >/dev/null 2>&1 </dev/null && echo "ACCEPTED: {probe}"' for probe in probes), 'rm -rf "$d"'])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    assert result.returncode == 0, result.stderr.decode("utf-8", "replace")
+    assert "ACCEPTED" not in result.stdout.decode("utf-8", "replace")
 
 
 def test_the_pool_hardening_script_asks_docker_top_for_the_pid_column_which_the_daemon_requires():

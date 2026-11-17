@@ -93,7 +93,7 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 
 ### D9：遷移前先做 RDS 快照；遷移是獨立的一次性容器
 
-`aws rds create-db-snapshot`（等待可用）→ 一次性容器 `alembic upgrade head`（掛憑證、環境檔）→ 查 `alembic current` 等於最新版 → 才啟動／重啟兩個池。初次部署的快照是空資料庫，仍執行以驗證流程。遷移容器非零結束即停止。`seed-scripts` 在遷移後執行一次（冪等）。`create-admin` 是互動步驟：計畫列出要在 SSM 終端機執行的完整指令，密碼由使用者在該終端機輸入。**第一次部署分組執行**（`deploy_plan` 的 `groups`）：`build` → 資料庫初始化與探測（D7、D8；`deploy_plan` 的 `db-init` 組，只在第一次部署以 `--group db-init` 執行，例行部署的整份計畫不含它）→ `snapshot`、`migrate`（含種子）→ `create-admin` → `restart`、`verify`；之後的例行部署一次跑完整份計畫（快照 → 建置 → 遷移 → 重啟 → 驗證）。
+`aws rds create-db-snapshot`（等待可用）→ 一次性容器 `alembic upgrade head`（掛憑證、環境檔）→ 查 `alembic current` 等於最新版 → 才啟動／重啟兩個池。初次部署的快照是空資料庫，仍執行以驗證流程。遷移容器非零結束即停止。`seed-scripts` 在遷移後執行一次（冪等）。`create-admin` 是互動步驟：計畫列出要在 SSM 終端機執行的完整指令，密碼由使用者在該終端機輸入。**第一次部署分組執行**（`deploy_plan` 的 `groups`）：`build` → 資料庫初始化與探測（D7、D8；`deploy_plan` 的 `db-init` 組，只在第一次部署以 `--group db-init` 執行，例行部署的整份計畫不含它）→ `snapshot`、`migrate`（含種子）→ `create-admin` → `restart`、`verify` → `ingress`（啟動 Caddy，在主機內以 `--resolve` 連回送位址、仍經 Caddy 驗證憑證、HTTP/2、HTTP 導向與安全標頭）→ `routing`（暫停客服池驗證分流：暫停中非 `/api/game/` 路徑回 502、`/api/game/` 路徑仍由 RPG 池回應，驗完一定恢復客服池）→ `schedule`（啟動排程計時器、手動跑一次 `check-alerts`、核對計時器清單與 `systemctl --failed`）；`ingress`、`routing`、`schedule` 與 `db-init`、`create-admin` 一樣只在第一次部署以 `--group` 明確執行（`routing` 還會讓客服短暫不可用，所以更不屬於例行部署）；之後的例行部署一次跑完整份計畫（快照 → 建置 → 遷移 → 重啟 → 驗證）。
 
 ### D10：排程用 systemd 計時器，由 `SCHEDULED_COMMANDS` 產生
 
