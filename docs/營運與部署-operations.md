@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-17 ｜ 對應 change：aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除與資料庫憑證方案；實作中，`deploy_plan` 以後尚未對真實 AWS 執行）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-17 ｜ 對應 change：aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作中，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的營運變化（新排程指令 `purge-unconfirmed-accounts`、告警改名為「帳號鎖定激增」、期限清除納入鎖定計次）與 change ② `remove-player-password-auth`：`EMAIL_VERIFICATION_REQUIRED` 已淘汰（留著只會警告一次，部署計畫檔含有它會被拒絕）；寄信設定只供營運告警信與管理員的重設密碼信使用，玩家不收任何信；部署多一個資料遷移 `0011`；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie（`scripts/mint_test_sessions.py`）。
 > 注意（2026-11-03）：本文件已納入 change `rpg-data-and-script`：成人模式的環境變數改為 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`（舊的 `SEXUAL_CONTENT_LEVEL3_*` 已淘汰：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕；staging 與 production 不再一律禁止，須明確設定才生效）、新的人工類指令 `seed-scripts`（部署之後執行）、`purge-expired-data` 新增 RPG 存檔與回合部分內容兩類，以及遷移 `0012`。
 
@@ -72,8 +72,8 @@ flowchart LR
 |---|---|
 | 執行 | `gunicorn --config gunicorn.conf.py wsgi:app`；`gthread`、`WEB_CONCURRENCY`（預設 2）個 worker、`GUNICORN_THREADS`（預設 8）、`timeout` 60 秒、`graceful_timeout` 30 秒 |
 | 連接埠 | 取自 `PORT`（預設 8080）；映像有 `HEALTHCHECK`（`/healthz`） |
-| RPG 串流池 | `gunicorn --config gunicorn.rpg.conf.py wsgi:app`（映像兩份設定都有，預設啟動客服池）：`gthread`、`WEB_CONCURRENCY`（預設 2）、`GUNICORN_THREADS`（預設 16：每個進行中的串流佔一條請求執行緒，外加一條上游讀取執行緒）、`timeout` 180 秒（大於單次串流生成上限 60 秒與心跳間隔 15 秒，也涵蓋一個回合最壞約 150 秒）、`graceful_timeout` 60 秒（讓進行中的回合寫回：完成、結算或退款）。**記事簿抓取（rpg-notebook）在回應關閉之後於同一條請求執行緒上執行**，每完成 10 輪最多再佔用該執行緒約 60 秒（串流本身已在 `done` 之後結束，玩家不等待；抓取總預算 60 秒，小於 `timeout` 180 秒）；RC-4 估算執行緒時要計入。初始值，RC-4 壓測校正。**`/api/game/` 分流到這個池屬後續的部署工作**，在那之前與客服共用同一個池 |
-| 禁止 | 不得用 `app.run()`（開發伺服器）執行正式環境；客服與 RPG 串流使用獨立的 worker 池（設定檔已分開，路徑分流待部署） |
+| RPG 串流池 | `gunicorn --config gunicorn.rpg.conf.py wsgi:app`（映像兩份設定都有，預設啟動客服池）：`gthread`、`WEB_CONCURRENCY`（預設 2）、`GUNICORN_THREADS`（預設 16：每個進行中的串流佔一條請求執行緒，外加一條上游讀取執行緒）、`timeout` 180 秒（大於單次串流生成上限 60 秒與心跳間隔 15 秒，也涵蓋一個回合最壞約 150 秒）、`graceful_timeout` 60 秒（讓進行中的回合寫回：完成、結算或退款）。**記事簿抓取（rpg-notebook）在回應關閉之後於同一條請求執行緒上執行**，每完成 10 輪最多再佔用該執行緒約 60 秒（串流本身已在 `done` 之後結束，玩家不等待；抓取總預算 60 秒，小於 `timeout` 180 秒）；RC-4 估算執行緒時要計入。初始值，RC-4 壓測校正。**`/api/game/` 分流到這個池**：AWS 展示環境已由入口（Caddy 的路徑規則）實現並驗證（2026-11-17，見第 8 節「驗證分流」）；Google Cloud 的 production 仍屬後續的部署工作，在那之前與客服共用同一個池 |
+| 禁止 | 不得用 `app.run()`（開發伺服器）執行正式環境；客服與 RPG 串流使用獨立的 worker 池（設定檔已分開；路徑分流在 AWS 展示環境已驗證，Google Cloud 的 production 待部署） |
 | 驗收 | `scripts/verify_container.py`（經 WSL 的 Docker）：建置、非 root、無 `.env`、各環境啟動與健康檢查、缺少機密時只列變數名稱、會員與客服的 HTTP 流程、保存期限指令 |
 
 ### 傳輸安全與安全標頭（C-5a）
@@ -94,7 +94,7 @@ flowchart LR
 - 驗證：`tests/test_security_headers.py`（五種路徑、錯誤回應、四個環境、自訂標頭不被覆蓋、沒有 CSP）。
 
 > 注意（2026-11-04）：本文件已納入 change `rpg-script-authoring`（RC-7）：遷移 `0013`（部署順序不變：備份 → 遷移 → 部署 → `flask seed-scripts`；七個營運限制的初始值由遷移寫入，不必另外執行指令）、兩個人工類指令 `set-script-limit` 與 `show-script-limits`（限制存在資料庫、立即生效、每次修改寫 `limit.set` 稽核）、`purge-expired-data` 新增劇本送審紀錄一類（365 天）、劇本事件的日誌白名單，以及容器驗收新增的七項檢查。
-> 注意（2026-11-10）：本文件已納入 change `rpg-turn-engine`（RC-2a）：遷移 `0016`（部署順序不變：備份 → 遷移 → 部署；只新增欄位並補一列 `rpg.max_months_per_turn`）、RPG 串流池的獨立 gunicorn 設定 `gunicorn.rpg.conf.py`（映像兩份設定都有，路徑分流待部署）、人工類指令 `set-rpg-setting`、`show-rpg-settings`，以及 `rpg.*` 日誌事件與六個新的日誌欄位。
+> 注意（2026-11-10）：本文件已納入 change `rpg-turn-engine`（RC-2a）：遷移 `0016`（部署順序不變：備份 → 遷移 → 部署；只新增欄位並補一列 `rpg.max_months_per_turn`）、RPG 串流池的獨立 gunicorn 設定 `gunicorn.rpg.conf.py`（映像兩份設定都有，路徑分流待部署；2026-11-17 更新：AWS 展示環境已分流並驗證，Google Cloud 的 production 仍待部署，見第 8 節）、人工類指令 `set-rpg-setting`、`show-rpg-settings`，以及 `rpg.*` 日誌事件與六個新的日誌欄位。
 > 注意（2026-11-09）：本文件已納入 change `game-wallet`（W1）：遷移 `0015`（部署順序不變：備份 → 遷移 → 部署；只新增 `wallets`、`wallet_entries` 兩張表並補五個遊戲幣設定鍵，已有的鍵不蓋掉）、兩個人工類指令 `set-wallet-setting`、`show-wallet-settings`（部署後以 `show-wallet-settings` 確認五個值）、遊戲幣事件 `wallet.*` 與三個新的日誌欄位 `coins`、`lost_coins`、`balance`。
 > 注意（2026-11-04）：本文件已納入 change `rpg-character-creation`（RC-9）：遷移 `0014`（部署順序不變：備份 → 遷移 → 部署；只新增 `sessions.protagonist_json` 並補三個每日主角生成次數的限制鍵，已有的鍵不蓋掉）、`show-script-limits` 與 `set-script-limit` 現在涵蓋十個鍵、主角事件的日誌白名單，以及開存檔最壞約 60 秒（劇本尚未審查過時再加一次審查；前端 axios 逾時請設 65 秒）。
 
@@ -435,16 +435,16 @@ flowchart BT
 |---|---|---|---|---|
 | **入口層 IP 限流** | AGENTS.md 第 9 節「限流第一道使用入口層」 | 使用者決定先不做（Cloud Run 沒有內建；Nginx 旁車或 Cloud Armor 加外部負載平衡器各有複雜度與費用） | 入口沒有第一道防線：只有帳號層級的登入鎖定與每分鐘訊息數，擋不住來自單一 IP 的註冊洪水、請求洪水與對不存在帳號的暴力嘗試 | 上線前關卡「入口層 IP 限流的決定」；C-5b 之前 |
 | **內容安全政策（CSP）** | 未明文要求，屬安全加固；列在此以免遺忘 | 前端使用 Vue 全域建置，模板在瀏覽器編譯，政策必須允許 `unsafe-eval`，幾乎沒有保護力（見「傳輸安全與安全標頭」） | 若出現 XSS，沒有第二道防線；目前靠純文字渲染（嚴禁 `v-html`）與輸入驗證 | 前端改為預先編譯模板時 |
-| **RPG 專用的獨立 worker 池** | AGENTS.md 第 9 節「客服與 RPG 串流使用獨立的 worker 池」 | `gunicorn.rpg.conf.py` 與串流端點（`/api/game/`）已完成（rpg-turn-engine），但還沒有把該前綴分流到獨立的服務；執行緒數與 worker 數是初始值 | 在分流之前，長連線的串流會佔用客服的執行緒 | 部署分流（Cloud Run 第二個服務或入口層路徑規則）與 RC-4（壓測） |
-| **平台告警尚未在雲端建立** | AGENTS.md 第 11 節（五項告警之外的三項由平台負責） | 定義已寫成腳本（預設只預覽），沒有雲端專案可建立 | 上線後沒有人會被通知 5xx、存活與寄信失敗 | C-5b 建立預備環境時 |
+| **RPG 專用的獨立 worker 池（Google Cloud 部分）** | AGENTS.md 第 9 節「客服與 RPG 串流使用獨立的 worker 池」 | `gunicorn.rpg.conf.py` 與串流端點（`/api/game/`）已完成（rpg-turn-engine）。**AWS 展示環境已達成**（2026-11-17，task 6.1、6.3）：兩個池各用自己的設定檔、只綁回送位址，入口依路徑分流並驗證了暫停客服池時 RPG 池仍回應。Google Cloud 的 production 還沒有分流（沒有可計費的專案）；執行緒數與 worker 數仍是初始值，展示環境的數字不是容量依據 | 在 production 分流之前，長連線的串流會佔用客服的執行緒 | Google Cloud 部署時（Cloud Run 第二個服務或入口層路徑規則）與 `rpg-ops-loadtest`（壓測） |
+| **平台告警尚未在 Google Cloud 建立；AWS 展示環境只做了其中一部分** | AGENTS.md 第 11 節（五項告警之外的三項由平台負責） | Google Cloud：定義已寫成腳本（預設只預覽），沒有雲端專案可建立。AWS 展示環境：只有三件事（`check-alerts` 計時器、EC2 狀態檢查告警、Budgets），其餘缺口逐項列在第 8 節「展示環境未達 production 的缺口」 | 上線後沒有人會被通知 5xx、存活與寄信失敗 | Google Cloud 的預備環境建立時；展示環境的各項見第 8 節 |
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`deploy_plan` 的 `ingress`、`routing` 組已於 2026-11-17 對真實主機執行並驗證（task 6.2、6.3：Caddy 啟動並簽發憑證、HTTP/2、導向、安全標頭、暫停客服池驗證分流，見「啟動入口與排程」「驗證分流」兩節）；串流探測（task 6.4，不是計畫步驟）已對真實入口與真實模型執行：入口沒有緩衝串流、心跳未驗證，見「串流探測」一節；`rollback_plan`、`teardown_plan` 尚未對真實 AWS 執行；DuckDNS 的更新由使用者在自己的終端機執行過（結果以 DNS 與對外連線驗證，沒有看到執行器的輸出）**，其餘雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`deploy_plan` 的 `ingress`、`routing` 組已於 2026-11-17 對真實主機執行並驗證（task 6.2、6.3：Caddy 啟動並簽發憑證、HTTP/2、導向、安全標頭、暫停客服池驗證分流，見「啟動入口與排程」「驗證分流」兩節）；串流探測（task 6.4，不是計畫步驟）已對真實入口與真實模型執行：入口沒有緩衝串流、心跳未驗證，見「串流探測」一節；`deploy_plan` 的 `schedule` 組與告警、寄信也已對真實的主機與 AWS 驗證（task 7.1 至 7.3：五個計時器、EC2 狀態告警演練、營運告警信寄達但進垃圾郵件匣，見「啟動入口與排程」「告警與寄信」兩節）；未達 production 的缺口見最後一節「展示環境未達 production 的缺口」；`rollback_plan`、`teardown_plan` 尚未對真實 AWS 執行；DuckDNS 的更新由使用者在自己的終端機執行過（結果以 DNS 與對外連線驗證，沒有看到執行器的輸出）**，其餘雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
-**限制（不得誤當成 production）**：它不是 production，資源名稱與網域都不含 `production`（計畫模組在建立時就拒絕）；不含真實會員資料（只用 `.invalid` 的測試帳號）；單機單點、記憶體與延遲的數字**不是容量依據**；備份保留、日誌保存與平台告警都**未達** production 的要求，缺口明細與重新評估時機另列（task 7.4，雲端批次完成後補上）。AGENTS.md 第 9 節的「雲端平台為 Google Cloud」描述的是 production，本環境不修改它。
+**限制（不得誤當成 production）**：它不是 production，資源名稱與網域都不含 `production`（計畫模組在建立時就拒絕）；不含真實會員資料（只用 `.invalid` 的測試帳號）；單機單點、記憶體與延遲的數字**不是容量依據**；備份保留、日誌保存與平台告警都**未達** production 的要求，缺口明細與重新評估時機見本節最後的「展示環境未達 production 的缺口」（task 7.4）。AGENTS.md 第 9 節的「雲端平台為 Google Cloud」描述的是 production，本環境不修改它。
 
 ### 拓撲
 
@@ -481,6 +481,19 @@ flowchart LR
 | 資料庫 | RDS for SQL Server Express `db.t3.micro`：單一可用區、20 GB gp3、加密、不公開、備份保留 1 天（Free plan 不接受 7 天，AWS 回 `FreeTierRestrictionError`；規格只要求大於 0）、只允許主機安全群組連入；主要使用者 `racmaster`（不是 `sa`），應用程式之後只用專屬登入 | `build_plan()` 的 `rds` 與 `rds-ready` 組 |
 | 映像 | 在主機上以 `git archive <提交短碼>` 的壓縮檔（經 S3）分兩段建置：共用的 `Dockerfile` 建成基底映像 `rac-app-base:<提交短碼>`，再疊一層主機上的 RDS CA 套件（衍生 Dockerfile，見「資料庫憑證方案」）成為 `rac-app:<提交短碼>`；不含 `.env`，以非 root（uid 10001）執行；前一版映像保留供回復 | `deploy_plan()`、`derived_dockerfile()` |
 | 預算與告警 | Budgets：季度 US$75，實際花費 60% 與 90% 兩個門檻寄信；CloudWatch：EC2 狀態檢查連續失敗通知 SNS 主題；收件人由呼叫者提供，沒有預設值 | `build_plan()` 的 `budget` 與 `alarms` 組 |
+
+**入口設定、憑證與分流的實際結果（task 6.2、6.3、6.4，2026-11-17；一覽，逐項的做法、證據與限度見「啟動入口與排程」「驗證分流」「串流探測」三節）**：
+
+| 項目 | 設定 | 在真實環境量到的結果 |
+|---|---|---|
+| 憑證 | 由 Caddy 自動簽發與管理（簽發者是 Let's Encrypt），帳戶與憑證存在主機的 `/var/lib/rac/caddy`（掛進容器；設計上換容器不會重新簽發，**重啟 Caddy 後不重新簽發沒有驗證**，目前只有第一次啟動的紀錄） | 簽發者 `CN=YE2`、到期 2027-02-15，**啟動 Caddy 後約 15 秒簽發完成**；以系統憑證庫驗證通過（沒有 `-k`）。**續期沒有驗證**：到期日在展示期（到 2026-12-31）之後，展示期內不會發生續期 |
+| HTTPS、HTTP/2 | 入口在 443 提供 HTTPS | 外部（使用者的電腦）ALPN 協商 `h2`、TLS 1.3；主機內 `curl` 也協商到 HTTP/2 |
+| HTTP 導向 | 80 導向同網域的 HTTPS | 回 **308**，導向 `https://rac001.duckdns.org/healthz` |
+| 標頭 | 應用程式自己送 HSTS 與四個安全標頭（見「傳輸安全與安全標頭」），入口不改寫 | 經入口仍在（`max-age=31536000`）；回應帶 `Via: 1.1 Caddy`、`Server: gunicorn`；`/healthz` 與 `/readyz` 本文只有 `{"status":"ok"}`，沒有內部細節 |
+| 路徑分流 | `/api/game/*` 到 RPG 池（`127.0.0.1:8082`，關閉回應緩衝、不壓縮），其餘到客服池（`127.0.0.1:8081`） | 暫停客服池時，非 `/api/game/` 的路徑經入口回 502、`/api/game/sessions/1` 仍回 401（RPG 池處理）；恢復後三條路徑回到 200、401、401。客服在暫停期間不可用，不超過該命令的約 40 秒 |
+| 串流不被緩衝 | `flush_interval -1`、不壓縮 | 第 0 幕的第一個事件 0.78 秒到達、`done` 6.11 秒：**入口沒有緩衝**（HTTP/1.1、一次成功執行、一個來源）；**心跳經入口的到達時間未驗證** |
+| 外部直連 | 安全群組只開 TCP 80 與 443 | 從使用者的電腦連 Elastic IP：80、443 連得上，8081、8082、22、1433 逾時（被丟棄，不是明確拒絕；只有一個來源） |
+| 觀察（沒有修改） | — | 回應帶 `Alt-Svc: h3=":443"`，但沒有開 UDP 443，瀏覽器會退回 HTTP/2；要關閉 HTTP/3 或開 UDP 443 由使用者決定 |
 
 主機上要放的檔案共 17 個（`host_files()`：Caddyfile、`plain.env`、兩支取出腳本、三個常駐單元、五個排程的各一對 `.service`／`.timer`）。**主機初始化**（建立 `/etc/rac` 與 `/var/lib/rac/caddy`、2 GB 交換檔、安裝並啟動 docker、放置 RDS 的 CA 套件、經 SSM 放置上述檔案、`systemctl daemon-reload` 與啟用單元、停用主機內的 sshd）沒有預先寫成計畫步驟（使用者 2026-11-16 決定）：task 4.4 在 SSM 上現場撰寫並逐項驗證，task 4.5 回寫成 `build_plan` 的 `host-init` 組（見下方「主機初始化」一節）；部署計畫假設這一組已執行完成。
 
@@ -591,7 +604,7 @@ task 4.4 在主機上以 SSM 現場撰寫並逐項驗證，task 4.5 回寫成計
 
 **拆除時的快照流程（design D14）**：真正執行 `teardown` 時，執行器在**任何刪除之前**先唯讀列出該資料庫的手動快照，顯示部署前快照（預設會刪除）與其他快照（例如最終快照，永遠不刪），然後要求你回覆要保留的例外：輸入要保留的快照名稱（空白或逗號分隔），或輸入「沒有例外」；**沉默、直接按 Enter 都不算回覆**，名稱打錯會說明原因並重問，三次沒有明確回覆就停止（結束代碼 3，沒有刪除任何東西）。回覆之後才以 `snapshots_to_delete()` 算出名單、重新產生計畫（`td-delete-snapshot-<名稱>`），之後照一般拆除逐步確認；每個快照刪除前仍先以標籤查詢把關。`--yes` 不能略過這個問題；`td-delete-snapshots`（沒有指令的佔位）不能用 `--only` 執行。預覽（不加 `--execute`）不呼叫 AWS，所以只列出「列出快照」的指令與被擋下的佔位步驟。
 
-**已驗證與未驗證（執行器）**：預覽不呼叫任何指令、拒絕即停止、單步只執行一步、被擋下的步驟不執行、輸出與引數沒有機密值、暫存檔一定刪除、輪詢逾時與失敗狀態、DuckDNS 權杖不外洩、拆除不會刪到未標籤的資源與被保留的快照，都由 `tests/test_aws_demo_script.py` 以假的 runner 驗證。**沒有對真實 AWS 執行過**：實際的 `aws` 回應形狀、錯誤文字與耗時、`file://` 暫存檔在真實 CLI 的行為，都在雲端批次發現後回寫。
+**已驗證與未驗證（執行器）**：預覽不呼叫任何指令、拒絕即停止、單步只執行一步、被擋下的步驟不執行、輸出與引數沒有機密值、暫存檔一定刪除、輪詢逾時與失敗狀態、DuckDNS 權杖不外洩、拆除不會刪到未標籤的資源與被保留的快照，都由 `tests/test_aws_demo_script.py` 以假的 runner 驗證。**執行器對真實 AWS 的執行（task 4.x 至 7.x）**：`build_plan` 的各組與 `deploy_plan` 的 `snapshot`、`build`、`db-init`、`migrate`、`create-admin`、`restart`、`verify`、`ingress`、`routing`、`schedule` 都已經由執行器對真實的 AWS、主機與 RDS 執行並逐項驗證，實際的 `aws` 回應形狀、錯誤文字、耗時與暫存檔在真實 CLI 的差異都已回寫（例如 Free plan 不接受 7 天的備份保留、`ServerCertificate` 與 RDS 不相容，見各節與 README「驗收紀錄（aws-demo-environment）」）。**沒有對真實 AWS 執行過**：`rollback` 與 `teardown` 兩份計畫的執行路徑，以及 DuckDNS 步驟（由使用者在自己的終端機執行，沒有看到執行器的輸出，只以 DNS 與對外連線驗證）。
 
 ### 資料庫憑證方案（design D7，2026-11-17 修訂）
 
@@ -748,10 +761,32 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **診斷（容器內走 SMTP 各階段，輸出只有階段、例外類別、SMTP 代碼與遮蔽過地址的訊息，沒有帳密）**：`smtp-relay.brevo.com:587`、`starttls`，使用者與密碼都有設；連線成功、EHLO 250、STARTTLS 220、EHLO 250，**登入被拒：`SMTPAuthenticationError 535 5.7.8 Authentication failed`**。SSM 的 `MAIL_SMTP_PASSWORD` 長度是 9，本機被忽略的 `aws-demo.secrets` 裡同名的值也是 9 個字元、不是 Brevo SMTP 金鑰（`xsmtpsib-` 開頭、約 90 字元）的格式；`MAIL_SMTP_USER` 與 Brevo 頁面顯示的 Login 相符。結論：**建立機密時放進去的是佔位值**。`rac-cs` 是啟動時把環境檔讀進去的，所以對它 `docker exec` 讀到的是啟動當時的舊值；改完金鑰後的重新診斷改用一次性容器（先 `rac-render-env-app` 重新取出機密）。
 - **修復（沒有計畫步驟的手動做法）**：使用者在 Brevo 取得真正的 SMTP 金鑰（Brevo 只在建立時顯示完整值），填進本機 `aws-demo.secrets` 的 `MAIL_SMTP_PASSWORD`（值不經對話）；我先只檢查長度（90）與格式（`xsmtpsib-`、沒有引號與空白），再以暫存檔 `{"Name", "Type": "SecureString", "Value", "Overwrite": true}`（**不帶標籤**：覆寫時指定標籤會被 AWS 拒絕；沿用既有的 `alias/aws/ssm` 金鑰）呼叫 `aws ssm put-parameter --cli-input-json file://…`，輸出遮蔽值、用後刪除，參數版本 1→2。這是因為 `put-parameter-…` 對已存在的參數會略過，而 `refresh-parameter-…` 只限由腳本組成的機密（`DATABASE_URL`）；**是否把「覆寫由 `--secrets-file` 提供的機密」補成計畫步驟待決定**。重跑 SMTP 診斷：登入 235、全部階段通過。
 - **補寄與恢復**：金鑰改好後，5 分鐘計時器在 05:35:12 UTC 自行補寄，日誌 `alert.firing`（`reason=login_lockouts`、`count=5`、`severity=warning`）、輸出「進入告警，已通知」；緊接著我手動再跑一次是「狀態不變」（去重，沒有重複寄）。清除測試帳號後再跑一次 `check-alerts`：`alert.resolved`（`count=0`）、「已恢復，已通知」（05:35:59 UTC）。
-- **使用者確認的結果**：兩封信（`【智能客服】告警：帳號鎖定激增（進入告警）`、`…（已恢復）`）**都在垃圾郵件匣**，沒有在收件匣。換句話說：應用程式、SMTP 與 Brevo 都把信送到了使用者的信箱，但信箱把它們判為垃圾信。**原因沒有驗證**（沒有看信件標頭，也沒有看 Brevo 的投遞紀錄）；合理的推測是寄件者位址（`MAIL_FROM`）與收件者都是免費信箱網域（gmail.com）：以免費信箱的網域當寄件者、卻由 Brevo 的伺服器寄出時，信件無法用該網域簽署 DKIM、SPF 也對不上，DMARC 不對齊，是進垃圾郵件匣的常見原因。改善要有自己的網域並在 Brevo 驗證寄件網域（SPF、DKIM、DMARC）；**展示環境不做**，列入缺口（task 7.4）：營運告警信目前可能被收件者的信箱判為垃圾信，使用者要自己把寄件者標為「非垃圾信」或定期檢查垃圾郵件匣。
+- **使用者確認的結果**：兩封信（`【智能客服】告警：帳號鎖定激增（進入告警）`、`…（已恢復）`）**都在垃圾郵件匣**，沒有在收件匣。換句話說：應用程式、SMTP 與 Brevo 都把信送到了使用者的信箱，但信箱把它們判為垃圾信。**原因沒有驗證**（沒有看信件標頭，也沒有看 Brevo 的投遞紀錄）；合理的推測是寄件者位址（`MAIL_FROM`）與收件者都是免費信箱網域（gmail.com）：以免費信箱的網域當寄件者、卻由 Brevo 的伺服器寄出時，信件無法用該網域簽署 DKIM、SPF 也對不上，DMARC 不對齊，是進垃圾郵件匣的常見原因。改善要有自己的網域並在 Brevo 驗證寄件網域（SPF、DKIM、DMARC）；**展示環境不做**，列入缺口（task 7.4，見下一節「展示環境未達 production 的缺口」）：營運告警信目前可能被收件者的信箱判為垃圾信，使用者要自己把寄件者標為「非垃圾信」或定期檢查垃圾郵件匣。
 - **清除**：一次性程式先確認找到的帳號「剛好是那 5 個預期的信箱」才刪（不符就中止，結束代碼 3），以 `UserRepository.delete_if_created_not_after` 刪除；結果刪 5、剩 0、鎖定數 0；告警狀態回到正常；`systemctl --failed` 為 0。沒有其他測試資料。
 - **兩個池要重啟才會用新金鑰（已處理）**：`rac-cs` 與 `rac-rpg` 是啟動時把環境檔讀進去的，換掉 SSM 的值之後它們仍握著舊的佔位密碼；排程容器每次啟動都重新取機密，所以 `check-alerts` 當時已經用新金鑰，但兩個池寄的信（管理員在 `/admin` 驗證密碼那一步按「忘記密碼」會寄重設信）會失敗。使用者同意後，執行 `deploy --group restart --group verify --tag 48f5ab2 --execute`（7 步全部達成，結束代碼 0；`release.env` 仍是同一個標籤，所以 `release.previous.env` 也是它，沒有真正的前一版）。**重啟後驗證**：對**執行中的容器**做 SMTP 登入診斷（不寄信），`rac-cs` 與 `rac-rpg` 都是密碼長度 90、登入 235；兩個容器 05:45:31 UTC 啟動、`RestartCount=0`；`systemctl --failed` 為 0、五個計時器與 Caddy 仍 active；公開的 `/healthz` 與 `/readyz` 回 200。客服與 RPG 在重啟期間短暫中斷（沒有量測確切秒數）。**教訓**：換 SSM 機密之後，排程工作自動吃到新值，常駐的兩個池要重啟；換任何機密都是同一個流程。
 - **證據限度**：信件有沒有送達完全是使用者的回報（我看不到信箱）；只演練了一種告警（帳號鎖定激增）與其恢復，其餘四種應用程式告警與三種平台告警（見「告警條件一覽」）沒有演練；一個收件人；Brevo 免費方案的每日寄送上限沒有查。
+
+### 展示環境未達 production 的缺口（task 7.4）
+
+**狀態**：2026-11-17 整理（第 6 批）。這一節只整理文件，沒有對 AWS 執行任何指令；「展示環境現況」取自計畫、design D11 與 task 4.x 至 7.x 的實際紀錄，本批沒有重新查詢。
+
+展示環境不是 production（見本節開頭的限制）。下表列出它與 AGENTS.md 第 9、11 節要求之間的缺口：每項寫明展示環境現況、不做的原因、風險與暫行做法、何時重新評估。不做的共同原因是展示用途（沒有真實會員，展示期到 2026-12-31）、費用與時程（design D11），**不是技術上做不到**。已列在「未滿足的規範項目」的入口層 IP 限流與內容安全政策，在展示環境同樣沒有（Caddy 不限流、應用程式不送 CSP），不在此重複。
+
+| 缺口（規範來源） | 展示環境現況 | 原因 | 風險與暫行做法 | 重新評估 |
+|---|---|---|---|---|
+| **5xx 比率告警**（第 11 節；平台告警：5xx 占全部請求超過 5%、窗口內至少 20 個請求、300 秒） | 沒有。入口是主機上的 Caddy，沒有現成的請求計數指標；`check-alerts` 只評估資料庫量得到的五項，不含 HTTP 5xx | 展示用途、沒有真實會員；要做需要額外元件（日誌型指標或自己的探測），不值得（design D11） | 應用程式或資料庫壞到回 5xx 時沒有人被通知。暫行：每批開工時用唯讀的 `deploy --group verify` 與公開的 `/healthz`、`/readyz` 檢查，需要時看 `docker logs`（結構化 JSON，含狀態碼） | 有真實會員之前；或 `rpg-ops-loadtest` 要在無人看管下長時間執行之前 |
+| **外部存活與就緒探測**（第 11 節；`/healthz`、`/readyz` 各連續失敗 3 次，探測要來自服務之外） | 沒有。只有 EC2 `StatusCheckFailed` 告警：它看的是主機本身，看不到 Caddy 或兩個池停了，也看不到資料庫連不上；兩個池的單元有 `Restart=always`，行程死掉會自動重啟，但重啟迴圈與資料庫不通不會通知 | 同上 | 主機健康、入口或池卻停了的時候沒有人知道 | 把展示環境給使用者以外的人看之前；有真實會員之前 |
+| **寄信失敗告警**（第 11 節；`mail.send_failed` 300 秒內 3 次以上） | 沒有。**第 5 批實際發生過**：SMTP 金鑰是佔位值，`check-alerts` 的通知失敗後每 5 分鐘重試、每次都失敗，**沒有任何人被通知**，是人工執行 `check-alerts` 才發現的。平台告警走 SNS，與 SMTP 互相獨立，這正是它存在的原因 | 同上 | 營運告警信寄不出去時沒有人知道。暫行：換任何機密之後手動跑一次 `check-alerts` 並查 `systemctl --failed`，兩個池要重啟（流程見「告警與寄信」） | 同上 |
+| **排程失敗與「告警檢查停擺」告警**（第 11 節；四個排程工作任一個非零結束；`check-alerts` 超過 15 分鐘沒有 `alert.check_completed`） | 沒有。失敗只留在 `systemctl --failed` 與 journald；五個計時器只有 `check-alerts`（每 5 分鐘）看到自行觸發，其餘四個每小時或每日的還沒等到觸發時間 | 同上 | 保存期限清除、帳號刪除、閒置與逾時帳號清除失敗時沒有人知道。展示環境沒有真實會員資料，影響很小；到 production 前這些是隱私義務的一部分，風險大。暫行：開工時以 SSM 唯讀查 `systemctl --failed` | 同上；其餘四個計時器的實際觸發結果在 8.4 的驗收紀錄補上 |
+| **備份保留 30 天、跨帳號或跨區域存放、每季還原演練**（第 11 節） | RDS 自動備份只保留 **1 天**（Free plan 不接受 7 天，AWS 回 `FreeTierRestrictionError`，2026-11-16；規格只要求大於 0）；與資料庫同帳號同區域（雪梨）、單一可用區；加密已開；每次部署前另有手動快照 `<資料庫>-pre-<提交短碼>`（不隨 RDS 消失；拆除時預設刪除，見 design D14）。**還原演練沒有做** | Free plan 的限制加上展示用途；跨帳號或跨區域複製是額外的費用與流程 | 時間點還原只能回到最近 1 天；資料毀損超過一天才發現就回不去（展示環境的資料可重建：測試帳號與種子）。手動快照是唯一較長的保留，但留著會持續計費。暫行：遷移之前一定先快照 | 資料變得不可重建之前（有真實會員，或要保留 `rpg-ops-loadtest` 的量測資料）；改用付費方案或搬到 production 時：保留提高到 30 天、加跨帳號或跨區域複製，並做第一次還原演練 |
+| **應用程式日誌保存 30 天**（第 11 節） | 沒有集中式日誌。每個容器只有 Docker 的循環日誌（`json-file`，單檔 10 MB、最多 3 個，每個容器上限約 30 MB，**依大小而不是依時間**，流量大時保存更短）；單元的輸出依 systemd 預設也進 journald（單元沒有另外設定輸出；排程單元用 `journalctl -u` 讀到過，常駐單元沒有另外驗證），但保存時間與是否跨重開機保存**沒有設定也沒有查證**；排程容器是 `--rm`，容器日誌隨容器消失，只剩 journald；主機終止時日誌全部消失。格式（結構化 JSON、不含個資）符合規範 | 沒有日誌代理或集中式服務；費用與時程 | 事後調查（幾天前的 5xx、告警失敗、模型逾時）可能已經沒有日誌。暫行：事件發生時立即看 `docker logs` 與 `journalctl -o cat`（本 change 的雲端批次都是這樣做） | 有真實會員之前；或需要保留量測期間的日誌時（`rpg-ops-loadtest`） |
+| **營運告警信的投遞品質**（上線前關卡「網域取得，Google 登入與信件的 SPF／DKIM／DMARC 設定」） | 進入告警與已恢復兩封信**都進了使用者的垃圾郵件匣**；原因沒有驗證（沒看標頭與 Brevo 的投遞紀錄），推測是寄件者與收件者都是免費信箱網域，DKIM 與 SPF 無法對齊。只有**一個收件人**；Brevo 免費方案的每日寄送上限**沒有查**；管理員重設密碼信**沒有真的寄過**（只驗證了兩個池的 SMTP 登入）。EC2 告警（SNS）的信在收件匣收到 | 沒有自己的網域可以在 Brevo 驗證寄件網域；展示環境不做 | 告警信可能被信箱判為垃圾信而漏看。暫行：使用者自己把寄件者標為「非垃圾信」並定期看垃圾郵件匣 | 取得自己的網域時（與上線前關卡同一項）；增加收件人或寄信量之前先查寄送上限 |
+
+**不是缺口、但仍未驗證**（只是還沒量到，不代表達不到要求；逐項見 README「驗收紀錄（aws-demo-environment）」的未驗證段）：心跳經入口的到達時間、HTTP/2 下的串流、一般回合（非第 0 幕）的串流、其餘四個排程計時器的實際觸發、Caddy 憑證續期、`rollback` 與 `teardown` 的真實執行。
+
+**已處理、不再是缺口**：兩個池曾握著舊的佔位 SMTP 密碼，已於 2026-11-17 重啟並驗證（見「告警與寄信」）。
+
+**怎麼用這張表**：升級成 production 或接到真實會員之前逐項處理；某一項達成後在原處標明「已達成」、日期與依據，不得悄悄刪掉（同「未滿足的規範項目」的規則）。
 
 ---
 

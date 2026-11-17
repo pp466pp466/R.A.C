@@ -54,7 +54,7 @@
 - [x] 6.2 把 `rac001.duckdns.org` 指向 Elastic IP（執行器的 DuckDNS 步驟，使用者確認），啟動 Caddy 並確認憑證簽發、HTTP/2、HTTP 導向 HTTPS；驗證應用程式的 HSTS 與安全標頭經入口仍在
 - [x] 6.3 驗證分流：`/api/game/…` 由 RPG 池處理、其餘由客服池；停止客服池時 RPG 池的 `/healthz` 仍正常；從主機外部直連應用程式埠被拒絕
 - [x] 6.4 驗證串流不被緩衝：用 `scripts/acceptance_rpg_turn.py` 的串流情境（或等效的最小請求）經入口量測第一個事件與心跳的到達時間；若入口緩衝，修正 Caddy 設定並補測試（記錄 `scripts/acceptance_rpg_turn.py` 只接受本機位址，需要另寫最小的串流探測或在主機內對回送位址執行並記錄限制）。**限度：第一個事件的到達時間已量（入口沒有緩衝）；心跳沒有觸發、未驗證**（見第 6 組開頭的補充）
-- [ ] 6.5 文件：營運文件補入口設定、憑證與分流的實際結果；更新 `docs/營運與部署-operations.md` 中「`/api/game/` 分流待部署」的敘述與缺口表；`tests/test_design_docs.py` 通過
+- [x] 6.5 文件：營運文件補入口設定、憑證與分流的實際結果；更新 `docs/營運與部署-operations.md` 中「`/api/game/` 分流待部署」的敘述與缺口表；`tests/test_design_docs.py` 通過。**第 6 批（2026-11-17，只改文件）**：第 8 節「拓撲」之後新增「入口設定、憑證與分流的實際結果」一覽表（憑證、HTTP/2、導向、標頭、分流、串流、外部直連、`Alt-Svc` 觀察；憑證續期與重啟後不重新簽發標為未驗證）；第 2 節兩處與一則 2026-11-10 的注意改成「AWS 展示環境已驗證、Google Cloud 的 production 待部署」；「未滿足的規範項目」兩列改寫（獨立 worker 池：AWS 已達成、Google Cloud 未達成；平台告警：指向第 8 節的缺口表）；文件標頭、第 8 節狀態與執行器一段的過時句（「沒有對真實 AWS 執行過」）更正為只有 `rollback`、`teardown` 與 DuckDNS 步驟沒有對真實執行
 
 ## 7. 排程與有限的監控
 
@@ -63,7 +63,7 @@
 - [x] 7.1 安裝排程單元（1.5 產生），驗證 `systemctl list-timers` 與清單一致、手動執行一次 `check-alerts` 成功；`systemctl --failed` 為空。**第 5 批（2026-11-17）已對真實主機驗證**：`deploy --group schedule --tag 48f5ab2 --execute` 第一次就全部通過（`timers-active=5`、`check-alerts result=success status=0`、`timers=5 next=5 failed=0`），沒有需要回寫的差異；另以獨立的唯讀 SSM 查證 `list-timers` 的五個計時器與下次觸發時間。限度：只有 `check-alerts` 的每 5 分鐘計時器看到自行觸發（05:25、05:30、05:35 UTC）；其餘四個每小時或每日的計時器還沒等到觸發時間
 - [x] 7.2 建立 EC2 狀態檢查告警；使用者確認 SNS 訂閱；以 `aws cloudwatch set-alarm-state` 觸發一次並確認信件送達（演練後恢復狀態）。**第 5 批（2026-11-17）**：告警與 SNS 訂閱早在 4.x 建立並確認（本批沒有新建資源）；演練 `OK→ALARM`（05:22:25 UTC，告警歷史的 `Action` 項目為「Successfully executed action」，指向 SNS 主題）後約 10 秒手動恢復 `OK`；使用者回報信件在收件匣收到
 - [x] 7.3 告警信驗證：在展示環境製造一項告警條件（`.invalid` 測試帳號）並執行 `check-alerts`，由使用者確認信件送達、是否進垃圾郵件匣；沒收到則標為未驗證並記錄檢查過的地方；驗證後清除測試資料。**第 5 批（2026-11-17）**：條件＝「帳號鎖定激增」（5 個被鎖定的 `alert-drill-N@alert-drill.invalid`）；**第一次通知沒有寄出**（`alert.delivery_failed`；SMTP 診斷：連線、EHLO、STARTTLS 都通過，登入被 Brevo 回 `535 5.7.8 Authentication failed`，因為 SSM 的 `MAIL_SMTP_PASSWORD` 是 9 字元的佔位值）；使用者換成真正的 Brevo SMTP 金鑰後覆寫 SSM，計時器自動補寄（`alert.firing`、「已通知」）；恢復流程也寄出（`alert.resolved`）；**使用者確認兩封信（進入告警、已恢復）都送達，但都進了垃圾郵件匣**；測試帳號已清除（刪 5、剩 0）、告警回到正常。之後使用者同意重啟兩個池（`deploy --group restart --group verify`，7 步通過），並對執行中的兩個池做 SMTP 登入診斷，都用上新金鑰（235）。限度：垃圾郵件匣的原因沒有驗證（見營運文件「告警與寄信」）
-- [ ] 7.4 在營運文件列出展示環境未達 production 的缺口（5xx、外部探測、寄信失敗與排程失敗的平台告警、備份保留 30 天與跨區域、日誌保存 30 天），每項附原因與重新評估時機
+- [x] 7.4 在營運文件列出展示環境未達 production 的缺口（5xx、外部探測、寄信失敗與排程失敗的平台告警、備份保留 30 天與跨區域、日誌保存 30 天），每項附原因與重新評估時機。**第 6 批（2026-11-17，只改文件）**：營運文件第 8 節最後新增「展示環境未達 production 的缺口（task 7.4）」，七項（5xx、外部存活與就緒探測、寄信失敗告警、排程失敗與告警檢查停擺告警、備份保留與還原演練、日誌保存、營運告警信的投遞品質〔垃圾郵件匣、單一收件人、Brevo 寄送上限未查、管理員重設密碼信未寄過〕），每項有展示環境現況、原因、風險與暫行做法、重新評估時機；另列「不是缺口、但仍未驗證」與「已處理」。現況取自計畫、design D11 與 4.x 至 7.x 的紀錄，本批沒有查詢 AWS
 
 ## 8. 驗收
 
