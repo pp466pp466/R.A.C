@@ -28,15 +28,15 @@ SYNCED_RULES = [
     (5, "後端單次請求總預算（含重試與切換備援）30 秒", "references/llm-streaming.md"),
     (6, "RPG 的「當前世界狀態」包含在場 NPC 的角色卡切片", "references/llm-streaming.md"),
     (7, "NPC 角色卡：NPC 的特質（表層或隱藏）、弧線階段", "references/business-encoding.md"),
-    # 2026-11-03：分級由 sexual_content_level 0 至 3 改為三種模式（安全、一般、成人），成人模式是玩家個人頁面的開關
-    (7, "內容分級：內容程度為三種模式，以單一欄位 content_tier 表示", "references/business-encoding.md"),
-    # 2026-10-28 後續修訂：年齡確認改為生日加年齡區間，未滿 13 歲不得註冊，13 至 17 歲只能使用安全模式
-    (7, "未滿 18 歲者一律為安全模式，不論任何設定都不得提高", "references/business-encoding.md"),
-    (7, "玩家在個人頁面以開關決定是否開啟成人模式，預設關閉，未開啟時為一般模式", "references/business-encoding.md"),
+    # 2026-11-17：全站只限滿 18 歲，分級改為兩種模式（安全模式開／關，預設開；關＝成年角色之間合意的露骨內容）
+    (7, "內容分級：內容程度為兩種模式，以單一欄位 content_tier 表示", "references/business-encoding.md"),
+    # 2026-11-17：年齡確認的最低年齡改為 18（原為 13，13 至 17 歲只能使用安全模式）
+    (7, "全站只限滿 18 歲者使用（見第 10 節），所以不再有依年齡設定的內容上限", "references/business-encoding.md"),
+    (7, "玩家在個人頁面以開關決定是否關閉安全模式，預設為開", "references/business-encoding.md"),
     (7, "系統只提醒玩家可調整，不得自動調高", "references/business-encoding.md"),
     (10, "年齡確認：玩家以 Google 首次登入建立帳號後，須立即填寫生日，並從下拉式選項選擇年齡區間", "references/auth-security.md"),
-    (10, "未滿 13 歲者不得使用本平台，發現時立即抹除該帳號與其全部個資", "references/auth-security.md"),
-    (10, "13 至 17 歲者可以使用本平台（含 AI 功能），但只能使用安全模式", "references/auth-security.md"),
+    (10, "本平台只限滿 18 歲者使用，未滿 18 歲者不得使用，發現時立即抹除該帳號與其全部個資", "references/auth-security.md"),
+    (10, "加上本平台提供含露骨內容的模式（見第 7 節），因此全站只限滿 18 歲者使用", "references/auth-security.md"),
     (10, "管理員後台只提供年齡區間的彙總統計，不顯示個別使用者的生日", "references/auth-security.md"),
     (11, "連續 12 個月未登入即直接刪除（不經 7 天寬限期", "references/privacy-observability.md"),
     (11, "清除連續 12 個月未登入的帳號", "references/privacy-observability.md"),
@@ -70,7 +70,7 @@ SYNCED_RULES = [
     (10, "已登入時打開首頁（/）或登入頁，直接導向登入後的預設頁面（單一常數；目前為 /game，即 RPG 的入口：選擇劇本與我的存檔，不直接進入聊天；客服 /cs 仍可直接開啟）", "references/auth-security.md"),
     (10, "密碼：只有管理員有密碼（玩家不設密碼，只用 Google 登入）", "references/auth-security.md"),
     (10, "玩家只以 Google 登入，首次登入即註冊（沒有密碼註冊，也沒有信箱驗證信、玩家端的重設密碼信與 EMAIL_VERIFICATION_REQUIRED", "references/auth-security.md"),
-    (10, "新使用者必須勾選，並記錄 terms_version 與 terms_accepted_at；回訪的使用者不必勾選，一鍵登入", "references/auth-security.md"),
+    (10, "新使用者必須兩者皆勾選，並記錄 terms_version 與 terms_accepted_at，以及年滿 18 歲聲明的時間與版本；回訪的使用者不必勾選，一鍵登入", "references/auth-security.md"),
     (10, "除了完成年齡確認與登出之外不得使用任何功能", "references/auth-security.md"),
     (10, "帳號自建立起最多保留 24 小時，逾時未完成即由排程刪除", "references/auth-security.md"),
     (10, "管理員通過 Google 之後還須再通過密碼驗證，兩者都通過才建立登入 session", "references/auth-security.md"),
@@ -82,7 +82,7 @@ SYNCED_RULES = [
     (11, "玩家帳號自建立起 24 小時內未完成年齡確認者同樣直接刪除", "references/privacy-observability.md"),
     (11, "清除逾時未完成年齡確認的帳號", "references/privacy-observability.md"),
     (11, "逾時帳號的清除每小時執行一次（其餘為每日）", "references/privacy-observability.md"),
-    (11, "年齡確認未在 24 小時內完成、或發現未滿 13 歲時，帳號與這些資料會立即刪除", "references/privacy-observability.md"),
+    (11, "年齡確認未在 24 小時內完成、或發現未滿 18 歲時，帳號與這些資料會立即刪除", "references/privacy-observability.md"),
     # 2026-11-02 稽核後：登入與年齡確認兩個頁面、未完成年齡確認者導向年齡確認頁、staging 的唯一例外、管理員忘記密碼寄信重設
     (3, "/login（Google 登入與條款勾選，登入與註冊合一，沒有 /register）、登入後的年齡確認頁、被鎖定時的申訴頁與 /account 等帳號頁面", "references/architecture.md"),
     (10, "尚未完成年齡確認的玩家則一律導向年齡確認頁", "references/auth-security.md"),
@@ -115,9 +115,14 @@ SYNCED_RULES = [
     (7, "安全模式須嚴格執行，由伺服器端的 system_instruction、安全設定與審查層共同套用", "references/business-encoding.md"),
     (7, "牽手、擁抱、告白與簡短的親吻等一般的親密情感表達允許", "references/business-encoding.md"),
     (7, "界線不明確時一律以較保守的判定處理", "references/business-encoding.md"),
-    (7, "玩家已在切換為成人模式時完成成年確認：須勾選「我確定已滿 18 歲」與同意安全規範兩項", "references/business-encoding.md"),
-    (7, "滿 18 歲後該限制自動解除，但玩家的模式與既有存檔的旗標不自動調高，介面提示玩家可自行切換", "references/business-encoding.md"),
-    (7, "一般模式可有性暗示、深吻與情慾張力，但性行為與性器官只能淡出或暗示，不得描寫", "references/business-encoding.md"),
+    (7, "關閉時須同意安全規範，並記錄確認時間與安全規範的版本", "references/business-encoding.md"),
+    (7, "關閉安全模式不以取得供應商書面許可、法務意見或付費模型為前提，可使用免費模型", "references/business-encoding.md"),
+    (7, "安全模式開的玩家在目錄點選未綁定安全模式的劇本時，系統須跳出通知詢問是否修改安全模式", "references/business-encoding.md"),
+    (7, "提示不得保證結果（模型端仍可能拒絕）", "references/business-encoding.md"),
+    (7, "被擋時在預扣遊戲幣與呼叫模型之前就拒絕，不消耗遊戲幣", "references/business-encoding.md"),
+    (7, "不得以附加引導詞或改寫玩家內容的方式繞過模型的拒絕", "references/business-encoding.md"),
+    (11, "安全模式關閉時的內容不以付費模型為前提，可使用免費模型，但其輸入輸出可能被供應商留存或人工審閱", "references/privacy-observability.md"),
+    (11, "服務含露骨內容（安全模式關閉時）、使用者須年滿 18 歲、謊報年齡者自行承擔責任", "references/privacy-observability.md"),
     (10, "暱稱與筆名：玩家有公開暱稱，於年齡確認的同一頁（初次設定頁）填寫", "references/auth-security.md"),
     (10, "筆名於劇本第一次發佈（審核通過）時鎖定", "references/auth-security.md"),
     (10, "劇本設定，含狀態轉移規則、結局說明與初始對話，亦同", "references/auth-security.md"),
@@ -218,6 +223,17 @@ def test_the_retired_password_registration_and_email_verification_rules_are_gone
         "浪漫僅限不含身體描寫的情感表達",
         "玩家已通過強化成年驗證",
         "須先於第 10 節訂定強化成年驗證的做法",
+        # 2026-11-17：全站只限滿 18 歲、分級改為兩種模式，舊的 13 歲門檻、一般模式與成人模式的三項條件不得殘留
+        "未滿 13 歲者不得使用本平台",
+        "13 至 17 歲者可以使用本平台",
+        "13 至 17 歲只能使用安全模式",
+        "成人模式須同時滿足三項",
+        "standard（一般模式",
+        "一般模式可有性暗示、深吻與情慾張力",
+        "敏感內容（一般模式與成人模式）不得使用免費模型",
+        "未滿 18 歲者一律為安全模式，不論任何設定都不得提高",
+        "未滿 18 歲的作者只能宣告安全",
+        "發現未滿 13 歲",
     )
     corpus = {"AGENTS.md": AGENTS}
     for path in [SKILL_DIR / "SKILL.md", *sorted((SKILL_DIR / "references").glob("*.md"))]:
@@ -271,11 +287,12 @@ def test_the_section_7_rpg_bullets_are_mirrored_verbatim(key):
     assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"business-encoding.md 沒有逐字鏡像：{key}"
 
 
-def test_the_three_content_modes_are_defined_once_and_the_levels_zero_to_three_are_not_mentioned_as_the_rule():
-    """分級是 safe／standard／adult 三種模式；等級 3 的舊說法不得再當成規則出現（程式的舊 0 至 3 由後續的 change 改掉）。"""
+def test_the_two_content_modes_are_defined_once_and_the_levels_zero_to_three_are_not_mentioned_as_the_rule():
+    """分級是 safe（安全模式開）與 adult（安全模式關）兩種模式；沒有中間的一般模式，等級 0 至 3 的舊說法也不得再當成規則出現。"""
     section7 = agents_section(7)
-    for mode in ("safe（安全模式）", "standard（一般模式", "adult（成人模式"):
+    for mode in ("safe（安全模式開", "adult（安全模式關"):
         assert mode in section7, mode
+    assert "standard（" not in section7
     assert "sexual_content_level" not in section7
 
 
