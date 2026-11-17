@@ -15,8 +15,8 @@
 - 主機檔案（Caddyfile、`rac-*` 單元、機密取出腳本、排程計時器；task 1.4、1.5）也是純函式：回傳字串（UTF-8、LF、不含 BOM），
   由執行器經 SSM 放到主機；字串內只有機密的**名稱**與 SSM 路徑，沒有任何機密值。
 - 部署、回復與拆除（task 1.6）各是一份獨立的計畫（`deploy_plan`、`rollback_plan`、`teardown_plan`），與 `build_plan` 的步驟 id 不重複：
-  部署依序快照 → 建置 → 遷移 → 重啟 → 驗證（第一次部署在建置與遷移之間多一組 `db-init`：資料庫初始化與憑證探測，用 `--group db-init` 明確執行，
-  例行部署的整份計畫不含它）；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
+  部署依序快照 → 建置 → 遷移 → 重啟 → 驗證（第一次部署在建置與遷移之間多一組 `db-init`：資料庫初始化與憑證探測，在遷移與重啟之間多一組
+  `create-admin`：使用者自己在 SSM 終端機建立首位管理員；兩組都用 `--group` 明確執行，例行部署的整份計畫不含它們）；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
   拆除每一步都先以**帶標籤的查詢**找出資源，沒有符合才略過，所以不會碰到帳號中的其他資源。
   在主機上執行的命令一律走 SSM Run Command（`send-command` 之後接 `wait-…` 步驟輪詢結果），內容只用 ASCII
   （`file://` 的 JSON 在 Windows 以系統地區編碼讀取，繁體中文會變成亂碼）。
@@ -147,6 +147,7 @@ class Step:
     run_if_found: bool = False           # 拆除步驟：先執行 exists_argv（查詢只會回傳帶本專案標籤的資源），輸出為空代表沒有符合的資源，略過本步；
                                          # 非空才執行 argv，且 capture 存的是 exists_argv 的輸出（argv 可用 {{capture}}）；與「已存在就略過」相反
     poll_fail: tuple[str, ...] = ()      # 輪詢時輸出等於其中任一值就立即失敗（例如 SSM 命令的 Failed），不必等到逾時
+    manual_commands: tuple[str, ...] = ()   # 人工步驟要使用者自己在主機終端機輸入的指令：只顯示、不由執行器執行；不得含機密或密碼參數
 
 
 @dataclass(frozen=True)
@@ -771,11 +772,13 @@ def _exec_start(chunks: list[str]) -> str:
     return "ExecStart=" + " \\\n    ".join(chunks)
 
 
-def _app_run_args(name: str, command: tuple[str, ...], *, publish: str | None = None) -> list[str]:
+def _app_run_args(name: str, command: tuple[str, ...], *, publish: str | None = None, tty: bool = False,
+                  image: str = APP_IMAGE_REF) -> list[str]:
     """應用程式容器（兩個池與排程工作共用）：非 root（沿用映像的使用者）、唯讀根檔案系統、丟掉所有 capability、
     不得提權、限制日誌；機密環境檔來自記憶體檔案系統。`--pull=never`：標籤不存在時直接失敗，不去公開倉庫找同名映像。
-    **沒有任何憑證掛載**：RDS 的 CA 已在建置時加進映像的系統憑證庫（design D7）。"""
-    chunks = [f"{DOCKER} run --rm --name={name} --pull=never"]
+    **沒有任何憑證掛載**：RDS 的 CA 已在建置時加進映像的系統憑證庫（design D7）。
+    `tty=True` 加 `-it`（人工步驟在終端機互動輸入用）；`image` 預設是由環境變數展開的 `rac-app:${RAC_IMAGE_TAG}`，人工輸入時改用寫死標籤的映像名稱。"""
+    chunks = [f"{DOCKER} run --rm{' -it' if tty else ''} --name={name} --pull=never"]
     if publish is not None:
         chunks.append(f"--publish={publish}")
     chunks += [
@@ -783,7 +786,7 @@ def _app_run_args(name: str, command: tuple[str, ...], *, publish: str | None = 
         f"--read-only --tmpfs=/dev/shm:{_TMPFS_OPTIONS} --tmpfs=/tmp:{_TMPFS_OPTIONS}",
         "--cap-drop=ALL --security-opt=no-new-privileges",
         " ".join(_LOG_OPTIONS),
-        f"{APP_IMAGE_REF} {' '.join(command)}",
+        f"{image} {' '.join(command)}",
     ]
     return chunks
 
@@ -1057,8 +1060,10 @@ def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
 # 在主機上執行的命令走 SSM Run Command：`send-command` 的 JSON 經暫存檔傳入、輸出存成命令編號，接著一個 `wait-…` 步驟輪詢結果。
 # 傳給 AWS 的 JSON 只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`），所以主機上的腳本訊息都是英文。
 
-DEPLOY_GROUPS = ("prepare", "snapshot", "build", "db-init", "migrate", "restart", "verify")    # 快照 → 建置 → （首次）資料庫初始化與探測 → 遷移 → 重啟 → 驗證
-FIRST_DEPLOY_GROUPS = ("db-init",)                  # 只在第一次部署以 `--group db-init` 執行：用 RDS 主要使用者建立專屬資料庫與登入（design D8），例行部署不重做
+DEPLOY_GROUPS = ("prepare", "snapshot", "build", "db-init", "migrate", "create-admin", "restart", "verify")
+# 快照 → 建置 → （首次）資料庫初始化與探測 → 遷移 → （首次）建立首位管理員 → 重啟 → 驗證
+FIRST_DEPLOY_GROUPS = ("db-init", "create-admin")   # 只在第一次部署以 `--group` 明確執行：`db-init` 用 RDS 主要使用者建立專屬資料庫與登入（design D8）、
+                                                    # `create-admin` 由使用者在 SSM 終端機建立首位管理員（design D9）；例行部署都不重做
 ROUTINE_DEPLOY_GROUPS = tuple(group for group in DEPLOY_GROUPS if group not in FIRST_DEPLOY_GROUPS)   # `deploy_plan` 沒指定 groups 時的整份計畫
 ROLLBACK_GROUPS = ("prepare", "restart", "verify")
 TEARDOWN_GROUPS = ("compute", "database", "snapshots", "network", "iam", "storage", "notify", "verify")
@@ -1081,6 +1086,8 @@ OPS_KEY_PREFIX = "ops"                              # 傳檔儲存貯體內放�
 OPS_WORK_PREFIX = "/var/tmp/rac-ops"                # 主機上的暫存目錄（持久磁碟；AL2023 的 /tmp 是記憶體檔案系統；用後由 trap 刪除）
 OPS_CONTAINER_DIR = "/ops"                          # 維運腳本在一次性容器內的掛載目錄
 DB_ENDPOINT_CAPTURE = "db-endpoint"                 # 資料庫初始化的 `--host`（RDS 端點，執行時以唯讀查詢取得）
+ADMIN_CONTAINER = "rac-create-admin"                # 人工建立首位管理員的互動容器（名稱固定，清理步驟以它找殘留）
+ADMIN_COMMAND = ("flask", "--app", "wsgi", "create-admin")   # app/cli.py 的 create-admin：信箱、顯示名稱與密碼（不回顯）由終端機詢問；不給任何參數
 POOL_READY_PATH = "/readyz"                         # 含資料庫檢查；主機內對回送位址探測
 SSM_FAILED_STATUSES = ("Failed", "Cancelled", "TimedOut", "Cancelling")
 BUILD_TIMEOUT_SECONDS = 1800                        # t3.small 上建置映像（pip 與 ODBC 驅動）的上限
@@ -1273,6 +1280,37 @@ def _migration_head_lines(tag: str) -> list[str]:
 
 def _seed_lines(tag: str) -> list[str]:
     return ["set -eu", "export HOME=/root", *_one_off_lines(tag, "rac-seed", ("flask", "--app", "wsgi", "seed-scripts"))]
+
+
+def _create_admin_check_lines(tag: str) -> list[str]:
+    """人工建立管理員之前的乾跑：與人工步驟相同的映像、強化與環境檔，只執行 `create-admin --help`（印說明就結束，不詢問、不寫入資料庫），
+    證明映像、環境檔、`flask` 與 `wsgi` 模組都能用；環境檔用完（含失敗）就刪除。輸出一行 `create-admin-help=ok`。"""
+    return [
+        "set -eu", "export HOME=/root", f"trap 'rm -f {RUN_DIR}/app.env' EXIT",
+        *_one_off_lines(tag, f"{ADMIN_CONTAINER}-check", (*ADMIN_COMMAND, "--help"), pipe=" >/dev/null"),
+        "echo create-admin-help=ok",
+    ]
+
+
+def _create_admin_manual_commands(tag: str) -> tuple[str, ...]:
+    """使用者在 SSM 終端機（`ssm-user`，要 `sudo`）自己輸入的兩行：先取出機密環境檔，再以互動容器執行 `create-admin`（`-it`）。
+    沒有信箱、顯示名稱與密碼的任何參數：它們由指令在終端機詢問，密碼不回顯。清除環境檔由下一個計畫步驟做。"""
+    image = f"{APP_IMAGE_REPO}:{_commit_tag(tag)}"
+    run = " ".join(_app_run_args(ADMIN_CONTAINER, ADMIN_COMMAND, tty=True, image=image))
+    return (f"sudo {SBIN_DIR}/rac-render-env-app", f"sudo {run}")
+
+
+def _create_admin_cleanup_lines() -> list[str]:
+    """人工步驟之後清理：刪掉互動容器（使用者中途關掉終端機可能留下）與環境檔，輸出殘留數；預期都是 0。"""
+    return [
+        "set -eu",
+        f"{DOCKER} rm -f {ADMIN_CONTAINER} >/dev/null 2>&1 || true",
+        f"rm -f {RUN_DIR}/app.env",
+        "left=0",
+        f"if [ -e {RUN_DIR}/app.env ]; then left=1; fi",
+        f"containers=\"$({DOCKER} ps -a --filter name='^{ADMIN_CONTAINER}$' --format x | wc -l)\"",
+        'echo "app-env-left=$left container-left=$containers"',
+    ]
 
 
 def _switch_release_lines(tag: str) -> list[str]:
@@ -1586,6 +1624,20 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] | None = No
                     _seed_lines(tag), timeout=600),
     ]
 
+    steps["create-admin"] += [
+        *_ssm_steps(target, "check-create-admin", "create-admin",
+                    f"建立管理員之前的乾跑：在 {APP_IMAGE_REPO}:{tag} 的一次性容器內執行 `flask --app wsgi create-admin --help`（只印說明、不詢問、不寫入資料庫），"
+                    "確認映像、環境檔與指令都可用；環境檔用完就刪除",
+                    _create_admin_check_lines(tag), timeout=300, expect="create-admin-help=ok"),
+        Step("create-admin", "create-admin",
+             "人工：請在連入主機的終端機（AWS 主控台的 Session Manager，登入使用者 ssm-user）自己建立首位管理員。"
+             "信箱與顯示名稱由指令詢問、密碼在終端機輸入且不回顯，不經腳本、參數與對話；下面的指令只顯示、不由本程式執行",
+             interactive=True, manual_commands=_create_admin_manual_commands(tag)),
+        *_ssm_steps(target, "cleanup-create-admin", "create-admin",
+                    "清理：刪除互動容器與機密環境檔（使用者中途關閉終端機時可能殘留），確認殘留都是 0",
+                    _create_admin_cleanup_lines(), timeout=300, expect="app-env-left=0 container-left=0"),
+    ]
+
     steps["restart"] += _ssm_steps(
         target, "switch-release", "restart", f"把 {RELEASE_ENV_PATH} 換成 {tag}（前一版存成 release.previous.env）並重啟客服池與 RPG 池",
         _switch_release_lines(tag), timeout=300)
@@ -1595,7 +1647,7 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] | None = No
         _pool_check_lines(), timeout=300, expect=_pool_check_expect(tag))
 
     selected = set(groups)
-    if selected & {"build", "db-init", "migrate", "restart", "verify"}:
+    if selected & {"build", "db-init", "migrate", "create-admin", "restart", "verify"}:
         selected.add("prepare")             # 在主機上執行的命令都要實例編號；找主機是唯讀的，所以一律自動帶上
     plan: list[Step] = []
     for group in DEPLOY_GROUPS:

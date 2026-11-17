@@ -60,7 +60,7 @@ def commands(step):
 
 def all_strings(step):
     """步驟內所有文字（含說明、JSON 範本、預期輸出），用來掃描機密與佔位符。"""
-    texts = [step.id, step.title, step.input_json or ""]
+    texts = [step.id, step.title, step.input_json or "", *step.manual_commands]
     for argv in commands(step):
         texts.extend(argv)
     if step.poll:
@@ -1135,7 +1135,8 @@ def test_the_image_tag_must_be_a_commit_short_code(tag):
 
 def test_every_on_host_command_goes_through_ssm_run_command_with_ascii_only_and_no_secret():
     sends = [s for s in all_deploy_steps() + rollback_steps() if is_host_command(s)]
-    assert len(sends) == 9 + 2, "部署 9 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、切換、池檢查）與回復 2 個（切換、池檢查）"
+    assert len(sends) == 11 + 2, ("部署 11 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、建立管理員的乾跑、清理、切換、池檢查）"
+                                  "與回復 2 個（切換、池檢查）；人工建立管理員的那一步不在其中（它不經 SSM Run Command）")
     for step in sends:
         body = json.loads(step.input_json)
         assert body["DocumentName"] == "AWS-RunShellScript" and body["InstanceIds"] == ["{{instance-id}}"], step.id
@@ -1371,8 +1372,8 @@ def test_the_db_init_group_sits_between_the_build_and_the_migration_and_is_not_p
     steps = all_deploy_steps()
     assert [s.id for s in steps if s.group == "db-init"] == list(DB_INIT_IDS)
     assert_in_order(steps, "wait-check-image", *DB_INIT_IDS, "migrate-db")
-    assert plan.FIRST_DEPLOY_GROUPS == ("db-init",)
-    assert plan.ROUTINE_DEPLOY_GROUPS == tuple(g for g in plan.DEPLOY_GROUPS if g != "db-init")
+    assert plan.FIRST_DEPLOY_GROUPS == ("db-init", "create-admin")
+    assert plan.ROUTINE_DEPLOY_GROUPS == tuple(g for g in plan.DEPLOY_GROUPS if g not in plan.FIRST_DEPLOY_GROUPS)
     assert not set(DB_INIT_IDS) & {s.id for s in deploy_steps()}, "例行部署不用主要使用者重做資料庫初始化"
     assert [s.id for s in plan.deploy_plan(target(), TAG, groups=plan.ROUTINE_DEPLOY_GROUPS)] == [s.id for s in deploy_steps()]
 
@@ -1499,6 +1500,136 @@ def test_a_failing_container_fails_the_host_command_with_the_same_exit_code_and_
     result = run_ops_script(tmp_path, step_id, docker_rc=3)
     assert result["rc"] == 3 and result["out"].strip() == "docker-exit=3", "非零結束讓 SSM 狀態為 Failed，等待步驟立即停止"
     assert (result["left_env"], result["left_work"]) == (0, 0)
+
+
+# 人工建立首位管理員（task 5.5）：`create-admin` 組，只在第一次部署以 `--group create-admin` 執行
+
+CREATE_ADMIN_IDS = (
+    "check-create-admin", "wait-check-create-admin", "create-admin", "cleanup-create-admin", "wait-cleanup-create-admin",
+)
+
+
+def test_the_create_admin_group_sits_between_the_migration_and_the_restart_and_is_not_part_of_a_routine_deploy():
+    steps = all_deploy_steps()
+    assert [s.id for s in steps if s.group == "create-admin"] == list(CREATE_ADMIN_IDS)
+    assert_in_order(steps, "wait-seed-scripts", *CREATE_ADMIN_IDS, "switch-release")
+    assert not set(CREATE_ADMIN_IDS) & {s.id for s in deploy_steps()}, "例行部署不再建立管理員"
+    selected = plan.deploy_plan(target(), TAG, groups=("create-admin",))
+    assert [s.id for s in selected] == ["deploy-find-host", *CREATE_ADMIN_IDS]
+    assert_placeholders_resolve(selected)
+    assert "restart" not in {s.group for s in selected}, "建立管理員的那一組不會重啟任何服務"
+
+
+def test_the_create_admin_step_is_interactive_runs_nothing_itself_and_lists_two_commands_without_any_credential_argument():
+    step = by_id(all_deploy_steps())["create-admin"]
+    assert step.interactive and step.argv == () and not step.input_json and not step.resource and not step.billing and not step.blocked
+    assert step.verify == () and step.poll is None and step.exists_argv is None and step.capture is None
+    render, run = step.manual_commands
+    assert render == f"sudo {plan.SBIN_DIR}/rac-render-env-app"
+    tokens = shlex.split(run)
+    assert tokens[:3] == ["sudo", "/usr/bin/docker", "run"]
+    for required in ("--rm", "-it", "--pull=never", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges"):
+        assert required in tokens, required
+    assert tokens[-5:] == [f"rac-app:{TAG}", "flask", "--app", "wsgi", "create-admin"], "指令之後沒有任何參數：信箱、顯示名稱與密碼都由終端機詢問"
+    assert option_values(tokens, "--env-file") == ["/etc/rac/plain.env", "/run/rac/app.env"]
+    assert not any(token.startswith("--publish") for token in tokens), "互動容器不對外開任何埠"
+    text = " ".join(step.manual_commands)
+    for forbidden in ("--email", "--display-name", "--password", "${", "RAC_IMAGE_TAG", "{{", "bootstrap.env", "DATABASE_URL", "rm -f"):
+        assert forbidden not in text, forbidden
+    assert text.isascii()
+    assert "ssm-user" in step.title and "不經腳本" in step.title and "密碼" in step.title
+
+
+def test_only_the_create_admin_step_carries_manual_commands_and_it_is_the_only_one_that_needs_a_terminal():
+    steps = [*full_plan(), *all_deploy_steps(), *rollback_steps(), *teardown_steps()]
+    assert [s.id for s in steps if s.manual_commands] == ["create-admin"]
+    assert [s.id for s in steps if is_host_command(s) and " -it " in script_text(s)] == [], "只有人工步驟用 -it；經 SSM 執行的腳本沒有終端機"
+
+
+def test_the_create_admin_dry_run_executes_only_help_with_the_same_hardening_and_always_removes_the_environment_file():
+    steps = by_id(all_deploy_steps())
+    lines = script_lines(steps["check-create-admin"])
+    text = "\n".join(lines)
+    assert lines[:3] == ["set -eu", "export HOME=/root", "trap 'rm -f /run/rac/app.env' EXIT"], "環境檔取出之前就設好清除（含失敗）"
+    run = next(line for line in lines if line.startswith("/usr/bin/docker run"))
+    tokens = shlex.split(run)
+    assert tokens[-7:] == ["rac-app:${RAC_IMAGE_TAG}", "flask", "--app", "wsgi", "create-admin", "--help", ">/dev/null"], "說明文字丟棄，只留固定的一行輸出"
+    assert f"RAC_IMAGE_TAG={TAG}" in lines
+    for required in ("--rm", "--pull=never", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges"):
+        assert required in tokens, required
+    assert "-it" not in tokens and not any(t.startswith("--publish") for t in tokens)
+    assert "--name=rac-create-admin-check" in tokens, "乾跑的容器名稱與人工步驟的互動容器不同，清理才不會互相誤刪"
+    assert lines[-1] == "echo create-admin-help=ok" and text.isascii()
+    assert steps["wait-check-create-admin"].verify[0].expect == "create-admin-help=ok"
+    assert int(json.loads(steps["check-create-admin"].input_json)["Parameters"]["executionTimeout"][0]) >= 300
+
+
+def test_the_cleanup_removes_the_interactive_container_and_the_environment_file_and_expects_zero_leftovers():
+    steps = by_id(all_deploy_steps())
+    lines = script_lines(steps["cleanup-create-admin"])
+    text = "\n".join(lines)
+    assert lines[0] == "set -eu" and text.isascii()
+    assert "/usr/bin/docker rm -f rac-create-admin >/dev/null 2>&1 || true" in lines and "rm -f /run/rac/app.env" in lines
+    assert "name='^rac-create-admin$'" in text, "只找互動容器，不含乾跑的 rac-create-admin-check"
+    assert steps["wait-cleanup-create-admin"].verify[0].expect == "app-env-left=0 container-left=0"
+    assert "flask" not in text and "create-admin " not in text.replace("rac-create-admin", ""), "清理不執行 create-admin"
+
+
+def run_create_admin_script(step_id, *, docker_rc=0, containers=0, env_exists=True):
+    """在 bash 內以假的 docker 與機密取出腳本執行乾跑或清理腳本；回傳結束代碼、標準輸出與錯誤、呼叫紀錄與環境檔是否殘留。"""
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法執行腳本（不算通過）")
+    body = "\n".join(script_lines(by_id(all_deploy_steps())[step_id]))
+    body = (body.replace("/usr/bin/docker", "dockerfake").replace(f"{plan.SBIN_DIR}/rac-render-env-app", "renderfake")
+            .replace("/run/rac", "$d/run").replace("/etc/rac/plain.env", "$d/plain.env"))
+    script = "\n".join([
+        'd="$(mktemp -d)"', 'mkdir "$d/run"', 'LOG="$d/log"; : > "$LOG"',
+        'touch "$d/run/app.env"' if env_exists else ":",
+        f"DOCKER_RC={docker_rc}; CONTAINERS={containers}",
+        'renderfake() { echo RENDER >> "$LOG"; : > "$d/run/app.env"; }',
+        'dockerfake() { echo "DOCKER: $*" >> "$LOG"; case "$1" in '
+        'run) return "$DOCKER_RC";; ps) i=0; while [ "$i" -lt "$CONTAINERS" ]; do echo x; i=$((i+1)); done;; esac; return 0; }',
+        "(", body, ') > "$d/out" 2> "$d/err"',
+        'echo "rc=$?"', 'if [ -e "$d/run/app.env" ]; then echo env_left=1; else echo env_left=0; fi',
+        'echo "---out"; cat "$d/out"', 'echo "---err"; cat "$d/err"', 'echo "---log"; cat "$LOG"', 'rm -rf "$d"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    text = result.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+    assert result.returncode == 0, (text, result.stderr.decode("utf-8", "replace"))
+    head, rest = text.split("---out\n", 1)
+    out, rest = rest.split("---err\n", 1)
+    err, log = rest.split("---log\n", 1)
+    values = dict(line.split("=", 1) for line in head.strip().splitlines())
+    return {"rc": int(values["rc"]), "env_left": int(values["env_left"]), "out": out, "err": err, "log": log}
+
+
+def test_a_successful_dry_run_prints_the_fixed_line_runs_help_once_and_removes_the_environment_file():
+    result = run_create_admin_script("check-create-admin", env_exists=False)
+    assert result["rc"] == 0 and result["out"].strip() == "create-admin-help=ok"
+    runs = [line for line in result["log"].splitlines() if line.startswith("DOCKER: run")]
+    assert len(runs) == 1 and runs[0].endswith(f"rac-app:{TAG} flask --app wsgi create-admin --help")
+    assert result["log"].splitlines().index("RENDER") < result["log"].splitlines().index(runs[0]), "環境檔在容器啟動之前取出"
+    assert result["env_left"] == 0, "用完就刪除"
+
+
+def test_a_failing_dry_run_fails_the_host_command_without_the_fixed_line_and_still_removes_the_environment_file():
+    result = run_create_admin_script("check-create-admin", docker_rc=5)
+    assert result["rc"] == 5 and "create-admin-help=ok" not in result["out"], "非零結束讓 SSM 狀態為 Failed，等待步驟立即停止"
+    assert result["env_left"] == 0
+
+
+@pytest.mark.parametrize("env_exists", [True, False])
+def test_the_cleanup_removes_a_leftover_environment_file_and_reports_the_fixed_line(env_exists):
+    result = run_create_admin_script("cleanup-create-admin", env_exists=env_exists)
+    assert result["rc"] == 0 and result["out"].strip() == "app-env-left=0 container-left=0" and result["env_left"] == 0
+    assert "DOCKER: rm -f rac-create-admin" in result["log"]
+
+
+def test_the_cleanup_reports_a_container_that_could_not_be_removed_so_the_wait_step_fails():
+    result = run_create_admin_script("cleanup-create-admin", containers=1)
+    expected = by_id(all_deploy_steps())["wait-cleanup-create-admin"].verify[0].expect
+    assert result["out"].strip() == "app-env-left=0 container-left=1" and result["out"].strip() != expected
 
 
 def test_migration_runs_in_a_one_off_container_with_the_pools_hardening_and_never_downgrades():

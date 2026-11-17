@@ -1630,7 +1630,7 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-email <信箱> --vars-file aws-demo.vars --only host-init-sshd --yes
 ```
 
-### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.4 已記入，8.4 收尾時補齊）
+### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5 已記入，8.4 收尾時補齊）
 
 **已對真實 AWS 執行並逐項以唯讀指令驗證**（資源都帶 `Project=rac-demo`、`Environment=staging` 標籤）：
 
@@ -1665,9 +1665,12 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 | 5.4 部署前快照（`deploy --group snapshot --group migrate --tag 48f5ab2`） | `rac-demo-staging-db-pre-48f5ab2` 為 `manual`、加密、20 GB、`available`，帶 `Project=rac-demo`、`Environment=staging` 與 `Name` 標籤；遷移之前建立並等到可用 |
 | 5.4 遷移（`migrate-db`） | 空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移，結束代碼 0；`check-migration-head` 輸出 `1`；另以唯讀一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)` |
 | 5.4 種子（`seed-scripts`） | 內建劇本：建立 1、更新 0、沒有變動 0（`xianxia-qingyun`）；全程沒有 restart，兩個池與 Caddy 仍未啟動 |
+| 5.5 建立管理員前的乾跑（`deploy --group create-admin --tag 48f5ab2 --execute`，到人工步驟時回答「否」讓它停住） | 找出主機通過；`check-create-admin` 的 SSM 狀態 `Success`，驗證輸出 `create-admin-help=ok`（映像、環境檔、`flask`、`wsgi` 與 `create-admin` 指令可用）；在人工步驟停止（結束代碼 3，是預期的），沒有建立任何帳號、沒有執行清理（乾跑腳本自己的 `trap` 已刪環境檔） |
+| 5.5 人工建立管理員與清理（`deploy --group create-admin --tag 48f5ab2 --execute`，使用者在自己的終端機執行） | 使用者在 Session Manager 終端機輸入兩行指令後回答「做完了」；`cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組「全部完成」。**證據的限度**：這是使用者的確認加清理驗證輸出，我沒有看到成功訊息的識別碼，也沒有獨立查詢資料庫；帳號可用與否在管理員第一次登入時才證明 |
+| 5.5 回寫成計畫步驟（`deploy_plan` 的 `create-admin` 組，第一次部署專用） | 5 個步驟（乾跑與等待、人工步驟、清理與等待）；`Step.manual_commands` 新欄位，執行器只顯示不執行，`--yes` 不能代替確認。新增測試（四個 aws_demo 測試檔）：順序與例行部署不含、人工指令沒有任何帳密參數、兩個 SSM 腳本在 bash 內以假 `docker` 實際執行（成功、容器失敗、環境檔與容器清除）、預覽不呼叫外部指令、拒絕人工確認即停止；**11 項破壞驗證全部被抓到**（人工指令少 `-it` 或多帶 `--password-stdin`、不再標為互動、進了例行部署、乾跑沒有 `trap`、清理不刪環境檔、組順序在遷移之前、乾跑拿掉 `--help`、清理的容器名稱不錨定、執行器不顯示指令、清理預期值放寬） |
 | 5.3 主機殘留複驗 | 暫存目錄 0、`/run/rac` 空、容器 0、沒有 active 的 `rac-*` 單元；主機上的映像為 `rac-app:48f5ab2`、`rac-app-base:48f5ab2` 與 5.1 的 `rac-app:5681983`（沒有 RDS CA，不可用於資料庫連線，留著只是尚未清理） |
 
-**未驗證**：新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、映像執行（兩個池與一次性容器在新映像上的行為）、兩個池與 Caddy 的啟動與分流（6.x）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
+**未驗證**：管理員帳號是否可用（5.5 的人工步驟由使用者執行並確認完成，證據限度見上表；第一次管理員登入才真正驗證）、新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、映像執行（兩個池與一次性容器在新映像上的行為）、兩個池與 Caddy 的啟動與分流（6.x）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
 
 ## 撰寫新端點：權限與 IDOR 測試
 

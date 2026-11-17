@@ -511,6 +511,49 @@ def test_the_database_init_group_is_not_in_a_routine_deploy_and_runs_with_the_en
     assert single.code == 0, "第一次部署專用的步驟也能用 --only 單獨執行（目錄含 db-init）"
 
 
+def create_admin_runner():
+    runner = FakeAws().with_identity()
+    runner.when("describe-instances", "length(Reservations", out="1")
+    runner.when("describe-instances", out="i-0host")
+    runner.when("send-command", out="cmd-1")
+    runner.when("StandardOutputContent", out=["create-admin-help=ok\n", "app-env-left=0 container-left=0\n"])
+    runner.when("get-command-invocation", out="Success")
+    return runner
+
+
+def test_the_create_admin_group_is_not_in_a_routine_deploy_and_its_preview_shows_the_commands_without_running_anything():
+    assert "create-admin" not in invoke(DEPLOY).text
+    preview = invoke([*DEPLOY, "--group", "create-admin"])
+    assert preview.code == 0 and preview.runner.calls == [] and preview.prompts == []
+    for shown in ("人工步驟", "只顯示，不由本程式執行", "sudo /usr/local/sbin/rac-render-env-app", f"rac-app:{TAG} flask --app wsgi create-admin",
+                  "終端機輸入且不回顯", "ssm-user"):
+        assert shown in preview.text, shown
+    for secret_like in ("--email", "--display-name", "--password", "alembic", "switch-release"):
+        assert secret_like not in preview.text, secret_like
+
+
+def test_executing_the_create_admin_group_runs_the_dry_run_then_waits_for_the_user_then_cleans_up_and_never_runs_the_commands_itself():
+    runner = create_admin_runner()
+    result = invoke([*DEPLOY, "--group", "create-admin", "--execute"], runner=runner)
+    assert result.code == 0, result.text + result.err
+    sends = [i for i, event in enumerate(runner.events) if event[0] == "run" and "send-command" in event[1]]
+    done = [i for i, event in enumerate(runner.events) if event[0] == "confirm" and "做完了嗎" in event[1]]
+    assert len(sends) == 2 and len(done) == 1 and sends[0] < done[0] < sends[1], "乾跑 → 等使用者做完 → 清理"
+    assert all(call[0] == "aws" for call in runner.calls), "執行器只呼叫 aws；互動指令由使用者在終端機輸入"
+    bodies = [json.loads(body)["Parameters"]["commands"] for body in runner.bodies if body]
+    assert len(bodies) == 2 and not any(" -it " in line for lines in bodies for line in lines)
+    assert any("create-admin --help" in line for line in bodies[0]) and any("rm -f /run/rac/app.env" in line for line in bodies[1])
+
+
+def test_declining_the_manual_step_stops_before_the_cleanup_and_yes_cannot_answer_for_the_user():
+    runner = create_admin_runner()
+    result = invoke([*DEPLOY, "--group", "create-admin", "--execute"], runner=runner, answers=[True, True, True, False])
+    assert result.code == demo.EXIT_DECLINED, result.text + result.err
+    assert len([call for call in runner.calls if "send-command" in call]) == 1, "清理沒有執行：使用者還沒做完"
+    refused = invoke([*DEPLOY, "--only", "create-admin", "--yes"], runner=create_admin_runner(), answers=[False])
+    assert refused.code == demo.EXIT_DECLINED and any("--yes 不能代替人工動作" in prompt for prompt in refused.prompts)
+
+
 def test_the_default_deploy_tag_comes_from_git_and_a_bad_tag_is_refused():
     result = invoke(["deploy", *BASE], tag="deadbee")
     assert result.code == 0 and "deadbee" in result.text

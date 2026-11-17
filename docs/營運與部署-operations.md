@@ -506,6 +506,7 @@ flowchart LR
 | `deploy_plan` | build | `archive-source`、`upload-source`、`build-image`、`wait-build-image`、`check-image`、`wait-check-image` | `git archive` 取出已提交的內容、上傳到傳檔儲存貯體、在主機上分兩段建置映像（基底映像，再加一層 RDS CA 的衍生映像）並檢查（非 root、沒有 `.env` 與 `.git`、系統憑證庫的憑證數＝基底映像的張數＋RDS 套件的張數） |
 | `deploy_plan` | db-init | `deploy-find-db-endpoint`、`upload-ops-bootstrap-db`、`upload-ops-probe-db`、`bootstrap-db`、`wait-bootstrap-db`、`probe-db`、`wait-probe-db` | **只在第一次部署以 `--group db-init` 執行**（例行部署的整份計畫不含它）：唯讀取得 RDS 端點、把兩支維運腳本加密上傳到傳檔儲存貯體的 `ops/` 前綴（主機下載後比對 SHA-256）、用 RDS 主要使用者在 `rac-app:<標籤>` 的一次性容器內建立專屬資料庫與登入（可重複執行），再以應用程式登入的連線字串探測；兩個等待步驟驗證標準輸出 `docker-exit=0`（容器的輸出在標準錯誤）；探測沒有通過就停止，不放寬 |
 | `deploy_plan` | migrate | `migrate-db`、`wait-migrate-db`、`check-migration-head`、`wait-check-migration-head`、`seed-scripts`、`wait-seed-scripts` | 一次性容器執行 `alembic upgrade head`、確認已是最新版、再執行 `seed-scripts`；失敗即停止，不重啟 |
+| `deploy_plan` | create-admin | `check-create-admin`、`wait-check-create-admin`、`create-admin`、`cleanup-create-admin`、`wait-cleanup-create-admin` | **只在第一次部署以 `--group create-admin` 執行**（例行部署的整份計畫不含它）：先在主機上乾跑 `create-admin --help`（同一個映像、強化與環境檔，不詢問、不寫入資料庫，輸出 `create-admin-help=ok`）；再是人工步驟 `create-admin`（只列出要在 SSM 終端機輸入的兩行指令，執行器不執行它，`--yes` 不能代替，信箱、顯示名稱與密碼都由終端機詢問，密碼不回顯）；最後清理互動容器與機密環境檔，輸出 `app-env-left=0 container-left=0` |
 | `deploy_plan` | restart | `switch-release`、`wait-switch-release` | 換 `release.env`（前一版存成 `release.previous.env`）並只重啟兩個池 |
 | `deploy_plan` | verify | `check-pools`、`wait-check-pools` | 兩個池在回送位址上 `/readyz` 回 200，且都在跑新映像 |
 | `rollback_plan` | prepare | `rollback-find-host` | 找出主機 |
@@ -526,7 +527,7 @@ flowchart LR
 - **費用護欄**：建立 RDS、EC2 與 Elastic IP 的步驟在沒有 `--accept-cost` 時只留說明、不輸出指令；執行器顯示的預估來自 `cost_lines()`（約 US$1.6／日，到 2026-12-31 約 US$75；牌價粗估，以 AWS 帳單頁為準）。
 - **機密**：計畫裡只有機密的名稱與參照（`{{secret:名稱}}`，只出現在經暫存檔傳入的 JSON 內），沒有值；傳給 AWS 的 JSON 一律只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`）。
 - **在主機上執行的命令**走 SSM Run Command：`send-command` 輸出命令編號，接著 `wait-…` 步驟輪詢到 `Success`，`Failed`、`Cancelled`、`TimedOut` 立即停止（不等逾時）；主機沒有 SSH。
-- **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。**第一次部署**在建置與遷移之間多一組 `db-init`（資料庫初始化與憑證探測，用 `--group db-init` 明確執行）：它不在例行部署的整份計畫內（`ROUTINE_DEPLOY_GROUPS`），所以例行部署不會每次都用 RDS 主要使用者的密碼；執行器的步驟目錄（`--only` 與擷取值的唯讀取回）則含它。
+- **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。**第一次部署**在建置與遷移之間多一組 `db-init`（資料庫初始化與憑證探測，用 `--group db-init` 明確執行）：它不在例行部署的整份計畫內（`ROUTINE_DEPLOY_GROUPS`），所以例行部署不會每次都用 RDS 主要使用者的密碼；執行器的步驟目錄（`--only` 與擷取值的唯讀取回）則含它。第一次部署在遷移與重啟之間還有一組 `create-admin`（人工建立首位管理員，見下方「建立首位管理員」），同樣不在例行部署內（`FIRST_DEPLOY_GROUPS` 含 `db-init` 與 `create-admin`）。
 - **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
 - **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。**手動快照**含資料庫內容、不隨 RDS 消失且持續計費，所以另有規則（design D14）：不論選擇保留或不保留最終快照，執行器先唯讀列出（`snapshot_listing_step()`）該資料庫仍存在的快照，使用者必須明確回覆要保留的**例外**（「沒有例外」也要明說，沉默不算），沒有被指定保留的**部署前快照**（`<資料庫>-pre-<提交短碼>`）才預設刪除；名單由 `snapshots_to_delete()` 算出（例外打錯名稱會丟錯，不會悄悄變成全部刪除），傳給 `teardown_plan(delete_snapshots=…)`，沒給名單時 `td-delete-snapshots` 沒有指令；每個刪除仍先以標籤查詢把關。**最終快照（本次保留的與先前拆除留下的）永遠不由計畫刪除**，要刪由使用者自己處理，拆除最後會列出仍留著的快照。
 - **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。`build_plan` 的各組與 `host-init` 已對真實的 AWS 與主機（Amazon Linux 2023 的 docker、systemd）執行並逐項驗證，差異已回寫（task 4.2 至 4.5，見下一節與 README「驗收紀錄（aws-demo-environment）」）；`deploy_plan` 的 `build` 組（兩段建置與 `check-image`）與 `db-init` 組、`refresh-parameter-DATABASE_URL` 已對真實主機與 RDS 執行並驗證（task 5.3，結果見下方「資料庫憑證方案」；`db-init` 回寫後的步驟另對真實主機重跑一次，兩個等待步驟都是 `docker-exit=0`）；`deploy_plan` 的 `snapshot`、`migrate` 組也已對真實的 AWS 與 RDS 執行並驗證（task 5.4）；`deploy_plan` 的 `restart`、`verify` 組、`rollback_plan`、`teardown_plan` 與 DuckDNS **沒有對真實的 AWS 執行過**，Caddy 與兩個池也尚未在主機上啟動，指令與旗標的差異在後續雲端批次回寫。
@@ -558,7 +559,7 @@ task 4.4 在主機上以 SSM 現場撰寫並逐項驗證，task 4.5 回寫成計
 | 子命令 | 做什麼（對應的計畫） | 範例 |
 |---|---|---|
 | `provision` | 建立環境（`build_plan`）：`--group` 只做某幾組、`--secrets-file` 提供機密的值、`--vars-file` 提供一般設定（主機初始化放置 `plain.env` 用）、`--accept-cost` 同意建立計費資源 | `python scripts/aws_demo.py provision --account-id 123456789012 --notify-email ops@example.com --accept-cost --execute` |
-| `deploy` | 部署（`deploy_plan`）：`--tag` 是提交短碼，省略時取目前 git 的短提交；第一次部署用 `--group` 分組執行（`build`，然後 `db-init`，再 `snapshot`、`migrate`；`restart`、`verify` 留到 `create-admin` 之後）；沒指定 `--group` 時是例行部署，不含 `db-init` | `python scripts/aws_demo.py deploy --account-id 123456789012 --tag abc1234 --execute` |
+| `deploy` | 部署（`deploy_plan`）：`--tag` 是提交短碼，省略時取目前 git 的短提交；第一次部署用 `--group` 分組執行（`build`，然後 `db-init`，再 `snapshot`、`migrate`、`create-admin`；`restart`、`verify` 留到 `create-admin` 之後）；沒指定 `--group` 時是例行部署，不含 `db-init`、`create-admin` | `python scripts/aws_demo.py deploy --account-id 123456789012 --tag abc1234 --execute` |
 | `rollback` | 回復（`rollback_plan`）：只把兩個池換回舊標籤，不動資料庫 | `python scripts/aws_demo.py rollback --account-id 123456789012 --tag abc1234 --execute` |
 | `teardown` | 拆除（`teardown_plan`）：必須明確選 `--final-snapshot` 或 `--no-final-snapshot`（互斥、沒有預設值；真正執行時沒選會在呼叫任何指令前被拒絕） | `python scripts/aws_demo.py teardown --account-id 123456789012 --no-final-snapshot --execute` |
 | `duckdns` | 把展示網域指向帶標籤的 Elastic IP；權杖只從環境變數 `DUCKDNS_TOKEN` 讀取 | `python scripts/aws_demo.py duckdns --account-id 123456789012 --execute` |
@@ -580,7 +581,7 @@ task 4.4 在主機上以 SSM 現場撰寫並逐項驗證，task 4.5 回寫成計
 | `confirm-sns-subscriptions` | 每位收件人開啟 AWS 寄的訂閱確認信並點擊確認（沒收到先看垃圾郵件匣）；`--yes` 不能代替人工動作，此步驟一律詢問 |
 | `create-rds-instance`、`launch-ec2`、`allocate-eip` | 開始計費：看過費用預估並加上 `--accept-cost`，再逐步確認 |
 | `host-init-*` | 不需要你動手，但每一步仍逐步確認（或你針對該步驟明確給 `--only … --yes`）；放置檔案要提供 `--vars-file`，看過內容再同意；`host-init-sshd` 會停用主機內的 sshd（之後只能用 SSM 管理） |
-| `create-admin` | 由你在 SSM 終端機自己執行並輸入密碼，不經腳本與對話（task 5.5） |
+| `create-admin` | 由你在 SSM 終端機自己執行並輸入信箱、顯示名稱與密碼，不經腳本與對話（task 5.5）；執行器只列出要輸入的兩行指令並等你確認，`--yes` 不能代替 |
 | `duckdns` | 確認查到的 Elastic IP 正確，才會更新網域 |
 | `teardown` 的保留或不保留最終快照 | 明確選擇 `--final-snapshot` 或 `--no-final-snapshot`，沒有預設值 |
 | `teardown` 的快照例外 | 見下：必須明確回覆，「沒有例外」也要明說 |
@@ -628,6 +629,22 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **未驗證**：英文（Linux 容器）的驅動程式訊息只以樣本字串驗證，沒有取得真實的失敗訊息（5.3 的連線全部成功）；`db_owner` 之外的權限邊界（例如應用程式登入是否真的不能碰其他資料庫）只由角色成員的設計保證，沒有在 RDS 上逐項嘗試。探測或初始化失敗（`tls_certificate` 或其他）時：停止並回報，**不**採用 `TrustServerCertificate=yes`、`ServerCertificate` 或行程範圍的 `SSL_CERT_FILE`。
 
 **遷移與種子（task 5.4，2026-11-17，映像 `rac-app:48f5ab2`；`deploy --group snapshot --group migrate --tag 48f5ab2`，沒有 restart）**：①`snapshot-db` 建立手動快照 `rac-demo-staging-db-pre-48f5ab2`（`manual`、加密、20 GB、帶 `Project`／`Environment`／`Name` 標籤），等到 `available` 才遷移；②`migrate-db` 在空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移（MSSQLImpl，交易式 DDL），結束代碼 0；③`check-migration-head` 輸出 `1`，另以唯讀的一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)`；④`seed-scripts`：建立 1 份內建劇本（`xianxia-qingyun`）、更新 0、沒有變動 0；⑤**沒有啟動或重啟任何服務**（兩個池與 Caddy 仍未啟動，網址仍連不上是正常的）。手動快照不隨 RDS 消失、持續計費，拆除時依 design D14 處理（部署前快照預設刪除、由使用者指定例外）。**觀察**：`migrate-db`、`check-migration-head`、`seed-scripts` 沿用 `_one_off_lines`，執行後 `/run/rac/app.env`（記憶體檔案系統、600、僅 root）仍留著，與 `db-init` 的腳本（結束時刪除環境檔）不一致；兩個池的單元每次啟動都會重新產生它，所以不影響功能，是否統一清除留待之後決定。
+
+### 建立首位管理員（task 5.5，`create-admin` 組）
+
+規格要求密碼由使用者在自己的終端機輸入、不經腳本參數與對話，所以這一步是**人工步驟**（`Step.interactive`，`argv` 為空）：執行器只把要輸入的指令列出來（`Step.manual_commands`，**只顯示、不執行**），等你回答「做完了」才繼續；`--yes` 不能代替這個確認。整組（`deploy --group create-admin --tag <標籤> --execute`，在你自己的終端機執行，因為要回答確認）依序是：
+
+1. **乾跑**（`check-create-admin`＋等待）：主機上以與人工步驟相同的映像、強化選項與環境檔執行 `flask --app wsgi create-admin --help`（只印說明，不詢問、不寫入資料庫），證明映像、環境檔、`flask` 與 `wsgi` 模組都可用；輸出一行 `create-admin-help=ok`，環境檔在結束時（含失敗）一律刪除。
+2. **人工步驟**（`create-admin`）：在 AWS 主控台開啟主機的 Session Manager 終端機（登入使用者 `ssm-user`，要 `sudo`；主機只開放 SSM，沒有 22 與金鑰），依序輸入兩行：`sudo /usr/local/sbin/rac-render-env-app`（把機密取到記憶體檔案系統的環境檔），再 `sudo /usr/bin/docker run --rm -it --name=rac-create-admin --pull=never …（與兩個池相同的強化選項）rac-app:<標籤> flask --app wsgi create-admin`。**指令之後沒有任何參數**：信箱、顯示名稱由指令詢問，密碼以不回顯的方式輸入並再輸入一次確認；成功時印出「已建立管理員帳號（識別碼 …）」。
+3. **清理**（`cleanup-create-admin`＋等待）：刪除互動容器與 `/run/rac/app.env`（使用者中途關閉終端機可能殘留），輸出 `app-env-left=0 container-left=0`，不符就失敗。清理由計畫做，不要求使用者手動刪檔。
+
+- **為什麼要有乾跑與清理**：人工指令是使用者自己輸入的，輸入的是真的會寫入資料庫的指令，所以先證明它用的映像與環境檔可用；而取出機密的環境檔不能留在記憶體檔案系統上（與 `db-init` 的腳本一致），不能指望人記得刪。
+- **機密與帳密不經過的地方**：指令列、計畫步驟、執行器輸出、SSM 命令（兩個 SSM 腳本都沒有 `-it`、沒有帳密）與對話；測試掃描人工指令不得出現 `--email`、`--display-name`、`--password`、`${`、`{{` 與 `rm -f`。
+- **只在第一次部署**：`FIRST_DEPLOY_GROUPS` 含 `create-admin`，例行部署的整份計畫不含它。順序在遷移之後（需要資料表）、`restart` 之前。指令本身（`app/cli.py`）對**已存在的信箱**拒絕且不改動既有帳號（`email_exists`），所以同一個信箱重做是安全的；它不限制管理員的數量，是否已建立要由部署者自己掌握。
+- **信箱要填之後用來 Google 登入的那一個**：管理員每次登入都先過 Google，第一次以「同信箱且 `email_verified`」的 Google 身分登入時才綁定，之後再驗證一次這裡設定的密碼（密碼 8 至 128 字）；信箱填錯就綁不上。
+- **已驗證**：`tests/test_aws_demo_plan.py` 與 `tests/test_aws_demo_script.py` 驗證順序、互動旗標、人工指令的內容（沒有任何帳密參數）、兩個 SSM 腳本在 bash 內以假的 `docker` 與機密取出腳本實際執行（成功、容器失敗、環境檔與容器清除）、預覽不呼叫任何外部指令、`--yes` 不能代替人工確認。**雲端**：乾跑已在真實主機以映像 `rac-app:48f5ab2` 成功（SSM `Success`，輸出 `create-admin-help=ok`）。
+- **雲端人工步驟（2026-11-17）**：使用者在 Session Manager 終端機輸入兩行指令後，於自己的終端機回答「做完了」；接著的 `cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組以「全部完成」結束。
+- **未驗證**：我沒有看到「已建立管理員帳號（識別碼 …）」那一行，也沒有獨立查詢資料庫確認帳號存在（沒有唯讀指令可查，不為此另寫查詢）；帳號是否可用要等管理員第一次登入（Google，再驗證密碼）才真正證明。
 
 ---
 
