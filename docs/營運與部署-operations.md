@@ -440,7 +440,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試，尚未對真實 AWS 執行**（沒有建立任何資源）。雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan`、`rollback_plan`、`teardown_plan`、DuckDNS 與資料庫初始化／探測腳本尚未對真實 AWS 執行**，雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -482,7 +482,7 @@ flowchart LR
 | 映像 | 在主機上以 `git archive <提交短碼>` 的壓縮檔（經 S3）建置，標記 `rac-app:<提交短碼>`；不含 `.env`，以非 root（uid 10001）執行；前一版映像保留供回復 | `deploy_plan()` |
 | 預算與告警 | Budgets：季度 US$75，實際花費 60% 與 90% 兩個門檻寄信；CloudWatch：EC2 狀態檢查連續失敗通知 SNS 主題；收件人由呼叫者提供，沒有預設值 | `build_plan()` 的 `budget` 與 `alarms` 組 |
 
-主機上要放的檔案共 17 個（`host_files()`：Caddyfile、`plain.env`、兩支取出腳本、三個常駐單元、五個排程的各一對 `.service`／`.timer`）。**主機初始化**（建立 `/etc/rac` 與 `/var/lib/rac/caddy`、2 GB 交換檔、安裝並啟動 docker、放置 RDS 的 CA 套件、經 SSM 放置上述檔案、`systemctl daemon-reload` 與啟用單元）**不預先寫成計畫步驟**（使用者 2026-11-16 決定）：第一次雲端執行時在 SSM 上現場撰寫並逐步確認，之後回寫成 `host-init` 計畫步驟與測試（task 4.5）；部署計畫假設這些已完成。
+主機上要放的檔案共 17 個（`host_files()`：Caddyfile、`plain.env`、兩支取出腳本、三個常駐單元、五個排程的各一對 `.service`／`.timer`）。**主機初始化**（建立 `/etc/rac` 與 `/var/lib/rac/caddy`、2 GB 交換檔、安裝並啟動 docker、放置 RDS 的 CA 套件、經 SSM 放置上述檔案、`systemctl daemon-reload` 與啟用單元、停用主機內的 sshd）沒有預先寫成計畫步驟（使用者 2026-11-16 決定）：task 4.4 在 SSM 上現場撰寫並逐項驗證，task 4.5 回寫成 `build_plan` 的 `host-init` 組（見下方「主機初始化」一節）；部署計畫假設這一組已執行完成。
 
 ### 步驟總表
 
@@ -500,6 +500,7 @@ flowchart LR
 | `build_plan` | ec2 | `get-ami`、`launch-ec2`、`wait-ec2-running`、`allocate-eip`、`get-eip-address`、`associate-eip`、`wait-ssm-online` | RDS 建立的等待期間建立主機（IMDSv2 強制、無金鑰對）與 Elastic IP（需要 `--accept-cost`） |
 | `build_plan` | rds-ready | `wait-rds-available`、`get-rds-endpoint`、`put-parameter-DATABASE_URL` | 等 RDS 可用、驗證不公開與加密，再寫入 `DATABASE_URL` |
 | `build_plan` | alarms | `create-ec2-status-alarm` | EC2 狀態檢查告警 |
+| `build_plan` | host-init | `host-init-find-host`、`host-init-system`、`wait-host-init-system`、`host-init-ca`、`wait-host-init-ca`、`host-init-files`、`wait-host-init-files`、`host-init-units`、`wait-host-init-units`、`host-init-secrets`、`wait-host-init-secrets`、`host-init-sshd`、`wait-host-init-sshd` | 主機初始化（見下一節）：找出主機，再依序 A 系統、B 憑證、C 檔案、D 單元、E 機密取出檢查、F 停用 sshd；不需要 `--accept-cost`，放置檔案需要 `--vars-file` |
 | `deploy_plan` | prepare | `deploy-find-host` | 以名稱與標籤找出主機，必須剛好一台 |
 | `deploy_plan` | snapshot | `snapshot-db`、`wait-snapshot-db` | 遷移之前的 RDS 快照（每個提交短碼一個，已存在就沿用），等到 available |
 | `deploy_plan` | build | `archive-source`、`upload-source`、`build-image`、`wait-build-image`、`check-image`、`wait-check-image` | `git archive` 取出已提交的內容、上傳到傳檔儲存貯體、在主機上建置映像並檢查（非 root、沒有 `.env` 與 `.git`） |
@@ -527,7 +528,27 @@ flowchart LR
 - **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。
 - **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
 - **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。**手動快照**含資料庫內容、不隨 RDS 消失且持續計費，所以另有規則（design D14）：不論選擇保留或不保留最終快照，執行器先唯讀列出（`snapshot_listing_step()`）該資料庫仍存在的快照，使用者必須明確回覆要保留的**例外**（「沒有例外」也要明說，沉默不算），沒有被指定保留的**部署前快照**（`<資料庫>-pre-<提交短碼>`）才預設刪除；名單由 `snapshots_to_delete()` 算出（例外打錯名稱會丟錯，不會悄悄變成全部刪除），傳給 `teardown_plan(delete_snapshots=…)`，沒給名單時 `td-delete-snapshots` 沒有指令；每個刪除仍先以標籤查詢把關。**最終快照（本次保留的與先前拆除留下的）永遠不由計畫刪除**，要刪由使用者自己處理，拆除最後會列出仍留著的快照。
-- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。**沒有對真實的 AWS、docker、systemd、Caddy 執行過**，指令與旗標的差異在雲端批次回寫（task 4.5）。
+- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。`build_plan` 的各組與 `host-init` 已對真實的 AWS 與主機（Amazon Linux 2023 的 docker、systemd）執行並逐項驗證，差異已回寫（task 4.2 至 4.5，見下一節與 README「驗收紀錄（aws-demo-environment）」）；`deploy_plan`、`rollback_plan`、`teardown_plan` 與 DuckDNS **沒有對真實的 AWS 執行過**，Caddy 與兩個池也尚未在主機上啟動，指令與旗標的差異在後續雲端批次回寫。
+
+### 主機初始化（`build_plan` 的 `host-init` 組）
+
+task 4.4 在主機上以 SSM 現場撰寫並逐項驗證，task 4.5 回寫成計畫步驟（腳本模板與步驟在 `scripts/aws_demo_plan.py` 的「主機初始化」一節，測試在 `tests/test_aws_demo_plan.py`）。順序固定，每一段一個 SSM 命令加一個等待步驟；腳本只印出**一行固定文字**，等待步驟以它驗證（不符就停止）。
+
+| 步驟 | 做什麼 | 驗證的輸出 |
+|---|---|---|
+| `host-init-find-host` | 以名稱與標籤找出主機（唯讀、必須剛好一台）；實例編號存成 `host-instance-id`，**不依賴建立主機的步驟**，所以單步或另一次執行都不需要 `--accept-cost` | 查詢結果為 1 台 |
+| A `host-init-system` | `/etc/rac`（0755）與 `/var/lib/rac/caddy`（0700）；2 GB 交換檔（先寫成 `/swapfile.new` 再改名，不留下半成品；寫入 fstab 一次）；`dnf install docker`、啟用並啟動 docker | `docker=active swap=1 dirs=755,700` |
+| B `host-init-ca` | 以 HTTPS（TLS 1.2 以上）取 AWS 公開的 `…/ap-southeast-2-bundle.pem`，至少一張憑證且能解析才放到 `/etc/rac/rds-ca-bundle.pem`（0644） | `ca-bundle=644` |
+| C `host-init-files` | 放置 `host_files()` 的 17 個檔案：內容以 base64 傳（含繁體中文，不直接放進 JSON）、附 sha256；安裝前比對雜湊（不符就在安裝之前失敗）、安裝後再比對一次並檢查權限 | `files=17` |
+| D `host-init-units` | `daemon-reload`；**啟用但不啟動**兩個池、Caddy 與 5 個排程計時器（排程的 `.service` 由計時器觸發，不單獨啟用） | `enabled=8` |
+| E `host-init-secrets` | 以主機角色執行 `rac-render-env-app`，確認取得全部應用程式機密、`/run/rac` 是 tmpfs 且權限為 700／600；**只印數量，不印任何值**，結束時（含失敗）立即刪除環境檔 | `secrets=<數量> fs=tmpfs mode=700/600` |
+| F `host-init-sshd` | 停用主機內的 sshd（Amazon Linux 2023 預設啟用並監聽 `0.0.0.0:22`）；之後的管理只走 SSM | `sshd=inactive port22=0 ssm=active` |
+
+- **可重複執行**（回寫後的版本已在真實主機以執行器重跑一次，六段的固定輸出行全部符合）：A 做過的不重做、B 與 C 重新放置相同的內容、D 與 F 的啟用與停用沒有副作用；任何一行失敗就停止（`set -eu`）。**沒有任何一段啟動 `rac-*` 單元**（兩個池由部署與重啟啟動、Caddy 在 6.2、計時器在 7.1），測試掃描所有腳本確認。腳本只用 ASCII、沒有機密名稱與值（機密只在 E 於主機上取出並在檢查後刪除）。
+- **一般設定檔（`--vars-file`）**：`plain.env` 的內容來自一般設定（非機密，例如 `aws-demo.vars`，`*.vars` 已被 `.gitignore` 忽略），C 因此需要 `provision --vars-file …`；沒有給時 C 只留說明、不輸出指令，執行到那裡以代碼 4 停止（A、B 照常）。檔案只能放一般設定：含機密變數、已淘汰的變數、不認得的變數或缺少必要設定都在呼叫任何指令之前被拒絕，訊息只有變數名稱。
+- **SSH 與「沒有 22」**：規格的「沒有 22」指對外——安全群組沒有 22 的規則、沒有金鑰對，所以外部連不進來；Amazon Linux 2023 的 sshd 預設仍在主機內監聽，F 把它停用，讓「只能經 SSM 連入」在主機內也成立。
+- **雲端執行時發現的差異（2026-11-17，已回寫）**：①AL2023 的 `/tmp` 是記憶體檔案系統，暫存檔一律放 `/var/tmp`（2 GB 的主機不要把大檔放在 `/tmp`）；②RDS 的 CA 套件含 3 張憑證（第一張 `Amazon RDS ap-southeast-2 Root CA RSA2048 G1`，2061 年到期），RDS 實際使用的 CA 是 `rds-ca-rsa2048-g1`，與套件吻合；③docker 25.0.x、系統內建 `aws-cli/2.38`，不需另外安裝；④Windows 上的 Git Bash 會把以 `/` 開頭的命令列引數改寫成 Windows 路徑，手動查 SSM 參數要設 `MSYS_NO_PATHCONV=1`（執行器以 `subprocess` 呼叫不受影響）；⑤執行器在 Windows 把輸出重設為主控台編碼，導向檔案時是 cp950，要讀輸出請設 `PYTHONUTF8=1`；⑥`--only` 不能與 `--group` 同用。
+- **仍未驗證**：ODBC Driver 18 的 `ServerCertificate` 是否接受這份 CA 套件（task 5.2 才實測）；`systemd-analyze verify` 只在現場驗證過（對我們的單元沒有警告），沒有寫進計畫步驟；Caddy 與兩個池在主機上的實際啟動。
 
 ### 執行器（`scripts/aws_demo.py`）
 
@@ -535,7 +556,7 @@ flowchart LR
 
 | 子命令 | 做什麼（對應的計畫） | 範例 |
 |---|---|---|
-| `provision` | 建立環境（`build_plan`）：`--group` 只做某幾組、`--secrets-file` 提供機密的值、`--accept-cost` 同意建立計費資源 | `python scripts/aws_demo.py provision --account-id 123456789012 --notify-email ops@example.com --accept-cost --execute` |
+| `provision` | 建立環境（`build_plan`）：`--group` 只做某幾組、`--secrets-file` 提供機密的值、`--vars-file` 提供一般設定（主機初始化放置 `plain.env` 用）、`--accept-cost` 同意建立計費資源 | `python scripts/aws_demo.py provision --account-id 123456789012 --notify-email ops@example.com --accept-cost --execute` |
 | `deploy` | 部署（`deploy_plan`）：`--tag` 是提交短碼，省略時取目前 git 的短提交；第一次部署用 `--group` 分組執行（`build`，然後 `snapshot`、`migrate`；`restart`、`verify` 留到 `create-admin` 之後） | `python scripts/aws_demo.py deploy --account-id 123456789012 --tag abc1234 --execute` |
 | `rollback` | 回復（`rollback_plan`）：只把兩個池換回舊標籤，不動資料庫 | `python scripts/aws_demo.py rollback --account-id 123456789012 --tag abc1234 --execute` |
 | `teardown` | 拆除（`teardown_plan`）：必須明確選 `--final-snapshot` 或 `--no-final-snapshot`（互斥、沒有預設值；真正執行時沒選會在呼叫任何指令前被拒絕） | `python scripts/aws_demo.py teardown --account-id 123456789012 --no-final-snapshot --execute` |
@@ -544,10 +565,11 @@ flowchart LR
 - **單步執行**：`--only STEP`（步驟代碼見預覽或上面的步驟總表）只處理那一步；`--only STEP --yes` 執行並**不再詢問**確認（確認由呼叫者針對該步驟明確給出）；`--yes` 只能與 `--only` 一起用，沒有「整份計畫一律同意」；`--only` 與 `--group` 不能一起用。
 - **取回先前步驟的結果**：步驟之間以 `{{名稱}}` 傳遞擷取值（例如 `vpc-id`）。單步或分組執行時，缺少的值只用**唯讀**的方式向 AWS 取回（建立資源的步驟只重跑它的「已存在」查詢，純查詢的步驟重跑自己）；SSM 命令編號之類無法安全取回的值會要求先執行產生它的步驟，不會為了取值而重複建立任何東西。
 - **`--accept-cost`（只有 `provision`）**：沒有它時，建立 RDS、EC2 與 Elastic IP 的步驟只留說明、不輸出指令，預覽仍會顯示費用預估，真正執行到那一步會**停止**（結束代碼 4）；有它時，建立計費資源前先顯示預估（約 US$1.6／日、到 2026-12-31 約 US$75；牌價粗估，以 AWS 帳單頁為準），之後仍逐步確認。`--only … --yes` 也需要它。
+- **`--vars-file`（只有 `provision`）**：一般設定（非機密，`KEY=VALUE`、UTF-8、不做變數插值；建議檔名 `aws-demo.vars`，`*.vars` 已被 `.gitignore` 忽略），主機初始化的 `host-init-files` 用它產生 `/etc/rac/plain.env`。沒有它時那一步只留說明、不輸出指令，執行到那裡以代碼 4 停止；有它時，檔案在呼叫任何指令之前先檢查（不得含機密變數、已淘汰與不認得的變數，必要設定要齊全），訊息只有變數名稱，預覽顯示「一般設定檔：N 個設定」。
 - **機密**：值來自 `--secrets-file`（`KEY=VALUE`、UTF-8、**不做變數插值**；建議檔名 `aws-demo.secrets`，`*.secrets` 已被 `.gitignore` 忽略）或由腳本隨機產生（`SECRET_KEY` 64 位十六進位、資料庫兩個密碼 40 字且只含英數與 `-_`）；`DATABASE_URL` 由腳本用 RDS 端點與專屬登入組成（`Encrypt=yes` 加 RDS 的 CA 套件路徑，**沒有 `TrustServerCertificate`**，密碼經 URL 編碼）。檔案只能放來自你的機密：由腳本產生或組成的名稱與未知的名稱會被拒絕，選取的步驟需要的機密缺漏時列出名稱（不顯示任何值）。值只經暫存檔（權限限本人、**用後一定刪除，含失敗與中斷**）交給 `aws ssm put-parameter --cli-input-json file://…`，不進命令列、輸出與日誌，所有輸出另外經過遮蔽（出現已知的機密值就以 `***` 取代）。**只有建立該參數的步驟能產生新值**；其他步驟（例如建立 RDS 用的主要使用者密碼）一律從 SSM 讀回已存在的值，讀不到就失敗，絕不為已存在的資源另外產生一個沒有存下來的密碼。已存在的參數不覆寫。
 - **輪詢**：有間隔與上限，逾時時說明等待了多久與最後一次的狀態；命令錯誤視為「還沒好」（例如 SSM 命令剛送出時 `InvocationDoesNotExist`）；SSM 命令進入 `Failed`、`Cancelled`、`TimedOut` 立即停止，並印出該命令錯誤輸出的前 500 字（主機腳本的訊息是英文、不含機密）。
 - **DuckDNS**：用標準函式庫呼叫 `https://www.duckdns.org/update`；權杖來自環境變數 `DUCKDNS_TOKEN`，不經命令列、不傳給 `aws` 與 `git` 子行程，任何輸出與例外都不含權杖或含權杖的網址（例外只記錄類別）；先唯讀查出 Elastic IP，顯示後由你確認才更新，只接受單層的 `*.duckdns.org` 子網域。
-- **結束代碼**：0 成功；1 失敗（指令失敗、驗證不符、逾時）；2 用法錯誤（區域、帳號、未選最終快照等，沒有呼叫任何指令）；3 你拒絕或沒有明確回覆；4 步驟被擋下（沒有 `--accept-cost`、尚未選擇最終快照）。
+- **結束代碼**：0 成功；1 失敗（指令失敗、驗證不符、逾時）；2 用法錯誤（區域、帳號、未選最終快照等，沒有呼叫任何指令）；3 你拒絕或沒有明確回覆；4 步驟被擋下（沒有 `--accept-cost`、沒有 `--vars-file`、尚未選擇最終快照）。
 - **Windows**：子行程設定 `AWS_CLI_FILE_ENCODING=UTF-8`，暫存檔以 UTF-8 寫入；主控台是 cp950 時不能編碼的字元以 `?` 取代，不會因此中斷。
 
 **人工確認點**（執行器不會替你做的事）：
@@ -556,7 +578,7 @@ flowchart LR
 |---|---|
 | `confirm-sns-subscriptions` | 每位收件人開啟 AWS 寄的訂閱確認信並點擊確認（沒收到先看垃圾郵件匣）；`--yes` 不能代替人工動作，此步驟一律詢問 |
 | `create-rds-instance`、`launch-ec2`、`allocate-eip` | 開始計費：看過費用預估並加上 `--accept-cost`，再逐步確認 |
-| 主機初始化 | 沒有計畫步驟（見上）：第一次雲端執行時在 SSM Session Manager 上現場撰寫、逐步確認，之後回寫（task 4.5） |
+| `host-init-*` | 不需要你動手，但每一步仍逐步確認（或你針對該步驟明確給 `--only … --yes`）；放置檔案要提供 `--vars-file`，看過內容再同意；`host-init-sshd` 會停用主機內的 sshd（之後只能用 SSM 管理） |
 | `create-admin` | 由你在 SSM 終端機自己執行並輸入密碼，不經腳本與對話（task 5.5） |
 | `duckdns` | 確認查到的 Elastic IP 正確，才會更新網域 |
 | `teardown` 的保留或不保留最終快照 | 明確選擇 `--final-snapshot` 或 `--no-final-snapshot`，沒有預設值 |
@@ -568,7 +590,7 @@ flowchart LR
 
 ### 資料庫初始化與連線探測（`scripts/aws_demo_bootstrap_db.py`、`scripts/aws_demo_probe_db.py`）
 
-兩支腳本都在**主映像內以一次性容器執行**（design D7、D8）：映像不含 `scripts/`（`.dockerignore`），所以由主機把腳本唯讀掛入；各自獨立、不匯入其他維運腳本，所以可以單獨掛入（初始化不匯入 `app/`；探測只匯入應用程式的引擎工廠，容器的工作目錄是 `/app`，腳本由別處掛入時會把工作目錄加進匯入路徑）。它們不是執行器的子命令：第一次雲端執行（task 5.2）時，由使用者在主機上以 SSM 逐步確認執行，並回寫成計畫步驟（task 4.5）。順序固定為「建置映像 → 資料庫初始化 → 連線探測 → 快照與 migration」，探測沒有通過就**停止**，不進入 migration，也不改用放寬的設定。
+兩支腳本都在**主映像內以一次性容器執行**（design D7、D8）：映像不含 `scripts/`（`.dockerignore`），所以由主機把腳本唯讀掛入；各自獨立、不匯入其他維運腳本，所以可以單獨掛入（初始化不匯入 `app/`；探測只匯入應用程式的引擎工廠，容器的工作目錄是 `/app`，腳本由別處掛入時會把工作目錄加進匯入路徑）。它們不是執行器的子命令，也還沒有計畫步驟：第一次雲端執行（task 5.2）時，由使用者在主機上以 SSM 逐步確認執行；task 4.5 只回寫 4.2 至 4.4 的雲端執行，5.2 發現的差異留在那一批回寫。順序固定為「建置映像 → 資料庫初始化 → 連線探測 → 快照與 migration」，探測沒有通過就**停止**，不進入 migration，也不改用放寬的設定。
 
 | | `aws_demo_bootstrap_db.py`（初始化） | `aws_demo_probe_db.py`（探測） |
 |---|---|---|

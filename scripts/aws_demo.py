@@ -9,6 +9,8 @@
         # 預覽完整的建立計畫；`--group network` 只看某一組（可重複）；`--execute` 逐步確認並執行
     python scripts/aws_demo.py provision ... --accept-cost --execute
         # 沒有 --accept-cost 時，建立 RDS、EC2、Elastic IP 的步驟只留說明、不輸出指令，執行到那一步會停止
+    python scripts/aws_demo.py provision ... --vars-file aws-demo.vars --group host-init --execute
+        # 主機初始化（交換檔、docker、RDS 的 CA 套件、主機檔案、單元啟用、停用 sshd）；放置檔案的那一步需要 --vars-file
     python scripts/aws_demo.py provision ... --only create-host-sg --yes
         # 只執行指定的單一步驟，不問確認（--yes 必須和 --only 一起用，沒有「整份計畫一律同意」）
     python scripts/aws_demo.py deploy --account-id ... --tag abc1234 --execute      # 快照 -> 建置 -> 遷移 -> 重啟 -> 驗證
@@ -24,7 +26,8 @@
 - 值只經暫存檔（權限限本人、用後一定刪除）交給 `aws ssm put-parameter --cli-input-json file://…`，不進命令列、輸出與日誌；
   所有輸出另外經過遮蔽（出現已知的機密值就以 *** 取代）。
 
-腳本沒有對真實 AWS 驗證過；第一次實際執行在雲端批次（tasks 4.x），發現的差異回寫到計畫模組與測試。
+`provision` 的各組與 `host-init` 已在雲端批次（tasks 4.2 至 4.5）對真實 AWS 執行並回寫差異；`deploy`、`rollback`、`teardown` 與 `duckdns`
+尚未對真實 AWS 執行，之後的批次發現的差異同樣先回寫到計畫模組與測試。
 """
 from __future__ import annotations
 
@@ -65,6 +68,7 @@ MIN_REDACT_LENGTH = 6                     # 太短的字串不當作機密遮蔽
 SNAPSHOT_REPLY_ATTEMPTS = 3               # 例外清單最多問幾次：沉默或打錯名稱都算一次，用完就停止
 NO_EXCEPTIONS_REPLY = "沒有例外"          # 明確表示「沒有要保留的部署前快照」的唯一說法；沉默與 Enter 不算
 SECRETS_FILE_HINT = "aws-demo.secrets"
+VARS_FILE_HINT = "aws-demo.vars"
 DISPLAY_CAPTURES = ("remaining-snapshots",)      # 擷取後只印出給人看、不被其他步驟使用的名稱；輸出可以是空的
 SNAPSHOT_STEP_PREFIX = "td-delete-snapshot-"    # 拆除計畫裡每個部署前快照一個刪除步驟：td-delete-snapshot-<名稱>
 
@@ -222,6 +226,20 @@ def read_secrets_file(path: str | None) -> dict[str, str]:
     file = Path(path)
     if not file.is_file():
         raise DemoError(f"找不到機密檔：{file.name}", EXIT_USAGE)
+    values = dotenv_values(file, encoding="utf-8-sig", interpolate=False)
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def read_vars_file(path: str | None) -> dict[str, str] | None:
+    """`--vars-file`：一般設定（非機密），KEY=VALUE，UTF-8（容許 BOM），不做變數插值。沒有給時回傳 None（主機初始化放置檔案的那一步被擋下）。
+    內容是否合法（不得含機密變數、不認得的變數、缺少必要設定）由計畫模組檢查，訊息只含變數名稱。"""
+    if not path:
+        return None
+    from dotenv import dotenv_values
+
+    file = Path(path)
+    if not file.is_file():
+        raise DemoError(f"找不到一般設定檔：{file.name}", EXIT_USAGE)
     values = dotenv_values(file, encoding="utf-8-sig", interpolate=False)
     return {key: value for key, value in values.items() if value is not None}
 
@@ -730,6 +748,7 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--budget-usd", type=int, default=plan.BUDGET_LIMIT_USD)
     provision.add_argument("--with-secret", action="append", default=[], metavar="NAME", help="除必要機密之外要建立的機密名稱")
     provision.add_argument("--secrets-file", help=f"機密的值（KEY=VALUE；例如 {SECRETS_FILE_HINT}，不進版本庫）")
+    provision.add_argument("--vars-file", help=f"一般設定（非機密，KEY=VALUE；例如 {VARS_FILE_HINT}，不進版本庫）：主機初始化放置 plain.env 時使用，沒有它那一步被擋下")
     provision.add_argument("--accept-cost", action="store_true", help="同意建立計費資源（沒有它，RDS、EC2、Elastic IP 的步驟不輸出指令）")
 
     deploy = sub.add_parser("deploy", parents=[common], help="部署：快照、建置映像、遷移、重啟兩個池、驗證")
@@ -759,7 +778,7 @@ def _target_from(args: argparse.Namespace) -> plan.Target:
 
 def _build_steps(
     args: argparse.Namespace, target: plan.Target, *, tag_default: Callable[[], str], today: date,
-    delete_snapshots: tuple[str, ...] | None = None,
+    delete_snapshots: tuple[str, ...] | None = None, plain: dict[str, str] | None = None,
 ) -> tuple[list[plan.Step], list[plan.Step], list[str]]:
     """回傳（整份計畫, 這次要處理的步驟, 預覽用的提醒）。整份計畫用來在擷取值遺失時唯讀取回；
     `--group` 取其中幾組（部署會自動帶上找主機的步驟），`--only` 取單一步驟。"""
@@ -768,8 +787,8 @@ def _build_steps(
         raise DemoError("--only 與 --group 不能一起用", EXIT_USAGE)
     notes: list[str] = []
     if args.command == "provision":
-        catalog = plan.build_plan(target, accept_cost=args.accept_cost)
-        narrowed = plan.build_plan(target, accept_cost=args.accept_cost, groups=groups) if groups else catalog
+        catalog = plan.build_plan(target, accept_cost=args.accept_cost, plain=plain)
+        narrowed = plan.build_plan(target, accept_cost=args.accept_cost, groups=groups, plain=plain) if groups else catalog
     elif args.command == "deploy":
         tag = args.tag or tag_default()
         catalog = plan.deploy_plan(target, tag)
@@ -835,9 +854,12 @@ def main(
         provided = read_secrets_file(args.secrets_file) if args.command == "provision" else {}
         for value in provided.values():
             redactor.add(value)
-        catalog, selected, notes = _build_steps(args, target, tag_default=tag_default, today=today)
+        plain = read_vars_file(args.vars_file) if args.command == "provision" else None
+        catalog, selected, notes = _build_steps(args, target, tag_default=tag_default, today=today, plain=plain)
         header += notes
         if args.command == "provision":
+            if plain is not None:
+                header.append(f"一般設定檔：{len(plain)} 個設定，檢查通過（只檢查名稱，值不顯示）。")
             if args.secrets_file:
                 _check_secrets_file(target, provided, selected)
                 header.append("機密檔：名稱與完整性檢查通過（只檢查名稱，值不顯示）。")

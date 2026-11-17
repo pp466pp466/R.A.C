@@ -1619,6 +1619,38 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 - **本機 SQL Server `project` 的升級（2026-11-11，Claude 依使用者要求執行）**：先備份到 SQL Server 預設備份目錄（`COPY_ONLY`、`CHECKSUM`，`project_pre_0017_20261111_102044.bak`），`RESTORE VERIFYONLY` 通過、`RESTORE HEADERONLY` 確認為 `project` 的完整備份、伺服器確認檔案存在；`alembic upgrade head` 由 `0016` 升到 `0017`，`alembic current` 為 `0017_story_preference (head)`，`alembic check` 沒有差異；唯讀查詢確認兩個新欄位的型別、可空與預設值正確，既有使用者的 `story_preference` 為 `all`、既有版本的 `audience` 為空（不回填），四張主要資料表的列數不變；**`flask seed-scripts --dry-run` 回報內建劇本「沒有變動 1（共 1 份）」**（升級前由舊程式存入的真實雜湊在新程式下仍相同，設計 D1 的真實資料證明）。第一次備份嘗試沒有真的寫出檔案（`BACKUP` 結果集沒讀完），當時沒有升級，已重做並驗證後才升級（細節在結構文件第 14 節）。**Azure 仍在 `0016`，沒有動。**
 - **第 1 次全套的結果不採信**：36 失敗、7 error（9601 通過，1185 秒）；我用 `| tail` 截斷了輸出，只看得到最後 14 項（都在 `test_seed_scripts`），這些測試單獨重跑 61 項全過，之後兩次完整重跑（第 2 次的 3 項是上一點，第 3 次 0 失敗）都沒有重現。**原因未查明**；不把它當成通過的依據，只記錄有過這次異常。
 
+## AWS 展示環境（aws-demo-environment）
+
+`APP_ENV=staging` 的單機展示環境（AWS 雪梨 `ap-southeast-2`、Free plan 抵用金、展示期到 2026-12-31；不是 production）。步驟、拓撲與執行器的完整說明在 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 第 8 節；計畫在 `scripts/aws_demo_plan.py`（純函式、有測試），執行器是 `scripts/aws_demo.py`（預設只預覽，`--execute` 才逐步確認並執行）。
+
+```powershell
+# 預覽主機初始化（沒有 --execute 不會呼叫任何外部指令）
+python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-email <信箱> --vars-file aws-demo.vars --group host-init
+# 單步執行（確認由你針對該步驟明確給出）
+python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-email <信箱> --vars-file aws-demo.vars --only host-init-sshd --yes
+```
+
+### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5 已記入，8.4 收尾時補齊）
+
+**已對真實 AWS 執行並逐項以唯讀指令驗證**（資源都帶 `Project=rac-demo`、`Environment=staging` 標籤）：
+
+| 項目 | 驗證結果 |
+|---|---|
+| 預算與 SNS | 預算 US$75（季、60% 與 90% 兩個門檻、不含抵用金）；SNS 主題與信箱訂閱，訂閱確認信由使用者點擊後查證沒有 `PendingConfirmation` |
+| 網路 | 主機安全群組只開 80、443（沒有 22）；資料庫安全群組只允許主機安全群組連 1433（0 個 CIDR） |
+| 角色與儲存 | 角色只附 SSM 受管政策與只讀專案參數路徑與傳檔儲存貯體的內嵌政策；S3 四項公開封鎖皆開、SSE-S3、標籤 |
+| 機密 | 8 個 SSM SecureString（Standard 層、帶標籤）；只用 `describe-parameters` 看名稱與型別，沒有讀取值 |
+| RDS | SQL Server Express 15.00.4500.2.v1、`db.t3.micro`、20 GB gp3、加密、不公開、單一可用區、備份保留 1 天、只掛資料庫安全群組；`DATABASE_URL` 已寫入 SSM（`Encrypt=yes` 加 CA 套件路徑，沒有 `TrustServerCertificate`） |
+| EC2 | `t3.small`、Amazon Linux 2023、gp3 20 GB 加密、IMDSv2 `required` 且 hop limit 1、沒有金鑰對、只掛一個安全群組；Elastic IP 已綁定；SSM `PingStatus=Online` |
+| 告警 | EC2 狀態檢查告警（建立時為 `INSUFFICIENT_DATA`，正常） |
+| 主機初始化（`host-init` 組；回寫後的版本於 2026-11-17 以執行器在真實主機重跑一次，六段的固定輸出行全部符合、重跑沒有副作用） | 2 GB 交換檔（總計 swap 約 2047 MB）、docker 25.0.18、`/etc/rac` 0755 與 `/var/lib/rac/caddy` 0700；RDS CA 套件 3 張憑證、`openssl` 可解析；17 個檔案安裝前後雜湊與權限皆吻合；8 個單元已啟用、**沒有任何 active 或 failed 的單元**；`rac-render-env-app` 以主機角色取得 6 個機密（3 個必要加 3 個 `--with-secret`）、`/run/rac` 為 tmpfs（700）、環境檔 600，驗完刪除；sshd 已停用，只剩回送位址的監聽，SSM Agent active |
+
+**發現並已回寫的差異**：①RDS 備份保留 7 天被 Free plan 拒絕（`FreeTierRestrictionError`），改為 1 天（規格只要求大於 0）；②Amazon Linux 2023 的 sshd 預設在主機內監聽 `0.0.0.0:22`（對外沒有，因為安全群組沒有規則且沒有金鑰對），新增 `host-init-sshd` 停用；③主機初始化原本不在計畫內，回寫成 `host-init` 組（含 17 個檔案的雜湊與權限檢查）；④主機初始化的「找出主機」改成獨立的唯讀步驟，單步或另一次執行都不再需要 `--accept-cost`；⑤`--only` 不能與 `--group` 同用；⑥Windows 上 Git Bash 會改寫以 `/` 開頭的命令列引數（手動查 SSM 參數要設 `MSYS_NO_PATHCONV=1`）、執行器輸出導向檔案時是 cp950（讀輸出請設 `PYTHONUTF8=1`）；⑦`iam list-account-aliases` 被組織的 SCP 拒絕（不需要，無妨）；⑧`--only` 單步執行時，`subscribe-sns-0`、`create-instance-profile`、`create-bucket`、`wait-instance-profile`、`get-default-vpc` 沒有「驗證通過」行（計畫本來就沒有驗證指令）。
+
+**仍在計費的資源**：RDS、EC2、Elastic IP、EBS（合計約 US$1.64／日，牌價粗估）；2026-11-17 抵用金餘額 US$139.85（到期 2027-05-11）、Cost Explorer 11 月至今約 0。拆除用 `teardown`（尚未對真實 AWS 執行）。
+
+**未驗證**：新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、映像建置與執行（5.1）、資料庫初始化與 ODBC Driver 18 的 `ServerCertificate` 是否接受 RDS 的 CA 套件（5.2）、`alembic upgrade head` 與 `seed-scripts`（5.4）、兩個池與 Caddy 的啟動與分流（6.x）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
+
 ## 撰寫新端點：權限與 IDOR 測試
 
 屬於使用者的資源（對話、訊息……）的每個讀寫端點，都要遵守下列規則，並用 `tests/support/idor.py` 的框架測試：

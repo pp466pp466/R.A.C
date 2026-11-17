@@ -2,6 +2,8 @@
 
 只比對 scripts/aws_demo_plan.py 產生的資料，不呼叫 AWS 指令，也不可能在測試中誤建資源。
 """
+import base64
+import hashlib
 import inspect
 import json
 import re
@@ -26,6 +28,7 @@ PLAIN = {
     "MAIL_SMTP_HOST": "smtp.example.com", "MAIL_SMTP_PORT": "587", "MAIL_FROM": "service@example.com",
     "ALERT_EMAIL_TO": "ops@example.com", "LOG_LEVEL": "INFO",
 }
+HOST_INIT_IDS = ("host-init-system", "host-init-ca", "host-init-files", "host-init-units", "host-init-secrets", "host-init-sshd")
 
 
 def target(**overrides):
@@ -34,8 +37,8 @@ def target(**overrides):
     return plan.Target(**values)
 
 
-def full_plan(accept_cost=True, **overrides):
-    return plan.build_plan(target(**overrides), accept_cost=accept_cost)
+def full_plan(accept_cost=True, plain=PLAIN, **overrides):
+    return plan.build_plan(target(**overrides), accept_cost=accept_cost, plain=plain)
 
 
 def by_id(steps):
@@ -577,7 +580,8 @@ def test_deployment_order_overlaps_ec2_with_the_rds_wait():
 
 def test_wait_steps_always_have_a_timeout_and_a_polling_interval():
     polls = [s for s in full_plan() if s.poll]
-    assert {s.id for s in polls} == {"wait-instance-profile", "wait-ec2-running", "wait-ssm-online", "wait-rds-available"}
+    host_init_waits = {f"wait-{step_id}" for step_id in HOST_INIT_IDS}
+    assert {s.id for s in polls} == {"wait-instance-profile", "wait-ec2-running", "wait-ssm-online", "wait-rds-available"} | host_init_waits
     for step in polls:
         assert step.argv == () and step.timeout_seconds and step.interval_seconds
         assert 0 < step.interval_seconds < step.timeout_seconds
@@ -1548,3 +1552,272 @@ def test_deleting_snapshots_does_not_touch_the_other_teardown_guards():
         assert base[step_id] == with_snapshots[step_id], step_id
     rds = with_snapshots["td-delete-rds"]
     assert argument_after(rds.argv, "--final-db-snapshot-identifier") == FINAL_NEW, "保留最終快照的選擇不受影響"
+
+
+# ---- 4.5 主機初始化（host-init）：4.4 在主機上現場撰寫並驗證過，這裡是回寫後的計畫 -----------------------------------------
+
+
+def host_init_steps(*, plain=PLAIN, accept_cost=True, **overrides):
+    return plan.build_plan(target(**overrides), accept_cost=accept_cost, groups=("host-init",), plain=plain)
+
+
+def host_init_sends(**kwargs):
+    return {s.id: s for s in host_init_steps(**kwargs) if is_host_command(s)}
+
+
+def put_lines(step):
+    """放置檔案那一步的每個 `put 權限 路徑 sha256 base64`。"""
+    return [line.split(" ") for line in script_lines(step) if line.startswith("put ")]
+
+
+def test_host_init_is_the_last_group_and_looks_up_the_host_then_has_six_ssm_steps_each_followed_by_its_wait_step_in_a_fixed_order():
+    assert plan.GROUPS[-1] == "host-init"
+    steps = host_init_steps()
+    expected = ["host-init-find-host", *(name for step_id in HOST_INIT_IDS for name in (step_id, f"wait-{step_id}"))]
+    assert [s.id for s in steps] == expected and {s.group for s in steps} == {"host-init"}
+    assert [s.id for s in steps if is_host_command(s)] == list(HOST_INIT_IDS)
+
+
+def test_host_init_finds_the_host_by_name_and_tags_with_its_own_capture_so_it_never_needs_the_billing_steps():
+    steps = host_init_steps(accept_cost=False)
+    find = steps[0]
+    assert find.id == "host-init-find-host" and find.capture == "host-instance-id" == plan.HOST_INSTANCE_CAPTURE
+    text = " ".join(find.argv)
+    for required in ("Name=tag:Name,Values=rac-demo-staging-host", "Name=tag:Project,Values=rac-demo",
+                     "Name=tag:Environment,Values=staging", "Name=instance-state-name,Values=running"):
+        assert required in text
+    assert "length(Reservations[].Instances[])" in " ".join(find.verify[0].argv) and find.verify[0].expect == "1", "必須剛好一台"
+    assert not find.resource and not find.billing and not find.input_json and not find.exists_argv, "純查詢：單步執行時可以安全重跑"
+    assert "{{instance-id}}" not in "".join(" ".join(all_strings(s)) for s in steps), "不依賴建立主機的步驟（那一步需要 --accept-cost）"
+    assert_placeholders_resolve(steps)
+
+
+def test_host_init_needs_no_cost_acceptance_and_runs_after_the_database_url_exists_so_the_secrets_check_can_succeed():
+    assert not any(s.blocked or s.billing for s in host_init_steps(accept_cost=False))
+    assert_in_order(full_plan(), "wait-ssm-online", "put-parameter-DATABASE_URL", "create-ec2-status-alarm", "host-init-find-host", "host-init-system", "host-init-secrets")
+
+
+def test_without_the_general_settings_only_the_file_placing_step_is_blocked_and_keeps_its_capture():
+    steps = by_id(host_init_steps(plain=None))
+    blocked = [s for s in steps.values() if s.blocked]
+    assert [s.id for s in blocked] == ["host-init-files"]
+    step = blocked[0]
+    assert step.argv == () and step.input_json is None and step.verify == () and "--vars-file" in step.title
+    assert step.capture == "host-init-files-command-id"
+    assert "{{host-init-files-command-id}}" in steps["wait-host-init-files"].poll.argv, "之後的等待步驟仍有擷取來源"
+    assert_placeholders_resolve(full_plan(plain=None))
+
+
+def test_a_general_settings_file_with_a_secret_or_an_unknown_name_is_rejected_without_echoing_the_value():
+    with pytest.raises(plan.PlanError) as error:
+        host_init_steps(plain={**PLAIN, "GEMINI_API_KEY": SECRET_SENTINEL})
+    assert "GEMINI_API_KEY" in str(error.value) and SECRET_SENTINEL not in str(error.value)
+    with pytest.raises(plan.PlanError, match="NOT_A_REAL_SETTING"):
+        host_init_steps(plain={**PLAIN, "NOT_A_REAL_SETTING": "x"})
+    with pytest.raises(plan.PlanError, match="MAIL_SMTP_HOST"):
+        host_init_steps(plain={k: v for k, v in PLAIN.items() if k != "MAIL_SMTP_HOST"})
+    host_init_steps(plain=None)        # 沒有一般設定時只是擋下放置檔案的那一步，其餘照常
+
+
+def test_every_host_init_script_goes_through_ssm_with_ascii_only_and_no_secret_value_or_name():
+    sends = host_init_sends()
+    assert set(sends) == set(HOST_INIT_IDS)
+    for step in sends.values():
+        body = json.loads(step.input_json)
+        assert body["DocumentName"] == "AWS-RunShellScript" and body["InstanceIds"] == ["{{host-instance-id}}"], step.id
+        assert "file://{{input_file}}" in step.argv and "--cli-input-json" in step.argv and step.capture == f"{step.id}-command-id"
+        assert all(ord(char) < 128 for char in step.input_json), f"{step.id}：傳給 AWS 的 JSON 只能用 ASCII（Windows 以系統地區編碼讀 file://）"
+        text = script_text(step)
+        assert "--with-decryption" not in text and not plan.SECRET_REFERENCE.search(step.input_json), step.id
+        assert not any(var in text for var in plan.SECRET_VARS), f"{step.id}：腳本不得出現機密變數名稱"
+        assert plan.SSM_PREFIX not in text and "AKIA" not in text
+        assert int(body["Parameters"]["executionTimeout"][0]) >= 120
+        assert script_lines(step)[:2] == ["set -eu", "export HOME=/root"], f"{step.id}：任何一行失敗就停止，且 aws CLI 需要 HOME"
+
+
+def test_each_host_init_wait_step_fails_fast_and_checks_one_fixed_output_line():
+    steps = by_id(host_init_steps())
+    expected = {
+        "host-init-system": "docker=active swap=1 dirs=755,700",
+        "host-init-ca": "ca-bundle=644",
+        "host-init-files": "files=17",
+        "host-init-units": "enabled=8",
+        "host-init-secrets": "secrets=3 fs=tmpfs mode=700/600",
+        "host-init-sshd": "sshd=inactive port22=0 ssm=active",
+    }
+    assert len(plan.host_files(target(), PLAIN)) == 17 and len(plan.unit_parameter_names(target(), "app")) == 3
+    for step_id, line in expected.items():
+        send, wait = steps[step_id], steps[f"wait-{step_id}"]
+        assert "{{" + send.capture + "}}" in wait.poll.argv and "{{host-instance-id}}" in wait.poll.argv
+        assert wait.poll.expect == "Success" and {"Failed", "Cancelled", "TimedOut"} <= set(wait.poll_fail)
+        assert [c.expect for c in wait.verify] == [line], step_id
+        assert "StandardOutputContent" in " ".join(wait.verify[0].argv)
+        assert wait.timeout_seconds > int(json.loads(send.input_json)["Parameters"]["executionTimeout"][0]) and 0 < wait.interval_seconds < wait.timeout_seconds
+        key = line.split("=")[0]
+        assert f'echo "{key}=' in script_text(send), f"{step_id}：腳本最後要印出被驗證的那一行（{key}=…）"
+
+
+def test_the_system_step_makes_the_directories_a_two_gigabyte_swap_file_and_docker_and_never_leaves_a_half_written_swap_file():
+    text = script_text(host_init_sends()["host-init-system"])
+    for path, mode in plan.HOST_DIRECTORIES:
+        assert f"install -d -m {mode} -o root -g root {path}" in text
+    assert plan.SWAP_MB == 2048 and "dd if=/dev/zero of=/swapfile.new bs=1M count=2048" in text
+    assert text.index("chmod 600 /swapfile.new") < text.index("mkswap /swapfile.new") < text.index("mv /swapfile.new /swapfile") < text.index("swapon /swapfile\n")
+    assert "if [ ! -f /swapfile ]" in text and "swapon --show=NAME --noheadings | grep -qx /swapfile" in text, "做過的不重做"
+    assert "grep -q '^/swapfile ' /etc/fstab ||" in text, "fstab 只寫一次"
+    assert text.index("dnf install -y -q docker") < text.index("systemctl enable --now docker")
+
+
+def test_the_ca_step_downloads_only_over_https_checks_for_a_certificate_and_installs_it_where_the_connection_string_expects():
+    text = script_text(host_init_sends()["host-init-ca"])
+    assert "url=https://truststore.pki.rds.amazonaws.com/ap-southeast-2/ap-southeast-2-bundle.pem" in text
+    assert plan.rds_ca_bundle_url(target()) == "https://truststore.pki.rds.amazonaws.com/ap-southeast-2/ap-southeast-2-bundle.pem"
+    assert "--proto '=https'" in text and "--tlsv1.2" in text and "curl -fsS" in text
+    assert not re.search(r"\s-k\b|--insecure|http://", text)
+    assert text.index("grep -c 'BEGIN CERTIFICATE'") < text.index('[ "$count" -ge 1 ]') < text.index("openssl x509") < text.index("install -m 0644 -o root -g root"), "沒有憑證或無法解析就不放置"
+    assert f'"$tmp" {plan.RDS_CA_BUNDLE_PATH}' in text, "放到連線字串的 ServerCertificate 使用的路徑"
+    assert "trap 'rm -f \"$tmp\"' EXIT" in text, "暫存檔不留下"
+
+
+def test_the_files_step_places_exactly_the_host_files_with_their_hashes_modes_and_contents():
+    files = plan.host_files(target(), PLAIN)
+    lines = put_lines(host_init_sends()["host-init-files"])
+    assert plan.host_file_count() == len(files) == len(lines) == 17
+    assert [(m, p) for _, m, p, *_ in lines] == [(f.mode, f.path) for f in files], "順序與權限和 host_files() 相同"
+    for (_, mode, path, digest, payload), item in zip(lines, files):
+        raw = base64.b64decode(payload, validate=True)
+        assert raw.decode("utf-8") == item.content, path
+        assert digest == hashlib.sha256(raw).hexdigest() and len(digest) == 64, path
+    assert any(not f.content.isascii() for f in files), "有繁體中文內容的檔案（取出腳本的註解）：證明內容是以 base64 傳，不是直接放進 JSON"
+
+
+def test_the_files_step_carries_secret_names_only_inside_the_encoded_files_and_no_secret_value():
+    step = host_init_sends(with_secrets=("OPENROUTER_API_KEY",))["host-init-files"]
+    assert "{{secret:" not in step.input_json
+    decoded = "\n".join(base64.b64decode(line[4]).decode("utf-8") for line in put_lines(step))
+    assert "OPENROUTER_API_KEY" in decoded and SECRET_SENTINEL not in decoded
+    assert {line[2] for line in put_lines(step)} >= {plan.render_env_script_path("app"), plan.render_env_script_path("bootstrap")}, "兩支取出腳本都放得上去"
+    assert plan.RDS_CA_BUNDLE_PATH in decoded
+
+
+def test_the_files_script_stays_within_the_size_the_cloud_run_proved():
+    step = host_init_sends()["host-init-files"]
+    assert len(script_text(step)) < 32 * 1024, "雲端驗證過約 19 KB 的單一命令；超過 32 KB 之前要改成分批放置"
+
+
+@pytest.mark.parametrize("tamper", [True, False])
+def test_the_files_script_verifies_the_hash_before_installing_and_stops_on_a_mismatch(tamper):
+    """在 bash 內以假的 install 執行 put()：雜湊不符時在安裝之前就失敗；雜湊相符時才會呼叫 install。"""
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法執行腳本（不算通過）")
+    content = "hello 中文\n".encode("utf-8")
+    payload = base64.b64encode(content).decode("ascii")
+    digest = hashlib.sha256(content).hexdigest()
+    if tamper:
+        digest = ("0" if digest[0] != "0" else "1") + digest[1:]
+    head = plan._HOST_FILES_HEAD.replace("/var/tmp", "$d")
+    report = "trap 'echo \"installed=$([ -f \"$d/mark\" ] && echo yes || echo no)\"; rm -rf \"$d\"' EXIT"
+    script = "\n".join([
+        'd="$(mktemp -d)"',
+        'install() { echo called >> "$d/mark"; cp "$7" "$8"; }',
+        head,
+        report,
+        f'put 0644 "$d/target" {digest} {payload}',
+        'echo "files=$n"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    out = result.stdout.decode("utf-8", "replace")
+    if tamper:
+        assert result.returncode != 0 and "installed=no" in out and "files=" not in out, out
+    else:
+        assert "installed=yes" in out, (out, result.stderr.decode("utf-8", "replace"))
+
+
+def test_the_files_script_checks_the_hash_again_after_installing_and_the_mode_and_counts_the_files():
+    head = plan._HOST_FILES_HEAD
+    first, last = head.index("sha256sum -c - >/dev/null"), head.rindex("sha256sum -c - >/dev/null")
+    assert first < head.index('install -m "$1" -o root -g root "$tmp" "$2"') < last
+    assert '[ "$(stat -c %a "$2")" = "${1#0}" ]' in head
+    assert script_lines(host_init_sends()["host-init-files"])[-1] == 'echo "files=$n"'
+
+
+def test_unsafe_host_file_paths_and_modes_are_refused_when_building_the_script():
+    item = plan.HostFile("/etc/rac/ok", "0644", "x\n")
+    assert plan._host_files_lines((item,))[-2].startswith("put 0644 /etc/rac/ok ")
+    for path in ("/etc/rac/a b", "/etc/rac/a;b", "etc/rac/a", "/etc/rac/$x", "/etc/rac/a\n", "/etc/rac/'a'"):
+        with pytest.raises(plan.PlanError, match="路徑或權限"):
+            plan._host_files_lines((plan.HostFile(path, "0644", "x\n"),))
+    for mode in ("644", "0999", "0644 ", "06440", "u+x"):
+        with pytest.raises(plan.PlanError, match="路徑或權限"):
+            plan._host_files_lines((plan.HostFile("/etc/rac/ok", mode, "x\n"),))
+
+
+def test_the_units_step_enables_every_unit_the_host_files_define_and_starts_nothing():
+    text = script_text(host_init_sends()["host-init-units"])
+    units = plan.host_enabled_units()
+    paths = {f.path for f in plan.host_files(target(), PLAIN)}
+    assert len(units) == 8 and len(set(units)) == 8
+    assert all(f"{plan.UNIT_DIR}/{unit}" in paths for unit in units), "啟用的單元都是這次放置的檔案"
+    assert {"rac-cs.service", "rac-rpg.service", "rac-caddy.service"} <= set(units)
+    timers = {path.rsplit("/", 1)[1] for path in paths if path.endswith(".timer")}
+    assert {unit for unit in units if unit.endswith(".timer")} == timers, "每個計時器都啟用"
+    assert not any(unit.startswith("rac-job-") and unit.endswith(".service") for unit in units), "排程的 .service 由計時器觸發，不單獨啟用"
+    assert f"systemctl enable {' '.join(units)} >/dev/null" in text
+    assert text.index("systemctl daemon-reload") < text.index("systemctl enable")
+    assert not re.search(r"systemctl (start|restart|reload-or-restart|try-restart)|--now", text), "啟動留給部署與排程階段"
+
+
+def test_no_host_init_script_starts_a_unit_of_this_project():
+    for step_id, text in host_scripts(host_init_steps()).items():
+        assert not re.search(r"systemctl\s+(start|restart)\s+\S*rac-", text), step_id
+        for line in text.splitlines():
+            if "--now" in line:
+                assert re.search(r"systemctl (enable|disable) --now (docker|sshd\.service) >/dev/null$", line), f"{step_id}：只有 docker 與 sshd 可以用 --now"
+
+
+def test_the_secrets_check_renders_to_memory_prints_only_counts_and_deletes_the_file():
+    text = script_text(host_init_sends()["host-init-secrets"])
+    assert plan.render_env_script_path("app") in {f.path for f in plan.host_files(target(), PLAIN)}
+    assert text.index("trap 'rm -f /run/rac/app.env' EXIT") < text.index(plan.render_env_script_path("app")), "渲染之前就設好刪除"
+    assert "stat -f -c %T /run/rac" in text and f"{plan.RUN_DIR}/app.env" in text
+    assert not re.search(r"\bcat\b|\bcut\b|\bsed\b|\bawk\b|echo[^\n]*\$value|--with-decryption|/dev/stdout", text), "不印出環境檔的內容"
+    assert text.splitlines()[-1] == 'echo "secrets=$count fs=$fs mode=$mode"'
+    chosen = ("OPENROUTER_API_KEY", "GOOGLE_OAUTH_CLIENT_SECRET")
+    assert script_text(host_init_sends(with_secrets=chosen)["host-init-secrets"]) == text, "腳本本身不依機密數量改變；數量只在預期輸出"
+    assert by_id(host_init_steps(with_secrets=chosen))["wait-host-init-secrets"].verify[0].expect == "secrets=5 fs=tmpfs mode=700/600"
+
+
+def test_the_sshd_step_disables_only_sshd_and_keeps_the_ssm_agent_checked():
+    text = script_text(host_init_sends()["host-init-sshd"])
+    assert "systemctl disable --now sshd.service" in text and text.count("systemctl disable") == 1
+    assert "if systemctl list-unit-files sshd.service" in text, "沒有 sshd 的映像也不會失敗"
+    assert "amazon-ssm-agent" in text and "disable --now amazon-ssm-agent" not in text and "stop amazon-ssm-agent" not in text
+    assert "grep -c ':22$'" in text
+
+
+@pytest.mark.parametrize("plain", [PLAIN, None])
+def test_the_host_init_scripts_pass_a_bash_syntax_check(plain):
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法做語法檢查（不算通過）")
+    scripts = host_scripts(host_init_steps(plain=plain))
+    assert len(scripts) == (5 if plain is None else 6), "沒有一般設定時放置檔案的那一步沒有腳本"
+    for step_id, text in scripts.items():
+        result = subprocess.run([bash, "-n"], input=(text + "\n").encode("ascii"), capture_output=True, timeout=60)
+        assert result.returncode == 0, (step_id, result.stderr.decode("utf-8", "replace"))
+
+
+def test_a_template_with_a_missing_value_or_a_non_ascii_character_is_refused():
+    with pytest.raises(plan.PlanError, match="沒有代入"):
+        plan._script("echo @MISSING@")
+    with pytest.raises(plan.PlanError, match="ASCII"):
+        plan._script("echo 中文")
+    assert plan._script("echo @A@ @A@", A="x") == ["echo x x"]
+
+
+def test_the_host_init_ids_do_not_collide_with_the_other_plans_and_nothing_mentions_production():
+    ids = [s.id for s in (*full_plan(), *deploy_steps(), *rollback_steps(), *teardown_steps())]
+    assert len(ids) == len(set(ids))
+    text = whole_plan_text(host_init_steps())
+    assert "production" not in text.lower() and not re.search(r"AKIA[0-9A-Z]{16}|--master-user-password|--password|--secret-string", text)

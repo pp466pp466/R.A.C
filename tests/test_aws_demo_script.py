@@ -1114,6 +1114,115 @@ def test_the_teardown_preview_lists_the_listing_command_and_the_blocked_placehol
     assert "describe-db-snapshots" in result.text and "明確回覆要保留的例外" in result.text and "delete-db-snapshot" not in result.text
 
 
+# ---- 4.5 主機初始化：--vars-file 與 host-init 組 -------------------------------------------------------------------
+
+VARS_TEXT = "﻿MAIL_SMTP_HOST=smtp.example.com\nMAIL_SMTP_PORT=587\nMAIL_FROM=service@example.com\nALERT_EMAIL_TO=ops@example.com\nLOG_LEVEL=INFO\n"
+HOST_INIT_OUTPUTS = [
+    "docker=active swap=1 dirs=755,700", "ca-bundle=644", "files=17", "enabled=8", "secrets=3 fs=tmpfs mode=700/600",
+    "sshd=inactive port22=0 ssm=active",
+]
+
+
+def write_vars(tmp_path, text=VARS_TEXT):
+    path = tmp_path / "aws-demo.vars"
+    path.write_text(text, encoding="utf-8")
+    return str(path)
+
+
+def host_runner(outputs=HOST_INIT_OUTPUTS):
+    """主機初始化的假回覆：找得到剛好一台主機、命令送出後成功，各段的標準輸出依序為 `outputs`。"""
+    runner = FakeAws().with_identity()
+    runner.when("describe-instances", "length(Reservations", out="1")
+    runner.when("describe-instances", out="i-0abc123")
+    runner.when("send-command", out="cmd-1")
+    runner.when("StandardOutputContent", out=[line + "\n" for line in outputs])
+    runner.when("get-command-invocation", out="Success")
+    return runner
+
+
+def sent_bodies(runner):
+    return [json.loads(body) for body in runner.bodies if body and '"DocumentName"' in body]
+
+
+def test_the_vars_file_is_read_as_utf8_without_interpolation_and_none_means_not_given(tmp_path):
+    path = write_vars(tmp_path, VARS_TEXT + "LOG_FORMAT=a$HOME-${NOPE}-b\n")
+    values = demo.read_vars_file(path)
+    assert values["MAIL_SMTP_HOST"] == "smtp.example.com" and values["LOG_FORMAT"] == "a$HOME-${NOPE}-b", "含 BOM、不做變數插值"
+    assert demo.read_vars_file(None) is None and demo.read_vars_file("") is None
+    with pytest.raises(demo.DemoError) as error:
+        demo.read_vars_file(str(tmp_path / "nope.vars"))
+    assert error.value.code == demo.EXIT_USAGE and "找不到一般設定檔" in str(error.value)
+
+
+def test_with_a_vars_file_the_host_init_group_runs_all_six_ssm_steps_without_accept_cost_and_checks_each_output(tmp_path):
+    runner = host_runner()
+    result = invoke([*PROVISION, "--vars-file", write_vars(tmp_path), "--group", "host-init", "--execute"], runner=runner)
+    assert result.code == 0 and "全部完成" in result.text and "一般設定檔：5 個設定" in result.text
+    assert len(runner.matching("send-command")) == 6 and result.text.count("驗證通過") >= 6 + 1
+    assert not runner.ran("run-instances") and not runner.ran("create-db-instance") and not runner.ran("allocate-address"), "不需要費用同意，也不碰計費資源"
+    bodies = sent_bodies(runner)
+    assert [body["Comment"] for body in bodies] == ["host-init-system", "host-init-ca", "host-init-files", "host-init-units", "host-init-secrets", "host-init-sshd"]
+    assert all(body["InstanceIds"] == ["i-0abc123"] for body in bodies), "實例編號來自唯讀的查詢"
+    commands = {body["Comment"]: "\n".join(body["Parameters"]["commands"]) for body in bodies}
+    assert "install -d -m 0755 -o root -g root /etc/rac" in commands["host-init-system"]
+    assert "put 0644 /etc/rac/Caddyfile " in commands["host-init-files"] and "put 0644 /etc/rac/plain.env " in commands["host-init-files"]
+    assert SECRET_VALUE not in result.text
+
+
+def test_a_wrong_output_line_fails_that_step_and_nothing_after_it_is_sent(tmp_path):
+    runner = host_runner(["docker=active swap=0 dirs=755,700"])
+    result = invoke([*PROVISION, "--vars-file", write_vars(tmp_path), "--group", "host-init", "--execute"], runner=runner)
+    assert result.code == demo.EXIT_FAILED and "驗證 1/1 不符" in result.text and "swap=0" in result.text
+    assert len(runner.matching("send-command")) == 1
+
+
+def test_a_single_host_init_step_finds_the_host_read_only_and_needs_no_accept_cost(tmp_path):
+    runner = host_runner(["sshd=inactive port22=0 ssm=active"])
+    result = invoke([*PROVISION, "--only", "host-init-sshd", "--yes"], runner=runner)
+    assert result.code == 0 and "唯讀取回先前步驟的結果：host-instance-id" in result.text
+    assert not runner.ran("run-instances") and len(runner.matching("send-command")) == 1
+    assert sent_bodies(runner)[0]["InstanceIds"] == ["i-0abc123"]
+
+
+def test_without_a_vars_file_the_run_stops_at_the_file_placing_step_after_the_steps_before_it(tmp_path):
+    runner = host_runner()
+    result = invoke([*PROVISION, "--group", "host-init", "--execute"], runner=runner)
+    assert result.code == demo.EXIT_BLOCKED and "注意：這些步驟被擋下" in result.text and "--vars-file" in result.text
+    assert [body["Comment"] for body in sent_bodies(runner)] == ["host-init-system", "host-init-ca"], "放置檔案之前的步驟照常，之後的不執行"
+    only = invoke([*PROVISION, "--only", "host-init-files", "--yes"], runner=host_runner())
+    assert only.code == demo.EXIT_BLOCKED and not only.runner.ran("send-command")
+
+
+def test_the_preview_with_a_vars_file_shows_every_file_and_runs_nothing(tmp_path):
+    result = invoke([*PROVISION, "--vars-file", write_vars(tmp_path), "--only", "host-init-files"])
+    assert result.code == 0 and result.runner.calls == []
+    assert "put 0644 /etc/rac/Caddyfile" in result.text and "put 0755 /usr/local/sbin/rac-render-env-app" in result.text
+    assert "一般設定檔：5 個設定，檢查通過（只檢查名稱，值不顯示）" in result.text
+
+
+@pytest.mark.parametrize("extra, named", [("GEMINI_API_KEY=" + SECRET_VALUE + "\n", "GEMINI_API_KEY"), ("NOT_A_REAL_SETTING=zzz-value-zzz\n", "NOT_A_REAL_SETTING"),
+                                          ("EMAIL_VERIFICATION_REQUIRED=true\n", "EMAIL_VERIFICATION_REQUIRED")])
+def test_a_vars_file_with_a_secret_an_unknown_or_an_obsolete_variable_is_refused_before_anything_runs(tmp_path, extra, named):
+    runner = FakeAws().with_identity()
+    result = invoke([*PROVISION, "--vars-file", write_vars(tmp_path, VARS_TEXT + extra), "--group", "host-init", "--execute"], runner=runner)
+    assert result.code == demo.EXIT_USAGE and named in result.err and runner.calls == []
+    assert SECRET_VALUE not in result.err and "zzz-value-zzz" not in result.err
+
+
+def test_a_missing_vars_file_and_missing_required_settings_are_refused_with_names_only(tmp_path):
+    missing = invoke([*PROVISION, "--vars-file", str(tmp_path / "nope.vars")])
+    assert missing.code == demo.EXIT_USAGE and "找不到一般設定檔" in missing.err and missing.runner.calls == []
+    incomplete = invoke([*PROVISION, "--vars-file", write_vars(tmp_path, "LOG_LEVEL=INFO\n")])
+    assert incomplete.code == demo.EXIT_USAGE and "MAIL_SMTP_HOST" in incomplete.err and incomplete.runner.calls == []
+
+
+def test_the_vars_file_name_is_ignored_by_git_and_the_help_names_the_option():
+    ignored = (PROJECT_ROOT / ".gitignore").read_text(encoding="utf-8")
+    assert "*.vars" in ignored
+    assert demo.build_parser().parse_args([*PROVISION, "--vars-file", "x.vars"]).vars_file == "x.vars"
+    assert demo.build_parser().parse_args(PROVISION).vars_file is None
+
+
 # ---- 2.5 文件 -----------------------------------------------------------------------------------------------
 
 

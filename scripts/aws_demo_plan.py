@@ -19,6 +19,9 @@
   拆除每一步都先以**帶標籤的查詢**找出資源，沒有符合才略過，所以不會碰到帳號中的其他資源。
   在主機上執行的命令一律走 SSM Run Command（`send-command` 之後接 `wait-…` 步驟輪詢結果），內容只用 ASCII
   （`file://` 的 JSON 在 Windows 以系統地區編碼讀取，繁體中文會變成亂碼）。
+- 主機初始化（task 4.4 現場撰寫、4.5 回寫）是 `build_plan` 的 `host-init` 組：交換檔與 docker、RDS 的 CA 套件、17 個主機檔案、單元啟用（不啟動）、
+  機密取出檢查、停用主機內的 sshd；每一段一個 SSM 步驟加一個等待步驟，且都以標準輸出的一行固定文字驗證結果。放置檔案的步驟需要一般設定
+  （`build_plan(plain=…)`），沒有給就被擋下（與沒有 `accept_cost` 的計費步驟同一個機制）。
 
 佔位符（`{{…}}`）：
 - `{{名稱}}`：先前某個步驟用 `capture` 存下的標準輸出（例如 `{{host-sg-id}}`）；執行器在執行時代入。
@@ -27,6 +30,8 @@
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import json
 import re
 import sys
@@ -103,7 +108,7 @@ ALLOWED_RESOURCES = (
     "db-subnet-group", "rds-instance", "ec2-instance", "elastic-ip", "cloudwatch-alarm",
 )
 
-GROUPS = ("preflight", "budget", "network", "iam", "storage", "secrets", "rds", "ec2", "rds-ready", "alarms")
+GROUPS = ("preflight", "budget", "network", "iam", "storage", "secrets", "rds", "ec2", "rds-ready", "alarms", "host-init")
 
 PLACEHOLDER = re.compile(r"\{\{([a-z][a-z0-9_-]*)\}\}")
 SECRET_REFERENCE = re.compile(r"\{\{secret:([A-Z][A-Z0-9_]*)\}\}")
@@ -128,7 +133,7 @@ class Step:
     argv: tuple[str, ...] = ()
     resource: str | None = None          # 這一步建立的資源類型（ALLOWED_RESOURCES 之一）；沒有建立資源的步驟為 None
     billing: bool = False                # 建立計費資源：沒有 accept_cost 時 build_plan 不輸出指令
-    blocked: bool = False                # 因沒有 accept_cost 而被清空指令（只留說明）
+    blocked: bool = False                # 因缺少必要的輸入（沒有 accept_cost、沒有一般設定）而被清空指令（只留說明）
     interactive: bool = False            # 需要人工動作（argv 可為空）；執行器等待使用者確認
     input_json: str | None = None        # 經暫存檔傳給指令的 JSON 範本（含 {{secret:名稱}}）；argv 以 file://{{input_file}} 參照
     exists_argv: tuple[str, ...] | None = None   # 先執行這個；成功（且 exists_nonempty 時輸出非空）代表資源已存在，略過本步
@@ -640,12 +645,14 @@ def _alarm_steps(target: Target) -> list[Step]:
         verify=(Check(_aws(target, "cloudwatch", "describe-alarms", "--alarm-names", n.alarm, *_text("MetricAlarms[0].AlarmActions[0]")), sns_topic_arn(target)),))]
 
 
-def build_plan(target: Target, *, accept_cost: bool = False, groups: tuple[str, ...] = GROUPS) -> list[Step]:
+def build_plan(target: Target, *, accept_cost: bool = False, groups: tuple[str, ...] = GROUPS,
+               plain: dict[str, str] | None = None) -> list[Step]:
     """依固定順序產生步驟。`groups` 只取其中幾組（順序不變）。
 
     順序（design D1）：帳號確認 → 預算與 SNS → 網路 → 角色 → 傳檔儲存貯體 → 機密 → RDS（只建立，不等待）→
-    EC2 與 Elastic IP（RDS 等待期間做）→ 等 RDS 可用並寫入 DATABASE_URL → 主機告警。
+    EC2 與 Elastic IP（RDS 等待期間做）→ 等 RDS 可用並寫入 DATABASE_URL → 主機告警 → 主機初始化（機密取出檢查需要 `DATABASE_URL`）。
     沒有 `accept_cost` 時，計費步驟（RDS、EC2、Elastic IP）只留說明，不輸出指令。
+    `plain` 是一般設定（非機密；主機上的 `plain.env` 由它產生）：沒有給時，放置主機檔案的那一步只留說明、不輸出指令。
     """
     unknown = [g for g in groups if g not in GROUPS]
     if unknown:
@@ -654,6 +661,7 @@ def build_plan(target: Target, *, accept_cost: bool = False, groups: tuple[str, 
         "preflight": _preflight_steps, "budget": _budget_steps, "network": _network_steps, "iam": _iam_steps,
         "storage": _storage_steps, "secrets": _secrets_steps, "rds": _rds_steps, "ec2": _ec2_steps,
         "rds-ready": _rds_ready_steps, "alarms": _alarm_steps,
+        "host-init": lambda chosen: _host_init_steps(chosen, plain),
     }
     steps: list[Step] = []
     for group in GROUPS:
@@ -664,12 +672,16 @@ def build_plan(target: Target, *, accept_cost: bool = False, groups: tuple[str, 
     return steps
 
 
+def _blocked_step(step: Step, reason: str) -> Step:
+    """清空指令（也不輸出 JSON 範本與驗證），只留說明；保留 capture，使後面的佔位符仍有來源。執行到這一步會停止。"""
+    return replace(step, argv=(), input_json=None, exists_argv=None, verify=(), blocked=True, title=f"{step.title}——{reason}")
+
+
 def _without_command(step: Step) -> Step:
-    """沒有 accept_cost 時，計費步驟不輸出指令（也不輸出 JSON 範本與驗證）；保留 capture，使後面的佔位符仍有來源。"""
+    """沒有 accept_cost 時，計費步驟不輸出指令。"""
     if not step.billing:
         return step
-    return replace(step, argv=(), input_json=None, exists_argv=None, verify=(), blocked=True,
-                   title=f"{step.title}——需要 --accept-cost 才會輸出建立指令（執行器會先顯示預估費用）")
+    return _blocked_step(step, "需要 --accept-cost 才會輸出建立指令（執行器會先顯示預估費用）")
 
 
 # ---- 主機檔案（task 1.4、1.5）：Caddyfile、rac-* 單元、機密取出腳本、排程計時器 -----------------------------
@@ -1054,23 +1066,25 @@ def _host_filters(target: Target) -> tuple[str, ...]:
             f"Name=tag:Environment,Values={ENV}", "Name=instance-state-name,Values=running")
 
 
-def _find_host_step(target: Target, step_id: str, group: str) -> Step:
+def _find_host_step(target: Target, step_id: str, group: str, *, capture: str = "instance-id") -> Step:
     """主機的實例編號不從建立時帶過來（部署可能在很久之後、另一次執行）：用名稱與標籤找；必須剛好一台。"""
     n = names(target)
     return Step(step_id, group, f"找出主機 {n.host}（running、帶本專案標籤；找不到或不只一台即停止）",
                 _aws(target, "ec2", "describe-instances", *_host_filters(target), *_text("Reservations[].Instances[].InstanceId")),
-                capture="instance-id",
+                capture=capture,
                 verify=(Check(_aws(target, "ec2", "describe-instances", *_host_filters(target), *_text("length(Reservations[].Instances[])")), "1"),))
 
 
 def _ssm_steps(target: Target, step_id: str, group: str, title: str, lines: list[str], *, timeout: int,
-               expect: str | None = None) -> list[Step]:
+               expect: str | None = None, instance: str = "instance-id") -> list[Step]:
     """在主機上執行一段腳本：`send-command`（輸出命令編號）加 `wait-…`（輪詢到 Success；Failed、Cancelled、TimedOut 立即停止）。
-    `expect` 不是 None 時，等待步驟驗證命令的標準輸出（去除前後空白）等於它。腳本內容只用 ASCII。"""
+    `expect` 不是 None 時，等待步驟驗證命令的標準輸出（去除前後空白）等於它。腳本內容只用 ASCII。
+    `instance` 是主機實例編號的擷取名稱（預設 `instance-id`；主機初始化用自己的查詢步驟，不依賴建立主機的步驟）。"""
     command = f"{step_id}-command-id"
-    body = {"InstanceIds": ["{{instance-id}}"], "DocumentName": "AWS-RunShellScript", "Comment": step_id, "TimeoutSeconds": 60,
+    placeholder = "{{" + instance + "}}"
+    body = {"InstanceIds": [placeholder], "DocumentName": "AWS-RunShellScript", "Comment": step_id, "TimeoutSeconds": 60,
             "Parameters": {"commands": lines, "executionTimeout": [str(timeout)]}}
-    invocation = ("--command-id", "{{" + command + "}}", "--instance-id", "{{instance-id}}")
+    invocation = ("--command-id", "{{" + command + "}}", "--instance-id", placeholder)
     verify = ()
     if expect is not None:
         verify = (Check(_aws(target, "ssm", "get-command-invocation", *invocation, *_text("StandardOutputContent")), expect),)
@@ -1169,6 +1183,200 @@ def _pool_check_lines() -> list[str]:
 
 def _pool_check_expect(tag: str) -> str:
     return " ".join(f"{APP_IMAGE_REPO}:{tag}" for _ in POOLS)
+
+
+# ---- 主機初始化（task 4.4 在主機上現場撰寫並逐項驗證，4.5 回寫成 `build_plan` 的 `host-init` 組）---------------------------
+# 六段，每段一個 SSM 步驟加一個等待步驟，順序固定：A 系統 → B 憑證 → C 檔案 → D 單元 → E 機密取出檢查 → F 停用 sshd。
+# 每一段都能重複執行（做過的不重做、結果相同）；沒有任何一段啟動 rac-* 單元（啟動屬於部署與排程階段）。
+# 每段腳本只在標準輸出印一行固定文字，等待步驟以它驗證（`_ssm_steps` 的 expect）；腳本內容只用 ASCII、沒有任何機密值。
+
+SWAP_FILE = "/swapfile"
+SWAP_MB = 2048                                   # design D1：2 GB 交換檔（2 GB 記憶體的主機要跑兩個池與 Caddy）
+HOST_PACKAGE = "docker"                          # Amazon Linux 2023 的套件庫提供；aws CLI 由系統內建
+RDS_CA_BUNDLE_URL = "https://truststore.pki.rds.amazonaws.com/{region}/{region}-bundle.pem"   # AWS 公開的區域 CA 套件
+HOST_INIT_TIMEOUT_SECONDS = 600                  # 安裝 docker 與下載套件的上限
+HOST_INIT_SHORT_TIMEOUT_SECONDS = 180            # 其餘各段
+HOST_INIT_GROUP = "host-init"
+HOST_INSTANCE_CAPTURE = "host-instance-id"          # 主機初始化自己的「找出主機」步驟擷取的實例編號
+_TOKEN = re.compile(r"@[A-Z][A-Z_]*@")
+_SAFE_HOST_PATH = re.compile(r"/[A-Za-z0-9_.-]+(/[A-Za-z0-9_.-]+)*")
+_SAFE_HOST_MODE = re.compile(r"0[0-7]{3}")
+
+_HOST_SYSTEM_TEMPLATE = r"""set -eu
+export HOME=/root
+@DIRECTORIES@
+if ! swapon --show=NAME --noheadings | grep -qx @SWAP_FILE@; then
+  if [ ! -f @SWAP_FILE@ ]; then
+    rm -f @SWAP_FILE@.new
+    dd if=/dev/zero of=@SWAP_FILE@.new bs=1M count=@SWAP_MB@ status=none
+    chmod 600 @SWAP_FILE@.new
+    mkswap @SWAP_FILE@.new >/dev/null
+    mv @SWAP_FILE@.new @SWAP_FILE@
+  fi
+  swapon @SWAP_FILE@
+fi
+grep -q '^@SWAP_FILE@ ' /etc/fstab || echo '@SWAP_FILE@ none swap defaults 0 0' >> /etc/fstab
+dnf install -y -q @PACKAGE@ >/dev/null
+systemctl enable --now docker >/dev/null
+echo "docker=$(systemctl is-active docker) swap=$(swapon --show=NAME --noheadings | grep -cx @SWAP_FILE@ || true) dirs=$(stat -c %a @STAT_PATHS@ | paste -sd, -)"
+"""
+
+_HOST_CA_TEMPLATE = r"""set -eu
+export HOME=/root
+url=@URL@
+tmp="$(mktemp /var/tmp/rds-ca.XXXXXX)"
+trap 'rm -f "$tmp"' EXIT
+curl -fsS --proto '=https' --tlsv1.2 -o "$tmp" "$url"
+count="$(grep -c 'BEGIN CERTIFICATE' "$tmp" || true)"
+[ "$count" -ge 1 ]
+openssl x509 -in "$tmp" -noout
+install -m 0644 -o root -g root "$tmp" @CA_PATH@
+echo "ca-bundle=$(stat -c %a @CA_PATH@)"
+"""
+
+# `put 權限 路徑 sha256 base64`：先解碼到暫存檔並比對雜湊（不符就在安裝之前失敗），安裝後再比對一次並檢查權限
+_HOST_FILES_HEAD = r"""set -eu
+export HOME=/root
+tmp="$(mktemp /var/tmp/rac-file.XXXXXX)"
+trap 'rm -f "$tmp"' EXIT
+n=0
+put() {
+  printf '%s' "$4" | base64 -d > "$tmp"
+  printf '%s  %s\n' "$3" "$tmp" | sha256sum -c - >/dev/null
+  install -m "$1" -o root -g root "$tmp" "$2"
+  printf '%s  %s\n' "$3" "$2" | sha256sum -c - >/dev/null
+  [ "$(stat -c %a "$2")" = "${1#0}" ]
+  n=$((n + 1))
+}"""
+
+_HOST_UNITS_TEMPLATE = r"""set -eu
+export HOME=/root
+systemctl daemon-reload
+systemctl enable @UNITS@ >/dev/null
+echo "enabled=$(systemctl is-enabled @UNITS@ | grep -cx enabled || true)"
+"""
+
+_HOST_SECRETS_TEMPLATE = r"""set -eu
+export HOME=/root
+trap 'rm -f @OUT@' EXIT
+@RENDER@
+fs="$(stat -f -c %T @RUN_DIR@)"
+mode="$(stat -c %a @RUN_DIR@)/$(stat -c %a @OUT@)"
+count="$(grep -c = @OUT@ || true)"
+echo "secrets=$count fs=$fs mode=$mode"
+"""
+
+_HOST_SSHD_TEMPLATE = r"""set -eu
+export HOME=/root
+if systemctl list-unit-files sshd.service --no-legend | grep -q '^sshd.service'; then
+  systemctl disable --now sshd.service >/dev/null
+fi
+echo "sshd=$(systemctl is-active sshd.service || true) port22=$(ss -tlnH | awk '{print $4}' | grep -c ':22$' || true) ssm=$(systemctl is-active amazon-ssm-agent || true)"
+"""
+
+
+def _script(template: str, **tokens: str) -> list[str]:
+    """把 `@名稱@` 代入模板並拆成行（SSM 的 commands 一行一個元素）。沒有代完或含非 ASCII 字元時丟錯。"""
+    text = template
+    for name, value in tokens.items():
+        text = text.replace(f"@{name}@", value)
+    if _TOKEN.search(text):
+        raise PlanError("主機腳本模板有沒有代入的標記")
+    if not text.isascii():
+        raise PlanError("主機腳本只能用 ASCII（傳給 AWS 的 JSON 在 Windows 以系統地區編碼讀取）")
+    return text.splitlines()
+
+
+def rds_ca_bundle_url(target: Target) -> str:
+    return RDS_CA_BUNDLE_URL.format(region=target.region)
+
+
+def host_enabled_units() -> tuple[str, ...]:
+    """主機初始化要啟用（enable）但**不啟動**的單元：兩個池、Caddy 與每個排程的計時器（排程的 .service 由計時器觸發，不單獨啟用）。"""
+    return (*(f"{pool.container}.service" for pool in POOLS), "rac-caddy.service",
+            *(name for name in scheduled_units() if name.endswith(".timer")))
+
+
+def host_file_count() -> int:
+    """`host_files()` 放置的檔案數（不依賴一般設定的內容；測試比對它與 `host_files()` 的長度一致）。"""
+    return 2 + len(UNITS) + len(POOLS) + 1 + len(scheduled_units())
+
+
+def _host_system_lines() -> list[str]:
+    return _script(
+        _HOST_SYSTEM_TEMPLATE,
+        DIRECTORIES="\n".join(f"install -d -m {mode} -o root -g root {path}" for path, mode in HOST_DIRECTORIES),
+        SWAP_FILE=SWAP_FILE, SWAP_MB=str(SWAP_MB), PACKAGE=HOST_PACKAGE, STAT_PATHS=" ".join(path for path, _ in HOST_DIRECTORIES))
+
+
+def _host_system_expect() -> str:
+    modes = ",".join(format(int(mode, 8), "o") for _, mode in HOST_DIRECTORIES)
+    return f"docker=active swap=1 dirs={modes}"
+
+
+def _host_ca_lines(target: Target) -> list[str]:
+    return _script(_HOST_CA_TEMPLATE, URL=rds_ca_bundle_url(target), CA_PATH=RDS_CA_BUNDLE_PATH)
+
+
+def _host_files_lines(files: tuple[HostFile, ...]) -> list[str]:
+    """每個檔案一行 `put`：內容以 base64 傳（含繁體中文，不直接放進 JSON）、附 sha256，路徑與權限先檢查格式。"""
+    lines = _HOST_FILES_HEAD.splitlines()
+    for item in files:
+        if not _SAFE_HOST_PATH.fullmatch(item.path) or not _SAFE_HOST_MODE.fullmatch(item.mode):
+            raise PlanError("主機檔案的路徑或權限格式不合法")
+        raw = item.content.encode("utf-8")
+        lines.append(f"put {item.mode} {item.path} {hashlib.sha256(raw).hexdigest()} {base64.b64encode(raw).decode('ascii')}")
+    lines.append('echo "files=$n"')
+    return lines
+
+
+def _host_units_lines() -> list[str]:
+    return _script(_HOST_UNITS_TEMPLATE, UNITS=" ".join(host_enabled_units()))
+
+
+def _host_secrets_lines() -> list[str]:
+    return _script(_HOST_SECRETS_TEMPLATE, RENDER=render_env_script_path("app"), RUN_DIR=RUN_DIR, OUT=f"{RUN_DIR}/app.env")
+
+
+def _host_sshd_lines() -> list[str]:
+    return _script(_HOST_SSHD_TEMPLATE)
+
+
+def _host_init_steps(target: Target, plain: dict[str, str] | None) -> list[Step]:
+    """先找出主機（唯讀查詢，不依賴建立主機的步驟，所以單步或另一次執行時不需要 `--accept-cost`），然後依序：
+    A 系統（目錄、交換檔、docker）→ B 憑證（RDS 的 CA 套件）→ C 檔案（`host_files()`）→ D 單元（啟用、不啟動）→
+    E 機密取出檢查（用主機角色取全部機密、確認在記憶體檔案系統、立即刪除）→ F 停用主機內的 sshd。
+    沒有一般設定（`plain`）時，C 只留說明、不輸出指令（內容含 `plain.env`，沒有它就不能產生）。"""
+    g = HOST_INIT_GROUP
+    count = host_file_count()
+    secret_count = len(unit_parameter_names(target, "app"))
+
+    def ssm(step_id: str, title: str, lines: list[str], *, expect: str, timeout: int = HOST_INIT_SHORT_TIMEOUT_SECONDS) -> list[Step]:
+        return _ssm_steps(target, step_id, g, title, lines, timeout=timeout, expect=expect, instance=HOST_INSTANCE_CAPTURE)
+
+    files = ssm("host-init-files",
+                f"主機初始化 C（檔案）：放置 {count} 個主機檔案（Caddyfile、plain.env、兩支取出腳本、單元與計時器；內容以 base64 傳送，"
+                "先比對雜湊再安裝，安裝後再比對一次並檢查權限）",
+                _host_files_lines(host_files(target, plain)) if plain is not None else [], expect=f"files={count}")
+    if plain is None:
+        files[0] = _blocked_step(files[0], "需要 --vars-file（一般設定檔，例如 aws-demo.vars）才會輸出放置檔案的指令")
+    return [
+        _find_host_step(target, "host-init-find-host", g, capture=HOST_INSTANCE_CAPTURE),
+        *ssm("host-init-system",
+             f"主機初始化 A（系統）：建立 {' 與 '.join(path for path, _ in HOST_DIRECTORIES)}、{SWAP_MB // 1024} GB 交換檔、安裝並啟動 docker（可重複執行）",
+             _host_system_lines(), expect=_host_system_expect(), timeout=HOST_INIT_TIMEOUT_SECONDS),
+        *ssm("host-init-ca", f"主機初始化 B（憑證）：從 AWS 公開位址取得 RDS 的 CA 套件，至少一張憑證且能解析才放到 {RDS_CA_BUNDLE_PATH}",
+             _host_ca_lines(target), expect="ca-bundle=644"),
+        *files,
+        *ssm("host-init-units", "主機初始化 D（單元）：daemon-reload，並啟用（不啟動）兩個池、Caddy 與每個排程計時器；啟動留給部署與排程階段",
+             _host_units_lines(), expect=f"enabled={len(host_enabled_units())}"),
+        *ssm("host-init-secrets",
+             f"主機初始化 E（機密取出檢查）：以主機角色執行 rac-render-env-app，確認取得全部 {secret_count} 個機密、{RUN_DIR} 是記憶體檔案系統且權限正確；"
+             "不印任何值，檢查後立即刪除環境檔",
+             _host_secrets_lines(), expect=f"secrets={secret_count} fs=tmpfs mode=700/600"),
+        *ssm("host-init-sshd", "主機初始化 F（SSH）：停用主機內的 sshd（對外本來就沒有 22；之後的管理只走 SSM）",
+             _host_sshd_lines(), expect="sshd=inactive port22=0 ssm=active"),
+    ]
 
 
 def snapshot_name(target: Target, tag: str) -> str:

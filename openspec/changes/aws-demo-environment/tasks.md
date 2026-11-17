@@ -32,14 +32,14 @@
 - [x] 4.2 預覽完整計畫後，逐步執行預算與 SNS、安全群組、IAM 角色、S3 儲存貯體、SSM 參數；每一步以唯讀指令驗證（標籤、規則、政策範圍）並記錄；使用者確認 SNS 訂閱信
 - [x] 4.3 建立 RDS（等待可用，期間進行 4.4）；驗證：不公開、加密、備份保留天數、安全群組只有主機來源
 - [x] 4.4 建立 EC2 與 Elastic IP、主機初始化（交換檔、docker、機密取出腳本與單元檔放置）；驗證：只能經 SSM 連入、沒有 22、`/run/rac` 為記憶體檔案系統。**主機初始化沒有預先寫成計畫步驟**（使用者 2026-11-16 決定：不先猜，現場撰寫）：在這一步以 SSM 逐步撰寫並確認——建立 `HOST_DIRECTORIES`、2 GB 交換檔、安裝並啟動 docker、取得 RDS 的 CA 套件放到 `RDS_CA_BUNDLE_PATH`、放置 `host_files()` 的檔案（含繁體中文內容，以 base64 傳，不直接放進 `commands` 的 JSON）、`systemctl daemon-reload` 與啟用單元與計時器
-- [ ] 4.5 發現的 AWS CLI 與主機指令差異全部回寫到 `scripts/aws_demo_plan.py` 並補測試（含 4.4 現場撰寫的主機初始化：寫成 `host-init` 計畫步驟與測試，營運文件第 8 節的步驟總表同步），結果記入 README「驗收紀錄（aws-demo-environment）」
+- [x] 4.5 發現的 AWS CLI 與主機指令差異全部回寫到 `scripts/aws_demo_plan.py` 並補測試（含 4.4 現場撰寫的主機初始化：寫成 `host-init` 計畫步驟與測試，營運文件第 8 節的步驟總表同步），結果記入 README「驗收紀錄（aws-demo-environment）」
 
 ## 5. 映像建置、資料庫初始化、憑證探測與遷移
 
 > 第一次部署**分組執行**（`deploy_plan(groups=…)`，`prepare` 會自動帶上）：5.1 用 `build` 組；5.4 用 `snapshot`、`migrate` 組；`restart`、`verify` 組**不在本組執行**，留到 5.5 `create-admin` 之後與 6.1 一起。資料庫初始化與探測要在主映像內以一次性容器執行，所以映像（5.1）先於它們（5.2）；例行的後續部署則一次跑完整份計畫（快照 → 建置 → 遷移 → 重啟 → 驗證）。
 
 - [ ] 5.1 在主機上建置映像（`deploy_plan` 的 `build` 組：`git archive <提交短碼>` 經 S3、標記提交短碼），確認映像內沒有 `.env`、以非 root 執行
-- [ ] 5.2 執行資料庫初始化（3.1），再執行憑證探測（3.2）使用候選 A（`ServerCertificate` 加 RDS CA 套件，唯讀掛載）；**成功才繼續**
+- [ ] 5.2 執行資料庫初始化（3.1），再執行憑證探測（3.2）使用候選 A（`ServerCertificate` 加 RDS CA 套件，唯讀掛載）；**成功才繼續**。**回寫**：這兩支腳本沒有計畫步驟（它們不是執行器的子命令），現場在主機上執行並逐項驗證後，把實際用過的指令回寫成計畫步驟與測試（主機上的腳本掛載、環境檔取出、一行輸出的驗證，同 `host-init` 的做法），營運文件第 8 節的步驟總表同步，結果記入 README「驗收紀錄（aws-demo-environment）」
 - [ ] 5.3 若 A 失敗：停止並回報使用者；採用候選 B 之前先以 `/openspec-update-change` 修訂本 change（design D7、tasks、必要的規格），經使用者同意後再改 `Dockerfile`；禁止 `TrustServerCertificate=yes` 與行程範圍的 `SSL_CERT_FILE`。若 A 成功，記錄實際採用的連線字串型態（不含密碼）到營運文件
 - [ ] 5.4 建立 RDS 快照，執行 `alembic upgrade head`，驗證 `alembic current` 為最新版（`0018`），再執行 `seed-scripts`（`deploy_plan` 的 `snapshot`、`migrate` 組）；任何一步失敗即停止，不啟動服務
 - [ ] 5.5 互動步驟：使用者在 SSM 終端機執行 `create-admin`（密碼自己輸入，不經腳本與對話）
