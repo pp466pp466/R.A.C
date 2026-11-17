@@ -717,9 +717,62 @@ def test_database_url_is_composed_from_the_endpoint_and_the_stored_application_p
     url = json.loads(runner.bodies[-1])["Value"]
     parsed = make_url(url)
     assert (parsed.username, parsed.password, parsed.host, parsed.port, parsed.database) == ("rac_app", app_password, endpoint, 1433, "rac_demo")
-    assert parsed.query["Encrypt"] == "yes" and parsed.query["ServerCertificate"] == plan.RDS_CA_BUNDLE_PATH and "ODBC Driver 18" in parsed.query["driver"]
-    assert "TrustServerCertificate" not in url and app_password not in result.text and url not in result.text
+    assert dict(parsed.query) == {"driver": "ODBC Driver 18 for SQL Server", "Encrypt": "yes"}, "design D7：只有 Encrypt=yes，憑證由映像的系統憑證庫驗證"
+    assert "TrustServerCertificate" not in url and "ServerCertificate" not in url and app_password not in result.text and url not in result.text
     assert not any(app_password in " ".join(call) for call in runner.calls)
+
+
+def test_refreshing_database_url_overwrites_it_with_the_new_shape_and_shows_neither_the_value_nor_the_password():
+    """既有的 SSM 值仍帶舊的 ServerCertificate：覆寫步驟重新組成連線字串（密碼從 SSM 讀回，不重新產生），值只經暫存檔、輸出與命令列都沒有。"""
+    endpoint = "rac-demo-staging-db.abcdefg.ap-southeast-2.rds.amazonaws.com"
+    app_password = "App-Pw_0123456789abcdefghijklmn"
+    runner = put_runner()
+    runner.when("describe-parameters", out='["/rac-demo/staging/DATABASE_URL","SecureString"]', first=True)
+    runner.when("get-parameter", "--with-decryption", out=app_password, first=True)
+    runner.when("describe-db-instances", "Endpoint.Address", out=endpoint)
+    result = invoke([*PROVISION, "--only", "refresh-parameter-DATABASE_URL", "--yes"], runner=runner)
+    assert result.code == 0, result.text + result.err
+    body = json.loads(runner.bodies[-1])
+    assert body["Overwrite"] is True and "Tags" not in body and body["Name"] == "/rac-demo/staging/DATABASE_URL" and body["Type"] == "SecureString"
+    parsed = make_url(body["Value"])
+    assert (parsed.username, parsed.password, parsed.host, parsed.database) == ("rac_app", app_password, endpoint, "rac_demo")
+    assert dict(parsed.query) == {"driver": "ODBC Driver 18 for SQL Server", "Encrypt": "yes"}
+    assert body["Value"] not in result.text and app_password not in result.text and app_password not in result.err
+    assert not any(body["Value"] in " ".join(call) or app_password in " ".join(call) for call in runner.calls)
+    put_call = runner.matching("put-parameter")[0]
+    assert put_call[:5] == ("aws", "ssm", "put-parameter", "--cli-input-json", put_call[4]) and put_call[4].startswith("file://")
+    assert not runner.matching("get-parameter", "Parameter.Name"), "覆寫不先查是否已存在（它的目的就是取代既有的值）"
+    assert "驗證通過" in result.text
+
+
+def test_refreshing_never_generates_a_new_password_or_secret_key(monkeypatch):
+    monkeypatch.setattr(demo, "generate_password", lambda *a, **k: pytest.fail("覆寫不得重新產生密碼"))
+    monkeypatch.setattr(demo, "generate_secret_key", lambda: pytest.fail("覆寫不得重新產生 SECRET_KEY"))
+    runner = put_runner()
+    runner.when("get-parameter", "--with-decryption", rc=254, err="ParameterNotFound", first=True)
+    runner.when("describe-db-instances", "Endpoint.Address", out="db.example.ap-southeast-2.rds.amazonaws.com")
+    result = invoke([*PROVISION, "--only", "refresh-parameter-DATABASE_URL", "--yes"], runner=runner)
+    assert result.code == demo.EXIT_FAILED and "DB_APP_PASSWORD" in result.text and "還沒有建立" in result.text
+    assert not runner.ran("put-parameter") and runner.bodies == []
+
+
+def test_a_refresh_step_for_a_secret_that_is_not_composed_reads_the_stored_value_instead_of_generating_a_new_one(monkeypatch, spool):
+    """計畫模組本來就不產生這樣的步驟；執行器再守一道（縱深）：就算有人造出 refresh-parameter-SECRET_KEY，也只會把 SSM 內既有的值讀回來寫回去。"""
+    monkeypatch.setattr(demo, "generate_secret_key", lambda: pytest.fail("覆寫不得重新產生 SECRET_KEY"))
+    stored = "stored-secret-key-0123456789abcdef"
+    runner = FakeAws().when("get-parameter", "--with-decryption", out=stored)
+    synthetic = step("refresh-parameter-SECRET_KEY", ("aws", "ssm", "put-parameter", "--cli-input-json", "file://{{input_file}}"),
+                     input_json='{"Name":"/rac-demo/staging/SECRET_KEY","Type":"SecureString","Value":"{{secret:SECRET_KEY}}","Overwrite":true}')
+    executor, out = make_executor(runner, [synthetic])
+    assert executor.run([synthetic], assume_yes=True) == 0
+    assert json.loads(runner.bodies[-1])["Value"] == stored and stored not in "\n".join(out)
+
+
+def test_the_refresh_step_needs_the_users_confirmation_and_does_nothing_when_declined():
+    runner = put_runner()
+    result = invoke([*PROVISION, "--only", "refresh-parameter-DATABASE_URL", "--execute"], runner=runner, answers=[False])
+    assert result.code == demo.EXIT_DECLINED and len(result.prompts) == 1
+    assert not runner.ran("put-parameter") and runner.bodies == [], "沒有確認就不覆寫"
 
 
 @pytest.mark.parametrize("password", ["p@ss/w:rd?#%&=+ x", "a\\b\"c'd", "ünï-密碼"])

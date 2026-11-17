@@ -205,14 +205,14 @@ def json_escape(value: str) -> str:
 
 
 def compose_database_url(*, endpoint: str, password: str) -> str:
-    """專屬登入的 `DATABASE_URL`（design D7 候選 A、D8）：驗證伺服器憑證（`Encrypt=yes` 加 RDS 的 CA 套件路徑），
+    """專屬登入的 `DATABASE_URL`（design D7、D8）：只有 `Encrypt=yes`，驅動程式以映像的系統憑證庫驗證憑證鏈與主機名稱
+    （RDS 的 CA 在建置時加進映像的系統憑證庫）；**沒有 `ServerCertificate`**（精確比對，與 RDS 不相容）、
     **沒有 `TrustServerCertificate`**，不是 `sa`；密碼經 URL 編碼。"""
     if not ENDPOINT_PATTERN.fullmatch(endpoint or ""):
         raise DemoError("RDS 端點不是合法的主機名稱，不組成連線字串")
     if not password:
         raise DemoError("缺少資料庫登入密碼，不組成連線字串")
-    query = urllib.parse.urlencode(
-        {"driver": DB_DRIVER, "Encrypt": "yes", "ServerCertificate": plan.RDS_CA_BUNDLE_PATH}, quote_via=urllib.parse.quote_plus)
+    query = urllib.parse.urlencode({"driver": DB_DRIVER, "Encrypt": "yes"}, quote_via=urllib.parse.quote_plus)
     login = urllib.parse.quote(plan.DB_APP_LOGIN, safe="")
     return f"mssql+pyodbc://{login}:{urllib.parse.quote(password, safe='')}@{endpoint}:{plan.RDS_PORT}/{plan.DB_NAME}?{query}"
 
@@ -532,7 +532,10 @@ class Executor:
         def replace(match: re.Match[str]) -> str:
             var, name = match.group(1), match.group(2)
             if var:
-                return json_escape(self._secrets.value(var, creating=step.id == f"put-parameter-{var}", lookup=self.get_capture))
+                # 只有「建立」與「重新組成」步驟可以產生新值；重新組成（refresh）只限由腳本組成的機密（DATABASE_URL），
+                # 隨機產生的機密（密碼、SECRET_KEY）一律從 SSM 讀回，絕不另外產生一個沒有存下來的值。
+                creating = step.id == f"put-parameter-{var}" or (step.id == f"refresh-parameter-{var}" and var in plan.COMPOSED_SECRETS)
+                return json_escape(self._secrets.value(var, creating=creating, lookup=self.get_capture))
             if name == "input_file":
                 raise DemoError("JSON 範本不能參照 {{input_file}}")
             return json_escape(self.captured[name])

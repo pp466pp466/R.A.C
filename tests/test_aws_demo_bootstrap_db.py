@@ -169,10 +169,21 @@ def test_ports_must_be_integers_in_range(port):
         boot.validate_port(port)
 
 
-@pytest.mark.parametrize("path", ["rds-ca.pem", "/etc/../etc/passwd", "/etc/rac/rds ca.pem", "/etc/rac/rds;ca.pem", "/etc/rac/{x}.pem", "/", "", None])
-def test_the_ca_bundle_path_must_be_a_plain_absolute_path(path):
-    with pytest.raises(boot.BootstrapError):
-        boot.validate_ca_bundle(path)
+def test_the_script_has_no_certificate_file_input_any_more():
+    """design D7：RDS 的 CA 在建置時加進映像的系統憑證庫，腳本不再接收、驗證或檢查 CA 套件路徑。"""
+    for removed in ("validate_ca_bundle", "DEFAULT_CA_BUNDLE", "CA_BUNDLE_PATH"):
+        assert not hasattr(boot, removed), removed
+    tree = ast.parse((PROJECT_ROOT / "scripts" / "aws_demo_bootstrap_db.py").read_text(encoding="utf-8-sig"))
+    docstrings = {
+        id(node.body[0].value) for node in ast.walk(tree)
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.ClassDef)) and node.body and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant) and isinstance(node.body[0].value.value, str)
+    }                                                    # 文件字串會說明已否決的做法，不算程式
+    strings = [n.value for n in ast.walk(tree) if isinstance(n, ast.Constant) and isinstance(n.value, str) and id(n) not in docstrings]
+    assert not [s for s in strings if "ServerCertificate" in s.replace("TrustServerCertificate", "") or "ca-bundle" in s]
+    identifiers = ({n.id for n in ast.walk(tree) if isinstance(n, ast.Name)} | {n.arg for n in ast.walk(tree) if isinstance(n, ast.arg)}
+                   | {n.name for n in ast.walk(tree) if isinstance(n, (ast.FunctionDef, ast.ClassDef))})
+    assert not {name for name in identifiers if "ca_bundle" in name.lower() or "file_exists" in name.lower()}
 
 
 def test_the_defaults_are_the_constants_of_the_plan_module():
@@ -181,7 +192,6 @@ def test_the_defaults_are_the_constants_of_the_plan_module():
     assert boot.DEFAULT_APP_LOGIN == plan.DB_APP_LOGIN
     assert boot.DEFAULT_MASTER_USER == plan.RDS_MASTER_USER
     assert boot.DEFAULT_PORT == plan.RDS_PORT
-    assert boot.DEFAULT_CA_BUNDLE == plan.RDS_CA_BUNDLE_PATH
     assert {boot.MASTER_PASSWORD_ENV, boot.APP_PASSWORD_ENV} == set(plan.DB_ONLY_SECRETS)
     target = plan.Target(account_id="123456789012", notify_emails=("ops@example.com",))
     assert set(plan.unit_parameter_names(target, "bootstrap")) == {boot.MASTER_PASSWORD_ENV, boot.APP_PASSWORD_ENV}
@@ -325,7 +335,7 @@ def test_validation_runs_before_any_connection():
 # ---- 主程式：輸入、連線字串與輸出 --------------------------------------------------------------
 
 
-def invoke(argv, environ=None, *, server=None, ca_exists=True, factory=None):
+def invoke(argv, environ=None, *, server=None, factory=None):
     messages: list[str] = []
     seen: dict = {}
     server = server or FakeServer()
@@ -336,7 +346,7 @@ def invoke(argv, environ=None, *, server=None, ca_exists=True, factory=None):
 
     code = boot.main(
         argv, environ=SERVER_ENV if environ is None else environ, out=messages.append,
-        connect_factory=factory or connect_factory, file_exists=lambda path: ca_exists,
+        connect_factory=factory or connect_factory,
     )
     return code, messages, seen, server
 
@@ -351,20 +361,21 @@ def test_a_successful_run_reports_names_and_states_only():
     assert code == 0 and "登入 rac_app：已存在，略過（不變更既有密碼）" in messages and "擁有者角色 db_owner：已具備，略過" in messages
 
 
-def test_the_connection_verifies_the_server_certificate_and_has_no_way_to_trust_everything():
+def test_the_connection_verifies_the_server_certificate_with_the_system_store_and_has_no_way_to_trust_everything():
     _, _, seen, _ = invoke(["--host", HOST, "--port", "1433"])
     url = seen["url"]
     rendered = url.render_as_string(hide_password=False)
-    assert url.query == {"driver": "ODBC Driver 18 for SQL Server", "Encrypt": "yes", "ServerCertificate": plan.RDS_CA_BUNDLE_PATH}
-    assert "TrustServerCertificate".lower() not in rendered.lower()
+    assert url.query == {"driver": "ODBC Driver 18 for SQL Server", "Encrypt": "yes"}, "只有 Encrypt=yes：憑證鏈與主機名稱由驅動程式以映像的系統憑證庫驗證"
+    assert "TrustServerCertificate".lower() not in rendered.lower() and "servercertificate" not in rendered.lower()
     assert url.username == "racmaster" and url.password == MASTER_PW and url.host == HOST and url.port == 1433
     assert url.username != "sa" and url.password != APP_PW, "用主要使用者連線，而不是應用程式登入"
 
 
 def test_there_is_no_command_line_option_that_relaxes_verification_or_takes_a_password(capsys):
     options = {action.dest for action in boot.build_parser()._actions}
-    assert options == {"help", "host", "port", "master_user", "db_name", "app_login", "ca_bundle"}
-    for argv in (["--host", HOST, "--trust-server-certificate"], ["--host", HOST, "--password=" + APP_PW], ["--host", HOST, "--password", APP_PW], ["--host", HOST, "--pass", APP_PW]):
+    assert options == {"help", "host", "port", "master_user", "db_name", "app_login"}
+    for argv in (["--host", HOST, "--trust-server-certificate"], ["--host", HOST, "--password=" + APP_PW], ["--host", HOST, "--password", APP_PW], ["--host", HOST, "--pass", APP_PW],
+                 ["--host", HOST, "--ca-bundle", "/etc/rac/rds-ca-bundle.pem"], ["--host", HOST, "--server-certificate", "/x.pem"]):
         with pytest.raises(SystemExit) as raised:
             boot.main(argv, environ=SERVER_ENV, out=lambda text: None)
         assert raised.value.code == 2
@@ -372,37 +383,30 @@ def test_there_is_no_command_line_option_that_relaxes_verification_or_takes_a_pa
     assert APP_PW not in captured.out + captured.err and "trust-server" not in captured.out + captured.err, "錯誤訊息不回顯命令列內容"
 
 
-@pytest.mark.parametrize("argv, environ, ca_exists", [
-    (["--host", HOST], {}, True),                                                                              # 沒有任何密碼
-    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: MASTER_PW}, True),                                           # 少應用程式密碼
-    (["--host", HOST], {boot.APP_PASSWORD_ENV: APP_PW}, True),                                                 # 少主要使用者密碼
-    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: MASTER_PW, boot.APP_PASSWORD_ENV: MASTER_PW}, True),         # 兩個密碼相同
-    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: "short", boot.APP_PASSWORD_ENV: APP_PW}, True),
-    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: MASTER_PW, boot.APP_PASSWORD_ENV: "has;semi-colon-12345"}, True),
-    (["--host", "bad host"], None, True),
-    (["--host", HOST, "--db-name", "master"], None, True),
-    (["--host", HOST, "--db-name", "x];DROP"], None, True),
-    (["--host", HOST, "--app-login", "sa"], None, True),
-    (["--host", HOST, "--app-login", "racmaster"], None, True),
-    (["--host", HOST, "--master-user", "sa"], None, True),
-    (["--host", HOST, "--port", "70000"], None, True),
-    (["--host", HOST, "--ca-bundle", "relative.pem"], None, True),
-    (["--host", HOST], None, False),                                                                           # 憑證套件檔案不存在
+@pytest.mark.parametrize("argv, environ", [
+    (["--host", HOST], {}),                                                                              # 沒有任何密碼
+    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: MASTER_PW}),                                           # 少應用程式密碼
+    (["--host", HOST], {boot.APP_PASSWORD_ENV: APP_PW}),                                                 # 少主要使用者密碼
+    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: MASTER_PW, boot.APP_PASSWORD_ENV: MASTER_PW}),         # 兩個密碼相同
+    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: "short", boot.APP_PASSWORD_ENV: APP_PW}),
+    (["--host", HOST], {boot.MASTER_PASSWORD_ENV: MASTER_PW, boot.APP_PASSWORD_ENV: "has;semi-colon-12345"}),
+    (["--host", "bad host"], None),
+    (["--host", HOST, "--db-name", "master"], None),
+    (["--host", HOST, "--db-name", "x];DROP"], None),
+    (["--host", HOST, "--app-login", "sa"], None),
+    (["--host", HOST, "--app-login", "racmaster"], None),
+    (["--host", HOST, "--master-user", "sa"], None),
+    (["--host", HOST, "--port", "70000"], None),
 ])
-def test_bad_input_is_refused_with_exit_code_2_before_any_connection_and_without_echoing_secrets(argv, environ, ca_exists):
+def test_bad_input_is_refused_with_exit_code_2_before_any_connection_and_without_echoing_secrets(argv, environ):
     def must_not_connect(url):
         raise AssertionError("輸入不合法時不得連線")
 
-    code, messages, *_ = invoke(argv, environ, ca_exists=ca_exists, factory=must_not_connect)
+    code, messages, *_ = invoke(argv, environ, factory=must_not_connect)
     assert code == 2 and messages and all(message.startswith("拒絕：") for message in messages)
     text = "\n".join(messages)
     assert not any(secret in text for secret in SECRETS)
     assert "has;semi" not in text and "short" not in text.replace("shortened", "")
-
-
-def test_the_missing_ca_bundle_never_turns_into_trusting_everything():
-    code, messages, seen, _ = invoke(["--host", HOST], ca_exists=False)
-    assert code == 2 and seen == {} and any("憑證套件" in message for message in messages)
 
 
 @pytest.mark.parametrize("error", [

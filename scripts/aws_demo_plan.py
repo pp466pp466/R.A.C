@@ -543,6 +543,24 @@ def _parameter_step(target: Target, var: str, group: str) -> Step:
                            *_text("Parameters[0].Type")), "SecureString"),))
 
 
+def _refresh_parameter_step(target: Target, var: str, group: str) -> Step:
+    """覆寫既有的 SecureString 參數（只限由腳本組成的機密）。連線字串的型態改版後（design D7：去掉 `ServerCertificate`），
+    SSM 內既有的 `DATABASE_URL` 仍是舊型態，而 `put-parameter-…` 對已存在的參數會略過；這一步由執行器重新組成值並經暫存檔傳入
+    （值不在計畫內、不在命令列、不顯示）。覆寫不能同時指定標籤（AWS 會拒絕），原有的標籤保留。
+    驗證只看名稱與型別，不讀出明文（所以計畫內沒有任何 `--with-decryption`）。重複執行的結果相同。"""
+    if var not in COMPOSED_SECRETS:
+        raise PlanError(f"{var} 不是由腳本組成的機密：不覆寫（隨機產生的機密重新產生會讓既有的資源與參數不一致）")
+    name = parameter_name(var)
+    body = {"Name": name, "Type": "SecureString", "Value": "{{secret:" + var + "}}", "Overwrite": True}
+    return Step(
+        f"refresh-parameter-{var}", group,
+        f"覆寫機密參數 {name}（重新組成連線字串：只有 Encrypt=yes，沒有 ServerCertificate；值經暫存檔傳入、不顯示；既有的值會被取代，原有標籤保留）",
+        _aws(target, "ssm", "put-parameter", "--cli-input-json", "file://{{input_file}}"),
+        input_json=_json(body),
+        verify=(Check(_aws(target, "ssm", "describe-parameters", "--parameter-filters", f"Key=Name,Option=Equals,Values={name}",
+                           *_text("to_string(Parameters[0].[Name,Type])")), _json([name, "SecureString"])),))
+
+
 def _secrets_steps(target: Target) -> list[Step]:
     """RDS 建立之前就能寫入的參數；DATABASE_URL 要等 RDS 端點，放在 rds-ready 組。"""
     return [_parameter_step(target, var, "secrets") for var in parameter_names(target) if var not in COMPOSED_SECRETS]
@@ -629,6 +647,7 @@ def _rds_ready_steps(target: Target) -> list[Step]:
              _aws(target, "rds", "describe-db-instances", "--db-instance-identifier", n.db_instance, *_text("DBInstances[0].Endpoint.Address")),
              capture="rds-endpoint"),
         _parameter_step(target, "DATABASE_URL", "rds-ready"),
+        _refresh_parameter_step(target, "DATABASE_URL", "rds-ready"),
     ]
 
 
@@ -695,7 +714,8 @@ UNIT_DIR = "/etc/systemd/system"
 CADDYFILE_PATH = f"{HOST_CONFIG_DIR}/Caddyfile"
 PLAIN_ENV_PATH = f"{HOST_CONFIG_DIR}/plain.env"        # 一般設定（非機密，可放持久磁碟）
 RELEASE_ENV_PATH = f"{HOST_CONFIG_DIR}/release.env"    # 目前使用的映像標籤；部署與回復只改這個檔案（task 1.6）
-# design D7 候選 A：RDS 的 CA 套件放在主機、唯讀掛進容器；DATABASE_URL 的 ServerCertificate 指向容器內同一路徑
+# design D7：RDS 的 CA 套件由主機初始化 B 段放在主機，之後只是「建置輸入」：建置映像時 COPY 進衍生層、加進映像的系統憑證庫；
+# 容器不掛載它，DATABASE_URL 也不指向它（ServerCertificate 與 RDS 不相容，已否決）
 RDS_CA_BUNDLE_PATH = f"{HOST_CONFIG_DIR}/rds-ca-bundle.pem"
 HOST_DIRECTORIES = ((HOST_CONFIG_DIR, "0755"), (CADDY_DATA_DIR, "0700"))   # 主機初始化要先建立的目錄（路徑、權限）
 
@@ -752,7 +772,8 @@ def _exec_start(chunks: list[str]) -> str:
 
 def _app_run_args(name: str, command: tuple[str, ...], *, publish: str | None = None) -> list[str]:
     """應用程式容器（兩個池與排程工作共用）：非 root（沿用映像的使用者）、唯讀根檔案系統、丟掉所有 capability、
-    不得提權、限制日誌；機密環境檔來自記憶體檔案系統。`--pull=never`：標籤不存在時直接失敗，不去公開倉庫找同名映像。"""
+    不得提權、限制日誌；機密環境檔來自記憶體檔案系統。`--pull=never`：標籤不存在時直接失敗，不去公開倉庫找同名映像。
+    **沒有任何憑證掛載**：RDS 的 CA 已在建置時加進映像的系統憑證庫（design D7）。"""
     chunks = [f"{DOCKER} run --rm --name={name} --pull=never"]
     if publish is not None:
         chunks.append(f"--publish={publish}")
@@ -761,7 +782,6 @@ def _app_run_args(name: str, command: tuple[str, ...], *, publish: str | None = 
         f"--read-only --tmpfs=/dev/shm:{_TMPFS_OPTIONS} --tmpfs=/tmp:{_TMPFS_OPTIONS}",
         "--cap-drop=ALL --security-opt=no-new-privileges",
         " ".join(_LOG_OPTIONS),
-        f"--mount=type=bind,source={RDS_CA_BUNDLE_PATH},target={RDS_CA_BUNDLE_PATH},readonly",
         f"{APP_IMAGE_REF} {' '.join(command)}",
     ]
     return chunks
@@ -1046,6 +1066,11 @@ LOCAL_ARCHIVE_DIR = "build/aws-demo"                # 本機放原始碼壓縮�
 SOURCE_KEY_PREFIX = "source"                        # 傳檔儲存貯體內的物件前綴
 IMAGE_USER_ID = "10001"                             # Dockerfile 的 `useradd --uid 10001`（映像以非 root 執行）
 APP_DIR = "/app"                                    # Dockerfile 的 WORKDIR（映像內不得有 .env 與 .git）
+APP_BASE_IMAGE_REPO = "rac-app-base"                # design D7：共用的 Dockerfile 建成基底映像，再疊一層 RDS 的 CA 成為 rac-app
+CA_TRUST_DIR = "/usr/local/share/ca-certificates"   # update-ca-certificates 只收這個目錄內副檔名為 .crt 的檔案
+CA_TRUST_FILE = "rds-ca-bundle.crt"                 # 衍生層內的檔名（同時是衍生映像建置內容裡的檔名）
+CA_STORE_FILE = "/etc/ssl/certs/ca-certificates.crt"   # 系統憑證庫（所有憑證串在一起）；check-image 數它的憑證張數
+CA_DERIVED_NAME = "Dockerfile"                      # 衍生映像建置內容裡的檔名
 POOL_READY_PATH = "/readyz"                         # 含資料庫檢查；主機內對回送位址探測
 SSM_FAILED_STATUSES = ("Failed", "Cancelled", "TimedOut", "Cancelling")
 BUILD_TIMEOUT_SECONDS = 1800                        # t3.small 上建置映像（pip 與 ODBC 驅動）的上限
@@ -1107,9 +1132,26 @@ def _one_off_lines(tag: str, name: str, command: tuple[str, ...], *, pipe: str =
     return [f"{SBIN_DIR}/rac-render-env-app", f"{IMAGE_TAG_VAR}={tag}", f"{DOCKER} rm -f {name} >/dev/null 2>&1 || true", run]
 
 
+def derived_dockerfile(tag: str) -> str:
+    """衍生映像的 Dockerfile（design D7）：在基底映像 `rac-app-base:<tag>` 上，把主機的 RDS CA 套件加進系統憑證庫。
+    只有五個指令：`FROM`、`USER root`、`COPY`、`RUN update-ca-certificates`、`USER app`；沒有 `ARG`／`ENV`、沒有網路取用、沒有任何機密。
+    變更只是**新增**這份區域 CA 套件的根憑證，不移除、不關閉任何驗證（check-image 以憑證張數核對）。共用的 `Dockerfile` 不動。"""
+    return _text_file([
+        f"FROM {APP_BASE_IMAGE_REPO}:{_commit_tag(tag)}",
+        "USER root",
+        f"COPY {CA_TRUST_FILE} {CA_TRUST_DIR}/{CA_TRUST_FILE}",
+        "RUN update-ca-certificates",
+        "USER app",
+    ])
+
+
 def _build_lines(target: Target, tag: str) -> list[str]:
+    """兩段建置：①共用的 `Dockerfile` 建成基底映像 `rac-app-base:<tag>`；②衍生 Dockerfile（見 `derived_dockerfile`）加一層主機上的
+    RDS CA 套件，建成 `rac-app:<tag>`。套件檔以 `.crt` 為副檔名複製進衍生映像的建置內容（`update-ca-certificates` 只收 `.crt`），
+    衍生映像的建置內容只有這個檔案與 Dockerfile。"""
     n = names(target)
     key = f"{SOURCE_KEY_PREFIX}/{tag}.tar.gz"
+    delimiter = "RAC_DERIVED_DOCKERFILE"
     return [
         "set -eu", "export HOME=/root",
         'work="$(mktemp -d /var/tmp/rac-build.XXXXXX)"',           # 持久磁碟（AL2023 的 /tmp 是記憶體檔案系統）
@@ -1117,18 +1159,33 @@ def _build_lines(target: Target, tag: str) -> list[str]:
         f'aws s3 cp "s3://{n.bucket}/{key}" "$work/source.tar.gz" --region {target.region} --only-show-errors',
         'mkdir "$work/src"',
         'tar -xzf "$work/source.tar.gz" -C "$work/src"',
-        f'{DOCKER} build --tag {APP_IMAGE_REPO}:{tag} "$work/src"',
+        f'{DOCKER} build --tag {APP_BASE_IMAGE_REPO}:{tag} "$work/src"',
+        'mkdir "$work/ca"',
+        f'install -m 0644 {RDS_CA_BUNDLE_PATH} "$work/ca/{CA_TRUST_FILE}"',
+        f'cat > "$work/ca/{CA_DERIVED_NAME}" <<\'{delimiter}\'',
+        *derived_dockerfile(tag).splitlines(),
+        delimiter,
+        f'{DOCKER} build --tag {APP_IMAGE_REPO}:{tag} "$work/ca"',
     ]
 
 
 def _image_check_lines(tag: str) -> list[str]:
-    """映像以非 root 執行、且工作目錄內沒有 .env 與 .git（輸出一行：`<uid> clean`）。"""
+    """映像以非 root 執行、且工作目錄內沒有 .env 與 .git（輸出一行：`<uid> clean`）；另外核對系統憑證庫：
+    部署用映像的憑證張數必須等於「基底映像的張數加主機上 RDS 套件的張數」（只新增、沒有減少；不符就以錯誤結束，標準輸出不變）。"""
     image = f"{APP_IMAGE_REPO}:{tag}"
+    base = f"{APP_BASE_IMAGE_REPO}:{tag}"
     probe = f"if [ -e {APP_DIR}/.env ] || [ -e {APP_DIR}/.git ]; then echo dirty; else echo clean; fi"
     return [
         "set -eu", "export HOME=/root",
         f'user="$({DOCKER} run --rm --pull=never --entrypoint id {image} -u)"',
         f"state=\"$({DOCKER} run --rm --pull=never --entrypoint sh {image} -c '{probe}')\"",
+        f"base_certs=\"$({DOCKER} run --rm --pull=never --entrypoint grep {base} -c 'BEGIN CERTIFICATE' {CA_STORE_FILE})\"",
+        f"image_certs=\"$({DOCKER} run --rm --pull=never --entrypoint grep {image} -c 'BEGIN CERTIFICATE' {CA_STORE_FILE})\"",
+        f"bundle_certs=\"$(grep -c 'BEGIN CERTIFICATE' {RDS_CA_BUNDLE_PATH})\"",
+        'if [ "$image_certs" -ne "$((base_certs + bundle_certs))" ]; then',
+        '  echo "ca store mismatch: base=$base_certs bundle=$bundle_certs image=$image_certs" >&2',
+        "  exit 1",
+        "fi",
         'echo "$user $state"',
     ]
 
@@ -1388,7 +1445,7 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] = DEPLOY_GR
     """新版部署：資料庫快照 → 建置映像 → 遷移 → 重啟兩個池 → 驗證（每個階段一組，順序固定；`groups` 只取其中幾組）。
 
     - `tag` 是要部署的提交短碼：原始碼以 `git archive <tag>` 取出（只含已提交內容，不含 .env），經傳檔儲存貯體到主機建置，
-      映像標記為 `rac-app:<tag>`，前一版的映像保留供回復。
+      先建基底映像 `rac-app-base:<tag>`，再加一層主機上的 RDS CA 套件，標記為 `rac-app:<tag>`（design D7），前一版的映像保留供回復。
     - 遷移之前一定有快照；遷移（含種子）失敗就停止，不重啟兩個池；遷移是 expand-only，所以舊版程式仍能在新結構上運作。
     - 沒有任何步驟降級資料庫結構。
     """
@@ -1424,9 +1481,11 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] = DEPLOY_GR
         Step("upload-source", "build", f"上傳壓縮檔到傳檔儲存貯體 s3://{n.bucket}/{object_key}（伺服器端加密）",
              _aws(target, "s3", "cp", archive, f"s3://{n.bucket}/{object_key}", "--sse", "AES256", "--only-show-errors"),
              verify=(Check(_aws(target, "s3api", "head-object", "--bucket", n.bucket, "--key", object_key, *_text("ServerSideEncryption")), "AES256"),)),
-        *_ssm_steps(target, "build-image", "build", f"在主機上建置映像 {APP_IMAGE_REPO}:{tag}（約數分鐘；前一版的映像保留）",
+        *_ssm_steps(target, "build-image", "build",
+                    f"在主機上建置映像：先建基底映像 {APP_BASE_IMAGE_REPO}:{tag}，再加一層主機上的 RDS CA 套件成為 {APP_IMAGE_REPO}:{tag}（design D7；約數分鐘；前一版的映像保留）",
                     _build_lines(target, tag), timeout=BUILD_TIMEOUT_SECONDS),
-        *_ssm_steps(target, "check-image", "build", f"確認映像以非 root（uid {IMAGE_USER_ID}）執行，且 {APP_DIR} 內沒有 .env 與 .git",
+        *_ssm_steps(target, "check-image", "build",
+                    f"確認映像以非 root（uid {IMAGE_USER_ID}）執行、{APP_DIR} 內沒有 .env 與 .git，且系統憑證庫的憑證數＝基底映像的憑證數＋RDS 套件的憑證數",
                     _image_check_lines(tag), timeout=300, expect=f"{IMAGE_USER_ID} clean"),
     ]
 

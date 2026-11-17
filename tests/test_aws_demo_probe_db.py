@@ -1,7 +1,7 @@
 """aws-demo-environment 規格「連線必須驗證伺服器憑證」：資料庫連線探測腳本（scripts/aws_demo_probe_db.py）。
 
 探測以應用程式的連線設定（DATABASE_URL）執行 SELECT 1：成功才允許 migration；憑證無法驗證時失敗並回報類別，
-**拒絕任何放寬的設定（TrustServerCertificate、關閉加密）**，輸出不含連線字串、密碼、登入名稱與主機。
+**拒絕任何放寬或不合格的設定（TrustServerCertificate、關閉加密、ServerCertificate）**，輸出不含連線字串、密碼、登入名稱與主機。
 單元測試用假的引擎；標記 sqlserver 的整合測試對本機 SQL Server 取得真實的驅動程式錯誤，確認分類（含在地化的訊息）。
 """
 import ast
@@ -26,8 +26,8 @@ HOST = "demo-db.c0ffee123.ap-southeast-2.rds.amazonaws.com"
 USER = "rac_app_sentinel"
 PASSWORD = "App-Sentinel-77c1-Pw"
 DRIVER = "driver=ODBC+Driver+18+for+SQL+Server"
-CA = plan.RDS_CA_BUNDLE_PATH
-GOOD_URL = f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}:1433/rac_demo?{DRIVER}&Encrypt=yes&ServerCertificate={CA}"
+CA = plan.RDS_CA_BUNDLE_PATH                      # 舊方案（已否決）的 ServerCertificate 值；只用來造出「應被拒絕」的連線字串
+GOOD_URL = f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}:1433/rac_demo?{DRIVER}&Encrypt=yes"
 SENTINELS = (HOST, USER, PASSWORD, "rac_demo", "1433")
 
 
@@ -39,7 +39,7 @@ class FakeEngine:
         self.disposed += 1
 
 
-def run_probe(url, *, exists=True, query=lambda engine: 1, factory=None):
+def run_probe(url, *, query=lambda engine: 1, factory=None):
     messages: list[str] = []
     engines: list[FakeEngine] = []
     received: list[str] = []
@@ -52,7 +52,7 @@ def run_probe(url, *, exists=True, query=lambda engine: 1, factory=None):
 
     code = probe.probe(
         {} if url is None else {"DATABASE_URL": url}, messages.append,
-        engine_factory=factory or engine_factory, file_exists=lambda path: exists, query=query,
+        engine_factory=factory or engine_factory, query=query,
     )
     return code, messages, engines, received
 
@@ -71,28 +71,28 @@ def test_a_good_connection_string_succeeds_and_the_report_describes_only_the_opt
     code, messages, engines, received = run_probe(GOOD_URL)
     assert code == 0
     assert messages[0].startswith("成功：") and "SELECT 1" in messages[0]
-    assert messages[1] == f"連線選項：Encrypt=yes；ServerCertificate 已指定（{CA}）；沒有 TrustServerCertificate"
+    assert messages[1] == "連線選項：Encrypt=yes；沒有 ServerCertificate（以映像的系統憑證庫驗證）；沒有 TrustServerCertificate"
     assert_no_connection_details(messages)
     assert received == [GOOD_URL], "探測要用應用程式的同一個 DATABASE_URL"
     assert [engine.disposed for engine in engines] == [1]
 
 
-def test_encrypt_may_be_left_out_because_the_driver_defaults_to_yes_and_a_missing_server_certificate_option_uses_the_system_store():
+def test_encrypt_may_be_left_out_because_the_driver_defaults_to_yes_and_the_system_store_verifies_the_certificate():
     url = f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}/rac_demo?{DRIVER}"
     code, messages, *_ = run_probe(url)
     assert code == 0
-    assert "Encrypt=（未指定，驅動程式預設為 yes）" in messages[1] and "ServerCertificate 未指定" in messages[1]
+    assert "Encrypt=（未指定，驅動程式預設為 yes）" in messages[1] and "沒有 ServerCertificate" in messages[1]
     assert_no_connection_details(messages)
 
 
-# ---- 拒絕放寬的設定（不連線）------------------------------------------------------------------
+# ---- 拒絕放寬或不合格的設定（不連線）----------------------------------------------------------
 
 
 @pytest.mark.parametrize("extra", [
     "&TrustServerCertificate=yes", "&TrustServerCertificate=YES", "&TrustServerCertificate=true", "&TrustServerCertificate=1", "&trustservercertificate=Yes",
 ])
 def test_trusting_every_certificate_is_refused_without_connecting(extra):
-    code, messages, engines, received = run_probe(f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}/rac_demo?{DRIVER}&Encrypt=yes&ServerCertificate={CA}{extra}")
+    code, messages, engines, received = run_probe(f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}/rac_demo?{DRIVER}&Encrypt=yes{extra}")
     assert code == 2 and engines == [] and received == []
     assert "TrustServerCertificate" in messages[0] and messages[0].startswith("拒絕：")
     assert_no_connection_details(messages)
@@ -106,14 +106,22 @@ def test_turning_encryption_off_is_refused_without_connecting(encrypt):
 
 
 def test_trust_server_certificate_no_is_not_a_relaxation_and_passes_the_guard():
-    code, *_ = run_probe(f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}/rac_demo?{DRIVER}&Encrypt=yes&TrustServerCertificate=no")
-    assert code == 0
+    """兩個選項名稱相近：TrustServerCertificate=no 不是放寬，也不是 ServerCertificate，應通過守門。"""
+    code, messages, *_ = run_probe(f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}/rac_demo?{DRIVER}&Encrypt=yes&TrustServerCertificate=no")
+    assert code == 0 and "沒有 ServerCertificate" in messages[1]
 
 
-def test_a_server_certificate_file_that_does_not_exist_is_refused_without_connecting():
-    code, messages, engines, _ = run_probe(GOOD_URL, exists=False)
-    assert code == 2 and engines == [] and "ServerCertificate" in messages[0]
+@pytest.mark.parametrize("extra", [
+    f"&ServerCertificate={CA}", "&servercertificate=/x.pem", "&SERVERCERTIFICATE=/etc/rac/rds-ca-bundle.pem",
+    f"&ServerCertificate={CA}&TrustServerCertificate=no",
+])
+def test_a_connection_string_with_server_certificate_is_refused_without_connecting(extra):
+    """design D7：ServerCertificate 是整份憑證的精確比對（需要 strict 加密），與 RDS 不相容——已否決，連線字串不得含它。"""
+    code, messages, engines, received = run_probe(f"mssql+pyodbc://{USER}:{PASSWORD}@{HOST}/rac_demo?{DRIVER}&Encrypt=yes{extra}")
+    assert code == 2 and engines == [] and received == []
+    assert messages[0].startswith("拒絕：") and "ServerCertificate" in messages[0] and "系統憑證庫" in messages[0]
     assert_no_connection_details(messages)
+    assert "/x.pem" not in "\n".join(messages) and CA not in "\n".join(messages)
 
 
 @pytest.mark.parametrize("url", ["sqlite+pysqlite:///:memory:", "postgresql://u:p@h/db", "mysql+pymysql://u:p@h/db"])
@@ -175,7 +183,7 @@ def test_failing_to_dispose_the_engine_does_not_hide_the_result():
             raise RuntimeError(PASSWORD)
 
     messages: list[str] = []
-    code = probe.probe({"DATABASE_URL": GOOD_URL}, messages.append, engine_factory=lambda url: StubbornEngine(), file_exists=lambda path: True, query=lambda engine: 1)
+    code = probe.probe({"DATABASE_URL": GOOD_URL}, messages.append, engine_factory=lambda url: StubbornEngine(), query=lambda engine: 1)
     assert code == 0 and PASSWORD not in "\n".join(messages)
 
 

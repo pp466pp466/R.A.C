@@ -7,10 +7,11 @@
     python aws_demo_probe_db.py
 
 - **輸出只有成功或失敗與錯誤類別**：不輸出連線字串、密碼、登入名稱、主機位址與例外訊息；失敗時只有類別（`tls_certificate`、`login_failed`、
-  `timeout`、`network`、`driver_missing`、`unknown`）、例外類型與 SQLSTATE。成功時另印出連線選項的型態（`Encrypt` 與 `ServerCertificate`
-  是否設定、沒有 `TrustServerCertificate`），供記錄採用的連線字串型態（task 5.3）。
-- **拒絕放寬的設定（不連線，結束代碼 2）**：`TrustServerCertificate` 為真、`Encrypt` 明確關閉或為 optional、不是 SQL Server 的連線字串、
-  指定的 `ServerCertificate` 檔案不存在。這些情況下不嘗試任何連線，也不產生任何放寬的設定。
+  `timeout`、`network`、`driver_missing`、`unknown`）、例外類型與 SQLSTATE。成功時另印出連線選項的型態（`Encrypt` 的值、沒有
+  `ServerCertificate`、沒有 `TrustServerCertificate`），供記錄採用的連線字串型態（task 5.3）。
+- **拒絕不合格的設定（不連線，結束代碼 2）**：`TrustServerCertificate` 為真、`Encrypt` 明確關閉或為 optional、不是 SQL Server 的連線字串、
+  含 `ServerCertificate`（那是整份憑證的精確比對、需要 strict 加密，與 RDS 不相容；憑證信任改由映像的系統憑證庫提供，design D7）。
+  這些情況下不嘗試任何連線，也不產生任何放寬的設定。
 - 結束代碼：0 成功；1 連線或查詢失敗；2 設定不合格（沒有連線）。
 
 腳本不匯入其他維運腳本（可單獨掛入）；錯誤分類與 `aws_demo_bootstrap_db.py` 的 `classify_error` 相同，`tests/test_aws_demo_probe_db.py` 比對兩者。
@@ -107,7 +108,7 @@ def _query(url, name: str) -> str | None:
     return None
 
 
-def check_options(url, *, file_exists: Callable[[str], bool] = os.path.isfile) -> str:
+def check_options(url) -> str:
     """檢查連線字串沒有放寬驗證，回傳連線選項的型態描述（不含主機、登入名稱與密碼）。不合格就丟 `ProbeRefused`。"""
     if url.get_backend_name() != "mssql":
         raise ProbeRefused("DATABASE_URL 不是 SQL Server 的連線字串")
@@ -117,14 +118,9 @@ def check_options(url, *, file_exists: Callable[[str], bool] = os.path.isfile) -
     encrypt = _query(url, "Encrypt")
     if encrypt is not None and encrypt.lower() in ENCRYPT_OFF:
         raise ProbeRefused("DATABASE_URL 的 Encrypt 被關閉：資料庫連線必須加密")
-    certificate = _query(url, "ServerCertificate")
-    if certificate:
-        if not file_exists(certificate):
-            raise ProbeRefused("DATABASE_URL 的 ServerCertificate 指向的檔案不存在（沒有它就無法驗證伺服器憑證）")
-        verification = f"ServerCertificate 已指定（{certificate}）"
-    else:
-        verification = "ServerCertificate 未指定（使用驅動程式預設的系統憑證庫驗證）"
-    return f"Encrypt={encrypt or '（未指定，驅動程式預設為 yes）'}；{verification}；沒有 TrustServerCertificate"
+    if _query(url, "ServerCertificate") is not None:
+        raise ProbeRefused("DATABASE_URL 含 ServerCertificate：它是整份憑證的精確比對（需要 strict 加密），與 RDS 不相容；憑證信任由映像的系統憑證庫提供")
+    return f"Encrypt={encrypt or '（未指定，驅動程式預設為 yes）'}；沒有 ServerCertificate（以映像的系統憑證庫驗證）；沒有 TrustServerCertificate"
 
 
 # ---- 探測本體 ----------------------------------------------------------------------------------
@@ -154,7 +150,6 @@ def probe(
     out: Callable[[str], None] = print,
     *,
     engine_factory: Callable[[str], object] = default_engine_factory,
-    file_exists: Callable[[str], bool] = os.path.isfile,
     query: Callable[[object], int] = select_one,
 ) -> int:
     from sqlalchemy.engine import make_url
@@ -165,7 +160,7 @@ def probe(
         return 2
     try:
         url = make_url(raw)
-        options = check_options(url, file_exists=file_exists)
+        options = check_options(url)
     except ProbeRefused as error:
         out(f"拒絕：{error}")
         return 2

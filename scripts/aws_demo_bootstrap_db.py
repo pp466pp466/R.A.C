@@ -4,13 +4,14 @@
 應用程式登入，並讓該登入成為資料庫的擁有者（`db_owner`；Alembic 遷移要建表與改表）。之後應用程式只用這個登入。
 
     python aws_demo_bootstrap_db.py --host <RDS 端點> [--port 1433] [--master-user racmaster] \\
-        [--db-name rac_demo] [--app-login rac_app] [--ca-bundle /etc/rac/rds-ca-bundle.pem]
+        [--db-name rac_demo] [--app-login rac_app]
 
 - **密碼只取環境變數**：`RDS_MASTER_PASSWORD`（主要使用者）與 `DB_APP_PASSWORD`（專屬登入），不接受命令列參數（避免留在行程清單與 shell
   歷史）；不寫入日誌、輸出與例外訊息。輸出只有名稱與「已建立／已存在」，失敗時只有步驟、錯誤類別、例外類型與 SQLSTATE，**不輸出例外訊息**
   （驅動程式的訊息可能含伺服器位址或登入名稱）。
 - **可重複執行**：資料庫、登入、資料庫使用者與擁有者角色各自「不存在才建立」；**已存在的登入不重設密碼**（也不動權限以外的內容）。
-- **連線一律驗證伺服器憑證**：`Encrypt=yes` 加 `ServerCertificate=<CA 套件路徑>`（design D7 候選 A），**沒有任何信任所有憑證的選項**。
+- **連線一律驗證伺服器憑證**：連線字串只有 `Encrypt=yes`，驅動程式以映像的系統憑證庫驗證憑證鏈與主機名稱（RDS 的 CA 在建置時已加進映像的
+  系統憑證庫，design D7）；**沒有 `ServerCertificate`**（它是整份憑證的精確比對、需要 strict 加密，與 RDS 不相容），**也沒有任何信任所有憑證的選項**。
 - 名稱經白名單驗證（只含英數與底線、不得是系統資料庫或保留名稱），語句只有下面四個，識別字不接受外部字串拼接。
 - 這是維運腳本，允許使用 T-SQL 的 `CREATE LOGIN／DATABASE`（沒有 ORM 對應）；它位於 `scripts/`，不在 `tests/architecture/test_no_raw_sql.py`
   掃描的 `app/` 與 `migrations/`（與 `scripts/restore_drill.py` 的 `RESTORE` 同類）。
@@ -33,7 +34,6 @@ DEFAULT_PORT = 1433
 DEFAULT_MASTER_USER = "racmaster"
 DEFAULT_DB_NAME = "rac_demo"
 DEFAULT_APP_LOGIN = "rac_app"
-DEFAULT_CA_BUNDLE = "/etc/rac/rds-ca-bundle.pem"
 MASTER_PASSWORD_ENV = "RDS_MASTER_PASSWORD"
 APP_PASSWORD_ENV = "DB_APP_PASSWORD"
 ODBC_DRIVER = "ODBC Driver 18 for SQL Server"
@@ -42,7 +42,6 @@ LOGIN_TIMEOUT_SECONDS = 15
 IDENTIFIER = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,62}")
 HOST = re.compile(r"[A-Za-z0-9]([A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")   # RDS 端點的主機名稱
 PASSWORD = re.compile(r"[A-Za-z0-9_-]{12,128}")                      # 與 scripts/aws_demo.py 的 generate_password 的字元集相同（測試比對）
-CA_BUNDLE_PATH = re.compile(r"/[A-Za-z0-9._/-]{1,200}")
 
 RESERVED_DATABASES = frozenset({"master", "model", "msdb", "tempdb", "distribution"})
 RESERVED_PREFIXES = ("db_", "sys", "rds")                            # 資料庫角色、系統物件與 RDS 的內部帳號
@@ -131,12 +130,6 @@ def validate_host(value: object) -> str:
 def validate_port(value: object) -> int:
     if not isinstance(value, int) or isinstance(value, bool) or not 1 <= value <= 65535:
         raise BootstrapError("連接埠：必須是 1 至 65535")
-    return value
-
-
-def validate_ca_bundle(value: object) -> str:
-    if not isinstance(value, str) or not CA_BUNDLE_PATH.fullmatch(value) or ".." in value:
-        raise BootstrapError("憑證套件路徑：必須是絕對路徑（只含英數、點、底線、連字號與斜線）")
     return value
 
 
@@ -332,13 +325,14 @@ def make_connect(admin_url) -> Connect:
     return connect
 
 
-def build_admin_url(host: str, port: int, master_user: str, master_password: str, ca_bundle: str):
-    """主要使用者的連線：加密並驗證伺服器憑證（`ServerCertificate`），**沒有 `TrustServerCertificate`**。"""
+def build_admin_url(host: str, port: int, master_user: str, master_password: str):
+    """主要使用者的連線：只有 `Encrypt=yes`（驅動程式以映像的系統憑證庫驗證憑證鏈與主機名稱），
+    **沒有 `ServerCertificate`、沒有 `TrustServerCertificate`**。"""
     from sqlalchemy.engine import URL
 
     return URL.create(
         "mssql+pyodbc", username=master_user, password=master_password, host=host, port=port, database="master",
-        query={"driver": ODBC_DRIVER, "Encrypt": "yes", "ServerCertificate": ca_bundle},
+        query={"driver": ODBC_DRIVER, "Encrypt": "yes"},
     )
 
 
@@ -359,7 +353,6 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--master-user", default=DEFAULT_MASTER_USER)
     parser.add_argument("--db-name", default=DEFAULT_DB_NAME)
     parser.add_argument("--app-login", default=DEFAULT_APP_LOGIN)
-    parser.add_argument("--ca-bundle", default=DEFAULT_CA_BUNDLE, help="RDS 的 CA 套件路徑（唯讀掛入容器）")
     return parser
 
 
@@ -373,7 +366,6 @@ def main(
     environ: Mapping[str, str] | None = None,
     out: Callable[[str], None] = print,
     connect_factory: Callable[..., Connect] = make_connect,
-    file_exists: Callable[[str], bool] = os.path.isfile,
 ) -> int:
     args = build_parser().parse_args(argv)
     env = os.environ if environ is None else environ
@@ -383,19 +375,16 @@ def main(
         master_user = validate_master_user(args.master_user)
         db_name = validate_database_name(args.db_name)
         login = validate_login_name(args.app_login, master_user=master_user)
-        ca_bundle = validate_ca_bundle(args.ca_bundle)
         master_password = validate_password(env.get(MASTER_PASSWORD_ENV), f"環境變數 {MASTER_PASSWORD_ENV}")
         app_password = validate_password(env.get(APP_PASSWORD_ENV), f"環境變數 {APP_PASSWORD_ENV}")
         if master_password == app_password:
             raise BootstrapError("應用程式登入密碼不得與主要使用者密碼相同")
-        if not file_exists(ca_bundle):
-            raise BootstrapError("憑證套件檔案不存在（沒有它就無法驗證伺服器憑證；不會改用信任所有憑證）")
     except BootstrapError as error:
         out(f"拒絕：{error}")
         return 2
 
     try:
-        admin_url = build_admin_url(host, port, master_user, master_password, ca_bundle)
+        admin_url = build_admin_url(host, port, master_user, master_password)
         outcome = bootstrap(connect_factory(admin_url), db_name, login, app_password, master_user=master_user)
     except BootstrapError as error:
         out(f"拒絕：{error}")

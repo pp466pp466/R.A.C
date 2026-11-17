@@ -354,6 +354,32 @@ def test_database_url_is_written_only_after_the_rds_endpoint_is_known():
     assert "put-parameter-DATABASE_URL" not in [s.id for s in steps if s.group == "secrets"]
 
 
+def test_the_existing_database_url_can_be_overwritten_by_a_step_that_never_shows_or_reads_the_value():
+    """design D7 修訂：既有的 SSM `DATABASE_URL` 仍是舊型態（帶 ServerCertificate），`put-parameter-…` 對已存在的參數會略過，所以要有覆寫步驟。"""
+    steps = full_plan()
+    ids = [s.id for s in steps]
+    refresh = by_id(steps)["refresh-parameter-DATABASE_URL"]
+    assert refresh.group == "rds-ready" and ids.index("put-parameter-DATABASE_URL") < ids.index(refresh.id)
+    assert refresh.argv[:3] == ("aws", "ssm", "put-parameter") and "file://{{input_file}}" in refresh.argv
+    body = json.loads(refresh.input_json)
+    assert body == {"Name": "/rac-demo/staging/DATABASE_URL", "Type": "SecureString", "Value": "{{secret:DATABASE_URL}}", "Overwrite": True}
+    assert "Tags" not in body, "AWS 不接受覆寫同時指定標籤；原有的標籤保留"
+    assert "--value" not in refresh.argv and "--overwrite" not in refresh.argv and "--with-decryption" not in " ".join(refresh.argv)
+    assert refresh.exists_argv is None and refresh.resource is None and not refresh.billing and not refresh.interactive, "不建立資源，沒有已存在就略過"
+    assert len(refresh.verify) == 1 and "--with-decryption" not in refresh.verify[0].argv, "驗證只看名稱與型別，不讀出明文"
+    assert refresh.verify[0].expect == '["/rac-demo/staging/DATABASE_URL","SecureString"]'
+    assert "Parameters[0].[Name,Type]" in " ".join(refresh.verify[0].argv)
+
+
+def test_only_composed_secrets_may_be_overwritten():
+    """隨機產生的機密（密碼、SECRET_KEY）重新產生會讓既有的資源與參數不一致，不提供覆寫。"""
+    assert plan._refresh_parameter_step(target(), "DATABASE_URL", "rds-ready").id == "refresh-parameter-DATABASE_URL"
+    for var in ("SECRET_KEY", "RDS_MASTER_PASSWORD", "DB_APP_PASSWORD", "GEMINI_API_KEY"):
+        with pytest.raises(plan.PlanError, match=var):
+            plan._refresh_parameter_step(target(), var, "rds-ready")
+    assert [s.id for s in full_plan() if s.id.startswith("refresh-parameter-")] == ["refresh-parameter-DATABASE_URL"]
+
+
 # ---- 1.3 資源步驟 ------------------------------------------------------------------------------
 
 
@@ -570,7 +596,7 @@ def test_deployment_order_overlaps_ec2_with_the_rds_wait():
     ids = [s.id for s in full_plan()]
     order = ["check-identity", "create-budget", "create-host-sg", "create-db-sg", "create-host-role", "wait-instance-profile", "create-bucket",
              "put-parameter-RDS_MASTER_PASSWORD", "create-rds-instance", "launch-ec2", "allocate-eip", "wait-ssm-online",
-             "wait-rds-available", "get-rds-endpoint", "put-parameter-DATABASE_URL", "create-ec2-status-alarm"]
+             "wait-rds-available", "get-rds-endpoint", "put-parameter-DATABASE_URL", "refresh-parameter-DATABASE_URL", "create-ec2-status-alarm"]
     positions = [ids.index(step_id) for step_id in order]
     assert positions == sorted(positions) and len(set(positions)) == len(order)
     assert ids.index("create-rds-instance") < ids.index("launch-ec2") < ids.index("wait-rds-available")
@@ -745,13 +771,20 @@ def test_app_containers_are_hardened_run_as_the_image_user_and_keep_secrets_off_
         assert tokens.index("rac-app:${RAC_IMAGE_TAG}") > tokens.index("--read-only"), "選項都在映像名稱之前"
 
 
-def test_app_containers_use_the_tag_from_release_env_and_the_rds_ca_bundle_read_only():
+def test_app_containers_use_the_tag_from_release_env_and_mount_no_certificate():
+    """design D7：RDS 的 CA 在建置時加進映像的系統憑證庫，容器不再掛載它（掛載是已否決的 ServerCertificate 方案）。"""
     for name, text in app_container_units().items():
         assert "EnvironmentFile=/etc/rac/release.env" in text, name
         assert "rac-app:${RAC_IMAGE_TAG}" in exec_tokens(text)
-        mounts = option_values(exec_tokens(text), "--mount")
-        assert mounts == ["type=bind,source=/etc/rac/rds-ca-bundle.pem,target=/etc/rac/rds-ca-bundle.pem,readonly"], name
-    assert plan.RDS_CA_BUNDLE_PATH == "/etc/rac/rds-ca-bundle.pem"
+        assert option_values(exec_tokens(text), "--mount") == [], name
+        assert "--volume" not in text and "rds-ca-bundle" not in text and "ServerCertificate" not in text, name
+    assert plan.RDS_CA_BUNDLE_PATH == "/etc/rac/rds-ca-bundle.pem", "它只是建置輸入（主機初始化 B 段放的位置）"
+
+
+def test_one_off_containers_mount_no_certificate_either():
+    for tag_lines in (plan._migrate_lines(TAG), plan._seed_lines(TAG), plan._migration_head_lines(TAG)):
+        text = "\n".join(tag_lines)
+        assert "--mount" not in text and "rds-ca-bundle" not in text and "--volume" not in text
 
 
 def test_release_env_file_holds_only_a_valid_image_tag():
@@ -1161,7 +1194,7 @@ def test_the_source_comes_from_the_commit_not_the_working_tree_and_is_uploaded_e
 def test_the_image_is_built_on_the_host_from_that_object_tagged_with_the_commit_and_older_images_are_kept():
     text = script_text(by_id(deploy_steps())["build-image"])
     bucket = plan.names(target()).bucket
-    assert f"s3://{bucket}/source/{TAG}.tar.gz" in text and f"--tag rac-app:{TAG}" in text
+    assert f"s3://{bucket}/source/{TAG}.tar.gz" in text and f"--tag rac-app:{TAG}" in text and f"--tag rac-app-base:{TAG}" in text
     assert "--region ap-southeast-2" in text, "主機上的 aws 指令也明確指定雪梨區域"
     assert "mktemp -d /var/tmp" in text and "trap" in text, "建置用的暫存目錄在持久磁碟（/tmp 是記憶體）並在結束時清除"
     for forbidden in ("rmi", "prune", "docker rm ", "--no-cache"):
@@ -1175,6 +1208,147 @@ def test_the_image_check_expects_a_non_root_user_and_no_env_or_git_directory_in_
     assert "--pull=never" in text and f"rac-app:{TAG}" in text and "-e /app/.env" in text and "-e /app/.git" in text
     dockerfile = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8-sig")
     assert f"--uid {plan.IMAGE_USER_ID}" in dockerfile and f"WORKDIR {plan.APP_DIR}\n" in dockerfile and "USER app" in dockerfile
+
+
+# ---- 憑證方案（design D7，2026-11-17 修訂）：衍生映像層，連線字串只有 Encrypt=yes ------------------------------------
+
+ALLOWED_DERIVED_INSTRUCTIONS = ("FROM", "USER", "COPY", "RUN")
+
+
+def test_the_derived_dockerfile_only_adds_the_rds_trust_anchors_on_top_of_the_base_image_and_returns_to_the_non_root_user():
+    text = plan.derived_dockerfile(TAG)
+    assert text.isascii() and text.endswith("\n") and "\r" not in text
+    lines = text.splitlines()
+    assert lines == [
+        f"FROM rac-app-base:{TAG}",
+        "USER root",
+        "COPY rds-ca-bundle.crt /usr/local/share/ca-certificates/rds-ca-bundle.crt",
+        "RUN update-ca-certificates",
+        "USER app",
+    ]
+    assert {line.split()[0] for line in lines} <= set(ALLOWED_DERIVED_INSTRUCTIONS)
+    assert lines[-1] == "USER app", "最後一個 USER 必須回到映像原本的非 root 使用者"
+    assert "/usr/local/share/ca-certificates/" in text and lines[2].split()[1].endswith(".crt"), "update-ca-certificates 只收 .crt"
+
+
+def test_the_derived_dockerfile_has_no_secret_network_fetch_or_trust_relaxation():
+    text = plan.derived_dockerfile(TAG)
+    for forbidden in ("ARG", "ENV", "ADD", "curl", "wget", "http", "apt", "pip", "TrustServerCertificate", "ServerCertificate", "SSL_CERT_FILE",
+                      "REQUESTS_CA_BUNDLE", "NODE_EXTRA_CA_CERTS", "--privileged", "PASSWORD", "SECRET", "rm "):
+        assert forbidden not in text, forbidden
+    with pytest.raises(plan.PlanError, match="映像標籤"):
+        plan.derived_dockerfile("Bad Tag")
+    with pytest.raises(plan.PlanError, match="映像標籤"):
+        plan.derived_dockerfile("abc1234\nUSER root")
+
+
+def test_the_shared_dockerfile_is_not_touched_by_the_certificate_scheme():
+    shared = (PROJECT_ROOT / "Dockerfile").read_text(encoding="utf-8-sig")
+    for forbidden in ("rds", "update-ca-certificates", "ca-certificates.crt", "ServerCertificate"):
+        assert forbidden not in shared, f"共用的 Dockerfile 不為單一展示環境而改（design D7）：{forbidden}"
+
+
+def test_the_build_step_builds_the_base_image_first_then_the_derived_layer_from_the_host_bundle():
+    text = script_text(by_id(deploy_steps())["build-image"])
+    base_build = text.index(f"docker build --tag rac-app-base:{TAG} ")
+    derived_build = text.index(f"docker build --tag rac-app:{TAG} ")
+    assert base_build < text.index("install -m 0644 /etc/rac/rds-ca-bundle.pem") < text.index("<<'RAC_DERIVED_DOCKERFILE'") < derived_build
+    assert text.count("docker build") == 2
+    assert "rds-ca-bundle.crt" in text and plan.derived_dockerfile(TAG).strip() in text
+    assert text.isascii()
+    assert "TrustServerCertificate" not in text and "SSL_CERT_FILE" not in text
+
+
+def fake_docker_script(body: str) -> list[str]:
+    """在 bash 內定義一個假的 docker 函式（`/usr/bin/docker` 之後會被代換成它）。`LOG` 與 `BUNDLE` 是呼叫端設定的 shell 變數。"""
+    return ["dockerfake() {", *("  " + line for line in body.splitlines()), "}"]
+
+
+def test_the_build_script_runs_both_builds_in_order_with_a_context_holding_only_the_dockerfile_and_the_bundle():
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法執行腳本（不算通過）")
+    fake = fake_docker_script(
+        'echo "ARGS: $*" >> "$LOG"\n'
+        'if [ "$1" = build ]; then\n'
+        '  for last; do :; done\n'
+        '  echo "CTX: $(ls -1 "$last" | tr "\\n" " ")" >> "$LOG"\n'
+        '  if [ -f "$last/Dockerfile" ]; then echo DOCKERFILE_BEGIN >> "$LOG"; cat "$last/Dockerfile" >> "$LOG"; echo DOCKERFILE_END >> "$LOG"; fi\n'
+        '  if [ -f "$last/rds-ca-bundle.crt" ] && cmp -s "$last/rds-ca-bundle.crt" "$BUNDLE"; then echo BUNDLE_SAME >> "$LOG"; fi\n'
+        "fi")
+    lines = script_lines(by_id(deploy_steps())["build-image"])
+    body = "\n".join(lines)
+    body = body.replace("/usr/bin/docker", "dockerfake").replace("/var/tmp", "$d").replace("/etc/rac/rds-ca-bundle.pem", "$BUNDLE")
+    script = "\n".join([
+        'd="$(mktemp -d)"',
+        'LOG="$d/log"; BUNDLE="$d/bundle.pem"; : > "$LOG"',
+        'printf "%s\\n" "-----BEGIN CERTIFICATE-----" "AAA" "-----END CERTIFICATE-----" "-----BEGIN CERTIFICATE-----" "BBB" "-----END CERTIFICATE-----" > "$BUNDLE"',
+        "aws() { :; }", "tar() { :; }",
+        *fake,
+        body,
+        'cat "$LOG"', 'rm -rf "$d"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    out = result.stdout.decode("utf-8", "replace")
+    assert result.returncode == 0, (out, result.stderr.decode("utf-8", "replace"))
+    builds = [line for line in out.splitlines() if line.startswith("ARGS: build")]
+    assert len(builds) == 2 and f"--tag rac-app-base:{TAG}" in builds[0] and f"--tag rac-app:{TAG}" in builds[1]
+    assert out.count("CTX: ") == 2
+    ctx = [line for line in out.splitlines() if line.startswith("CTX: ")]
+    assert ctx[1].split() == ["CTX:", "Dockerfile", "rds-ca-bundle.crt"], "衍生映像的建置內容只有 Dockerfile 與 CA 套件（不含原始碼與其他檔案）"
+    dockerfile = out[out.index("DOCKERFILE_BEGIN\n") + len("DOCKERFILE_BEGIN\n"):out.index("DOCKERFILE_END")].replace("\r\n", "\n")
+    assert dockerfile == plan.derived_dockerfile(TAG), "heredoc 寫出的 Dockerfile 就是計畫模組產生的那一份"
+    assert "BUNDLE_SAME" in out, "放進建置內容的就是主機上的套件，沒有被改動"
+
+
+@pytest.mark.parametrize(("base", "derived", "passes"), [
+    (140, 142, True),           # 套件 2 張（測試用的假套件）：基底 140 + 2 = 142
+    (140, 140, False),          # 憑證沒有加進去
+    (140, 141, False),          # 只加了一張
+    (140, 144, False),          # 多了不明的憑證
+    (140, 139, False),          # 少了原有的憑證（移除了信任錨）
+])
+def test_the_image_check_script_requires_the_certificate_store_to_grow_by_exactly_the_bundle(base, derived, passes):
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法執行腳本（不算通過）")
+    fake = fake_docker_script(
+        'case "$*" in\n'
+        '  *"--entrypoint id"*) echo 10001;;\n'
+        '  *"--entrypoint sh"*) echo clean;;\n'
+        '  *"--entrypoint grep rac-app-base:"*) echo "$BASE";;\n'
+        '  *"--entrypoint grep rac-app:"*) echo "$DERIVED";;\n'
+        "esac")
+    body = "\n".join(plan._image_check_lines(TAG)).replace("/usr/bin/docker", "dockerfake").replace("/etc/rac/rds-ca-bundle.pem", "$BUNDLE")
+    script = "\n".join([
+        'd="$(mktemp -d)"', 'BUNDLE="$d/bundle.pem"', f"BASE={base}", f"DERIVED={derived}",
+        'printf "%s\\n" "-----BEGIN CERTIFICATE-----" "AAA" "-----END CERTIFICATE-----" "-----BEGIN CERTIFICATE-----" "BBB" "-----END CERTIFICATE-----" > "$BUNDLE"',
+        *fake,
+        body,
+        'rm -rf "$d"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    out, err = result.stdout.decode("utf-8", "replace").strip(), result.stderr.decode("utf-8", "replace")
+    if passes:
+        assert result.returncode == 0 and out == f"{plan.IMAGE_USER_ID} clean", (out, err)
+    else:
+        assert result.returncode != 0 and "10001 clean" not in out and "ca store mismatch" in err, (out, err)
+        assert f"base={base}" in err and f"image={derived}" in err and "bundle=2" in err
+
+
+def test_the_image_check_compares_the_system_certificate_store_of_the_base_and_the_derived_image_with_the_host_bundle():
+    text = script_text(by_id(deploy_steps())["check-image"])
+    assert text.count(plan.CA_STORE_FILE) == 2 and plan.CA_STORE_FILE == "/etc/ssl/certs/ca-certificates.crt"
+    assert f"rac-app-base:{TAG}" in text and f"rac-app:{TAG}" in text and plan.RDS_CA_BUNDLE_PATH in text
+    assert "--pull=never" in text and text.isascii()
+    assert "$((base_certs + bundle_certs))" in text, "憑證庫只新增套件的憑證：基底張數加套件張數"
+
+
+def test_the_derived_image_scheme_adds_no_certificate_trust_through_environment_variables_or_flags():
+    for steps in (deploy_steps(), full_plan()):
+        text = whole_plan_text(steps)
+        for forbidden in ("SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "TrustServerCertificate=yes", "ServerCertificate="):
+            assert forbidden not in text, forbidden
 
 
 def test_migration_runs_in_a_one_off_container_with_the_pools_hardening_and_never_downgrades():
@@ -1697,7 +1871,7 @@ def test_the_files_step_carries_secret_names_only_inside_the_encoded_files_and_n
     decoded = "\n".join(base64.b64decode(line[4]).decode("utf-8") for line in put_lines(step))
     assert "OPENROUTER_API_KEY" in decoded and SECRET_SENTINEL not in decoded
     assert {line[2] for line in put_lines(step)} >= {plan.render_env_script_path("app"), plan.render_env_script_path("bootstrap")}, "兩支取出腳本都放得上去"
-    assert plan.RDS_CA_BUNDLE_PATH in decoded
+    assert plan.RDS_CA_BUNDLE_PATH not in decoded, "沒有任何主機檔案參照 CA 套件：它只是建置輸入（design D7）"
 
 
 def test_the_files_script_stays_within_the_size_the_cloud_run_proved():
