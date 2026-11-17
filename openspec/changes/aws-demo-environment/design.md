@@ -18,7 +18,7 @@
 - 費用可預期、可一鍵拆除。
 
 **Non-Goals:**
-- 改應用程式碼、Dockerfile、gunicorn 設定或 AGENTS.md（假模型的 http 例外與 503／`Retry-After` 屬 `rpg-ops-loadtest`）。
+- 改應用程式碼、Dockerfile、gunicorn 設定或 AGENTS.md（假模型的 http 例外與 503／`Retry-After` 屬 `rpg-ops-loadtest`；資料庫憑證方案以部署時的衍生映像層實作，同樣不改共用的 `Dockerfile`，見 D7）。
 - 高可用、自動擴縮、藍綠部署、CI/CD 管線（單機展示，部署由人手動觸發）。
 - 達到 production 的備份、日誌保存與平台告警要求（缺口明列，見 D11）。
 - 搬移 Azure 資料；處理 Render 站在 Azure 到期後的去向。
@@ -72,14 +72,17 @@
 - 與既有規範對照：AGENTS.md 第 9 節「機密採同一套注入機制」在 AWS 的對應是平台機密儲存加執行時注入；不寫入映像、不寫入持久磁碟、不進日誌。
 - **替代方案**：Secrets Manager——每個機密每月 US$0.40，十餘個機密約 US$5，且無額外功能需求；`.env` 檔放主機磁碟——違反「不落地」。
 
-### D7：資料庫憑證驗證——先探測，不退讓
+### D7：資料庫憑證驗證——信任錨放進映像的系統憑證庫（2026-11-17 實測後修訂）
 
-RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證庫內；與 Cloud SQL 不同的是 RDS 端點的主機名稱與憑證相符，所以只缺信任錨。候選做法依序嘗試：
-1. **A（預設）**：從 AWS 公開的信任套件取得 RDS 的 CA 套件放在主機，唯讀掛進容器，連線字串加 `Encrypt=yes` 與 ODBC Driver 18 的 `ServerCertificate=<路徑>`，**只作用於資料庫連線**；探測以應用程式的連線設定（同一個 `DATABASE_URL`）執行 `SELECT 1`。**已知不確定**：`ServerCertificate` 在 Driver 18 的比對語意（與哪一層憑證比對、是否接受 CA 套件）需實測確認。
-2. **B（A 失敗才用）**：在 `Dockerfile` 把 RDS 的 CA 加進系統憑證庫（只新增一個只簽發 RDS 端點的信任錨，不關閉任何驗證）。這會修改 Dockerfile 與映像，所以**選 B 之前必須先回頭修訂本 change（design、tasks，必要時 `container-runtime`），再動手**。
-3. **禁止**：`TrustServerCertificate=yes`、`SSL_CERT_FILE` 之類改變整個行程信任範圍的做法（會影響模型供應商、SMTP、Google 的 TLS 驗證）。
+RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證庫內；與 Cloud SQL 不同的是 RDS 端點的主機名稱與憑證相符，所以只缺信任錨。
 
-探測（與資料庫初始化，D8）在主映像內以一次性容器執行，所以映像要先建置；在 migration 與啟動服務之前執行；兩種都失敗就停止回報使用者。結果（採用哪一種、連線字串型態）寫進營運文件。
+- **已否決的原方案 A**（`Encrypt=yes` 加 ODBC Driver 18 的 `ServerCertificate=<RDS 的 CA 套件>`）：2026-11-17 在真實主機實測失敗（資料庫初始化的第一個連線即 `tls_certificate`、SQLSTATE 08001，尚未建立任何資料庫物件）。查 Microsoft 文件確認原因是原理性的，不是設定錯：`ServerCertificate`（Driver 18.1 起）是「伺服器憑證必須與檔案**完全相同**」的釘選比對，取代標準驗證（到期、主機名稱、信任鏈），而且只在 `Encrypt=Strict`（TDS 8.0）時可用；RDS SQL Server 2019 不支援 strict，伺服器的葉憑證也會輪替，所以 CA 套件永遠比對不上。**連線字串不得使用 `ServerCertificate`。**
+- **採用：衍生映像層**。共用的 `Dockerfile` **不動**。部署的建置步驟先建基底映像 `rac-app-base:<標籤>`，再以計畫模組產生的衍生 Dockerfile 建成 `rac-app:<標籤>`：`FROM rac-app-base:<標籤>`、`USER root`、`COPY` 主機上的 RDS CA 套件到 `/usr/local/share/ca-certificates/`、`RUN update-ca-certificates`、`USER app`。兩個池、單元與所有一次性容器照舊使用 `rac-app:<標籤>`。連線字串只有 `Encrypt=yes`（驅動程式驗證憑證鏈與主機名稱），**沒有 `ServerCertificate`、沒有 `TrustServerCertificate`**；容器不再掛載 CA 套件。主機上的 CA 套件（主機初始化 B 段取得並已驗證）從此只是建置輸入。
+- **實測（2026-11-17，主機上對 RDS 以一個不存在的登入連線：TLS 通過時只會在登入被拒，SQLSTATE 28000；沒通過則是憑證錯誤 08001）**：現有映像（沒有 RDS CA）→ 08001；`update-ca-certificates`，3 張憑證放同一個檔 → 28000；每張憑證一個檔 → 28000；執行時把「Debian 憑證庫加 RDS CA」合併檔唯讀掛到 `ca-certificates.crt` → 28000。採用的是第一種（單一檔），不需要拆檔。
+- **信任範圍**：變更只是在系統憑證庫**新增**這份區域 CA 套件的 3 張根憑證（只簽發 RDS 端點的憑證）；不關閉、不放寬任何驗證，原有的根憑證一張不少，所以對模型供應商、SMTP、Google 的 TLS 驗證結果不變。建置後以檢查確認「憑證庫的憑證數＝基底映像的憑證數＋套件的憑證數」。
+- **替代方案**：①改共用 `Dockerfile` 並把 CA 套件放進版本庫——拒絕：映像是各環境共用的，為單一展示環境改它違反本 change 的 Non-Goal；②執行時把合併檔掛到 `ca-certificates.crt`（實測可行）——拒絕：合併檔是某一版基底映像憑證庫的快照，映像更新後會與新映像脫節，過期的根憑證可能讓模型供應商或 Google 的連線驗證失敗，每次部署都要重產；③**禁止**：`TrustServerCertificate=yes`、`SSL_CERT_FILE` 之類改變整個行程信任範圍的做法（會影響模型供應商、SMTP、Google 的 TLS 驗證）。
+
+探測（與資料庫初始化，D8）在建好的 `rac-app:<標籤>`（含衍生層）內以一次性容器執行，所以映像要先建置；在 migration 與啟動服務之前執行；失敗就停止回報使用者，不退而放寬。結果（連線字串型態，不含密碼）寫進營運文件。
 
 ### D8：資料庫初始化以主要使用者一次性執行，之後只用應用程式登入
 
@@ -123,7 +126,8 @@ AGENTS.md 第 9 節的「雲端平台為 Google Cloud」描述的是正式環境
 ## Risks / Trade-offs
 
 - **費用超出抵用金** → `--accept-cost`、預算告警、D12 的估算、`teardown`；RDS 與 EC2 不在使用時（例如暫停展示）可停止，列在營運文件。
-- **RDS 憑證驗證可能行不通** → D7 先探測、失敗即停止，並明訂 B 的前置修訂；不退讓到 `TrustServerCertificate=yes`。
+- **RDS 憑證驗證** → 原方案 A（`ServerCertificate`）已實測否決（原理不合，見 D7）；新方案（衍生映像層）已在主機以不存在的登入驗證 TLS 通過，但完整的資料庫初始化與探測仍要在 task 5.3 驗證，失敗即停止，不退讓到 `TrustServerCertificate=yes`。衍生層讓建置多一步（基底層快取命中時只要數秒）。
+- **既有的 SSM `DATABASE_URL` 還帶舊的 `ServerCertificate`**（4.3 依原方案 A 寫入）→ 新的 `compose_database_url` 不再帶它，且 `put-parameter` 對已存在的參數預設略過，所以 task 5.2 要提供覆寫步驟（值不印出，驗證只看名稱與型別），5.3 在探測之前執行。
 - **Google 可能不接受 `duckdns.org` 的回呼網址** → 人工驗收時最先測；不接受則改用備用網域（另行決定，不放寬登入檢查）。
 - **2 GB 記憶體不夠兩個池加 Caddy** → 交換檔、降 `WEB_CONCURRENCY`、必要時升 t3.medium；量測值記錄。
 - **單機單點**（主機或 RDS 故障即停擺）→ 展示用途接受；RDS 自動備份與快照可還原，Elastic IP 可換主機。

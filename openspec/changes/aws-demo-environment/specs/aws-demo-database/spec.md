@@ -18,7 +18,7 @@ RDS 執行個體 SHALL 不可公開存取（沒有公開位址），其安全群
 - **THEN** 只有一條規則，來源是應用程式主機的安全群組，沒有 CIDR 來源
 
 ### Requirement: 連線必須驗證伺服器憑證
-應用程式連線 SHALL 驗證 RDS 的伺服器憑證，SHALL NOT 使用 `TrustServerCertificate=yes`，也 SHALL NOT 使用 `sa` 或 RDS 主要使用者作為應用程式登入。憑證信任的範圍 SHALL 僅限資料庫連線，不得改變整個行程對其他外部服務（模型供應商、SMTP、OAuth）的憑證驗證。無法驗證時 SHALL 停止部署並回報，不得退而放寬。
+應用程式連線 SHALL 加密並驗證 RDS 的伺服器憑證（憑證鏈與主機名稱），SHALL NOT 使用 `TrustServerCertificate=yes`，也 SHALL NOT 使用 `sa` 或 RDS 主要使用者作為應用程式登入。連線字串 SHALL NOT 使用 `ServerCertificate`（該設定是對整份憑證的精確比對、需要 strict 加密，與 RDS 不相容）。憑證信任的變更 SHALL 僅是在映像的系統憑證庫新增 RDS 的 CA（只簽發 RDS 端點憑證的信任錨）：SHALL NOT 關閉或放寬任何驗證、SHALL NOT 移除任何原有的根憑證、SHALL NOT 使用 `SSL_CERT_FILE` 之類改變整個行程信任範圍的設定，所以對其他外部服務（模型供應商、SMTP、OAuth）的憑證驗證結果不變。無法驗證時 SHALL 停止部署並回報，不得退而放寬。
 
 #### Scenario: 驗證成功才繼續
 - **WHEN** 探測步驟以應用程式的連線設定對資料庫執行最簡單的查詢
@@ -29,8 +29,12 @@ RDS 執行個體 SHALL 不可公開存取（沒有公開位址），其安全群
 - **THEN** 腳本停止並回報原因，不產生任何含 `TrustServerCertificate=yes` 的設定
 
 #### Scenario: 不影響其他連線
-- **WHEN** 憑證信任設定生效
-- **THEN** 容器對模型供應商、SMTP 與 Google 的 HTTPS 連線仍使用系統憑證庫驗證
+- **WHEN** 檢視部署用映像的系統憑證庫，與其基底映像比較
+- **THEN** 憑證庫的憑證只多出 RDS 的 CA 套件的憑證、沒有減少，容器對模型供應商、SMTP 與 Google 的 HTTPS 連線仍使用系統憑證庫驗證
+
+#### Scenario: 連線字串不放寬
+- **WHEN** 檢視應用程式的資料庫連線字串（只看選項，不看密碼）
+- **THEN** 含 `Encrypt=yes`，不含 `TrustServerCertificate`，也不含 `ServerCertificate`
 
 ### Requirement: 應用程式使用專屬的最小權限登入
 資料庫初始化 SHALL 以 RDS 主要使用者建立一個專屬資料庫與一個專屬的應用程式登入，後者只擁有該資料庫的必要權限（含結構遷移所需）。主要使用者的密碼 SHALL 隨機產生並僅存於機密儲存，初始化完成後應用程式 SHALL 只使用專屬登入。初始化 SHALL 可重複執行（已存在即略過），且 SHALL NOT 把任何密碼寫入日誌或命令列。
