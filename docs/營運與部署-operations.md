@@ -440,7 +440,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組、`rollback_plan`、`teardown_plan` 與 DuckDNS 尚未對真實 AWS 執行**，雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`rollback_plan`、`teardown_plan` 與 DuckDNS 尚未對真實 AWS 執行**，雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -508,10 +508,10 @@ flowchart LR
 | `deploy_plan` | migrate | `migrate-db`、`wait-migrate-db`、`check-migration-head`、`wait-check-migration-head`、`seed-scripts`、`wait-seed-scripts` | 一次性容器執行 `alembic upgrade head`、確認已是最新版、再執行 `seed-scripts`；失敗即停止，不重啟 |
 | `deploy_plan` | create-admin | `check-create-admin`、`wait-check-create-admin`、`create-admin`、`cleanup-create-admin`、`wait-cleanup-create-admin` | **只在第一次部署以 `--group create-admin` 執行**（例行部署的整份計畫不含它）：先在主機上乾跑 `create-admin --help`（同一個映像、強化與環境檔，不詢問、不寫入資料庫，輸出 `create-admin-help=ok`）；再是人工步驟 `create-admin`（只列出要在 SSM 終端機輸入的兩行指令，執行器不執行它，`--yes` 不能代替，信箱、顯示名稱與密碼都由終端機詢問，密碼不回顯）；最後清理互動容器與機密環境檔，輸出 `app-env-left=0 container-left=0` |
 | `deploy_plan` | restart | `switch-release`、`wait-switch-release` | 換 `release.env`（前一版存成 `release.previous.env`）並只重啟兩個池 |
-| `deploy_plan` | verify | `check-pools`、`wait-check-pools` | 兩個池在回送位址上 `/readyz` 回 200，且都在跑新映像 |
+| `deploy_plan` | verify | `check-pools`、`wait-check-pools`、`check-pool-hardening`、`wait-check-pool-hardening` | 兩個池在回送位址上 `/readyz` 回 200，且都在跑新映像；再唯讀驗證執行方式（task 6.1）：行程都以 UID 10001（非 root）執行、各自只執行自己的 gunicorn 設定（客服池 `gunicorn.conf.py`、RPG 池 `gunicorn.rpg.conf.py`）、容器埠只發布在回送位址且主機上該埠只有 `127.0.0.1` 的監聽；全部符合才輸出固定的一行，任何一項不符就在標準錯誤印出被比對的值並失敗 |
 | `rollback_plan` | prepare | `rollback-find-host` | 找出主機 |
 | `rollback_plan` | restart | `rollback-switch-release`、`wait-rollback-switch-release` | 換回前一版標籤並重啟兩個池；映像不在主機上就在改任何檔案前失敗；**不執行任何遷移或降級、不還原資料庫** |
-| `rollback_plan` | verify | `rollback-check-pools`、`wait-rollback-check-pools` | 同部署的驗證 |
+| `rollback_plan` | verify | `rollback-check-pools`、`wait-rollback-check-pools`、`rollback-check-pool-hardening`、`wait-rollback-check-pool-hardening` | 同部署的驗證 |
 | `teardown_plan` | compute | `td-delete-ec2-alarm`、`td-terminate-ec2`、`td-wait-ec2-terminated`、`td-release-eip` | 告警、主機、Elastic IP |
 | `teardown_plan` | database | `td-delete-rds`、`td-wait-rds-deleted`、`td-delete-db-subnet-group` | RDS（必須明確選擇是否保留最終快照）與子網路群組 |
 | `teardown_plan` | snapshots | `td-delete-snapshots` | 部署前快照：沒給名單時是沒有指令的佔位；使用者看過清單並明確回覆要保留的例外之後，才改為對名單內的每個快照產生 `td-delete-snapshot-<名稱>`（最終快照永遠不刪） |
@@ -530,7 +530,7 @@ flowchart LR
 - **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。**第一次部署**在建置與遷移之間多一組 `db-init`（資料庫初始化與憑證探測，用 `--group db-init` 明確執行）：它不在例行部署的整份計畫內（`ROUTINE_DEPLOY_GROUPS`），所以例行部署不會每次都用 RDS 主要使用者的密碼；執行器的步驟目錄（`--only` 與擷取值的唯讀取回）則含它。第一次部署在遷移與重啟之間還有一組 `create-admin`（人工建立首位管理員，見下方「建立首位管理員」），同樣不在例行部署內（`FIRST_DEPLOY_GROUPS` 含 `db-init` 與 `create-admin`）。
 - **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
 - **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。**手動快照**含資料庫內容、不隨 RDS 消失且持續計費，所以另有規則（design D14）：不論選擇保留或不保留最終快照，執行器先唯讀列出（`snapshot_listing_step()`）該資料庫仍存在的快照，使用者必須明確回覆要保留的**例外**（「沒有例外」也要明說，沉默不算），沒有被指定保留的**部署前快照**（`<資料庫>-pre-<提交短碼>`）才預設刪除；名單由 `snapshots_to_delete()` 算出（例外打錯名稱會丟錯，不會悄悄變成全部刪除），傳給 `teardown_plan(delete_snapshots=…)`，沒給名單時 `td-delete-snapshots` 沒有指令；每個刪除仍先以標籤查詢把關。**最終快照（本次保留的與先前拆除留下的）永遠不由計畫刪除**，要刪由使用者自己處理，拆除最後會列出仍留著的快照。
-- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。`build_plan` 的各組與 `host-init` 已對真實的 AWS 與主機（Amazon Linux 2023 的 docker、systemd）執行並逐項驗證，差異已回寫（task 4.2 至 4.5，見下一節與 README「驗收紀錄（aws-demo-environment）」）；`deploy_plan` 的 `build` 組（兩段建置與 `check-image`）與 `db-init` 組、`refresh-parameter-DATABASE_URL` 已對真實主機與 RDS 執行並驗證（task 5.3，結果見下方「資料庫憑證方案」；`db-init` 回寫後的步驟另對真實主機重跑一次，兩個等待步驟都是 `docker-exit=0`）；`deploy_plan` 的 `snapshot`、`migrate` 組也已對真實的 AWS 與 RDS 執行並驗證（task 5.4）；`deploy_plan` 的 `restart`、`verify` 組、`rollback_plan`、`teardown_plan` 與 DuckDNS **沒有對真實的 AWS 執行過**，Caddy 與兩個池也尚未在主機上啟動，指令與旗標的差異在後續雲端批次回寫。
+- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。`build_plan` 的各組與 `host-init` 已對真實的 AWS 與主機（Amazon Linux 2023 的 docker、systemd）執行並逐項驗證，差異已回寫（task 4.2 至 4.5，見下一節與 README「驗收紀錄（aws-demo-environment）」）；`deploy_plan` 的 `build` 組（兩段建置與 `check-image`）與 `db-init` 組、`refresh-parameter-DATABASE_URL` 已對真實主機與 RDS 執行並驗證（task 5.3，結果見下方「資料庫憑證方案」；`db-init` 回寫後的步驟另對真實主機重跑一次，兩個等待步驟都是 `docker-exit=0`）；`deploy_plan` 的 `snapshot`、`migrate` 組也已對真實的 AWS 與 RDS 執行並驗證（task 5.4）；`deploy_plan` 的 `restart`、`verify` 組也已對真實主機執行並驗證（task 6.1，兩個池啟動；原有的兩個步驟沒有發現需要回寫的差異，之後補進 `verify` 組的 `check-pool-hardening` 第一次執行時發現並修正了 `docker top` 的參數，見「啟動兩個池」一節）；`rollback_plan`、`teardown_plan` 與 DuckDNS **沒有對真實的 AWS 執行過**，Caddy 也尚未在主機上啟動，指令與旗標的差異在後續雲端批次回寫。
 
 ### 主機初始化（`build_plan` 的 `host-init` 組）
 
@@ -628,7 +628,7 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **已在真實 RDS 驗證（task 5.3，2026-11-17）**：主要使用者 `racmaster` 在 RDS 上可以 `CREATE DATABASE`、`CREATE LOGIN`（`CHECK_POLICY = ON` 的密碼規則接受執行器產生的密碼）、`CREATE USER` 與 `ALTER ROLE db_owner ADD MEMBER`；第二次執行全部略過、不重設密碼；應用程式登入以 `Encrypt=yes` 連線並由映像的系統憑證庫驗證憑證（探測成功）；結果見上一節的「雲端驗證」。
 - **未驗證**：英文（Linux 容器）的驅動程式訊息只以樣本字串驗證，沒有取得真實的失敗訊息（5.3 的連線全部成功）；`db_owner` 之外的權限邊界（例如應用程式登入是否真的不能碰其他資料庫）只由角色成員的設計保證，沒有在 RDS 上逐項嘗試。探測或初始化失敗（`tls_certificate` 或其他）時：停止並回報，**不**採用 `TrustServerCertificate=yes`、`ServerCertificate` 或行程範圍的 `SSL_CERT_FILE`。
 
-**遷移與種子（task 5.4，2026-11-17，映像 `rac-app:48f5ab2`；`deploy --group snapshot --group migrate --tag 48f5ab2`，沒有 restart）**：①`snapshot-db` 建立手動快照 `rac-demo-staging-db-pre-48f5ab2`（`manual`、加密、20 GB、帶 `Project`／`Environment`／`Name` 標籤），等到 `available` 才遷移；②`migrate-db` 在空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移（MSSQLImpl，交易式 DDL），結束代碼 0；③`check-migration-head` 輸出 `1`，另以唯讀的一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)`；④`seed-scripts`：建立 1 份內建劇本（`xianxia-qingyun`）、更新 0、沒有變動 0；⑤**沒有啟動或重啟任何服務**（兩個池與 Caddy 仍未啟動，網址仍連不上是正常的）。手動快照不隨 RDS 消失、持續計費，拆除時依 design D14 處理（部署前快照預設刪除、由使用者指定例外）。**觀察**：`migrate-db`、`check-migration-head`、`seed-scripts` 沿用 `_one_off_lines`，執行後 `/run/rac/app.env`（記憶體檔案系統、600、僅 root）仍留著，與 `db-init` 的腳本（結束時刪除環境檔）不一致；兩個池的單元每次啟動都會重新產生它，所以不影響功能，是否統一清除留待之後決定。
+**遷移與種子（task 5.4，2026-11-17，映像 `rac-app:48f5ab2`；`deploy --group snapshot --group migrate --tag 48f5ab2`，沒有 restart）**：①`snapshot-db` 建立手動快照 `rac-demo-staging-db-pre-48f5ab2`（`manual`、加密、20 GB、帶 `Project`／`Environment`／`Name` 標籤），等到 `available` 才遷移；②`migrate-db` 在空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移（MSSQLImpl，交易式 DDL），結束代碼 0；③`check-migration-head` 輸出 `1`，另以唯讀的一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)`；④`seed-scripts`：建立 1 份內建劇本（`xianxia-qingyun`）、更新 0、沒有變動 0；⑤**沒有啟動或重啟任何服務**（兩個池與 Caddy 仍未啟動，網址仍連不上是正常的）。手動快照不隨 RDS 消失、持續計費，拆除時依 design D14 處理（部署前快照預設刪除、由使用者指定例外）。**觀察**：`migrate-db`、`check-migration-head`、`seed-scripts` 沿用 `_one_off_lines`，執行後 `/run/rac/app.env`（記憶體檔案系統、600、僅 root）仍留著，與 `db-init` 的腳本（結束時刪除環境檔）不一致；兩個池的單元每次啟動都會重新產生它，所以不影響功能。**已決定不清除**（理由見下方「啟動兩個池」一節的 `/run/rac/app.env` 條目）。
 
 ### 建立首位管理員（task 5.5，`create-admin` 組）
 
@@ -645,6 +645,39 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **已驗證**：`tests/test_aws_demo_plan.py` 與 `tests/test_aws_demo_script.py` 驗證順序、互動旗標、人工指令的內容（沒有任何帳密參數）、兩個 SSM 腳本在 bash 內以假的 `docker` 與機密取出腳本實際執行（成功、容器失敗、環境檔與容器清除）、預覽不呼叫任何外部指令、`--yes` 不能代替人工確認。**雲端**：乾跑已在真實主機以映像 `rac-app:48f5ab2` 成功（SSM `Success`，輸出 `create-admin-help=ok`）。
 - **雲端人工步驟（2026-11-17）**：使用者在 Session Manager 終端機輸入兩行指令後，於自己的終端機回答「做完了」；接著的 `cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組以「全部完成」結束。
 - **未驗證**：我沒有看到「已建立管理員帳號（識別碼 …）」那一行，也沒有獨立查詢資料庫確認帳號存在（沒有唯讀指令可查，不為此另寫查詢）；帳號是否可用要等管理員第一次登入（Google，再驗證密碼）才真正證明。
+
+### 啟動兩個池（task 6.1，`restart`、`verify` 組）
+
+**執行（2026-11-17）**：`deploy --account-id 179601693865 --group restart --group verify --tag 48f5ab2 --execute`（`--tag` 明確帶主機上的映像標籤 `48f5ab2`，不是新的 HEAD）。5 步全部成功：找出主機 → `switch-release`（`/etc/rac/release.env` 換成 `RAC_IMAGE_TAG=48f5ab2`，重啟 `rac-cs.service` 與 `rac-rpg.service`）→ 等待 `Success` → `check-pools`（兩個池在回送位址 8081、8082 的 `/readyz` 回 200，輸出 `rac-app:48f5ab2 rac-app:48f5ab2`）→ 等待 `Success`。這是兩個池第一次啟動，沒有前一版，所以沒有產生 `release.previous.env`，`rollback` 也沒有演練。
+
+**唯讀查證**（另以 SSM 送出只讀指令，只輸出被查的欄位，不印環境變數與任何機密；現場版的指令已回寫成 `verify` 組的 `check-pool-hardening` 步驟，見下方「回寫成計畫步驟」）：
+
+| 項目 | 結果 |
+|---|---|
+| 非 root | 兩個容器的 `Config.User` 都是 `app`；`docker top` 的行程 UID 都是 10001；容器內 `id` 為 `uid=10001(app) gid=10001(app)`；根檔案系統唯讀（`ReadonlyRootfs=true`） |
+| 各用自己的 gunicorn 設定 | 客服池的行程指令是 `gunicorn --config gunicorn.conf.py wsgi:app`，RPG 池是 `gunicorn --config gunicorn.rpg.conf.py wsgi:app`；各有 3 個 gunicorn 行程（1 個主行程加 2 個 worker，與設定檔的 `workers` 預設 2 相符） |
+| 只綁回送位址 | `docker port`：客服池 `8080/tcp -> 127.0.0.1:8081`、RPG 池 `8080/tcp -> 127.0.0.1:8082`；主機上的 TCP 監聽只有 `127.0.0.1:8081`、`127.0.0.1:8082`（兩個 `docker-proxy`）與 `127.0.0.1:41519`（`containerd` 自己的回送埠），沒有任何監聽在 `0.0.0.0` 或外部位址。**這只證明主機層**；安全群組是否擋住外部直連由 6.3 驗證 |
+| 穩定性 | 兩個容器 `running`、`RestartCount=0`，單元 `NRestarts=0`；Caddy 與五個排程計時器都是 `inactive`（符合預期，6.2、7.1 才啟動） |
+
+**記憶體（啟動後約 50 秒與約 90 秒各量一次；沒有任何流量）**：
+
+| | 客服池 `rac-cs` | RPG 池 `rac-rpg` |
+|---|---|---|
+| `docker stats`（cgroup 用量） | 92.95 MiB → 93.16 MiB（4.88%） | 92.48 MiB → 92.36 MiB（4.84%） |
+| 容器記憶體上限 | 無（`HostConfig.Memory=0`，百分比的分母是主機總量 1.865 GiB） | 無 |
+
+主機 `free -m`（第二次）：總量 1909、已用 508、空閒 85、緩衝與快取 1316、可用 1225（單位 MB）；交換空間 2047 MB，只用了 40 KB。兩次量測相差不到 1 MiB，沒有看到持續增長。
+
+- **讀數的限度**：①`docker top` 三個行程的 RSS 合計約 248 MiB，大於 `docker stats` 的 93 MiB，因為主行程與 worker 共用分頁，RSS 會重複計算；以 `docker stats` 為準。②systemd 單元的 `MemoryCurrent`（約 8 MB）判斷只計 `docker run` 的用戶端行程，不含容器（容器在 docker 自己的 cgroup 內），不能當作池的記憶體。③這是**閒置**讀數：有流量（尤其是 RPG 串流與兩個池同時忙碌）時的記憶體屬 `rpg-ops-loadtest` 的量測，展示環境不是容量依據。
+- **`/run/rac/app.env` 仍留著，已決定不清除**（2026-11-17，使用者採納建議）：池與排程工作的單元每次啟動都會重新產生它，所以池啟動之後它還在（證實了 5.4 的觀察）。理由：①**查證**（唯讀）：`/run` 是 tmpfs，`/run/rac` 權限 700、檔案 600，擁有者都是 root，docker 群組沒有成員，所以能讀它的只有 root；root 本來就能用 `docker inspect`、`/proc/<pid>/environ` 或實例角色讀到同樣的機密，這個檔沒有讓更多人讀到機密；②規格要求的是「記憶體檔案系統、僅擁有者可讀、不寫入持久磁碟、映像、日誌或命令列」，沒有要求用完即刪，現況符合；檔案不含 RDS 主要使用者密碼（那個只在 `db-init` 的暫存檔，用完即刪）；③**清掉不安全**（從程式推論，**沒有在主機上實測**）：兩個池與五個排程工作共用同一個路徑，寫入是先寫暫存檔再改名（安全），但「啟動後刪除」會與同時啟動的另一個單元競爭（`systemctl restart rac-cs rac-rpg` 同時啟動兩個池；`check-alerts` 每 5 分鐘一次），對方的 `docker run --env-file` 可能讀不到檔案；要做對得讓每個單元用自己的檔案路徑，連帶改機密取出腳本、單元、一次性容器與測試，換到的只是「只有 root 讀得到的檔案少存在幾分鐘」，而排程工作每 5 分鐘就會重新產生它；④這個環境只用到 2026-12-31，正式環境（Cloud Run 以 Secret Manager 注入）沒有這個檔。**維持的不一致**：`db-init`（它的暫存環境檔含 RDS 主要使用者密碼，必須刪）與 `create-admin`（只在第一次部署、池還沒啟動時執行，人工步驟可能中途關閉終端機而殘留，所以清理順便刪檔）用完會刪，`migrate-db`、`seed-scripts` 與池、排程工作用同一份 `app.env`，不刪（刪了有上述競爭）。**何時重新考慮**：若日後要求機密「只在需要的瞬間存在」，改為每個單元獨立的檔案路徑再加啟動後刪除，不要只在某個單元加刪除。
+- **未驗證**：外部是否連得到兩個池（Caddy 尚未啟動，6.2 與 6.3）、有流量時的記憶體與延遲、`rollback`。
+
+**回寫成計畫步驟（`verify` 組的 `check-pool-hardening`，部署與回復都有）**：把上表前三列做成一個唯讀的 SSM 步驟，之後每次例行部署與回復都會驗。它**只看兩個池自己的埠**，不檢查主機的全部監聽，因為 Caddy 啟動之後（6.2）主機本來就會監聽 80 與 443，檢查全部會誤判。
+
+- **檢查什麼**（對每個池）：①`docker top <容器> -eo pid,uid,args` 列出的所有行程都以 UID 10001 執行；②行程指令只有 `… gunicorn --config <該池的設定檔> wsgi:app` 一種（客服池 `gunicorn.conf.py`、RPG 池 `gunicorn.rpg.conf.py`）；③`docker port` 只有 `8080/tcp -> 127.0.0.1:<埠>`，且 `ss -ltnH 'sport = :<埠>'` 的本地位址只有 `127.0.0.1:<埠>`（沒有 `0.0.0.0`、`*`、IPv6，也不是沒在監聽）。
+- **輸出**：全部符合才輸出固定的一行（`rac-cs uid=10001 config=gunicorn.conf.py bind=127.0.0.1:8081 rac-rpg uid=10001 config=gunicorn.rpg.conf.py bind=127.0.0.1:8082`），等待步驟以它驗證；任何一項不符就在標準錯誤印出被比對的值（UID、gunicorn 的行程指令、埠對應，沒有機密）並以 1 結束，SSM 狀態為 `Failed`，等待步驟立即停止。腳本只用 `docker top` 與 `docker port`（不 exec、不 inspect、不印環境變數）與 `ss`，不改動任何東西。
+- **真實主機上發現的差異（2026-11-17）**：第一版腳本用 `docker top <容器> -eo uid`，在真實主機上被 daemon 拒絕（`Couldn't find PID field in ps output`，`-o` 清單一定要含 `pid`），步驟失敗並停止；改為一次 `-eo pid,uid,args` 後通過。**原本的測試沒有抓到**，因為假的 `docker` 接受任何參數；現在假的 `docker top` 跟真的一樣，缺 `pid` 就回同一個錯誤，並另有測試鎖住 `-eo` 清單的第一欄是 `pid`。
+- **已驗證**：`tests/test_aws_demo_plan.py` 在 bash 內以假的 `docker top`、`docker port` 與 `ss` 實際執行：兩個池都符合時輸出固定一行；14 種不符（一個 worker 以 root 執行、整個池以 root 執行、兩個池互換設定、多出 `--bind` 參數、多出別的行程、容器埠發布在所有介面或多一個 IPv6、發布到別的主機埠、主機上監聽在 `0.0.0.0`、`*`、IPv6 或根本沒在監聽、完全沒有行程）都失敗且沒有固定一行；`docker` 本身失敗也失敗。**15 項破壞驗證全部被抓到**（含原始的 `-eo uid`）。**雲端**：對真實主機執行 `deploy --group verify --tag 48f5ab2 --execute`，`check-pools` 與 `check-pool-hardening` 都 `Success` 且輸出符合（上一段的第一版失敗過一次，是修正之前的紀錄）。這一步是唯讀的，沒有重啟任何服務。
 
 ---
 

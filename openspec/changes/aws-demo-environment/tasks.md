@@ -48,7 +48,7 @@
 
 ## 6. 服務、入口與網域
 
-- [ ] 6.1 在 5.5 之後啟動客服池與 RPG 池（`rac-cs`、`rac-rpg`；`deploy_plan` 的 `restart`、`verify` 組），驗證兩者都以非 root、各用自己的 gunicorn 設定、只綁回送位址；記錄兩個池的常駐記憶體與 `free -m`
+- [x] 6.1 在 5.5 之後啟動客服池與 RPG 池（`rac-cs`、`rac-rpg`；`deploy_plan` 的 `restart`、`verify` 組），驗證兩者都以非 root、各用自己的 gunicorn 設定、只綁回送位址；記錄兩個池的常駐記憶體與 `free -m`
 - [ ] 6.2 把 `rac001.duckdns.org` 指向 Elastic IP（執行器的 DuckDNS 步驟，使用者確認），啟動 Caddy 並確認憑證簽發、HTTP/2、HTTP 導向 HTTPS；驗證應用程式的 HSTS 與安全標頭經入口仍在
 - [ ] 6.3 驗證分流：`/api/game/…` 由 RPG 池處理、其餘由客服池；停止客服池時 RPG 池的 `/healthz` 仍正常；從主機外部直連應用程式埠被拒絕
 - [ ] 6.4 驗證串流不被緩衝：用 `scripts/acceptance_rpg_turn.py` 的串流情境（或等效的最小請求）經入口量測第一個事件與心跳的到達時間；若入口緩衝，修正 Caddy 設定並補測試（記錄 `scripts/acceptance_rpg_turn.py` 只接受本機位址，需要另寫最小的串流探測或在主機內對回送位址執行並記錄限制）

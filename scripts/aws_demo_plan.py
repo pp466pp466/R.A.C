@@ -835,7 +835,7 @@ def pool_unit(pool: Pool) -> str:
         f"ExecStartPre={SBIN_DIR}/rac-render-env-app",
         f"ExecStartPre=-{DOCKER} rm -f {pool.container}",
         _exec_start(_app_run_args(pool.container, ("gunicorn", "--config", pool.gunicorn_config, "wsgi:app"),
-                                  publish=f"127.0.0.1:{pool.port}:8080")),
+                                  publish=f"127.0.0.1:{pool.port}:{POOL_CONTAINER_PORT}")),
         f"ExecStop={DOCKER} stop --time={pool.stop_seconds} {pool.container}",
         "",
         "[Install]",
@@ -1089,6 +1089,7 @@ DB_ENDPOINT_CAPTURE = "db-endpoint"                 # 資料庫初始化的 `--h
 ADMIN_CONTAINER = "rac-create-admin"                # 人工建立首位管理員的互動容器（名稱固定，清理步驟以它找殘留）
 ADMIN_COMMAND = ("flask", "--app", "wsgi", "create-admin")   # app/cli.py 的 create-admin：信箱、顯示名稱與密碼（不回顯）由終端機詢問；不給任何參數
 POOL_READY_PATH = "/readyz"                         # 含資料庫檢查；主機內對回送位址探測
+POOL_CONTAINER_PORT = 8080                          # gunicorn 在容器內的監聽埠（映像與 gunicorn 設定固定）；主機只把它發布在回送位址的 `Pool.port`
 SSM_FAILED_STATUSES = ("Failed", "Cancelled", "TimedOut", "Cancelling")
 BUILD_TIMEOUT_SECONDS = 1800                        # t3.small 上建置映像（pip 與 ODBC 驅動）的上限
 SNAPSHOT_TIMEOUT_SECONDS = 1800
@@ -1349,6 +1350,40 @@ def _pool_check_lines() -> list[str]:
 
 def _pool_check_expect(tag: str) -> str:
     return " ".join(f"{APP_IMAGE_REPO}:{tag}" for _ in POOLS)
+
+
+def _pool_hardening_lines() -> list[str]:
+    """唯讀驗證兩個池的執行方式（task 6.1）：①容器內所有行程都以 UID `IMAGE_USER_ID`（非 root）執行；②各自只執行自己的
+    gunicorn 設定（客服池 `gunicorn.conf.py`、RPG 池 `gunicorn.rpg.conf.py`，行程指令只有這一種）；③容器埠只發布在回送位址的該池埠，
+    且主機上該埠的 TCP 監聽只有 `127.0.0.1:<埠>`（沒有 `0.0.0.0`、`*` 或 IPv6）。任何一項不符就在標準錯誤印出被比對的值並以 1 結束；
+    全部符合才輸出固定的一行。不執行容器內的指令（用 `docker top -eo pid,uid,args`：2026-11-17 在真實主機上發現 `-o` 清單沒有 `pid` 會被
+    daemon 拒絕）、不改動任何東西、不印環境變數。
+    只檢查**池自己的埠**，不檢查主機的全部監聽（Caddy 啟動後本來就會監聽 80 與 443）。"""
+    lines = ["set -eu"]
+    for pool in POOLS:
+        c, port = pool.container, pool.port
+        lines += [
+            f"top=$({DOCKER} top {c} -eo pid,uid,args | tail -n +2)",          # `docker top` 的 -o 清單一定要含 pid（沒有就回 daemon 錯誤）
+            "uids=$(printf '%s\\n' \"$top\" | awk '{print $2}' | sort -u)",
+            "cmds=$(printf '%s\\n' \"$top\" | sed 's/^.*gunicorn //' | sort -u)",
+            f"bound=$({DOCKER} port {c} | sort -u)",
+            f"listen=$(ss -ltnH 'sport = :{port}' | awk '{{print $4}}' | sort -u)",
+            f'if [ "$uids" != "{IMAGE_USER_ID}" ] || [ "$cmds" != "--config {pool.gunicorn_config} wsgi:app" ] \\',
+            f'  || [ "$bound" != "{POOL_CONTAINER_PORT}/tcp -> 127.0.0.1:{port}" ] || [ "$listen" != "127.0.0.1:{port}" ]; then',
+            f'  echo "{c} hardening mismatch: uid=[$uids] cmd=[$cmds] bound=[$bound] listen=[$listen]" >&2',
+            "  exit 1",
+            "fi",
+        ]
+    lines.append(f'echo "{_pool_hardening_expect()}"')
+    return lines
+
+
+def _pool_hardening_expect() -> str:
+    return " ".join(f"{pool.container} uid={IMAGE_USER_ID} config={pool.gunicorn_config} bind=127.0.0.1:{pool.port}" for pool in POOLS)
+
+
+def _pool_hardening_title() -> str:
+    return f"唯讀驗證兩個池：行程以非 root（UID {IMAGE_USER_ID}）執行、各用自己的 gunicorn 設定、只綁回送位址"
 
 
 # ---- 主機初始化（task 4.4 在主機上現場撰寫並逐項驗證，4.5 回寫成 `build_plan` 的 `host-init` 組）---------------------------
@@ -1645,6 +1680,9 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] | None = No
     steps["verify"] += _ssm_steps(
         target, "check-pools", "verify", f"驗證兩個池在回送位址上 {POOL_READY_PATH} 回 200，且都在跑 {APP_IMAGE_REPO}:{tag}",
         _pool_check_lines(), timeout=300, expect=_pool_check_expect(tag))
+    steps["verify"] += _ssm_steps(
+        target, "check-pool-hardening", "verify", _pool_hardening_title(),
+        _pool_hardening_lines(), timeout=120, expect=_pool_hardening_expect())
 
     selected = set(groups)
     if selected & {"build", "db-init", "migrate", "create-admin", "restart", "verify"}:
@@ -1665,6 +1703,8 @@ def rollback_plan(target: Target, tag: str) -> list[Step]:
                         _switch_release_lines(tag), timeout=300)
     steps += _ssm_steps(target, "rollback-check-pools", "verify", f"驗證兩個池在回送位址上 {POOL_READY_PATH} 回 200，且都在跑 {APP_IMAGE_REPO}:{tag}",
                         _pool_check_lines(), timeout=300, expect=_pool_check_expect(tag))
+    steps += _ssm_steps(target, "rollback-check-pool-hardening", "verify", _pool_hardening_title(),
+                        _pool_hardening_lines(), timeout=120, expect=_pool_hardening_expect())
     return steps
 
 

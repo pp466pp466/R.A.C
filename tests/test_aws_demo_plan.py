@@ -1029,6 +1029,7 @@ DEPLOY_PLAN_IDS = (
     "deploy-find-host", "snapshot-db", "wait-snapshot-db", "archive-source", "upload-source", "build-image", "wait-build-image",
     "check-image", "wait-check-image", "migrate-db", "wait-migrate-db", "check-migration-head", "wait-check-migration-head",
     "seed-scripts", "wait-seed-scripts", "switch-release", "wait-switch-release", "check-pools", "wait-check-pools",
+    "check-pool-hardening", "wait-check-pool-hardening",
 )
 
 
@@ -1104,7 +1105,7 @@ def test_the_deploy_plan_has_the_expected_steps_in_the_five_phases_snapshot_buil
     assert set(phases) == set(plan.ROUTINE_DEPLOY_GROUPS) and "db-init" not in phases, "例行部署不含只在第一次部署執行的資料庫初始化"
     assert_in_order(steps, "snapshot-db", "wait-snapshot-db", "archive-source", "upload-source", "build-image", "migrate-db",
                     "wait-migrate-db", "seed-scripts", "switch-release", "check-pools")
-    assert steps[-1].id == "wait-check-pools", "驗證在最後"
+    assert steps[-1].id == "wait-check-pool-hardening", "驗證在最後（先確認兩個池回 200，再唯讀驗證執行方式）"
 
 
 def test_the_snapshot_is_available_before_any_migration_and_the_migration_succeeds_before_any_restart():
@@ -1135,8 +1136,8 @@ def test_the_image_tag_must_be_a_commit_short_code(tag):
 
 def test_every_on_host_command_goes_through_ssm_run_command_with_ascii_only_and_no_secret():
     sends = [s for s in all_deploy_steps() + rollback_steps() if is_host_command(s)]
-    assert len(sends) == 11 + 2, ("部署 11 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、建立管理員的乾跑、清理、切換、池檢查）"
-                                  "與回復 2 個（切換、池檢查）；人工建立管理員的那一步不在其中（它不經 SSM Run Command）")
+    assert len(sends) == 12 + 3, ("部署 12 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、建立管理員的乾跑、清理、切換、池檢查、池的執行方式驗證）"
+                                  "與回復 3 個（切換、池檢查、池的執行方式驗證）；人工建立管理員的那一步不在其中（它不經 SSM Run Command）")
     for step in sends:
         body = json.loads(step.input_json)
         assert body["DocumentName"] == "AWS-RunShellScript" and body["InstanceIds"] == ["{{instance-id}}"], step.id
@@ -1676,6 +1677,135 @@ def test_the_pool_check_probes_both_loopback_ports_and_expects_the_new_image_in_
     assert "0.0.0.0" not in text
 
 
+# 兩個池的執行方式驗證（task 6.1 的唯讀查證回寫）：非 root、各用自己的 gunicorn 設定、只綁回送位址
+
+HARDENING_IDS = ("check-pool-hardening", "wait-check-pool-hardening")
+HARDENING_EXPECT = ("rac-cs uid=10001 config=gunicorn.conf.py bind=127.0.0.1:8081 "
+                    "rac-rpg uid=10001 config=gunicorn.rpg.conf.py bind=127.0.0.1:8082")
+
+
+def test_the_pool_hardening_check_follows_the_readiness_check_in_the_deploy_and_rollback_verify_groups():
+    steps = deploy_steps()
+    assert_in_order(steps, "wait-check-pools", *HARDENING_IDS)
+    assert [s.id for s in steps if s.group == "verify"] == ["check-pools", "wait-check-pools", *HARDENING_IDS]
+    only_verify = plan.deploy_plan(target(), TAG, groups=("verify",))
+    assert [s.id for s in only_verify] == ["deploy-find-host", "check-pools", "wait-check-pools", *HARDENING_IDS]
+    assert_placeholders_resolve(only_verify)
+    rollback = by_id(rollback_steps())
+    assert script_lines(rollback["rollback-check-pool-hardening"]) == script_lines(by_id(steps)["check-pool-hardening"]), "回復也驗證同樣的項目"
+    assert rollback["wait-rollback-check-pool-hardening"].verify[0].expect == HARDENING_EXPECT
+
+
+def test_the_pool_hardening_check_expects_each_pool_to_name_its_own_gunicorn_config_and_loopback_port():
+    steps = by_id(deploy_steps())
+    assert steps["wait-check-pool-hardening"].verify[0].expect == HARDENING_EXPECT == plan._pool_hardening_expect()
+    assert [(p.container, p.port, p.gunicorn_config) for p in plan.POOLS] == [
+        ("rac-cs", 8081, "gunicorn.conf.py"), ("rac-rpg", 8082, "gunicorn.rpg.conf.py")]
+    assert plan.POOL_CONTAINER_PORT == 8080 and f"127.0.0.1:8081:{plan.POOL_CONTAINER_PORT}" in plan.pool_unit(plan.POOLS[0])
+    assert int(json.loads(steps["check-pool-hardening"].input_json)["Parameters"]["executionTimeout"][0]) >= 120
+
+
+def test_the_pool_hardening_script_only_reads_and_only_looks_at_the_pools_own_ports():
+    lines = script_lines(by_id(deploy_steps())["check-pool-hardening"])
+    text = "\n".join(lines)
+    assert lines[0] == "set -eu" and text.isascii()
+    assert set(re.findall(r"/usr/bin/docker (\S+)", text)) == {"top", "port"}, "只用 docker top 與 docker port：不 exec、不 inspect、不印環境變數"
+    for forbidden in ("exec", "inspect", "printenv", "env ", " rm ", "systemctl", "restart", "stop", "curl", "sudo", ">>", "> /", "app.env", "release.env"):
+        assert forbidden not in text, forbidden
+    assert text.count("ss -ltnH") == len(plan.POOLS) and all(f"ss -ltnH 'sport = :{p.port}'" in text for p in plan.POOLS), (
+        "只查池自己的埠；Caddy 啟動後主機本來就會監聽 80 與 443，檢查全部監聽會在 6.2 之後誤判")
+    assert text.count("exit 1") == len(plan.POOLS) and "0.0.0.0" not in text.replace('"$listen"', "")
+
+
+CS_PROCESS = ("10001", "/usr/local/bin/python3.14 /usr/local/bin/gunicorn --config gunicorn.conf.py wsgi:app")
+RPG_PROCESS = ("10001", "/usr/local/bin/python3.14 /usr/local/bin/gunicorn --config gunicorn.rpg.conf.py wsgi:app")
+HARDENING_DEFAULTS = {     # procs 是 (uid, 指令) 的列表：主行程加兩個 worker，與真實主機上 `docker top` 的輸出一致
+    "rac-cs": {"procs": [CS_PROCESS] * 3, "port": ["8080/tcp -> 127.0.0.1:8081"], "listen": ["127.0.0.1:8081"]},
+    "rac-rpg": {"procs": [RPG_PROCESS] * 3, "port": ["8080/tcp -> 127.0.0.1:8082"], "listen": ["127.0.0.1:8082"]},
+}
+
+
+def run_hardening_script(step_id="check-pool-hardening", overrides=None, *, docker_fails=False):
+    """在 bash 內以假的 `docker top`、`docker port` 與 `ss` 執行驗證腳本；`overrides` 是 {容器: {欄位: 值}}。回傳結束代碼、標準輸出與錯誤。
+    假的 `docker top` 跟真的一樣嚴格：`-o` 清單沒有 `pid` 就回 daemon 錯誤（2026-11-17 在真實主機上被這個擋下，原本寬鬆的假指令沒有抓到）。"""
+    bash = usable_bash()
+    if bash is None:
+        pytest.skip("這台機器沒有可用的 bash，無法執行腳本（不算通過）")
+    data = {name: {**fields, **(overrides or {}).get(name, {})} for name, fields in HARDENING_DEFAULTS.items()}
+    body = "\n".join(script_lines(by_id(all_deploy_steps() + rollback_steps())[step_id])).replace("/usr/bin/docker", "dockerfake")
+    ports = {pool.container: pool.port for pool in plan.POOLS}
+    setup = ['d="$(mktemp -d)"']
+    for name, fields in data.items():
+        setup.append(f': > "$d/top-{name}"')
+        for index, (uid, args) in enumerate(fields["procs"]):
+            setup.append(f'printf "%s\\n" {shlex.quote(f"{100 + index} {uid} {args}")} >> "$d/top-{name}"')
+        for field, path in (("port", f"port-{name}"), ("listen", f"listen-{ports[name]}")):
+            setup.append(f': > "$d/{path}"')
+            for value in fields[field]:
+                setup.append(f'printf "%s\\n" {shlex.quote(value)} >> "$d/{path}"')
+    script = "\n".join([
+        *setup,
+        f"DOCKER_FAILS={1 if docker_fails else 0}",
+        'dockerfake() { [ "$DOCKER_FAILS" = 0 ] || return 1; case "$1" in '
+        'top) case "$4" in *pid*) ;; *) echo "Error response from daemon: Couldn\'t find PID field in ps output" >&2; return 1;; esac; '
+        'echo "PID UID COMMAND"; cat "$d/top-$2";; '
+        'port) cat "$d/port-$2";; esac; }',
+        'ss() { p="${2##*:}"; while read -r address; do echo "LISTEN 0 4096 $address 0.0.0.0:*"; done < "$d/listen-$p"; }',
+        "(", body, ') > "$d/out" 2> "$d/err"',
+        'echo "rc=$?"', 'echo "---out"; cat "$d/out"', 'echo "---err"; cat "$d/err"', 'rm -rf "$d"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    text = result.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+    assert result.returncode == 0, (text, result.stderr.decode("utf-8", "replace"))
+    head, rest = text.split("---out\n", 1)
+    out, err = rest.split("---err\n", 1)
+    return {"rc": int(head.strip().split("=", 1)[1]), "out": out, "err": err}
+
+
+@pytest.mark.parametrize("step_id", ["check-pool-hardening", "rollback-check-pool-hardening"])
+def test_the_pool_hardening_script_prints_the_fixed_line_when_both_pools_match(step_id):
+    result = run_hardening_script(step_id)
+    assert result["rc"] == 0 and result["out"].strip() == HARDENING_EXPECT and result["err"] == ""
+
+
+HARDENING_MISMATCHES = {
+    "one worker runs as root": ("rac-cs", {"procs": [CS_PROCESS, ("0", CS_PROCESS[1]), CS_PROCESS]}),
+    "the whole rpg pool runs as root": ("rac-rpg", {"procs": [("0", RPG_PROCESS[1])] * 3}),
+    "the customer service pool runs the rpg config": ("rac-cs", {"procs": [RPG_PROCESS] * 3}),
+    "the rpg pool runs the customer service config": ("rac-rpg", {"procs": [CS_PROCESS] * 3}),
+    "an extra bind argument": ("rac-cs", {"procs": [("10001", CS_PROCESS[1].replace("wsgi:app", "--bind 0.0.0.0:9 wsgi:app"))] * 3}),
+    "a process with a different command": ("rac-rpg", {"procs": [*[RPG_PROCESS] * 3, ("10001", "/bin/sh -c sleep")]}),
+    "published on all interfaces": ("rac-cs", {"port": ["8080/tcp -> 0.0.0.0:8081"]}),
+    "published on loopback and ipv6": ("rac-rpg", {"port": ["8080/tcp -> 127.0.0.1:8082", "8080/tcp -> [::]:8082"]}),
+    "published to another host port": ("rac-cs", {"port": ["8080/tcp -> 127.0.0.1:9999"]}),
+    "listening on the wildcard address": ("rac-cs", {"listen": ["0.0.0.0:8081"]}),
+    "listening on star": ("rac-rpg", {"listen": ["*:8082"]}),
+    "listening on loopback and the ipv6 wildcard": ("rac-cs", {"listen": ["127.0.0.1:8081", "[::]:8081"]}),
+    "not listening at all": ("rac-rpg", {"listen": []}),
+    "no process at all": ("rac-cs", {"procs": []}),
+}
+
+
+@pytest.mark.parametrize("name", HARDENING_MISMATCHES)
+def test_the_pool_hardening_script_fails_without_the_fixed_line_when_a_pool_does_not_match(name):
+    container, override = HARDENING_MISMATCHES[name]
+    result = run_hardening_script(overrides={container: override})
+    assert result["rc"] == 1 and HARDENING_EXPECT not in result["out"] and result["out"].strip() == "", "非零結束讓 SSM 狀態為 Failed，等待步驟立即停止"
+    assert f"{container} hardening mismatch" in result["err"]
+
+
+def test_the_pool_hardening_script_fails_when_a_container_cannot_be_inspected():
+    result = run_hardening_script(docker_fails=True)
+    assert result["rc"] == 1 and result["out"].strip() == "" and "rac-cs hardening mismatch" in result["err"]
+
+
+def test_the_pool_hardening_script_asks_docker_top_for_the_pid_column_which_the_daemon_requires():
+    text = script_text(by_id(deploy_steps())["check-pool-hardening"])
+    selections = re.findall(r"docker top \S+ -eo (\S+)", text)
+    assert len(selections) == len(plan.POOLS) and all(columns.split(",")[0] == "pid" and "uid" in columns and "args" in columns for columns in selections), (
+        "沒有 pid 欄位時 docker 回 `Couldn't find PID field in ps output`（真實主機實測）")
+
+
 def test_the_new_plans_use_only_aws_and_one_git_command_and_always_name_the_sydney_region():
     steps = deploy_steps() + rollback_steps() + teardown_steps()
     for step in steps:
@@ -1723,8 +1853,9 @@ def test_the_host_scripts_pass_a_bash_syntax_check(make):
 def test_rollback_only_switches_the_image_tag_and_restarts_the_pools_without_touching_the_database():
     steps = rollback_steps()
     assert [s.id for s in steps] == ["rollback-find-host", "rollback-switch-release", "wait-rollback-switch-release",
-                                      "rollback-check-pools", "wait-rollback-check-pools"]
-    assert [s.group for s in steps] == ["prepare", "restart", "restart", "verify", "verify"]
+                                      "rollback-check-pools", "wait-rollback-check-pools",
+                                      "rollback-check-pool-hardening", "wait-rollback-check-pool-hardening"]
+    assert [s.group for s in steps] == ["prepare", "restart", "restart", "verify", "verify", "verify", "verify"]
     text = whole_plan_text(steps).lower()
     for forbidden in ("alembic", "downgrade", "migrate", "seed-scripts", "snapshot", "restore", "docker build", "s3 cp", "delete", "rds"):
         assert forbidden not in text, forbidden

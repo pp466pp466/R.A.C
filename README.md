@@ -1630,7 +1630,7 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-email <信箱> --vars-file aws-demo.vars --only host-init-sshd --yes
 ```
 
-### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5 已記入，8.4 收尾時補齊）
+### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5、6.1 已記入，8.4 收尾時補齊）
 
 **已對真實 AWS 執行並逐項以唯讀指令驗證**（資源都帶 `Project=rac-demo`、`Environment=staging` 標籤）：
 
@@ -1668,9 +1668,13 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 | 5.5 建立管理員前的乾跑（`deploy --group create-admin --tag 48f5ab2 --execute`，到人工步驟時回答「否」讓它停住） | 找出主機通過；`check-create-admin` 的 SSM 狀態 `Success`，驗證輸出 `create-admin-help=ok`（映像、環境檔、`flask`、`wsgi` 與 `create-admin` 指令可用）；在人工步驟停止（結束代碼 3，是預期的），沒有建立任何帳號、沒有執行清理（乾跑腳本自己的 `trap` 已刪環境檔） |
 | 5.5 人工建立管理員與清理（`deploy --group create-admin --tag 48f5ab2 --execute`，使用者在自己的終端機執行） | 使用者在 Session Manager 終端機輸入兩行指令後回答「做完了」；`cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組「全部完成」。**證據的限度**：這是使用者的確認加清理驗證輸出，我沒有看到成功訊息的識別碼，也沒有獨立查詢資料庫；帳號可用與否在管理員第一次登入時才證明 |
 | 5.5 回寫成計畫步驟（`deploy_plan` 的 `create-admin` 組，第一次部署專用） | 5 個步驟（乾跑與等待、人工步驟、清理與等待）；`Step.manual_commands` 新欄位，執行器只顯示不執行，`--yes` 不能代替確認。新增測試（四個 aws_demo 測試檔）：順序與例行部署不含、人工指令沒有任何帳密參數、兩個 SSM 腳本在 bash 內以假 `docker` 實際執行（成功、容器失敗、環境檔與容器清除）、預覽不呼叫外部指令、拒絕人工確認即停止；**11 項破壞驗證全部被抓到**（人工指令少 `-it` 或多帶 `--password-stdin`、不再標為互動、進了例行部署、乾跑沒有 `trap`、清理不刪環境檔、組順序在遷移之前、乾跑拿掉 `--help`、清理的容器名稱不錨定、執行器不顯示指令、清理預期值放寬） |
+| 6.1 啟動兩個池（`deploy --group restart --group verify --tag 48f5ab2 --execute`） | 5 步全部成功：`release.env` 換成 `RAC_IMAGE_TAG=48f5ab2`、重啟 `rac-cs` 與 `rac-rpg`、兩個池在回送位址 8081 與 8082 的 `/readyz` 回 200、輸出 `rac-app:48f5ab2 rac-app:48f5ab2`；第一次啟動，沒有前一版，沒有演練 `rollback`。抵用金啟動前讀數 US$139.13 |
+| 6.1 唯讀查證（SSM 只讀指令，現場撰寫；之後回寫成 `check-pool-hardening`，見下一列） | 非 root：兩個容器 `Config.User=app`、行程 UID 10001、容器內 `uid=10001(app)`、根檔案系統唯讀；各用自己的設定：客服池 `gunicorn.conf.py`、RPG 池 `gunicorn.rpg.conf.py`（各 3 個 gunicorn 行程）；只綁回送位址：`127.0.0.1:8081` 與 `127.0.0.1:8082`，主機上沒有監聽在 `0.0.0.0` 或外部位址的 TCP 埠（另有 `containerd` 自己的 `127.0.0.1:41519`）；容器 `RestartCount=0`，Caddy 與五個計時器 `inactive`。**只證明主機層**，外部直連是否被擋由 6.3 驗證 |
+| 6.1 閒置記憶體（啟動後約 50 秒與約 90 秒；沒有流量） | `docker stats`：客服池 92.95 → 93.16 MiB、RPG 池 92.48 → 92.36 MiB（各約 4.9% 的 1.865 GiB，容器沒有記憶體上限）；`free -m`：總量 1909、已用 508、可用 1225 MB，交換空間 2047 MB 只用 40 KB。不是容量依據，有流量時的記憶體屬 `rpg-ops-loadtest` |
+| 6.1 回寫成計畫步驟（`deploy_plan` 與 `rollback_plan` 的 `verify` 組多一個 `check-pool-hardening`；`deploy --group verify --tag 48f5ab2 --execute` 對真實主機執行兩次） | 步驟只看兩個池自己的埠（不看主機全部監聽，Caddy 啟動後會監聽 80 與 443），驗證 UID 10001、各自的 gunicorn 設定、容器埠只發布在回送位址且主機上該埠只有 `127.0.0.1` 的監聽，全部符合才輸出固定一行。**第一次對真實主機執行失敗**：`docker top -eo uid` 被 daemon 拒絕（`Couldn't find PID field in ps output`，`-o` 清單要含 `pid`），而原本的測試沒抓到，因為假的 `docker` 接受任何參數；修正為 `-eo pid,uid,args`、假的 `docker top` 改成同樣嚴格後，第二次通過（`check-pools` 與 `check-pool-hardening` 都 `Success`，輸出符合）。新增測試：兩份計畫的順序、步驟只用 `docker top`／`docker port`／`ss`、`-eo` 第一欄是 `pid`、在 bash 內以假指令執行（成功一種、不符 14 種、`docker` 失敗一種）；**15 項破壞驗證全部被抓到**（含原始的 `-eo uid`、拿掉 UID／設定／監聽位址比對、不再過濾池的埠、失敗結束代碼改 0、固定輸出行搬到檢查之前、任一份計畫少了這一步、等待步驟不驗證輸出） |
 | 5.3 主機殘留複驗 | 暫存目錄 0、`/run/rac` 空、容器 0、沒有 active 的 `rac-*` 單元；主機上的映像為 `rac-app:48f5ab2`、`rac-app-base:48f5ab2` 與 5.1 的 `rac-app:5681983`（沒有 RDS CA，不可用於資料庫連線，留著只是尚未清理） |
 
-**未驗證**：管理員帳號是否可用（5.5 的人工步驟由使用者執行並確認完成，證據限度見上表；第一次管理員登入才真正驗證）、新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、映像執行（兩個池與一次性容器在新映像上的行為）、兩個池與 Caddy 的啟動與分流（6.x）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
+**未驗證**：管理員帳號是否可用（5.5 的人工步驟由使用者執行並確認完成，證據限度見上表；第一次管理員登入才真正驗證）、新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、有流量時兩個池的行為（6.1 只量了閒置的記憶體與 `/readyz`）、Caddy 的啟動、外部連線與分流（6.2 至 6.4）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
 
 ## 撰寫新端點：權限與 IDOR 測試
 
