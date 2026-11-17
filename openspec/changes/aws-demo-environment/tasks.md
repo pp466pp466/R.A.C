@@ -74,8 +74,8 @@
 
 ## 9. 收尾
 
-- [ ] 9.1 依 `docs/README.md` 的對照表更新受影響的設計文件（營運與部署、路線圖：新增本 change 並說明 RC-4 拆成兩個 change、`rpg-ops-loadtest` 以本環境為量測基礎），複查各文件標頭的「對應 change」，並執行 `tests/test_design_docs.py` 通過
-- [ ] 9.2 全套測試通過（`pytest` 與 Node 測試），確認沒有修改 `app/`、`Dockerfile`、`gunicorn*.conf.py`、migration 與 AGENTS.md（憑證方案以衍生映像層實作，不改這些，見 design D7）
+- [x] 9.1 依 `docs/README.md` 的對照表更新受影響的設計文件（營運與部署、路線圖：新增本 change 並說明 RC-4 拆成兩個 change、`rpg-ops-loadtest` 以本環境為量測基礎），複查各文件標頭的「對應 change」，並執行 `tests/test_design_docs.py` 通過。**第 8 批（2026-11-17，只改文件）**：本 change 沒有改 `app/`，依對照表只有「營運與部署」與「路線圖」受影響。營運文件：標頭狀態由「實作中」改為「實作與驗收皆已完成、待使用者核對後封存」，第 8 節狀態行的「其餘雲端驗收是後續批次」改為雲端驗收 8.1 至 8.4 已全部完成並指向 README 驗收摘要與缺口表；路線圖：aws-demo-environment 一列改為「實作與驗收完成（40／40），待使用者核對後封存」並記入第 8 批，依賴圖 `RC4` 節點註明以展示環境為量測基礎（RC-4 拆成兩個 change 與 `cloud-staging-run` 擱置的說明、依賴邊 `C5B → AWS`、`RC3 → AWS → RC4` 原本就在）。其餘文件標頭的「對應 change」逐份複查：只有營運文件列出本 change，其餘文件的內容沒有因本 change 改變，不加。`tests/test_design_docs.py` 44 項通過、`openspec validate aws-demo-environment --strict` 通過。複查時看到一處與本 change 無關的既有不一致：`docs/前端結構-frontend.md` 第 98 行的登入流程圖仍把「其他」導向 `/cs（預設頁面）`，登入後預設頁面已是 `/game`（`d7af7d9` 只改了 AGENTS.md、技能鏡像與同步測試），已記入 HANDOFF 的未解決問題，不在本批順手修
+- [x] 9.2 全套測試通過（`pytest` 與 Node 測試），確認沒有修改 `app/`、`Dockerfile`、`gunicorn*.conf.py`、migration 與 AGENTS.md（憑證方案以衍生映像層實作，不改這些，見 design D7）。**第 8 批（2026-11-17）**：全套 `pytest`（含真實 SQL Server `project_test`，單一行程）**11345 項通過、2 項跳過、1 個警告**，約 21 分 43 秒；2 項跳過都是先前就有的 Windows 跳過（`tests/test_aws_demo_script.py` 的檔案權限位元、`tests/test_container_files.py` 沒有 `grp` 模組）；1 個警告是 `tests/test_assets_manifest.py::test_the_update_script_check_mode_agrees_with_the_test` 的子行程讀取執行緒以 UTF-8 解碼 Windows 系統編碼輸出失敗（`UnicodeDecodeError`），測試仍通過、與本 change 無關，記入 HANDOFF 的未解決問題；Node 測試（`node --test "tests/js/**/*.test.js"`）**1099 項通過、0 失敗**。範圍確認：本 change 立案（`2867733`）以來的 27 個提交，`app/`、`Dockerfile`、`gunicorn*.conf.py`、`migrations/` 沒有任何修改；唯一碰到 AGENTS.md 的是 `d7af7d9`（第 10 節登入後預設頁面由 `/cs` 更正為 `/game`，依使用者要求單獨提交，同時改了技能鏡像與 `tests/test_agents_skill_sync.py`），它是規範的更正、不屬於本 change 的範圍；本 change 自己的提交只動 `scripts/aws_demo*.py`、`tests/`、`docs/`、`README.md`、`openspec/`，另有 `.gitignore` 新增一條 `*.secrets`（忽略執行器的機密值檔）
 
 ## Workflow follow-up
 

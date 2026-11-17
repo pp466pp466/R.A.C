@@ -1635,7 +1635,7 @@ python scripts/aws_demo.py deploy --account-id <12 位帳號編號> --tag <映�
 python scripts/aws_demo_probe_stream.py https://<展示網域> --allow-model-call
 ```
 
-### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5、6.1 至 6.5、7.1 至 7.4、8.1 至 8.4 已記入（7.1 的本機部分在第 2 批，雲端驗證在第 5 批；6.5 與 7.4 是第 6 批的文件工作；8.x 在第 7 批；8.4 的驗收摘要在表格之後）；9.x 收尾尚未做）
+### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5、6.1 至 6.5、7.1 至 7.4、8.1 至 8.4 已記入（7.1 的本機部分在第 2 批，雲端驗證在第 5 批；6.5 與 7.4 是第 6 批的文件工作；8.x 在第 7 批；8.4 的驗收摘要在表格之後；9.1、9.2 在第 8 批）；全部 40 項已完成）
 
 **已對真實 AWS 執行並逐項以唯讀指令驗證**（資源都帶 `Project=rac-demo`、`Environment=staging` 標籤）：
 
@@ -1707,6 +1707,9 @@ python scripts/aws_demo_probe_stream.py https://<展示網域> --allow-model-cal
 | 8.2 四項驗證（使用者的瀏覽器；後端日誌事件） | ①管理員：`auth.google_started` → **`auth.google_linked`** → `auth.admin_google_passed` → `auth.login_success`（約 11 秒），可進 `/admin`；②新使用者不勾條款：`auth.google_rejected.terms`，沒有建帳號（編號沒跳號）；③勾選後：`auth.google_registered` → `auth.age_confirmed.later`，登入後預設頁 `/game`；④回訪：先 `auth.logout`，再 `auth.google_started` → **`auth.google_login`**，直接進 `/game`（第一次嘗試沒驗到：只是重開登入頁，登入狀態還在，日誌沒有 `auth.google_started`）。**全部通過** |
 | 8.2 驗證後清除（使用者決定：管理員保留、玩家抹除） | 第二個 Google 帳號的玩家（使用者 11）經正式的抹除出口刪除（先核對共 2 位、角色與遮蔽信箱相符、管理員在）；剩管理員（使用者 10，已綁定 Google 身分）。限度：只驗證**測試使用者**，Google 發佈為正式版、一般使用者登入與 `duckdns.org` 作為授權網域沒有驗證 |
 | 5.3 主機殘留複驗 | 暫存目錄 0、`/run/rac` 空、容器 0、沒有 active 的 `rac-*` 單元；主機上的映像為 `rac-app:48f5ab2`、`rac-app-base:48f5ab2` 與 5.1 的 `rac-app:5681983`（沒有 RDS CA，不可用於資料庫連線，留著只是尚未清理） |
+| 9.1 設計文件（第 8 批，只改文件，沒有對 AWS 執行任何指令） | 營運與部署、路線圖兩份更新（本 change 沒有改 `app/`，其餘文件不受影響）；`tests/test_design_docs.py` **44 項通過**、`openspec validate aws-demo-environment --strict` 通過 |
+| 9.2 全套測試（第 8 批；本機，單一 pytest 行程，含真實 SQL Server `project_test`） | `pytest` **11345 項通過、2 項跳過、1 個警告**（約 21 分 43 秒）；2 項跳過是先前就有的 Windows 跳過；警告來自 `tests/test_assets_manifest.py` 的子行程輸出解碼（與本 change 無關）。`node --test "tests/js/**/*.test.js"` **1099 項通過、0 失敗** |
+| 9.2 範圍確認（`git log` 與 `git diff`，本 change 立案 `2867733` 以來 27 個提交） | `app/`、`Dockerfile`、`gunicorn*.conf.py`、`migrations/` 沒有任何修改；AGENTS.md 只有單獨提交 `d7af7d9`（第 10 節登入後預設頁面更正為 `/game`，規範的更正，不屬於本 change）；本 change 自己的提交只動 `scripts/aws_demo*.py`、`tests/`、`docs/`、`README.md`、`openspec/` 與 `.gitignore` 的一條 `*.secrets` |
 
 #### 驗收摘要（task 8.4，2026-11-17）
 
