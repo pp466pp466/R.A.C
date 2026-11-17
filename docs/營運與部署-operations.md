@@ -440,7 +440,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan`、`rollback_plan`、`teardown_plan`、DuckDNS 與資料庫初始化／探測腳本尚未對真實 AWS 執行**（資料庫憑證方案已於 2026-11-17 修訂並在本機實作，見下方「資料庫憑證方案」，雲端驗證是 task 5.3），雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組、`rollback_plan`、`teardown_plan` 與 DuckDNS 尚未對真實 AWS 執行**，雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -504,6 +504,7 @@ flowchart LR
 | `deploy_plan` | prepare | `deploy-find-host` | 以名稱與標籤找出主機，必須剛好一台 |
 | `deploy_plan` | snapshot | `snapshot-db`、`wait-snapshot-db` | 遷移之前的 RDS 快照（每個提交短碼一個，已存在就沿用），等到 available |
 | `deploy_plan` | build | `archive-source`、`upload-source`、`build-image`、`wait-build-image`、`check-image`、`wait-check-image` | `git archive` 取出已提交的內容、上傳到傳檔儲存貯體、在主機上分兩段建置映像（基底映像，再加一層 RDS CA 的衍生映像）並檢查（非 root、沒有 `.env` 與 `.git`、系統憑證庫的憑證數＝基底映像的張數＋RDS 套件的張數） |
+| `deploy_plan` | db-init | `deploy-find-db-endpoint`、`upload-ops-bootstrap-db`、`upload-ops-probe-db`、`bootstrap-db`、`wait-bootstrap-db`、`probe-db`、`wait-probe-db` | **只在第一次部署以 `--group db-init` 執行**（例行部署的整份計畫不含它）：唯讀取得 RDS 端點、把兩支維運腳本加密上傳到傳檔儲存貯體的 `ops/` 前綴（主機下載後比對 SHA-256）、用 RDS 主要使用者在 `rac-app:<標籤>` 的一次性容器內建立專屬資料庫與登入（可重複執行），再以應用程式登入的連線字串探測；兩個等待步驟驗證標準輸出 `docker-exit=0`（容器的輸出在標準錯誤）；探測沒有通過就停止，不放寬 |
 | `deploy_plan` | migrate | `migrate-db`、`wait-migrate-db`、`check-migration-head`、`wait-check-migration-head`、`seed-scripts`、`wait-seed-scripts` | 一次性容器執行 `alembic upgrade head`、確認已是最新版、再執行 `seed-scripts`；失敗即停止，不重啟 |
 | `deploy_plan` | restart | `switch-release`、`wait-switch-release` | 換 `release.env`（前一版存成 `release.previous.env`）並只重啟兩個池 |
 | `deploy_plan` | verify | `check-pools`、`wait-check-pools` | 兩個池在回送位址上 `/readyz` 回 200，且都在跑新映像 |
@@ -525,10 +526,10 @@ flowchart LR
 - **費用護欄**：建立 RDS、EC2 與 Elastic IP 的步驟在沒有 `--accept-cost` 時只留說明、不輸出指令；執行器顯示的預估來自 `cost_lines()`（約 US$1.6／日，到 2026-12-31 約 US$75；牌價粗估，以 AWS 帳單頁為準）。
 - **機密**：計畫裡只有機密的名稱與參照（`{{secret:名稱}}`，只出現在經暫存檔傳入的 JSON 內），沒有值；傳給 AWS 的 JSON 一律只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`）。
 - **在主機上執行的命令**走 SSM Run Command：`send-command` 輸出命令編號，接著 `wait-…` 步驟輪詢到 `Success`，`Failed`、`Cancelled`、`TimedOut` 立即停止（不等逾時）；主機沒有 SSH。
-- **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。
+- **部署順序固定為快照 → 建置 → 遷移 → 重啟 → 驗證**：快照 available 之後才遷移；遷移與種子都成功才重啟兩個池（失敗時舊版仍在跑，遷移是 expand-only，舊版程式可在新結構上運作）；驗證在最後。映像標籤就是提交短碼（7 至 40 位小寫十六進位），所以每個映像都對得到提交。**第一次部署**在建置與遷移之間多一組 `db-init`（資料庫初始化與憑證探測，用 `--group db-init` 明確執行）：它不在例行部署的整份計畫內（`ROUTINE_DEPLOY_GROUPS`），所以例行部署不會每次都用 RDS 主要使用者的密碼；執行器的步驟目錄（`--only` 與擷取值的唯讀取回）則含它。
 - **回復只換標籤**：`release.env` 換回前一版並重啟兩個池，沒有降級遷移、不還原資料庫。
 - **拆除只動帶標籤的資源**：每個刪除步驟先以帶 `Project=rac-demo` 與 `Environment=staging` 兩個標籤的查詢找出資源（`run_if_found`），沒有符合就略過；RDS 刪除要求明確選擇保留或不保留最終快照，**沒有預設值**（沒選時不輸出刪除指令）。**手動快照**含資料庫內容、不隨 RDS 消失且持續計費，所以另有規則（design D14）：不論選擇保留或不保留最終快照，執行器先唯讀列出（`snapshot_listing_step()`）該資料庫仍存在的快照，使用者必須明確回覆要保留的**例外**（「沒有例外」也要明說，沉默不算），沒有被指定保留的**部署前快照**（`<資料庫>-pre-<提交短碼>`）才預設刪除；名單由 `snapshots_to_delete()` 算出（例外打錯名稱會丟錯，不會悄悄變成全部刪除），傳給 `teardown_plan(delete_snapshots=…)`，沒給名單時 `td-delete-snapshots` 沒有指令；每個刪除仍先以標籤查詢把關。**最終快照（本次保留的與先前拆除留下的）永遠不由計畫刪除**，要刪由使用者自己處理，拆除最後會列出仍留著的快照。
-- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。`build_plan` 的各組與 `host-init` 已對真實的 AWS 與主機（Amazon Linux 2023 的 docker、systemd）執行並逐項驗證，差異已回寫（task 4.2 至 4.5，見下一節與 README「驗收紀錄（aws-demo-environment）」）；`deploy_plan`、`rollback_plan`、`teardown_plan` 與 DuckDNS **沒有對真實的 AWS 執行過**，Caddy 與兩個池也尚未在主機上啟動，指令與旗標的差異在後續雲端批次回寫。
+- **已驗證與未驗證**：計畫的輸出、順序與守門由 `tests/test_aws_demo_plan.py` 驗證；每條 `aws` 指令都以假金鑰離線確認過引數與 JMESPath 查詢能被 AWS CLI 解析、主機腳本通過 `bash -n`。`build_plan` 的各組與 `host-init` 已對真實的 AWS 與主機（Amazon Linux 2023 的 docker、systemd）執行並逐項驗證，差異已回寫（task 4.2 至 4.5，見下一節與 README「驗收紀錄（aws-demo-environment）」）；`deploy_plan` 的 `build` 組（兩段建置與 `check-image`）與 `db-init` 組、`refresh-parameter-DATABASE_URL` 已對真實主機與 RDS 執行並驗證（task 5.3，結果見下方「資料庫憑證方案」；`db-init` 回寫後的步驟另對真實主機重跑一次，兩個等待步驟都是 `docker-exit=0`）；`deploy_plan` 的 `snapshot`、`migrate` 組也已對真實的 AWS 與 RDS 執行並驗證（task 5.4）；`deploy_plan` 的 `restart`、`verify` 組、`rollback_plan`、`teardown_plan` 與 DuckDNS **沒有對真實的 AWS 執行過**，Caddy 與兩個池也尚未在主機上啟動，指令與旗標的差異在後續雲端批次回寫。
 
 ### 主機初始化（`build_plan` 的 `host-init` 組）
 
@@ -548,7 +549,7 @@ task 4.4 在主機上以 SSM 現場撰寫並逐項驗證，task 4.5 回寫成計
 - **一般設定檔（`--vars-file`）**：`plain.env` 的內容來自一般設定（非機密，例如 `aws-demo.vars`，`*.vars` 已被 `.gitignore` 忽略），C 因此需要 `provision --vars-file …`；沒有給時 C 只留說明、不輸出指令，執行到那裡以代碼 4 停止（A、B 照常）。檔案只能放一般設定：含機密變數、已淘汰的變數、不認得的變數或缺少必要設定都在呼叫任何指令之前被拒絕，訊息只有變數名稱。
 - **SSH 與「沒有 22」**：規格的「沒有 22」指對外——安全群組沒有 22 的規則、沒有金鑰對，所以外部連不進來；Amazon Linux 2023 的 sshd 預設仍在主機內監聽，F 把它停用，讓「只能經 SSM 連入」在主機內也成立。
 - **雲端執行時發現的差異（2026-11-17，已回寫）**：①AL2023 的 `/tmp` 是記憶體檔案系統，暫存檔一律放 `/var/tmp`（2 GB 的主機不要把大檔放在 `/tmp`）；②RDS 的 CA 套件含 3 張憑證（第一張 `Amazon RDS ap-southeast-2 Root CA RSA2048 G1`，2061 年到期），RDS 實際使用的 CA 是 `rds-ca-rsa2048-g1`，與套件吻合；③docker 25.0.x、系統內建 `aws-cli/2.38`，不需另外安裝；④Windows 上的 Git Bash 會把以 `/` 開頭的命令列引數改寫成 Windows 路徑，手動查 SSM 參數要設 `MSYS_NO_PATHCONV=1`（執行器以 `subprocess` 呼叫不受影響）；⑤執行器在 Windows 把輸出重設為主控台編碼，導向檔案時是 cp950，要讀輸出請設 `PYTHONUTF8=1`；⑥`--only` 不能與 `--group` 同用。
-- **仍未驗證**：衍生映像層的信任方案在真實主機上的建置與檢查（task 5.3；2026-11-17 的現場實測只確認「CA 進系統憑證庫後連線不再是憑證錯誤」，見「資料庫憑證方案」）；`systemd-analyze verify` 只在現場驗證過（對我們的單元沒有警告），沒有寫進計畫步驟；Caddy 與兩個池在主機上的實際啟動。
+- **仍未驗證**：`systemd-analyze verify` 只在現場驗證過（對我們的單元沒有警告），沒有寫進計畫步驟；Caddy 與兩個池在主機上的實際啟動。
 
 ### 執行器（`scripts/aws_demo.py`）
 
@@ -557,7 +558,7 @@ task 4.4 在主機上以 SSM 現場撰寫並逐項驗證，task 4.5 回寫成計
 | 子命令 | 做什麼（對應的計畫） | 範例 |
 |---|---|---|
 | `provision` | 建立環境（`build_plan`）：`--group` 只做某幾組、`--secrets-file` 提供機密的值、`--vars-file` 提供一般設定（主機初始化放置 `plain.env` 用）、`--accept-cost` 同意建立計費資源 | `python scripts/aws_demo.py provision --account-id 123456789012 --notify-email ops@example.com --accept-cost --execute` |
-| `deploy` | 部署（`deploy_plan`）：`--tag` 是提交短碼，省略時取目前 git 的短提交；第一次部署用 `--group` 分組執行（`build`，然後 `snapshot`、`migrate`；`restart`、`verify` 留到 `create-admin` 之後） | `python scripts/aws_demo.py deploy --account-id 123456789012 --tag abc1234 --execute` |
+| `deploy` | 部署（`deploy_plan`）：`--tag` 是提交短碼，省略時取目前 git 的短提交；第一次部署用 `--group` 分組執行（`build`，然後 `db-init`，再 `snapshot`、`migrate`；`restart`、`verify` 留到 `create-admin` 之後）；沒指定 `--group` 時是例行部署，不含 `db-init` | `python scripts/aws_demo.py deploy --account-id 123456789012 --tag abc1234 --execute` |
 | `rollback` | 回復（`rollback_plan`）：只把兩個池換回舊標籤，不動資料庫 | `python scripts/aws_demo.py rollback --account-id 123456789012 --tag abc1234 --execute` |
 | `teardown` | 拆除（`teardown_plan`）：必須明確選 `--final-snapshot` 或 `--no-final-snapshot`（互斥、沒有預設值；真正執行時沒選會在呼叫任何指令前被拒絕） | `python scripts/aws_demo.py teardown --account-id 123456789012 --no-final-snapshot --execute` |
 | `duckdns` | 把展示網域指向帶標籤的 Elastic IP；權杖只從環境變數 `DUCKDNS_TOKEN` 讀取 | `python scripts/aws_demo.py duckdns --account-id 123456789012 --execute` |
@@ -603,10 +604,13 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **信任範圍**：變更只是在系統憑證庫**新增**這份區域 CA 套件的根憑證（只簽發 RDS 端點的憑證）；不關閉、不放寬任何驗證，原有的根憑證一張不少，所以對模型供應商、SMTP、Google 的 TLS 驗證結果不變。`check-image` 以 `grep -c 'BEGIN CERTIFICATE'` 數 `/etc/ssl/certs/ca-certificates.crt`，確認「部署用映像的憑證數＝基底映像的張數＋主機上套件的張數」，不符就以錯誤結束（標準輸出仍只是 `10001 clean`）；測試以 bash 執行這段腳本，涵蓋沒加進去、只加一張、多出不明憑證與少了原有憑證。
 - **既有的 SSM `DATABASE_URL` 仍是舊型態**：`put-parameter-DATABASE_URL` 對已存在的參數會略過（不覆寫），所以新增 `refresh-parameter-DATABASE_URL`（`rds-ready` 組）：由執行器用 RDS 端點與 SSM 內的專屬登入密碼重新組成連線字串，經暫存檔覆寫；`Overwrite` 不能與標籤並用，所以不帶標籤（原有的保留）；輸出與命令列都沒有值，驗證只看名稱與型別；執行前一樣逐步確認。重複執行的結果相同。
 - **標籤陷阱**：5.1 建出的 `rac-app:5681983` 沒有 RDS CA，**不可用於資料庫連線**（它的建置與非 root 檢查仍有效）；要資料庫連線的映像必須以新提交的短碼重跑 `build` 組。`--tag` 預設取目前 git 短提交（HEAD 會一直變），之後的 `migrate`、`restart` 等組要明確帶 `--tag`。
+- **雲端驗證（task 5.3，2026-11-17，映像標籤 `48f5ab2`）**：①`build` 組兩段建置成功，`check-image` 通過：`10001 clean`，憑證庫 148 張（基底映像）＋3 張（RDS 套件）＝151 張，只新增、沒有減少；②`refresh-parameter-DATABASE_URL` 覆寫成功（覆寫後參數版本為 2、標籤保留，值不顯示；連線字串型態以探測的輸出確認）；③資料庫初始化在 RDS 上**第一個連線就通過憑證驗證**（候選 A 在這一步 `tls_certificate`），建立資料庫 `rac_demo`、登入 `rac_app`、資料庫使用者與 `db_owner`；第二次執行全部「已存在，略過」、不變更既有密碼；④探測成功：連線加密且伺服器憑證通過驗證，連線選項為 `Encrypt=yes`、沒有 `ServerCertificate`、沒有 `TrustServerCertificate`（採用的連線字串型態）；⑤主機沒有殘留：暫存目錄 0、`/run/rac` 空、容器 0、沒有 active 的 `rac-*` 單元。
 
 ### 資料庫初始化與連線探測（`scripts/aws_demo_bootstrap_db.py`、`scripts/aws_demo_probe_db.py`）
 
-兩支腳本都在**主映像內以一次性容器執行**（design D7、D8；映像是含 RDS CA 的 `rac-app:<標籤>`）：映像不含 `scripts/`（`.dockerignore`），所以由主機把腳本唯讀掛入；各自獨立、不匯入其他維運腳本，所以可以單獨掛入（初始化不匯入 `app/`；探測只匯入應用程式的引擎工廠，容器的工作目錄是 `/app`，腳本由別處掛入時會把工作目錄加進匯入路徑）。它們不是執行器的子命令，也還沒有計畫步驟：第一次雲端執行（task 5.3）時，由使用者在主機上以 SSM 逐步確認執行，之後把現場的做法回寫成計畫步驟與測試。順序固定為「建置映像（含 RDS CA）→ 覆寫 `DATABASE_URL` → 資料庫初始化 → 連線探測 → 快照與 migration」，探測沒有通過就**停止**，不進入 migration，也不改用放寬的設定。
+兩支腳本都在**主映像內以一次性容器執行**（design D7、D8；映像是含 RDS CA 的 `rac-app:<標籤>`）：映像不含 `scripts/`（`.dockerignore`），所以由主機把腳本唯讀掛入；各自獨立、不匯入其他維運腳本，所以可以單獨掛入（初始化不匯入 `app/`；探測只匯入應用程式的引擎工廠，容器的工作目錄是 `/app`，腳本由別處掛入時會把工作目錄加進匯入路徑）。它們不是執行器的子命令，而是 `deploy_plan` 的 `db-init` 組的步驟（task 5.3 在真實主機現場執行並逐項驗證後回寫）。順序固定為「建置映像（含 RDS CA）→ 覆寫 `DATABASE_URL` → 資料庫初始化 → 連線探測 → 快照與 migration」，探測沒有通過就**停止**，不進入 migration，也不改用放寬的設定。
+
+`db-init` 組只在第一次部署以 `--group db-init` 執行，每個維運腳本的流程相同（`_ops_container_lines()`，兩段 SSM 命令各一段）：①本機 `upload-ops-…` 以 `--sse AES256` 把 `scripts/<腳本>` 傳到傳檔儲存貯體的 `ops/` 前綴（每次重傳，並驗證物件的加密）；②主機建立持久磁碟上的暫存目錄（`/var/tmp/rac-ops.*`，結束時一律刪除）、下載腳本、**比對計畫產生時算出的 SHA-256（不符就在取出任何機密之前失敗）**；③由機密取出腳本寫環境檔到記憶體檔案系統（初始化用 `bootstrap` 單元，只含 RDS 主要使用者與專屬登入的密碼；探測用 `app` 單元，與應用程式相同，**取不到主要使用者的密碼**；結束時一律刪除環境檔）；④用 `rac-app:<標籤>`（含 RDS CA）的一次性容器執行，強化選項與兩個池相同（唯讀根、丟掉所有 capability、不得提權、`--pull=never`），腳本唯讀掛入，**沒有任何憑證掛載**；初始化帶 `--host <RDS 端點>`（`deploy-find-db-endpoint` 以唯讀查詢取得）。容器的輸出（繁體中文的進度與失敗類別）送到該 SSM 命令的**標準錯誤**，標準輸出只有一行 `docker-exit=<代碼>`，等待步驟以 `docker-exit=0` 驗證；容器非零結束時整段腳本以同一個代碼結束，SSM 狀態為 Failed，執行器立即停止。測試以 bash 搭配假的 `aws`、`docker` 與機密取出腳本實際執行這兩段：成功、容器失敗（代碼原樣傳出）與腳本被竄改（不取機密、不啟動容器）三種情況，且暫存目錄與環境檔都已刪除。
 
 | | `aws_demo_bootstrap_db.py`（初始化） | `aws_demo_probe_db.py`（探測） |
 |---|---|---|
@@ -614,13 +618,16 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 | 輸入 | `--host`（RDS 端點，必填）；`--port`、`--master-user`、`--db-name`、`--app-login` 有預設值（與計畫模組的常數相同，測試比對；**沒有憑證相關的參數**）；應用程式登入的密碼取環境變數 `DB_APP_PASSWORD`；兩者來自機密取出腳本產生的 `/run/rac/bootstrap.env`（`--env-file`），**沒有任何密碼的命令列參數**，多給的參數一律拒絕且不回顯內容 | 沒有參數；連線只來自 `DATABASE_URL`，並經應用程式的引擎工廠 `create_engine_for` |
 | 做什麼 | 依序「不存在才建立」：資料庫 `rac_demo` → 登入 `rac_app` → 資料庫使用者 → `db_owner` 角色（遷移要建表與改表；**沒有任何伺服器層級的角色**）。可重複執行：已存在就略過，**既有登入的密碼不重設**；資料庫內有同名但對應到別的登入的使用者時停止、不修改 | 以 ORM 表達式執行 `SELECT 1`，成功才允許 migration |
 | 驗證憑證 | 只有 `Encrypt=yes`，由驅動程式以映像的系統憑證庫驗證憑證鏈與主機名稱；**沒有 `ServerCertificate`，也沒有任何信任所有憑證的選項** | 拒絕（不連線、結束代碼 2）：`TrustServerCertificate` 為真、`Encrypt` 關閉或 `optional`、不是 SQL Server 的連線字串、**含 `ServerCertificate`**（已否決的做法） |
-| 輸出 | 名稱與「已建立／已存在」；失敗時只有步驟、類別、例外類型與 SQLSTATE | 成功或失敗與類別；成功時另印連線選項的型態（`Encrypt` 的值、沒有 `ServerCertificate`、沒有 `TrustServerCertificate`），供記錄採用的連線字串型態（task 5.3） |
+| 輸出 | 名稱與「已建立／已存在」；失敗時只有步驟、類別、例外類型與 SQLSTATE | 成功或失敗與類別；成功時另印連線選項的型態（`Encrypt` 的值、沒有 `ServerCertificate`、沒有 `TrustServerCertificate`），供記錄採用的連線字串型態（task 5.3 已記錄：`Encrypt=yes`） |
 | 結束代碼 | 0 成功；1 資料庫操作失敗；2 輸入不合法或缺少環境變數（沒有連線） | 0 成功；1 連線或查詢失敗；2 設定不合格（沒有連線） |
 
 - **名稱與密碼的白名單**：資料庫、登入與主要使用者名稱只含英數與底線（英文字母開頭、最長 63 字），不得以 `db_`、`sys`、`rds` 開頭，不得是系統資料庫或 `sa`、`dbo`、`public`、`guest`；應用程式登入不得與主要使用者相同；密碼 12 至 128 字且只含英數、`_` 與 `-`（與執行器產生的密碼同一字元集，測試以 200 次產生確認全部通過），兩個密碼不得相同。DDL 無法使用參數，所以識別字經白名單與方括號、密碼值以字元集排除引號；存在性查詢一律以參數傳入。語句只有 `CREATE DATABASE`、`CREATE LOGIN`、`CREATE USER`、`ALTER ROLE ... ADD MEMBER` 四種，屬維運腳本的 T-SQL（位於 `scripts/`，不在 `tests/architecture/test_no_raw_sql.py` 掃描的 `app/` 與 `migrations/`，與 `scripts/restore_drill.py` 的 `RESTORE` 同類）。
 - **機密不外洩**：密碼只經環境變數進入行程，不寫入日誌、輸出、命令列或例外訊息；失敗時**不輸出例外訊息**（驅動程式的訊息可能含伺服器位址或登入名稱），只輸出固定的類別。類別為 `login_failed`、`tls_certificate`（憑證無法驗證：停止並回報，不放寬）、`timeout`、`network`、`driver_missing`、`password_policy`、`permission_denied`、`orphaned_user`、`unknown`。驅動程式的訊息會依作業系統語系在地化（繁體中文 Windows 上的憑證失敗是中文），所以分類另比對不分語系的標記與 Windows 的錯誤碼；兩支腳本各自帶一份相同的規則，測試比對。
 - **已驗證**：名稱與密碼的白名單、四個語句的內容與順序、重複執行不再執行任何 DDL 且不重設密碼、中途失敗即停止並指出步驟、輸出不含密碼與位址、分類與命令列的拒絕行為，由 `tests/test_aws_demo_bootstrap_db.py` 與 `tests/test_aws_demo_probe_db.py` 驗證；另有標記 `sqlserver` 的整合測試對 `TEST_SQLSERVER_URL` 的本機 SQL Server 實際執行兩次初始化（登入可連線、是 `db_owner`、不是 `sysadmin`、可建表、第二次不重設密碼；測試自己建立並清除 `racbootit_*` 的資料庫與登入，連不到時標為跳過），以及取得真實的驅動程式錯誤（未信任的自簽憑證歸為 `tls_certificate`、錯誤密碼歸為 `login_failed` 且 SQLSTATE 為 28000）。
-- **未驗證**：對 **RDS** 的行為——主要使用者在 RDS 上的 `CREATE LOGIN`／`CREATE DATABASE`／`ALTER ROLE` 權限、`CHECK_POLICY = ON` 的密碼規則；以及衍生映像層方案在真實主機上的整體結果（映像建置、憑證張數檢查、`DATABASE_URL` 覆寫、初始化與探測，全部是 task 5.3 的雲端執行；已有的現場證據只有上面「現場實測」那四項，它們只確認憑證錯誤消失，沒有跑過這兩支腳本）；英文（Linux 容器）的驅動程式訊息只以樣本字串驗證，沒有取得真實的訊息。探測或初始化失敗（`tls_certificate` 或其他）時依 task 5.3 處理：停止並回報，**不**採用 `TrustServerCertificate=yes`、`ServerCertificate` 或行程範圍的 `SSL_CERT_FILE`。
+- **已在真實 RDS 驗證（task 5.3，2026-11-17）**：主要使用者 `racmaster` 在 RDS 上可以 `CREATE DATABASE`、`CREATE LOGIN`（`CHECK_POLICY = ON` 的密碼規則接受執行器產生的密碼）、`CREATE USER` 與 `ALTER ROLE db_owner ADD MEMBER`；第二次執行全部略過、不重設密碼；應用程式登入以 `Encrypt=yes` 連線並由映像的系統憑證庫驗證憑證（探測成功）；結果見上一節的「雲端驗證」。
+- **未驗證**：英文（Linux 容器）的驅動程式訊息只以樣本字串驗證，沒有取得真實的失敗訊息（5.3 的連線全部成功）；`db_owner` 之外的權限邊界（例如應用程式登入是否真的不能碰其他資料庫）只由角色成員的設計保證，沒有在 RDS 上逐項嘗試。探測或初始化失敗（`tls_certificate` 或其他）時：停止並回報，**不**採用 `TrustServerCertificate=yes`、`ServerCertificate` 或行程範圍的 `SSL_CERT_FILE`。
+
+**遷移與種子（task 5.4，2026-11-17，映像 `rac-app:48f5ab2`；`deploy --group snapshot --group migrate --tag 48f5ab2`，沒有 restart）**：①`snapshot-db` 建立手動快照 `rac-demo-staging-db-pre-48f5ab2`（`manual`、加密、20 GB、帶 `Project`／`Environment`／`Name` 標籤），等到 `available` 才遷移；②`migrate-db` 在空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移（MSSQLImpl，交易式 DDL），結束代碼 0；③`check-migration-head` 輸出 `1`，另以唯讀的一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)`；④`seed-scripts`：建立 1 份內建劇本（`xianxia-qingyun`）、更新 0、沒有變動 0；⑤**沒有啟動或重啟任何服務**（兩個池與 Caddy 仍未啟動，網址仍連不上是正常的）。手動快照不隨 RDS 消失、持續計費，拆除時依 design D14 處理（部署前快照預設刪除、由使用者指定例外）。**觀察**：`migrate-db`、`check-migration-head`、`seed-scripts` 沿用 `_one_off_lines`，執行後 `/run/rac/app.env`（記憶體檔案系統、600、僅 root）仍留著，與 `db-init` 的腳本（結束時刪除環境檔）不一致；兩個池的單元每次啟動都會重新產生它，所以不影響功能，是否統一清除留待之後決定。
 
 ---
 

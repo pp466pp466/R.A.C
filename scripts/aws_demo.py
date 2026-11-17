@@ -754,7 +754,7 @@ def build_parser() -> argparse.ArgumentParser:
     provision.add_argument("--vars-file", help=f"一般設定（非機密，KEY=VALUE；例如 {VARS_FILE_HINT}，不進版本庫）：主機初始化放置 plain.env 時使用，沒有它那一步被擋下")
     provision.add_argument("--accept-cost", action="store_true", help="同意建立計費資源（沒有它，RDS、EC2、Elastic IP 的步驟不輸出指令）")
 
-    deploy = sub.add_parser("deploy", parents=[common], help="部署：快照、建置映像、遷移、重啟兩個池、驗證")
+    deploy = sub.add_parser("deploy", parents=[common], help="部署：快照、建置映像、遷移、重啟兩個池、驗證（第一次另有 --group db-init：資料庫初始化與憑證探測）")
     with_steps(deploy, plan.DEPLOY_GROUPS)
     deploy.add_argument("--tag", help="要部署的提交短碼（7 至 40 位小寫十六進位）；省略時取目前 git 的短提交")
 
@@ -794,8 +794,8 @@ def _build_steps(
         narrowed = plan.build_plan(target, accept_cost=args.accept_cost, groups=groups, plain=plain) if groups else catalog
     elif args.command == "deploy":
         tag = args.tag or tag_default()
-        catalog = plan.deploy_plan(target, tag)
-        narrowed = plan.deploy_plan(target, tag, groups=groups) if groups else catalog
+        catalog = plan.deploy_plan(target, tag, groups=plan.DEPLOY_GROUPS)         # 整份目錄含只在第一次部署的 db-init（--only 與擷取值的唯讀取回用）
+        narrowed = plan.deploy_plan(target, tag, groups=groups) if groups else plan.deploy_plan(target, tag)   # 沒指定 --group 時是例行部署，不含 db-init
         notes.append(f"映像標籤 {tag}；原始碼來自 git archive（只含已提交的內容，不含 .env 與未提交的變更）。")
     elif args.command == "rollback":
         catalog = narrowed = plan.rollback_plan(target, args.tag)

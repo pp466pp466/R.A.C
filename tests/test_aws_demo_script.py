@@ -486,6 +486,31 @@ def test_deploy_groups_include_the_host_lookup_and_the_archive_directory_is_crea
     assert "找出主機" in narrowed.text and "git archive" in narrowed.text and "alembic" not in narrowed.text
 
 
+def test_the_database_init_group_is_not_in_a_routine_deploy_and_runs_with_the_endpoint_filled_into_the_host_command():
+    routine = invoke(DEPLOY)
+    assert "bootstrap-db" not in routine.text and "probe-db" not in routine.text and "migrate-db" in routine.text
+    preview = invoke([*DEPLOY, "--group", "db-init"])
+    assert preview.code == 0 and "找出主機" in preview.text and "bootstrap-db" in preview.text and "alembic" not in preview.text
+    runner = FakeAws().with_identity()
+    runner.when("describe-instances", "length(Reservations", out="1")
+    runner.when("describe-instances", out="i-0host")
+    runner.when("describe-db-instances", out="db.example.internal")
+    runner.when("head-object", out="AES256")
+    runner.when("send-command", out="cmd-1")
+    runner.when("StandardOutputContent", out="docker-exit=0\n")
+    runner.when("get-command-invocation", out="Success")
+    result = invoke([*DEPLOY, "--group", "db-init", "--execute"], runner=runner)
+    assert result.code == 0, result.text + result.err
+    uploads = [call for call in runner.calls if call[1:3] == ("s3", "cp")]
+    assert [call[3] for call in uploads] == ["scripts/aws_demo_bootstrap_db.py", "scripts/aws_demo_probe_db.py"]
+    bodies = [json.loads(body)["Parameters"]["commands"] for body in runner.bodies if body]
+    bootstrap = next("\n".join(lines) for lines in bodies if any("bootstrap" in line for line in lines))
+    assert "--host db.example.internal" in bootstrap and "{{" not in bootstrap, "RDS 端點由唯讀查詢取得、代入主機命令"
+    assert runner.destructive() == [] and not runner.ran("alembic")
+    single = invoke([*DEPLOY, "--only", "upload-ops-probe-db", "--yes"], runner=FakeAws().with_identity().when("head-object", out="AES256"))
+    assert single.code == 0, "第一次部署專用的步驟也能用 --only 單獨執行（目錄含 db-init）"
+
+
 def test_the_default_deploy_tag_comes_from_git_and_a_bad_tag_is_refused():
     result = invoke(["deploy", *BASE], tag="deadbee")
     assert result.code == 0 and "deadbee" in result.text

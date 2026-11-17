@@ -15,7 +15,8 @@
 - 主機檔案（Caddyfile、`rac-*` 單元、機密取出腳本、排程計時器；task 1.4、1.5）也是純函式：回傳字串（UTF-8、LF、不含 BOM），
   由執行器經 SSM 放到主機；字串內只有機密的**名稱**與 SSM 路徑，沒有任何機密值。
 - 部署、回復與拆除（task 1.6）各是一份獨立的計畫（`deploy_plan`、`rollback_plan`、`teardown_plan`），與 `build_plan` 的步驟 id 不重複：
-  部署依序快照 → 建置 → 遷移 → 重啟 → 驗證；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
+  部署依序快照 → 建置 → 遷移 → 重啟 → 驗證（第一次部署在建置與遷移之間多一組 `db-init`：資料庫初始化與憑證探測，用 `--group db-init` 明確執行，
+  例行部署的整份計畫不含它）；回復只把 `release.env` 換回前一版標籤並重啟兩個池，沒有任何降級遷移；
   拆除每一步都先以**帶標籤的查詢**找出資源，沒有符合才略過，所以不會碰到帳號中的其他資源。
   在主機上執行的命令一律走 SSM Run Command（`send-command` 之後接 `wait-…` 步驟輪詢結果），內容只用 ASCII
   （`file://` 的 JSON 在 Windows 以系統地區編碼讀取，繁體中文會變成亂碼）。
@@ -1056,7 +1057,9 @@ def host_files(target: Target, plain: dict[str, str]) -> tuple[HostFile, ...]:
 # 在主機上執行的命令走 SSM Run Command：`send-command` 的 JSON 經暫存檔傳入、輸出存成命令編號，接著一個 `wait-…` 步驟輪詢結果。
 # 傳給 AWS 的 JSON 只用 ASCII（Windows 的 AWS CLI 以系統地區編碼讀 `file://`），所以主機上的腳本訊息都是英文。
 
-DEPLOY_GROUPS = ("prepare", "snapshot", "build", "migrate", "restart", "verify")    # 快照 → 建置 → 遷移 → 重啟 → 驗證
+DEPLOY_GROUPS = ("prepare", "snapshot", "build", "db-init", "migrate", "restart", "verify")    # 快照 → 建置 → （首次）資料庫初始化與探測 → 遷移 → 重啟 → 驗證
+FIRST_DEPLOY_GROUPS = ("db-init",)                  # 只在第一次部署以 `--group db-init` 執行：用 RDS 主要使用者建立專屬資料庫與登入（design D8），例行部署不重做
+ROUTINE_DEPLOY_GROUPS = tuple(group for group in DEPLOY_GROUPS if group not in FIRST_DEPLOY_GROUPS)   # `deploy_plan` 沒指定 groups 時的整份計畫
 ROLLBACK_GROUPS = ("prepare", "restart", "verify")
 TEARDOWN_GROUPS = ("compute", "database", "snapshots", "network", "iam", "storage", "notify", "verify")
 DEPLOY_RESOURCES = ("db-snapshot",)                 # 部署時才建立的資源類型（不屬於 build_plan 的 ALLOWED_RESOURCES）
@@ -1071,6 +1074,13 @@ CA_TRUST_DIR = "/usr/local/share/ca-certificates"   # update-ca-certificates 只
 CA_TRUST_FILE = "rds-ca-bundle.crt"                 # 衍生層內的檔名（同時是衍生映像建置內容裡的檔名）
 CA_STORE_FILE = "/etc/ssl/certs/ca-certificates.crt"   # 系統憑證庫（所有憑證串在一起）；check-image 數它的憑證張數
 CA_DERIVED_NAME = "Dockerfile"                      # 衍生映像建置內容裡的檔名
+BOOTSTRAP_SCRIPT = "aws_demo_bootstrap_db.py"       # 資料庫初始化：在主映像內以 RDS 主要使用者一次性執行（design D8）
+PROBE_SCRIPT = "aws_demo_probe_db.py"               # 憑證探測：以應用程式登入的 DATABASE_URL 對資料庫執行 SELECT 1（design D7）
+OPS_SCRIPTS = (BOOTSTRAP_SCRIPT, PROBE_SCRIPT)      # 這兩支維運腳本不在映像內：經傳檔儲存貯體放到主機暫存目錄，再唯讀掛進一次性容器
+OPS_KEY_PREFIX = "ops"                              # 傳檔儲存貯體內放維運腳本的前綴（與 `source/` 分開）
+OPS_WORK_PREFIX = "/var/tmp/rac-ops"                # 主機上的暫存目錄（持久磁碟；AL2023 的 /tmp 是記憶體檔案系統；用後由 trap 刪除）
+OPS_CONTAINER_DIR = "/ops"                          # 維運腳本在一次性容器內的掛載目錄
+DB_ENDPOINT_CAPTURE = "db-endpoint"                 # 資料庫初始化的 `--host`（RDS 端點，執行時以唯讀查詢取得）
 POOL_READY_PATH = "/readyz"                         # 含資料庫檢查；主機內對回送位址探測
 SSM_FAILED_STATUSES = ("Failed", "Cancelled", "TimedOut", "Cancelling")
 BUILD_TIMEOUT_SECONDS = 1800                        # t3.small 上建置映像（pip 與 ODBC 驅動）的上限
@@ -1188,6 +1198,67 @@ def _image_check_lines(tag: str) -> list[str]:
         "fi",
         'echo "$user $state"',
     ]
+
+
+def ops_script_sha256(name: str) -> str:
+    """維運腳本（`OPS_SCRIPTS`）目前內容的 SHA-256：上傳之後主機下載時比對，不符就在執行之前失敗（路徑只限這兩個固定名稱）。"""
+    if name not in OPS_SCRIPTS:
+        raise PlanError(f"不是維運腳本：{name}（只有 {'、'.join(OPS_SCRIPTS)}）")
+    return hashlib.sha256((SCRIPTS_DIR / name).read_bytes()).hexdigest()
+
+
+def _ops_container_lines(target: Target, tag: str, script: str, *, container: str, unit: str, env_files: str, command: str) -> list[str]:
+    """在主機上以一次性容器（映像 `rac-app:<tag>`）執行一支維運腳本：下載到暫存目錄、比對 SHA-256、由機密取出腳本寫環境檔
+    （記憶體檔案系統；結束時一律刪除）、腳本唯讀掛入。強化選項與兩個池相同（唯讀根、丟掉所有 capability、不得提權），**沒有任何憑證掛載**
+    （RDS 的 CA 在映像的系統憑證庫，design D7）。容器的輸出（含繁體中文的進度與失敗類別）送到標準錯誤，標準輸出只有一行
+    `docker-exit=<代碼>`，所以等待步驟能以固定文字驗證；容器非零結束時整段腳本也以同一個代碼結束（SSM 狀態為 Failed）。"""
+    n = names(target)
+    digest = ops_script_sha256(script)
+    env_out = f"{RUN_DIR}/{unit}.env"
+    mount = f'--mount=type=bind,source="$work/{script}",target={OPS_CONTAINER_DIR}/{script},readonly'
+    return [
+        "set -eu", "export HOME=/root",
+        f'work="$(mktemp -d {OPS_WORK_PREFIX}.XXXXXX)"',
+        f"trap 'rm -rf \"$work\" {env_out}' EXIT",
+        'chmod 0755 "$work"',
+        f'aws s3 cp "s3://{n.bucket}/{OPS_KEY_PREFIX}/{script}" "$work/{script}" --region {target.region} --only-show-errors',
+        f'echo "{digest}  $work/{script}" | sha256sum -c --status -',
+        f'chmod 0644 "$work/{script}"',
+        render_env_script_path(unit),
+        f"{DOCKER} rm -f {container} >/dev/null 2>&1 || true",
+        "set +e",
+        f"{DOCKER} run --rm --name={container} --pull=never {env_files} --env PYTHONIOENCODING=utf-8 "
+        f"--read-only --tmpfs=/dev/shm:{_TMPFS_OPTIONS} --tmpfs=/tmp:{_TMPFS_OPTIONS} --cap-drop=ALL --security-opt=no-new-privileges "
+        f"{mount} {APP_IMAGE_REPO}:{tag} {command} >&2",
+        "rc=$?",
+        'echo "docker-exit=$rc"',
+        "exit $rc",
+    ]
+
+
+def _bootstrap_db_lines(target: Target, tag: str) -> list[str]:
+    """資料庫初始化：環境檔只含 RDS 主要使用者的連線機密（`bootstrap` 單元），腳本以它建立專屬資料庫與登入；可重複執行。"""
+    return _ops_container_lines(
+        target, tag, BOOTSTRAP_SCRIPT, container="rac-bootstrap-db", unit="bootstrap",
+        env_files=f"--env-file={RUN_DIR}/bootstrap.env",
+        command=f"python {OPS_CONTAINER_DIR}/{BOOTSTRAP_SCRIPT} --host {{{{{DB_ENDPOINT_CAPTURE}}}}}")
+
+
+def _probe_db_lines(target: Target, tag: str) -> list[str]:
+    """憑證探測：與應用程式相同的環境檔（`plain.env` 加 `app.env`，應用程式登入的 `DATABASE_URL`），只做 `SELECT 1`。"""
+    return _ops_container_lines(
+        target, tag, PROBE_SCRIPT, container="rac-probe-db", unit="app",
+        env_files=f"--env-file={PLAIN_ENV_PATH} --env-file={RUN_DIR}/app.env", command=f"python {OPS_CONTAINER_DIR}/{PROBE_SCRIPT}")
+
+
+def _upload_ops_step(target: Target, script: str) -> Step:
+    """本機：把維運腳本以伺服器端加密上傳到傳檔儲存貯體的 `ops/` 前綴（每次都重傳；物件內容以 SHA-256 在主機端核對）。"""
+    n = names(target)
+    key = f"{OPS_KEY_PREFIX}/{script}"
+    return Step(f"upload-ops-{script.removeprefix('aws_demo_').removesuffix('.py').replace('_', '-')}", "db-init",
+                f"上傳維運腳本 scripts/{script} 到 s3://{n.bucket}/{key}（伺服器端加密；主機下載後比對 SHA-256）",
+                _aws(target, "s3", "cp", f"scripts/{script}", f"s3://{n.bucket}/{key}", "--sse", "AES256", "--only-show-errors"),
+                verify=(Check(_aws(target, "s3api", "head-object", "--bucket", n.bucket, "--key", key, *_text("ServerSideEncryption")), "AES256"),))
 
 
 def _migrate_lines(tag: str) -> list[str]:
@@ -1441,14 +1512,16 @@ def snapshot_name(target: Target, tag: str) -> str:
     return assert_name(f"{names(target).db_instance}-pre-{_commit_tag(tag)}", what="快照名稱")
 
 
-def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] = DEPLOY_GROUPS) -> list[Step]:
-    """新版部署：資料庫快照 → 建置映像 → 遷移 → 重啟兩個池 → 驗證（每個階段一組，順序固定；`groups` 只取其中幾組）。
+def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] | None = None) -> list[Step]:
+    """新版部署：資料庫快照 → 建置映像 → 遷移 → 重啟兩個池 → 驗證（每個階段一組，順序固定；`groups` 只取其中幾組，
+    沒指定時是例行部署的整份計畫 `ROUTINE_DEPLOY_GROUPS`，**不含**只在第一次部署執行的 `db-init`）。
 
     - `tag` 是要部署的提交短碼：原始碼以 `git archive <tag>` 取出（只含已提交內容，不含 .env），經傳檔儲存貯體到主機建置，
       先建基底映像 `rac-app-base:<tag>`，再加一層主機上的 RDS CA 套件，標記為 `rac-app:<tag>`（design D7），前一版的映像保留供回復。
     - 遷移之前一定有快照；遷移（含種子）失敗就停止，不重啟兩個池；遷移是 expand-only，所以舊版程式仍能在新結構上運作。
     - 沒有任何步驟降級資料庫結構。
     """
+    groups = ROUTINE_DEPLOY_GROUPS if groups is None else groups
     unknown = [g for g in groups if g not in DEPLOY_GROUPS]
     if unknown:
         raise PlanError("不認得的步驟組：" + "、".join(unknown))
@@ -1489,6 +1562,21 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] = DEPLOY_GR
                     _image_check_lines(tag), timeout=300, expect=f"{IMAGE_USER_ID} clean"),
     ]
 
+    steps["db-init"] += [
+        Step("deploy-find-db-endpoint", "db-init", "取得 RDS 的端點位址（唯讀；資料庫初始化的 --host）",
+             _aws(target, "rds", "describe-db-instances", "--db-instance-identifier", n.db_instance, *_text("DBInstances[0].Endpoint.Address")),
+             capture=DB_ENDPOINT_CAPTURE),
+        *(_upload_ops_step(target, script) for script in OPS_SCRIPTS),
+        *_ssm_steps(target, "bootstrap-db", "db-init",
+                    f"資料庫初始化（design D8）：用 RDS 主要使用者在 {APP_IMAGE_REPO}:{tag} 的一次性容器內建立專屬資料庫與登入（已存在就略過，可重複執行；"
+                    "只在第一次部署執行；容器的輸出在該命令的標準錯誤）",
+                    _bootstrap_db_lines(target, tag), timeout=600, expect="docker-exit=0"),
+        *_ssm_steps(target, "probe-db", "db-init",
+                    f"憑證探測（design D7）：以應用程式登入的連線字串對資料庫執行 SELECT 1，連線必須加密並由映像的系統憑證庫驗證憑證；"
+                    "失敗就停止、不放寬任何驗證",
+                    _probe_db_lines(target, tag), timeout=300, expect="docker-exit=0"),
+    ]
+
     steps["migrate"] += [
         *_ssm_steps(target, "migrate-db", "migrate", "執行 alembic upgrade head（一次性容器；失敗即停止，不重啟兩個池）",
                     _migrate_lines(tag), timeout=900),
@@ -1507,7 +1595,7 @@ def deploy_plan(target: Target, tag: str, *, groups: tuple[str, ...] = DEPLOY_GR
         _pool_check_lines(), timeout=300, expect=_pool_check_expect(tag))
 
     selected = set(groups)
-    if selected & {"build", "migrate", "restart", "verify"}:
+    if selected & {"build", "db-init", "migrate", "restart", "verify"}:
         selected.add("prepare")             # 在主機上執行的命令都要實例編號；找主機是唯讀的，所以一律自動帶上
     plan: list[Step] = []
     for group in DEPLOY_GROUPS:

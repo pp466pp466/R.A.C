@@ -233,7 +233,7 @@ def test_the_aws_demo_section_lists_exactly_the_steps_the_plan_module_produces_i
     target = plan.Target(account_id="123456789012", notify_emails=("ops@example.com",))
     plans = {
         "build_plan": plan.build_plan(target, accept_cost=True),
-        "deploy_plan": plan.deploy_plan(target, "abc1234"),
+        "deploy_plan": plan.deploy_plan(target, "abc1234", groups=plan.DEPLOY_GROUPS),
         "rollback_plan": plan.rollback_plan(target, "abc1234"),
         "teardown_plan": plan.teardown_plan(target, final_snapshot=True, today=date(2026, 12, 31)),
     }

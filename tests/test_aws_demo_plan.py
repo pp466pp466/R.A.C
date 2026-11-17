@@ -1032,8 +1032,19 @@ DEPLOY_PLAN_IDS = (
 )
 
 
+DB_INIT_IDS = (
+    "deploy-find-db-endpoint", "upload-ops-bootstrap-db", "upload-ops-probe-db", "bootstrap-db", "wait-bootstrap-db", "probe-db", "wait-probe-db",
+)
+
+
 def deploy_steps(tag=TAG, **overrides):
+    """例行部署的整份計畫（不含只在第一次部署執行的 db-init）。"""
     return plan.deploy_plan(target(**overrides), tag)
+
+
+def all_deploy_steps(tag=TAG, **overrides):
+    """含 db-init 的完整目錄（執行器的 catalog 與第一次部署分組執行用）。"""
+    return plan.deploy_plan(target(**overrides), tag, groups=plan.DEPLOY_GROUPS)
 
 
 def rollback_steps(tag=OTHER_TAG, **overrides):
@@ -1090,7 +1101,7 @@ def test_the_deploy_plan_has_the_expected_steps_in_the_five_phases_snapshot_buil
     assert tuple(s.id for s in steps) == DEPLOY_PLAN_IDS
     phases = [s.group for s in steps]
     assert phases == sorted(phases, key=plan.DEPLOY_GROUPS.index)
-    assert set(phases) == set(plan.DEPLOY_GROUPS)
+    assert set(phases) == set(plan.ROUTINE_DEPLOY_GROUPS) and "db-init" not in phases, "例行部署不含只在第一次部署執行的資料庫初始化"
     assert_in_order(steps, "snapshot-db", "wait-snapshot-db", "archive-source", "upload-source", "build-image", "migrate-db",
                     "wait-migrate-db", "seed-scripts", "switch-release", "check-pools")
     assert steps[-1].id == "wait-check-pools", "驗證在最後"
@@ -1123,8 +1134,8 @@ def test_the_image_tag_must_be_a_commit_short_code(tag):
 
 
 def test_every_on_host_command_goes_through_ssm_run_command_with_ascii_only_and_no_secret():
-    sends = [s for s in deploy_steps() + rollback_steps() if is_host_command(s)]
-    assert len(sends) == 7 + 2, "部署 7 個（建置、映像檢查、遷移、版本檢查、種子、切換、池檢查）與回復 2 個（切換、池檢查）"
+    sends = [s for s in all_deploy_steps() + rollback_steps() if is_host_command(s)]
+    assert len(sends) == 9 + 2, "部署 9 個（建置、映像檢查、資料庫初始化、探測、遷移、版本檢查、種子、切換、池檢查）與回復 2 個（切換、池檢查）"
     for step in sends:
         body = json.loads(step.input_json)
         assert body["DocumentName"] == "AWS-RunShellScript" and body["InstanceIds"] == ["{{instance-id}}"], step.id
@@ -1147,7 +1158,7 @@ def test_the_host_lookup_needs_the_name_both_tags_and_the_running_state_and_exac
 
 
 def test_each_on_host_command_is_followed_by_a_wait_step_that_fails_fast_on_a_failed_command():
-    steps = deploy_steps() + rollback_steps()
+    steps = all_deploy_steps() + rollback_steps()
     sends = [s for s in steps if is_host_command(s)]
     waits = {s.id: s for s in steps if s.poll and s.poll.argv[1:3] == ("ssm", "get-command-invocation")}
     assert set(waits) == {f"wait-{send.id}" for send in sends}
@@ -1345,10 +1356,149 @@ def test_the_image_check_compares_the_system_certificate_store_of_the_base_and_t
 
 
 def test_the_derived_image_scheme_adds_no_certificate_trust_through_environment_variables_or_flags():
-    for steps in (deploy_steps(), full_plan()):
+    for steps in (all_deploy_steps(), full_plan()):
         text = whole_plan_text(steps)
         for forbidden in ("SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "TrustServerCertificate=yes", "ServerCertificate="):
             assert forbidden not in text, forbidden
+
+
+# 資料庫初始化與探測（task 5.3 現場執行後回寫）：`db-init` 組，只在第一次部署以 `--group db-init` 執行
+
+OPS_STEPS = (("bootstrap-db", plan.BOOTSTRAP_SCRIPT, "bootstrap"), ("probe-db", plan.PROBE_SCRIPT, "app"))
+
+
+def test_the_db_init_group_sits_between_the_build_and_the_migration_and_is_not_part_of_a_routine_deploy():
+    steps = all_deploy_steps()
+    assert [s.id for s in steps if s.group == "db-init"] == list(DB_INIT_IDS)
+    assert_in_order(steps, "wait-check-image", *DB_INIT_IDS, "migrate-db")
+    assert plan.FIRST_DEPLOY_GROUPS == ("db-init",)
+    assert plan.ROUTINE_DEPLOY_GROUPS == tuple(g for g in plan.DEPLOY_GROUPS if g != "db-init")
+    assert not set(DB_INIT_IDS) & {s.id for s in deploy_steps()}, "例行部署不用主要使用者重做資料庫初始化"
+    assert [s.id for s in plan.deploy_plan(target(), TAG, groups=plan.ROUTINE_DEPLOY_GROUPS)] == [s.id for s in deploy_steps()]
+
+
+def test_selecting_only_the_db_init_group_brings_the_host_lookup_along_and_nothing_else():
+    selected = plan.deploy_plan(target(), TAG, groups=("db-init",))
+    assert [s.id for s in selected] == ["deploy-find-host", *DB_INIT_IDS]
+    assert_placeholders_resolve(selected)
+
+
+def test_the_database_endpoint_is_looked_up_read_only_and_only_the_bootstrap_script_uses_it():
+    steps = by_id(all_deploy_steps())
+    find = steps["deploy-find-db-endpoint"]
+    assert find.argv[1:3] == ("rds", "describe-db-instances") and "rac-demo-staging-db" in find.argv
+    assert find.capture == plan.DB_ENDPOINT_CAPTURE == "db-endpoint" and not find.input_json and not find.resource
+    assert "--host {{db-endpoint}}" in script_text(steps["bootstrap-db"])
+    assert "{{db-endpoint}}" not in script_text(steps["probe-db"]) and "--host" not in script_text(steps["probe-db"])
+
+
+@pytest.mark.parametrize(("step_id", "name", "unit"), OPS_STEPS)
+def test_the_ops_scripts_are_uploaded_encrypted_and_the_host_checks_their_sha256_before_using_them(step_id, name, unit):
+    steps = by_id(all_deploy_steps())
+    upload = steps[f"upload-ops-{name.removeprefix('aws_demo_').removesuffix('.py').replace('_', '-')}"]
+    bucket = f"rac-demo-staging-{ACCOUNT}-transfer"
+    assert upload.argv[1:3] == ("s3", "cp") and f"scripts/{name}" in upload.argv and f"s3://{bucket}/ops/{name}" in upload.argv
+    assert upload.argv[upload.argv.index("--sse") + 1] == "AES256"
+    assert upload.verify[0].expect == "AES256" and f"ops/{name}" in " ".join(upload.verify[0].argv)
+    digest = hashlib.sha256((PROJECT_ROOT / "scripts" / name).read_bytes()).hexdigest()
+    assert plan.ops_script_sha256(name) == digest
+    lines = script_lines(steps[step_id])
+    check = lines.index(f'echo "{digest}  $work/{name}" | sha256sum -c --status -')
+    download = next(i for i, line in enumerate(lines) if line.startswith(f'aws s3 cp "s3://{bucket}/ops/{name}"'))
+    render = lines.index(plan.render_env_script_path(unit))
+    run = next(i for i, line in enumerate(lines) if "docker run" in line)
+    assert download < check < render < run, "下載、核對雜湊都在取出機密與啟動容器之前；雜湊不符時機密根本不會被取出"
+
+
+@pytest.mark.parametrize("name", ["", "aws_demo_plan.py", "../app/config.py", "scripts/aws_demo_probe_db.py", "AWS_DEMO_PROBE_DB.PY", None])
+def test_only_the_two_ops_scripts_can_be_hashed(name):
+    with pytest.raises(plan.PlanError, match="維運腳本"):
+        plan.ops_script_sha256(name)
+
+
+@pytest.mark.parametrize(("step_id", "name", "unit"), OPS_STEPS)
+def test_the_ops_containers_have_the_pools_hardening_and_no_certificate_mount_or_secret_on_the_command_line(step_id, name, unit):
+    steps = by_id(all_deploy_steps())
+    text = script_text(steps[step_id])
+    assert text.isascii() and not plan.SECRET_REFERENCE.search(steps[step_id].input_json)
+    for required in ("--rm", "--pull=never", "--read-only", "--cap-drop=ALL", "--security-opt=no-new-privileges", f"rac-app:{TAG}"):
+        assert required in text, required
+    assert "rac-app-base" not in text, "一次性容器用含 RDS CA 的映像，不是基底映像"
+    assert text.count("--mount=") == 1 and f'--mount=type=bind,source="$work/{name}",target=/ops/{name},readonly' in text
+    for forbidden in ("rds-ca-bundle", "/etc/ssl", "SSL_CERT_FILE", "TrustServerCertificate", "ServerCertificate", "--with-decryption", "--env DATABASE_URL"):
+        assert forbidden not in text, forbidden
+    assert steps[f"wait-{step_id}"].verify[0].expect == "docker-exit=0"
+    assert int(json.loads(steps[step_id].input_json)["Parameters"]["executionTimeout"][0]) >= 300
+
+
+def test_the_bootstrap_gets_the_master_user_environment_and_the_probe_only_the_application_one():
+    steps = by_id(all_deploy_steps())
+    bootstrap, probe = script_text(steps["bootstrap-db"]), script_text(steps["probe-db"])
+    assert f"{plan.SBIN_DIR}/rac-render-env-bootstrap" in bootstrap and "--env-file=/run/rac/bootstrap.env" in bootstrap
+    assert "app.env" not in bootstrap and "plain.env" not in bootstrap
+    assert f"{plan.SBIN_DIR}/rac-render-env-app" in probe and "--env-file=/etc/rac/plain.env --env-file=/run/rac/app.env" in probe
+    assert "bootstrap" not in probe.replace("aws_demo_bootstrap_db", ""), "探測（應用程式登入）取不到 RDS 主要使用者的密碼"
+    assert "/run/rac/bootstrap.env" in next(line for line in script_lines(steps["bootstrap-db"]) if line.startswith("trap "))
+    assert "/run/rac/app.env" in next(line for line in script_lines(steps["probe-db"]) if line.startswith("trap "))
+
+
+def run_ops_script(tmp_path, step_id, *, tamper=False, docker_rc=0):
+    """在 bash 內以假的 aws、docker 與機密取出腳本執行 db-init 的主機腳本；回傳結束代碼、標準輸出與錯誤、呼叫紀錄與殘留檔案數。"""
+    bash = usable_bash()
+    if bash is None or shutil.which("sha256sum") is None:
+        pytest.skip("這台機器沒有可用的 bash 或 sha256sum，無法執行腳本（不算通過）")
+    _, name, unit = next(item for item in OPS_STEPS if item[0] == step_id)
+    body = "\n".join(script_lines(by_id(all_deploy_steps())[step_id]))
+    body = (body.replace("{{db-endpoint}}", "db.example.internal").replace("/usr/bin/docker", "dockerfake").replace("/var/tmp", "$d")
+            .replace(f"{plan.SBIN_DIR}/rac-render-env-{unit}", "renderfake").replace("/run/rac", "$d/run").replace("/etc/rac/plain.env", "$d/plain.env"))
+    real = shlex.quote((PROJECT_ROOT / "scripts" / name).as_posix())
+    script = "\n".join([
+        'd="$(mktemp -d)"', 'mkdir "$d/run"', 'LOG="$d/log"; : > "$LOG"',
+        f'FIXTURE="$d/fixture"; cp {real} "$FIXTURE"', 'echo "# tampered" >> "$FIXTURE"' if tamper else ":",
+        f"DOCKER_RC={docker_rc}",
+        'aws() { echo "AWS: $*" >> "$LOG"; cp "$FIXTURE" "$4"; }',
+        f'renderfake() {{ echo "RENDER {unit}" >> "$LOG"; : > "$d/run/{unit}.env"; }}',
+        'dockerfake() { echo "DOCKER: $*" >> "$LOG"; if [ "$1" = run ]; then echo container-out; echo container-err >&2; return "$DOCKER_RC"; fi; }',
+        "(", body, ') > "$d/out" 2> "$d/err"',
+        'echo "rc=$?"', 'echo "left_env=$(ls -A "$d/run" | wc -l)"', 'echo "left_work=$(ls -d "$d"/rac-ops.* 2>/dev/null | wc -l)"',
+        'echo "---out"; cat "$d/out"', 'echo "---err"; cat "$d/err"', 'echo "---log"; cat "$LOG"', 'rm -rf "$d"',
+    ])
+    result = subprocess.run([bash], input=script.encode("utf-8"), capture_output=True, timeout=60)
+    text = result.stdout.decode("utf-8", "replace").replace("\r\n", "\n")
+    assert result.returncode == 0, (text, result.stderr.decode("utf-8", "replace"))
+    head, rest = text.split("---out\n", 1)
+    out, rest = rest.split("---err\n", 1)
+    err, log = rest.split("---log\n", 1)
+    values = dict(line.split("=", 1) for line in head.strip().splitlines())
+    return {"rc": int(values["rc"]), "left_env": int(values["left_env"]), "left_work": int(values["left_work"]), "out": out, "err": err, "log": log}
+
+
+@pytest.mark.parametrize(("step_id", "name", "unit"), OPS_STEPS)
+def test_a_successful_ops_script_prints_only_the_exit_line_on_stdout_sends_the_container_output_to_stderr_and_cleans_up(tmp_path, step_id, name, unit):
+    result = run_ops_script(tmp_path, step_id)
+    assert result["rc"] == 0 and result["out"].strip() == "docker-exit=0"
+    assert "container-out" in result["err"] and "container-err" in result["err"], "容器的輸出（含繁體中文的進度）在標準錯誤，不干擾固定文字的驗證"
+    assert (result["left_env"], result["left_work"]) == (0, 0), "機密環境檔與暫存目錄結束時一定刪除"
+    log = result["log"].splitlines()
+    run = [line for line in log if line.startswith("DOCKER: run")]
+    assert len(run) == 1 and f"rac-app:{TAG} python /ops/{name}" in run[0]
+    assert log.index(f"RENDER {unit}") < log.index(run[0]), "環境檔在容器啟動之前取出"
+    assert ("--host db.example.internal" in run[0]) == (step_id == "bootstrap-db")
+
+
+@pytest.mark.parametrize("step_id", ["bootstrap-db", "probe-db"])
+def test_an_ops_script_whose_hash_does_not_match_stops_before_fetching_any_secret_or_starting_a_container(tmp_path, step_id):
+    result = run_ops_script(tmp_path, step_id, tamper=True)
+    assert result["rc"] != 0 and "docker-exit" not in result["out"]
+    assert "RENDER" not in result["log"] and "DOCKER: run" not in result["log"]
+    assert (result["left_env"], result["left_work"]) == (0, 0)
+
+
+@pytest.mark.parametrize("step_id", ["bootstrap-db", "probe-db"])
+def test_a_failing_container_fails_the_host_command_with_the_same_exit_code_and_still_cleans_up(tmp_path, step_id):
+    result = run_ops_script(tmp_path, step_id, docker_rc=3)
+    assert result["rc"] == 3 and result["out"].strip() == "docker-exit=3", "非零結束讓 SSM 狀態為 Failed，等待步驟立即停止"
+    assert (result["left_env"], result["left_work"]) == (0, 0)
 
 
 def test_migration_runs_in_a_one_off_container_with_the_pools_hardening_and_never_downgrades():
@@ -1408,23 +1558,23 @@ def test_the_new_plans_use_only_aws_and_one_git_command_and_always_name_the_sydn
 
 
 def test_step_ids_are_unique_across_the_build_deploy_rollback_and_teardown_plans():
-    ids = [s.id for s in (*full_plan(), *deploy_steps(), *rollback_steps(), *teardown_steps())]
+    ids = [s.id for s in (*full_plan(), *all_deploy_steps(), *rollback_steps(), *teardown_steps())]
     assert len(ids) == len(set(ids))
 
 
 def test_every_placeholder_in_the_new_plans_is_captured_by_an_earlier_step():
-    for steps in (deploy_steps(), rollback_steps(), teardown_steps(True), teardown_steps(False), teardown_steps(None)):
+    for steps in (deploy_steps(), all_deploy_steps(), rollback_steps(), teardown_steps(True), teardown_steps(False), teardown_steps(None)):
         assert_placeholders_resolve(steps)
 
 
 def test_nothing_in_the_new_plans_mentions_production_or_a_secret_value():
-    for steps in (deploy_steps(), rollback_steps(), teardown_steps()):
+    for steps in (all_deploy_steps(), rollback_steps(), teardown_steps()):
         text = whole_plan_text(steps)
         assert "production" not in text.lower()
         assert not re.search(r"AKIA[0-9A-Z]{16}|--master-user-password|--password|--value\b|--secret-string|--with-decryption", text)
 
 
-@pytest.mark.parametrize("make", [deploy_steps, rollback_steps])
+@pytest.mark.parametrize("make", [all_deploy_steps, rollback_steps])
 def test_the_host_scripts_pass_a_bash_syntax_check(make):
     bash = usable_bash()
     if bash is None:

@@ -1630,7 +1630,7 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-email <信箱> --vars-file aws-demo.vars --only host-init-sshd --yes
 ```
 
-### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5 已記入，8.4 收尾時補齊）
+### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.4 已記入，8.4 收尾時補齊）
 
 **已對真實 AWS 執行並逐項以唯讀指令驗證**（資源都帶 `Project=rac-demo`、`Environment=staging` 標籤）：
 
@@ -1640,7 +1640,7 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 | 網路 | 主機安全群組只開 80、443（沒有 22）；資料庫安全群組只允許主機安全群組連 1433（0 個 CIDR） |
 | 角色與儲存 | 角色只附 SSM 受管政策與只讀專案參數路徑與傳檔儲存貯體的內嵌政策；S3 四項公開封鎖皆開、SSE-S3、標籤 |
 | 機密 | 8 個 SSM SecureString（Standard 層、帶標籤）；只用 `describe-parameters` 看名稱與型別，沒有讀取值 |
-| RDS | SQL Server Express 15.00.4500.2.v1、`db.t3.micro`、20 GB gp3、加密、不公開、單一可用區、備份保留 1 天、只掛資料庫安全群組；`DATABASE_URL` 已寫入 SSM（4.x 當時是 `Encrypt=yes` 加 `ServerCertificate`〔CA 套件路徑〕，沒有 `TrustServerCertificate`；`ServerCertificate` 已證實不可行而否決，下方「憑證方案」；SSM 內這個值要在 task 5.3 以 `refresh-parameter-DATABASE_URL` 覆寫成只有 `Encrypt=yes`） |
+| RDS | SQL Server Express 15.00.4500.2.v1、`db.t3.micro`、20 GB gp3、加密、不公開、單一可用區、備份保留 1 天、只掛資料庫安全群組；`DATABASE_URL` 已寫入 SSM（4.x 當時是 `Encrypt=yes` 加 `ServerCertificate`〔CA 套件路徑〕，沒有 `TrustServerCertificate`；`ServerCertificate` 已證實不可行而否決，下方「憑證方案」；2026-11-17 task 5.3 已以 `refresh-parameter-DATABASE_URL` 覆寫成只有 `Encrypt=yes`，參數版本 2、標籤保留）；資料庫 `rac_demo` 與登入 `rac_app` 已由 `db-init` 組建立（task 5.3） |
 | EC2 | `t3.small`、Amazon Linux 2023、gp3 20 GB 加密、IMDSv2 `required` 且 hop limit 1、沒有金鑰對、只掛一個安全群組；Elastic IP 已綁定；SSM `PingStatus=Online` |
 | 告警 | EC2 狀態檢查告警（建立時為 `INSUFFICIENT_DATA`，正常） |
 | 主機初始化（`host-init` 組；回寫後的版本於 2026-11-17 以執行器在真實主機重跑一次，六段的固定輸出行全部符合、重跑沒有副作用） | 2 GB 交換檔（總計 swap 約 2047 MB）、docker 25.0.18、`/etc/rac` 0755 與 `/var/lib/rac/caddy` 0700；RDS CA 套件 3 張憑證、`openssl` 可解析；17 個檔案安裝前後雜湊與權限皆吻合；8 個單元已啟用、**沒有任何 active 或 failed 的單元**；`rac-render-env-app` 以主機角色取得 6 個機密（3 個必要加 3 個 `--with-secret`）、`/run/rac` 為 tmpfs（700）、環境檔 600，驗完刪除；sshd 已停用，只剩回送位址的監聽，SSM Agent active |
@@ -1649,7 +1649,7 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 
 **仍在計費的資源**：RDS、EC2、Elastic IP、EBS（合計約 US$1.64／日，牌價粗估）；2026-11-17 抵用金餘額 US$139.85（到期 2027-05-11）、Cost Explorer 11 月至今約 0。拆除用 `teardown`（尚未對真實 AWS 執行）。
 
-**資料庫憑證方案（task 5.1 與 5.2，2026-11-17）**：
+**資料庫憑證方案（task 5.1 至 5.3，2026-11-17）**：
 
 | 項目 | 結果 |
 |---|---|
@@ -1657,8 +1657,17 @@ python scripts/aws_demo.py provision --account-id <12 位帳號編號> --notify-
 | 候選 A 現場實測（`ServerCertificate`） | **失敗**：資料庫初始化的第一個連線即 `tls_certificate`（SQLSTATE 08001），沒有建立任何資料庫物件。查 Microsoft 文件確認是原理性不相容：`ServerCertificate` 是整份憑證的精確比對、取代標準驗證、只在 `Encrypt=Strict` 可用，而 RDS SQL Server 2019 不支援 strict |
 | 替代做法的現場實測（以不存在的登入連 RDS：TLS 通過只會在登入被拒＝SQLSTATE 28000，沒通過是 08001） | 沒有 RDS CA 的現有映像 → 08001；`update-ca-certificates`（3 張同一檔）→ 28000；（每張一檔）→ 28000；執行時掛合併檔 → 28000。**只確認「CA 進系統憑證庫後憑證錯誤消失」，沒有跑過初始化與探測腳本** |
 | 採用（本機實作，task 5.2） | 衍生映像層：共用 `Dockerfile` 不動，`build-image` 先建 `rac-app-base:<標籤>` 再疊一層 RDS CA 成為 `rac-app:<標籤>`；`DATABASE_URL` 只有 `Encrypt=yes`；容器不掛載憑證；`check-image` 加憑證張數核對；新增 `refresh-parameter-DATABASE_URL`；兩支腳本去掉 `ServerCertificate` 與 `--ca-bundle`，探測拒絕含 `ServerCertificate` 的連線字串。測試：四個 aws_demo 測試檔 593 項（592 通過、1 項是 Windows 權限的既有跳過；加上 `test_design_docs`、`test_readme`、`tests/architecture` 與 `test_launch_plan` 共 798 通過）；另以 16 項破壞驗證（改壞衍生 Dockerfile、憑證張數比較、容器掛載、覆寫步驟的標籤、`Overwrite`、讀出明文、可覆寫的機密範圍、`DATABASE_URL` 型態、探測與初始化的守門、`refresh` 的重新組成）確認測試會失敗 |
+| 5.3 兩段建置（映像標籤 `48f5ab2`，`deploy --group build`） | 成功：主機上有 `rac-app-base:48f5ab2` 與 `rac-app:48f5ab2`（各 195 MB）；`check-image` 輸出 `10001 clean`，**憑證庫 148 張（基底）＋3 張（RDS 套件）＝151 張**（只新增、沒有減少） |
+| 5.3 覆寫 SSM `DATABASE_URL`（`provision --only refresh-parameter-DATABASE_URL`） | 成功：覆寫後參數版本為 2，類型 SecureString，原有的 `Project`、`Environment` 標籤保留；值不顯示（連線字串型態由下列探測的輸出確認） |
+| 5.3 資料庫初始化（現場腳本，之後以回寫的 `bootstrap-db` 重跑） | **第一個連線就通過憑證驗證**（候選 A 在這裡 `tls_certificate`）；第一次建立資料庫 `rac_demo`、登入 `rac_app`、資料庫使用者 `rac_app`、`db_owner`；第二次與回寫步驟的執行全部「已存在，略過」、不變更既有密碼，容器結束代碼 0 |
+| 5.3 連線探測（現場腳本，之後以回寫的 `probe-db` 重跑） | 成功：「資料庫連線正常（SELECT 1），連線已加密且伺服器憑證通過驗證」；**採用的連線字串型態：`Encrypt=yes`，沒有 `ServerCertificate`，沒有 `TrustServerCertificate`**（憑證由映像的系統憑證庫驗證） |
+| 5.3 回寫（`deploy_plan` 的 `db-init` 組，第一次部署專用） | 7 個步驟（找 RDS 端點、上傳兩支維運腳本、`bootstrap-db`、`probe-db` 與各自的等待）；回寫後的步驟對真實主機執行一次，兩個等待步驟都驗證到 `docker-exit=0`；容器輸出在標準錯誤。四個 aws_demo 測試檔新增 bash 實際執行主機腳本的行為測試（成功、容器失敗、腳本被竄改、暫存與環境檔清除）；18 項破壞驗證（雜湊檢查、輸出重導、憑證掛載、環境檔與暫存清除、主要使用者環境檔、`--host`、結束代碼、順序、`--pull=never`、加密上傳、目錄、例行部署不含 `db-init` 等）全部被抓到 |
+| 5.4 部署前快照（`deploy --group snapshot --group migrate --tag 48f5ab2`） | `rac-demo-staging-db-pre-48f5ab2` 為 `manual`、加密、20 GB、`available`，帶 `Project=rac-demo`、`Environment=staging` 與 `Name` 標籤；遷移之前建立並等到可用 |
+| 5.4 遷移（`migrate-db`） | 空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移，結束代碼 0；`check-migration-head` 輸出 `1`；另以唯讀一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)` |
+| 5.4 種子（`seed-scripts`） | 內建劇本：建立 1、更新 0、沒有變動 0（`xianxia-qingyun`）；全程沒有 restart，兩個池與 Caddy 仍未啟動 |
+| 5.3 主機殘留複驗 | 暫存目錄 0、`/run/rac` 空、容器 0、沒有 active 的 `rac-*` 單元；主機上的映像為 `rac-app:48f5ab2`、`rac-app-base:48f5ab2` 與 5.1 的 `rac-app:5681983`（沒有 RDS CA，不可用於資料庫連線，留著只是尚未清理） |
 
-**未驗證**：衍生映像層的兩段建置與憑證張數檢查在真實主機的結果、`refresh-parameter-DATABASE_URL` 對真實 SSM 的覆寫、資料庫初始化與探測腳本對 RDS 的執行（以上全部是 task 5.3 的雲端執行）、新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、映像執行（兩個池與一次性容器在新映像上的行為）、`alembic upgrade head` 與 `seed-scripts`（5.4）、兩個池與 Caddy 的啟動與分流（6.x）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
+**未驗證**：新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、映像執行（兩個池與一次性容器在新映像上的行為）、兩個池與 Caddy 的啟動與分流（6.x）、DuckDNS、排程計時器的實際觸發（7.x）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 目前是免費模型，8.3 要確認一般與成人模式沒有使用免費模型的設定，`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2 要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
 
 ## 撰寫新端點：權限與 IDOR 測試
 
