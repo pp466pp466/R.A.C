@@ -31,7 +31,7 @@
 - [ ] 4.1 前提確認並記錄（不含機密）：`aws sts get-caller-identity` 的帳號、區域 `ap-southeast-2`、通知信箱、DuckDNS 權杖已放入環境變數、`--secrets-file` 內容齊全；使用者看過 D12 的費用估算並明確同意 `--accept-cost`
 - [x] 4.2 預覽完整計畫後，逐步執行預算與 SNS、安全群組、IAM 角色、S3 儲存貯體、SSM 參數；每一步以唯讀指令驗證（標籤、規則、政策範圍）並記錄；使用者確認 SNS 訂閱信
 - [x] 4.3 建立 RDS（等待可用，期間進行 4.4）；驗證：不公開、加密、備份保留天數、安全群組只有主機來源
-- [ ] 4.4 建立 EC2 與 Elastic IP、主機初始化（交換檔、docker、機密取出腳本與單元檔放置）；驗證：只能經 SSM 連入、沒有 22、`/run/rac` 為記憶體檔案系統。**主機初始化沒有預先寫成計畫步驟**（使用者 2026-11-16 決定：不先猜，現場撰寫）：在這一步以 SSM 逐步撰寫並確認——建立 `HOST_DIRECTORIES`、2 GB 交換檔、安裝並啟動 docker、取得 RDS 的 CA 套件放到 `RDS_CA_BUNDLE_PATH`、放置 `host_files()` 的檔案（含繁體中文內容，以 base64 傳，不直接放進 `commands` 的 JSON）、`systemctl daemon-reload` 與啟用單元與計時器
+- [x] 4.4 建立 EC2 與 Elastic IP、主機初始化（交換檔、docker、機密取出腳本與單元檔放置）；驗證：只能經 SSM 連入、沒有 22、`/run/rac` 為記憶體檔案系統。**主機初始化沒有預先寫成計畫步驟**（使用者 2026-11-16 決定：不先猜，現場撰寫）：在這一步以 SSM 逐步撰寫並確認——建立 `HOST_DIRECTORIES`、2 GB 交換檔、安裝並啟動 docker、取得 RDS 的 CA 套件放到 `RDS_CA_BUNDLE_PATH`、放置 `host_files()` 的檔案（含繁體中文內容，以 base64 傳，不直接放進 `commands` 的 JSON）、`systemctl daemon-reload` 與啟用單元與計時器
 - [ ] 4.5 發現的 AWS CLI 與主機指令差異全部回寫到 `scripts/aws_demo_plan.py` 並補測試（含 4.4 現場撰寫的主機初始化：寫成 `host-init` 計畫步驟與測試，營運文件第 8 節的步驟總表同步），結果記入 README「驗收紀錄（aws-demo-environment）」
 
 ## 5. 映像建置、資料庫初始化、憑證探測與遷移
