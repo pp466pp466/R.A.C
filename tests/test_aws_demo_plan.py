@@ -436,7 +436,8 @@ def test_rds_is_private_encrypted_backed_up_and_reachable_only_through_the_datab
     steps = by_id(full_plan())
     body = json.loads(steps["create-rds-instance"].input_json)
     assert body["PubliclyAccessible"] is False and body["StorageEncrypted"] is True
-    assert body["BackupRetentionPeriod"] == 7 and body["MultiAZ"] is False
+    # Free plan 的 AWS 驗證拒絕 7 天（FreeTierRestrictionError，2026-11-16 實測）；規格只要求大於 0
+    assert body["BackupRetentionPeriod"] == 1 and body["BackupRetentionPeriod"] > 0 and body["MultiAZ"] is False
     assert body["VpcSecurityGroupIds"] == ["{{db-sg-id}}"] and body["DBSubnetGroupName"] == "rac-demo-staging-db-subnets"
     assert body["Engine"] == "sqlserver-ex" and body["DBInstanceClass"] == "db.t3.micro" and body["LicenseModel"] == "license-included"
     assert body["MasterUsername"] not in ("sa", "admin") and body["MasterUserPassword"] == "{{secret:RDS_MASTER_PASSWORD}}"
