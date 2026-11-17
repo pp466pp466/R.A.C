@@ -38,7 +38,7 @@
 
 > 第一次部署**分組執行**（`deploy_plan(groups=…)`，`prepare` 會自動帶上）：5.1 用 `build` 組；5.4 用 `snapshot`、`migrate` 組；`restart`、`verify` 組**不在本組執行**，留到 5.5 `create-admin` 之後與 6.1 一起。資料庫初始化與探測要在主映像內以一次性容器執行，所以映像（5.1）先於它們（5.2）；例行的後續部署則一次跑完整份計畫（快照 → 建置 → 遷移 → 重啟 → 驗證）。
 
-- [ ] 5.1 在主機上建置映像（`deploy_plan` 的 `build` 組：`git archive <提交短碼>` 經 S3、標記提交短碼），確認映像內沒有 `.env`、以非 root 執行
+- [x] 5.1 在主機上建置映像（`deploy_plan` 的 `build` 組：`git archive <提交短碼>` 經 S3、標記提交短碼），確認映像內沒有 `.env`、以非 root 執行
 - [ ] 5.2 執行資料庫初始化（3.1），再執行憑證探測（3.2）使用候選 A（`ServerCertificate` 加 RDS CA 套件，唯讀掛載）；**成功才繼續**。**回寫**：這兩支腳本沒有計畫步驟（它們不是執行器的子命令），現場在主機上執行並逐項驗證後，把實際用過的指令回寫成計畫步驟與測試（主機上的腳本掛載、環境檔取出、一行輸出的驗證，同 `host-init` 的做法），營運文件第 8 節的步驟總表同步，結果記入 README「驗收紀錄（aws-demo-environment）」
 - [ ] 5.3 若 A 失敗：停止並回報使用者；採用候選 B 之前先以 `/openspec-update-change` 修訂本 change（design D7、tasks、必要的規格），經使用者同意後再改 `Dockerfile`；禁止 `TrustServerCertificate=yes` 與行程範圍的 `SSL_CERT_FILE`。若 A 成功，記錄實際採用的連線字串型態（不含密碼）到營運文件
 - [ ] 5.4 建立 RDS 快照，執行 `alembic upgrade head`，驗證 `alembic current` 為最新版（`0018`），再執行 `seed-scripts`（`deploy_plan` 的 `snapshot`、`migrate` 組）；任何一步失敗即停止，不啟動服務
