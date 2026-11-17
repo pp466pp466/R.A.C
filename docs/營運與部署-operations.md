@@ -440,7 +440,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`deploy_plan` 的 `ingress`、`routing` 組已於 2026-11-17 對真實主機執行並驗證（task 6.2、6.3：Caddy 啟動並簽發憑證、HTTP/2、導向、安全標頭、暫停客服池驗證分流，見「啟動入口與排程」「驗證分流」兩節）；串流探測（task 6.4，不是計畫步驟）已對真實入口與真實模型執行：入口沒有緩衝串流、心跳未驗證，見「串流探測」一節；`deploy_plan` 的 `schedule` 組與告警、寄信也已對真實的主機與 AWS 驗證（task 7.1 至 7.3：五個計時器、EC2 狀態告警演練、營運告警信寄達但進垃圾郵件匣，見「啟動入口與排程」「告警與寄信」兩節）；冒煙驗收與真實模型連通性（task 8.1、8.3）見「冒煙驗收與真實模型連通性」一節；未達 production 的缺口見最後一節「展示環境未達 production 的缺口」；`rollback_plan`、`teardown_plan` 尚未對真實 AWS 執行；DuckDNS 的更新由使用者在自己的終端機執行過（結果以 DNS 與對外連線驗證，沒有看到執行器的輸出）**，其餘雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`deploy_plan` 的 `ingress`、`routing` 組已於 2026-11-17 對真實主機執行並驗證（task 6.2、6.3：Caddy 啟動並簽發憑證、HTTP/2、導向、安全標頭、暫停客服池驗證分流，見「啟動入口與排程」「驗證分流」兩節）；串流探測（task 6.4，不是計畫步驟）已對真實入口與真實模型執行：入口沒有緩衝串流、心跳未驗證，見「串流探測」一節；`deploy_plan` 的 `schedule` 組與告警、寄信也已對真實的主機與 AWS 驗證（task 7.1 至 7.3：五個計時器、EC2 狀態告警演練、營運告警信寄達但進垃圾郵件匣，見「啟動入口與排程」「告警與寄信」兩節）；冒煙驗收與真實模型連通性（task 8.1、8.3）見「冒煙驗收與真實模型連通性」一節；Google 登入人工驗收（task 8.2，四項通過，並發現 5.5 的管理員第一次沒有建成、已重建）見「Google 登入人工驗收」與「建立首位管理員」兩節；未達 production 的缺口見最後一節「展示環境未達 production 的缺口」；`rollback_plan`、`teardown_plan` 尚未對真實 AWS 執行；DuckDNS 的更新由使用者在自己的終端機執行過（結果以 DNS 與對外連線驗證，沒有看到執行器的輸出）**，其餘雲端驗收是後續批次。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -659,8 +659,9 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **只在第一次部署**：`FIRST_DEPLOY_GROUPS` 含 `create-admin`，例行部署的整份計畫不含它。順序在遷移之後（需要資料表）、`restart` 之前。指令本身（`app/cli.py`）對**已存在的信箱**拒絕且不改動既有帳號（`email_exists`），所以同一個信箱重做是安全的；它不限制管理員的數量，是否已建立要由部署者自己掌握。
 - **信箱要填之後用來 Google 登入的那一個**：管理員每次登入都先過 Google，第一次以「同信箱且 `email_verified`」的 Google 身分登入時才綁定，之後再驗證一次這裡設定的密碼（密碼 8 至 128 字）；信箱填錯就綁不上。
 - **已驗證**：`tests/test_aws_demo_plan.py` 與 `tests/test_aws_demo_script.py` 驗證順序、互動旗標、人工指令的內容（沒有任何帳密參數）、兩個 SSM 腳本在 bash 內以假的 `docker` 與機密取出腳本實際執行（成功、容器失敗、環境檔與容器清除）、預覽不呼叫任何外部指令、`--yes` 不能代替人工確認。**雲端**：乾跑已在真實主機以映像 `rac-app:48f5ab2` 成功（SSM `Success`，輸出 `create-admin-help=ok`）。
-- **雲端人工步驟（2026-11-17）**：使用者在 Session Manager 終端機輸入兩行指令後，於自己的終端機回答「做完了」；接著的 `cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組以「全部完成」結束。
-- **未驗證**：我沒有看到「已建立管理員帳號（識別碼 …）」那一行，也沒有獨立查詢資料庫確認帳號存在（沒有唯讀指令可查，不為此另寫查詢）；帳號是否可用要等管理員第一次登入（Google，再驗證密碼）才真正證明。
+- **雲端人工步驟，第一次（2026-11-17）——其實沒有建成**：當時使用者回報在 Session Manager 終端機完成並回答「做完了」，接著的 `cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組以「全部完成」結束，task 5.5 因而勾選。**第 7 批的 8.2 發現資料庫裡沒有任何管理員**：使用者編號 1 至 9 全都對得上其他帳號（兩位 6.4 測試玩家、五個 7.3 告警演練帳號、8.1 的測試玩家、8.2 第一次 Google 登入註冊的玩家），沒有任何編號給過管理員。**原因沒有查明**；第二次嘗試時使用者回報「本機執行器只問 `[y/N]`，全按 y 就做完了」，與資料庫沒有任何變化一致：**執行器只列出要輸入的指令並問「做完了嗎？」，信箱、顯示名稱與密碼的提示出現在 Session Manager 終端機，不在執行器裡**，所以只在本機回答 `y` 會得到「全部完成」，卻什麼都沒建立。
+- **雲端人工步驟，第二次（2026-11-17，約 06:57 UTC）——建成並驗證**：使用者在 Session Manager 終端機（EC2 主控台的「連線」要選 **SSM Session Manager** 那一項，不是預設的 EC2 Instance Connect，這台主機沒有開 SSH）貼上兩行指令，回答三個提示，看到「已建立管理員帳號」。我以唯讀的一次性程式（容器內、只走 ORM、遮蔽信箱）確認：`users` 只有編號 10，角色 `admin`、狀態 active、信箱已驗證、有密碼、當時沒有 Google 身分；互動容器沒有殘留，兩個池仍在執行。其後管理員 Google 登入成功（見「Google 登入人工驗收」）。這次沒有重跑 `cleanup-create-admin`：`/run/rac/app.env` 在兩個池啟動後本來就留著（已決定不清除），互動容器是 `--rm`。
+- **教訓與待決定的改善**：①人工步驟的成功**不能只靠使用者在本機回答 `y`**；②這一組沒有任何步驟驗證管理員存在（原本想的唯讀查詢因為沒有現成指令而不做，結果漏掉了這個失敗）。**待使用者決定**（程式與測試變更，超出 8.x 範圍）：把執行器的提示改成明確寫出「請先到 AWS 主控台的 Session Manager 終端機完成上述步驟」，並在 `cleanup-create-admin` 之後加一個唯讀的「確認管理員存在」步驟（例如在一次性容器內以 ORM 只印管理員人數）。
 
 ### 啟動兩個池（task 6.1，`restart`、`verify` 組）
 
@@ -792,6 +793,23 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - 這項列入下方缺口表（「一般與成人模式不得使用免費模型」）。使用者在第 7 批選擇「維持免費模型」；展示環境沒有真實個資，隱私權政策也已寫明現階段免費模型不得輸入真實個資。
 
 **證據限度**：一位測試玩家、各一次執行；時間包含網際網路與 TLS，不是容量依據；RPG 免費模型的延遲不穩定（6.4 曾 30 秒逾時），這次剛好順暢，不代表穩定；沒有測重新生成、編輯、記事簿抓取（要滿 10 輪）與被擋回合；一般模式與成人模式都沒有跑到。
+
+### Google 登入人工驗收（task 8.2）
+
+**狀態**：2026-11-17（第 7 批）由使用者本人以瀏覽器完成，我從後端日誌確認每一步的事件。**四項全部通過**；過程中發現並修正了 5.5 的管理員沒有建成（見「建立首位管理員」）。
+
+**前置**：OAuth 用戶端沿用 `aws-demo.vars` 的 `GOOGLE_OAUTH_CLIENT_ID`（來自 `staging.vars`）。使用者在 Google 主控台把 `https://rac001.duckdns.org/auth/google/callback` 加入「已授權的重新導向 URI」（回呼網址是 `BASE_URL`＋`/auth/google/callback`，`BASE_URL` 由計畫自動填成 `https://<網域>`）；OAuth 同意畫面的發佈狀態是**測試中**，只有列為測試使用者的 Google 帳號能登入，使用者把管理員信箱與第二個 Google 信箱都加了進去。使用者回報這個用戶端除了本環境，還有一筆**舊的 Render 回呼網址**（`r-a-c-ragchat.onrender.com`），沒有 localhost 或 ngrok：它是預備性質的用戶端，不與開發共用（AGENTS.md 第 10 節），但仍與舊的 Render 環境共用同一個用戶端，那筆不用了就該移除（待使用者處理）。**預檢（不登入）**：從登入頁發起 `POST /api/auth/google/start`，取得的授權網址指向 Google 的授權端點、帶 PKCE（`S256`）、state、nonce、範圍 `openid email profile`，且 `redirect_uri` 與預期相符；對該網址做一次 GET，Google 回 302 到標準登入頁（沒有 `redirect_uri_mismatch`、`invalid_client` 或其他錯誤），代表 Google 接受這個用戶端與回呼網址。
+
+| 項目 | 結果（後端日誌事件；沒有任何事件含信箱或個資） |
+|---|---|
+| ① 管理員 Google 加密碼 | `auth.google_started` → **`auth.google_linked`**（第一次以同信箱的 Google 登入，綁定到管理員，使用者 10）→ `auth.admin_google_passed`（Google 通過，等待密碼）→ `auth.login_success`（密碼通過，約 11 秒內完成），使用者確認可進入 `/admin`。**第一次嘗試失敗**：當時資料庫沒有管理員，後端把這次登入當成新玩家（`auth.google_registered`、`auth.age_confirmed.later`），`/admin` 回 404（非管理員存取後台一律 404，行為正確）；使用者同意後我走正式的抹除出口刪除該玩家，使用者重做 5.5 建立管理員，再重做這一項 |
+| ② 新使用者不勾條款不建帳號（第二個 Google 帳號） | `auth.google_started` → **`auth.google_rejected.terms`**（WARNING）；沒有建帳號：下一個註冊的使用者編號沒有跳號 |
+| ③ 勾選後完成年齡確認 | `auth.google_started` → `auth.google_registered`（使用者 11）→ `auth.age_confirmed.later`（約 35 秒後）；登入後預設頁是 `/game`（`DEFAULT_AFTER_LOGIN`；使用者確認是預期的）。使用者 11：角色 `user`、年齡確認完成、信箱已驗證、Google 身分 1 個 |
+| ④ 回訪一鍵登入 | 第一次嘗試**沒有驗到**：使用者只是重新開啟登入頁，登入狀態還在（session 的閒置期限 30 天），被直接導向預設頁，日誌沒有 `auth.google_started`；改為先到 `/account` 按「登出」（`auth.logout`），再開 `/login` 不勾條款按 Google 登入：`auth.google_started` → **`auth.google_login`**（使用者 11），直接進入 `/game` |
+
+**驗證後的清除（使用者決定：管理員保留、玩家抹除）**：第二個 Google 帳號的玩家（使用者 11）經正式的帳號抹除出口刪除（先核對「共 2 位、編號 11 角色是 user、遮蔽信箱相符、管理員 10 在」才動手），剩下管理員（使用者 10，已綁定 Google 身分）。
+
+**限度與未驗證**：只驗證了**測試使用者**（發佈狀態為測試中）；Google 將同意畫面改為「正式版」之後、一般使用者登入，以及 `duckdns.org`（在公用尾碼清單上）能否當作授權網域，都沒有驗證；兩次 Google 授權都是在使用者的瀏覽器完成，我只看到後端事件；沒有驗證管理員重設密碼信（「忘記密碼」）的實際寄出。**觀察（與規範的差異，沒有修改）**：AGENTS.md 第 10 節仍寫「登入後的預設頁面目前為 /cs」，程式的 `DEFAULT_AFTER_LOGIN` 已是 `/game`（RPG 入口），規範文字已過時，是否更正由使用者決定。
 
 ### 展示環境未達 production 的缺口（task 7.4）
 

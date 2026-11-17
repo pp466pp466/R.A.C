@@ -1635,7 +1635,7 @@ python scripts/aws_demo.py deploy --account-id <12 位帳號編號> --tag <映�
 python scripts/aws_demo_probe_stream.py https://<展示網域> --allow-model-call
 ```
 
-### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5、6.1 至 6.5、7.1 至 7.4、8.1、8.3 已記入（7.1 的本機部分在第 2 批，雲端驗證在第 5 批；6.5 與 7.4 是第 6 批的文件工作；8.1 與 8.3 在第 7 批；8.2 由使用者本人執行），8.4 收尾時補齊）
+### 驗收紀錄（aws-demo-environment，2026-11-16 至 2026-11-17；task 4.2 至 4.5、5.1 至 5.5、6.1 至 6.5、7.1 至 7.4、8.1 至 8.4 已記入（7.1 的本機部分在第 2 批，雲端驗證在第 5 批；6.5 與 7.4 是第 6 批的文件工作；8.x 在第 7 批；8.4 的驗收摘要在表格之後）；9.x 收尾尚未做）
 
 **已對真實 AWS 執行並逐項以唯讀指令驗證**（資源都帶 `Project=rac-demo`、`Environment=staging` 標籤）：
 
@@ -1671,7 +1671,7 @@ python scripts/aws_demo_probe_stream.py https://<展示網域> --allow-model-cal
 | 5.4 遷移（`migrate-db`） | 空資料庫上依序執行 `0001_baseline` 到 `0018_rpg_turn_revision` 共 18 個遷移，結束代碼 0；`check-migration-head` 輸出 `1`；另以唯讀一次性容器直接查 `alembic current`＝`0018_rpg_turn_revision (head)` |
 | 5.4 種子（`seed-scripts`） | 內建劇本：建立 1、更新 0、沒有變動 0（`xianxia-qingyun`）；全程沒有 restart，兩個池與 Caddy 仍未啟動 |
 | 5.5 建立管理員前的乾跑（`deploy --group create-admin --tag 48f5ab2 --execute`，到人工步驟時回答「否」讓它停住） | 找出主機通過；`check-create-admin` 的 SSM 狀態 `Success`，驗證輸出 `create-admin-help=ok`（映像、環境檔、`flask`、`wsgi` 與 `create-admin` 指令可用）；在人工步驟停止（結束代碼 3，是預期的），沒有建立任何帳號、沒有執行清理（乾跑腳本自己的 `trap` 已刪環境檔） |
-| 5.5 人工建立管理員與清理（`deploy --group create-admin --tag 48f5ab2 --execute`，使用者在自己的終端機執行） | 使用者在 Session Manager 終端機輸入兩行指令後回答「做完了」；`cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組「全部完成」。**證據的限度**：這是使用者的確認加清理驗證輸出，我沒有看到成功訊息的識別碼，也沒有獨立查詢資料庫；帳號可用與否在管理員第一次登入時才證明 |
+| 5.5 人工建立管理員與清理（`deploy --group create-admin --tag 48f5ab2 --execute`，使用者在自己的終端機執行） | 使用者在 Session Manager 終端機輸入兩行指令後回答「做完了」；`cleanup-create-admin` 驗證通過（`app-env-left=0 container-left=0`），整組「全部完成」。**證據的限度**：這是使用者的確認加清理驗證輸出，我沒有看到成功訊息的識別碼，也沒有獨立查詢資料庫；帳號可用與否在管理員第一次登入時才證明。**更正（第 7 批 8.2，2026-11-17）：這次其實沒有建成管理員**，見 8.2 的列 |
 | 5.5 回寫成計畫步驟（`deploy_plan` 的 `create-admin` 組，第一次部署專用） | 5 個步驟（乾跑與等待、人工步驟、清理與等待）；`Step.manual_commands` 新欄位，執行器只顯示不執行，`--yes` 不能代替確認。新增測試（四個 aws_demo 測試檔）：順序與例行部署不含、人工指令沒有任何帳密參數、兩個 SSM 腳本在 bash 內以假 `docker` 實際執行（成功、容器失敗、環境檔與容器清除）、預覽不呼叫外部指令、拒絕人工確認即停止；**11 項破壞驗證全部被抓到**（人工指令少 `-it` 或多帶 `--password-stdin`、不再標為互動、進了例行部署、乾跑沒有 `trap`、清理不刪環境檔、組順序在遷移之前、乾跑拿掉 `--help`、清理的容器名稱不錨定、執行器不顯示指令、清理預期值放寬） |
 | 6.1 啟動兩個池（`deploy --group restart --group verify --tag 48f5ab2 --execute`） | 5 步全部成功：`release.env` 換成 `RAC_IMAGE_TAG=48f5ab2`、重啟 `rac-cs` 與 `rac-rpg`、兩個池在回送位址 8081 與 8082 的 `/readyz` 回 200、輸出 `rac-app:48f5ab2 rac-app:48f5ab2`；第一次啟動，沒有前一版，沒有演練 `rollback`。抵用金啟動前讀數 US$139.13 |
 | 6.1 唯讀查證（SSM 只讀指令，現場撰寫；之後回寫成 `check-pool-hardening`，見下一列） | 非 root：兩個容器 `Config.User=app`、行程 UID 10001、容器內 `uid=10001(app)`、根檔案系統唯讀；各用自己的設定：客服池 `gunicorn.conf.py`、RPG 池 `gunicorn.rpg.conf.py`（各 3 個 gunicorn 行程）；只綁回送位址：`127.0.0.1:8081` 與 `127.0.0.1:8082`，主機上沒有監聽在 `0.0.0.0` 或外部位址的 TCP 埠（另有 `containerd` 自己的 `127.0.0.1:41519`）；容器 `RestartCount=0`，Caddy 與五個計時器 `inactive`。**只證明主機層**，外部直連是否被擋由 6.3 驗證 |
@@ -1701,9 +1701,42 @@ python scripts/aws_demo_probe_stream.py https://<展示網域> --allow-model-cal
 | 8.3 RPG 真實模型（第 7 批；同一位測試玩家；`OPENROUTER_MODEL=nvidia/nemotron-3.5-lightning:free`，沒有備援與零保存） | 簽到 200→400；開存檔 201、4.2 秒；第 0 幕串流 200，第一個事件 0.75 秒、第一個 token 1.79 秒、`done` 8.73 秒，28 個事件、813 字、沒有 `error`；一個回合串流 200，第一個 token 2.35 秒、`done` 5.89 秒，12 個事件（含 1 個 `ping` 與 1 個 `state`）、351 字、沒有 `error`，扣 30 幣（400→370）、回合紀錄 1 筆 `complete`。**回合中的 `ping` 是回合開始、狀態呼叫之前固定送出的一個，不是 15 秒的閒置心跳**，所以 6.4 的「心跳未驗證」仍成立。不是容量依據 |
 | 8.3 客服真實模型（`GEMINI_MODEL=gemini-3.5-flash-lite`） | `staging_smoke.py --allow-model-call`：**11 項通過、0 失敗**，其中「送出一則訊息且回覆不是降級文案」通過，這也證明展示環境的 `GEMINI_API_KEY` 真的可用。**生成時間沒有記錄**（冒煙驗收不輸出計時） |
 | 8.3 一般與成人模式沒有使用免費模型？ | **結論：不成立，沒有放寬**。RPG 只有一個免費模型設定、沒有備援與零保存；成人模式因 `ADULT_MODE_ENABLED` 未設而關閉；一般模式沒有被擋，但**這次沒有跑到**：測試存檔的 `content_tier` 是 `safe`，目錄裡唯一的劇本（`xianxia-qingyun`）自己宣告安全，有效模式取三者中最保守者。使用者選擇維持免費模型；列入營運文件缺口表第八項，一般模式標為未驗證 |
+| 8.2 前置與預檢（第 7 批；使用者本人在 Google 主控台操作） | 使用者把 `https://rac001.duckdns.org/auth/google/callback` 加入用戶端的「已授權的重新導向 URI」（回呼網址是 `BASE_URL`＋`/auth/google/callback`）；發佈狀態**測試中**，管理員信箱與第二個 Google 信箱都是測試使用者；用戶端另有一筆舊的 Render 回呼網址（使用者回報沒有 localhost／ngrok，所以不與開發共用，但與舊 Render 環境共用同一個用戶端）。**預檢（不登入）**：`POST /api/auth/google/start` 取得的授權網址帶 PKCE（`S256`）、state、nonce，`redirect_uri` 與預期相符；對它做一次 GET，Google 回 302 到標準登入頁（沒有 `redirect_uri_mismatch`、`invalid_client`），代表 Google 接受這個用戶端與回呼網址 |
+| 8.2 發現：5.5 的管理員沒有建成 | 使用者第一次驗證管理員時 `/admin` 回 404；日誌顯示被當成新玩家（`auth.google_registered`、`auth.age_confirmed.later`）。唯讀診斷（遮蔽輸出）：`users` 只有一位玩家、管理員 0 位，使用者編號 1 至 9 全部對得上其他帳號（兩位 6.4 測試玩家、五個 7.3 告警演練帳號、8.1 測試玩家、這次註冊的玩家），**從來沒有任何編號給過管理員**。原因沒有查明；使用者回報執行器在本機只問 `[y/N]`、全按 y 就「全部完成」，**真正的提示在 Session Manager 終端機**。使用者選擇由我抹除那位玩家（先核對只有這一位、角色 user、遮蔽信箱相符），再重做 5.5 |
+| 8.2 重建管理員（使用者在 Session Manager 終端機；EC2 主控台「連線」要選 SSM Session Manager） | 唯讀查詢確認：`users` 只有編號 10，角色 `admin`、active、信箱已驗證、有密碼、當時沒有 Google 身分；互動容器沒有殘留（`container-left=0`），兩個池仍在執行 |
+| 8.2 四項驗證（使用者的瀏覽器；後端日誌事件） | ①管理員：`auth.google_started` → **`auth.google_linked`** → `auth.admin_google_passed` → `auth.login_success`（約 11 秒），可進 `/admin`；②新使用者不勾條款：`auth.google_rejected.terms`，沒有建帳號（編號沒跳號）；③勾選後：`auth.google_registered` → `auth.age_confirmed.later`，登入後預設頁 `/game`；④回訪：先 `auth.logout`，再 `auth.google_started` → **`auth.google_login`**，直接進 `/game`（第一次嘗試沒驗到：只是重開登入頁，登入狀態還在，日誌沒有 `auth.google_started`）。**全部通過** |
+| 8.2 驗證後清除（使用者決定：管理員保留、玩家抹除） | 第二個 Google 帳號的玩家（使用者 11）經正式的抹除出口刪除（先核對共 2 位、角色與遮蔽信箱相符、管理員在）；剩管理員（使用者 10，已綁定 Google 身分）。限度：只驗證**測試使用者**，Google 發佈為正式版、一般使用者登入與 `duckdns.org` 作為授權網域沒有驗證 |
 | 5.3 主機殘留複驗 | 暫存目錄 0、`/run/rac` 空、容器 0、沒有 active 的 `rac-*` 單元；主機上的映像為 `rac-app:48f5ab2`、`rac-app-base:48f5ab2` 與 5.1 的 `rac-app:5681983`（沒有 RDS CA，不可用於資料庫連線，留著只是尚未清理） |
 
-**未驗證**：管理員帳號是否可用（5.5 的人工步驟由使用者執行並確認完成，證據限度見上表；第一次管理員登入才真正驗證）、新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、有流量時兩個池的行為（6.1 只量了閒置的記憶體與 `/readyz`）、心跳經入口是否即時到達（6.4：探測沒有觸發 `ping`；第 7 批回合串流裡的 `ping` 是回合開始時固定送的一個，不是閒置心跳）、HTTP/2 下的串流與一般回合的串流（6.4 只量了 HTTP/1.1 的第 0 幕）、免費模型 `nvidia/nemotron-3.5-lightning:free` 的延遲穩定性（6.4 觀察到一次供應商端塞車，第 7 批的 8.3 順暢但只有一次；使用者選擇維持免費模型）、一般模式（唯一的劇本宣告安全，8.3 沒有跑到；成人模式關閉）、客服對話的生成時間（冒煙驗收不輸出計時）、HTTP/3 與 UDP 443、有流量時入口的行為、DuckDNS 更新步驟本身的輸出（使用者在自己的終端機執行，我沒看到輸出，只以結果驗證：`rac001.duckdns.org` 指向 Elastic IP 且對外連線成功）、其餘四個每小時或每日排程計時器的實際觸發、Caddy 憑證續期與重啟 Caddy 後是否不重新簽發（只有第一次啟動的紀錄）、營運告警信進垃圾郵件匣的原因（7.3：推測是免費信箱網域當寄件者，沒看標頭）、管理員重設密碼信的實際寄出（兩個池已用新金鑰登入成功，但沒有真的寄過那封信）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 是免費模型，8.3 已確認「一般與成人模式沒有使用免費模型的設定」**不成立**（見上表與營運文件缺口表第八項）；`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，8.2（使用者本人執行）要確認它是預備環境專用的用戶端並加入此網域的回呼網址。
+#### 驗收摘要（task 8.4，2026-11-17）
+
+**已驗證與未驗證**（期間 2026-11-16 至 2026-11-17；每一項的做法、數字與限度見上表與營運文件第 8 節）：
+
+| 範圍 | 已驗證 | 未驗證 |
+|---|---|---|
+| 資源建立與主機初始化（4.x） | 預算、網路、IAM、傳檔儲存貯體、機密、RDS、EC2、Elastic IP、EC2 狀態告警、主機初始化（docker、交換檔、單元、機密取出、停用 sshd） | `rollback` 與 `teardown` 的真實執行；新版 `host-init` 的第一次（非重跑）執行；DuckDNS 更新步驟本身的輸出（只以 DNS 結果驗證） |
+| 映像、資料庫與管理員（5.x） | 兩段建置、RDS 憑證方案、部署前快照、遷移到 `0018` 與種子；**管理員**（5.5 第一次沒建成，第二次重建後由 Google 登入驗證，見 8.2） | 管理員重設密碼信的實際寄出 |
+| 服務與入口（6.x） | 兩個池（非 root、各自設定檔、只綁回送位址）；Caddy：憑證約 15 秒簽發、HTTP/2、HTTP 308 導向、HSTS 與安全標頭；`/api/game/` 分流；外部只連得上 80 與 443；串流經入口沒有被緩衝 | 有流量時兩個池的行為；Caddy 憑證續期與重啟後不重新簽發；HTTP/3（`Alt-Svc: h3` 但沒開 UDP 443）；心跳經入口、HTTP/2 下串流、一般回合經入口 |
+| 排程與監控（7.x） | 五個計時器、`check-alerts` 自行觸發；EC2 狀態告警演練與信件（收件匣）；營運告警信（進入告警與恢復）寄達 | 其餘四個每小時或每日計時器的實際觸發；告警信進垃圾郵件匣的原因與 Brevo 寄送上限 |
+| 驗收（8.x） | 冒煙驗收（不呼叫模型 10 項、含客服模型 11 項）通過；RPG 與客服真實模型各一次連通；Google 登入四項（測試使用者） | 一般模式（唯一劇本宣告 safe，沒跑到）與成人模式；客服對話生成時間；Google 正式版與一般使用者登入、`duckdns.org` 作為授權網域；免費模型的延遲穩定性（6.4 塞車一次、8.3 順暢一次） |
+| 與 production 的差距 | 營運文件缺口表八項，每項附現況、原因、風險與暫行做法、重新評估時機 | — |
+
+**資源清單與仍在計費的項目**（2026-11-17 唯讀盤點，區域 `ap-southeast-2`，帳號 `179601693865`，帶 `Project=rac-demo`、`Environment=staging` 標籤）：
+
+| 資源 | 規格與狀態 | 計費 |
+|---|---|---|
+| EC2 | `t3.small`，`i-0575e6e3307fa75f3`，running | **是** |
+| EBS | gp3 20 GB，in-use | **是** |
+| Elastic IP | 1 個，已綁定（`16.179.97.189`） | **是**（公有 IPv4） |
+| RDS | `rac-demo-staging-db`：SQL Server Express `db.t3.micro`，20 GB，單一可用區，不公開、加密，備份保留 1 天，available | **是** |
+| RDS 手動快照 | `rac-demo-staging-db-pre-48f5ab2`（20 GB），available；自動快照 2 個 | **是**（手動快照不隨 RDS 消失、持續計費；拆除時預設刪除部署前快照） |
+| CloudWatch 告警、SNS 主題、傳檔用 S3 儲存貯體、SSM 參數（8 個 SecureString）、Budgets | 告警 `rac-demo-staging-ec2-status-check`（OK）；主題 `rac-demo-staging-alerts`（1 個已確認的電子郵件訂閱）；儲存貯體 `rac-demo-staging-179601693865-transfer`；預算季度 US$75、60% 與 90% 兩個門檻 | 預期微量或不另計，**沒有在帳單確認** |
+
+**每日費用觀察**：抵用金（Free plan）讀數 **US$139.13**，到期 2027-05-11，一整天沒有變動（顯示有延遲）。Cost Explorer 排除抵用金後，只有 **2026-11-16** 一天有毛額 **US$0.148**（資源當天才建、不是整日：EC2 運算 0.053、RDS 0.064、VPC 0.015、EC2 其他〔EBS 等〕0.005、Cost Explorer 0.01〔我查詢本身的費用，每次 API 呼叫約 US$0.01〕），全數被抵用金抵掉；2026-11-17 尚無資料（約延遲一天）。**資料不足，規劃的約 US$1.6／日（到 2026-12-31 約 US$75）沒有被證實**，要隔天再查；展示期到 2026-12-31，費用逼近預算 60%（US$45）或抵用金撐不到期限時要主動提醒。
+
+**`GET /readyz` 不回傳內部細節**：公開網域的就緒回應是 200，本文只有 `{"status":"ok"}`（16 位元組），`Cache-Control: no-store`、`Content-Type: application/json`，沒有資料庫、版本或主機資訊（8.1 與 6.2 都量過）。**限度**：只量了就緒時的回應，不就緒（例如資料庫不通）時的本文沒有在雲端驗證。
+
+**未驗證（逐項明細）**：新版 `host-init` 的第一次（非重跑）執行（現場版在 4.4 驗證過，回寫版只做過重跑）、有流量時兩個池的行為（6.1 只量了閒置的記憶體與 `/readyz`）、心跳經入口是否即時到達（6.4：探測沒有觸發 `ping`；第 7 批回合串流裡的 `ping` 是回合開始時固定送的一個，不是閒置心跳）、HTTP/2 下的串流與一般回合的串流（6.4 只量了 HTTP/1.1 的第 0 幕）、免費模型 `nvidia/nemotron-3.5-lightning:free` 的延遲穩定性（6.4 觀察到一次供應商端塞車，第 7 批的 8.3 順暢但只有一次；使用者選擇維持免費模型）、一般模式（唯一的劇本宣告安全，8.3 沒有跑到；成人模式關閉）、客服對話的生成時間（冒煙驗收不輸出計時）、HTTP/3 與 UDP 443、有流量時入口的行為、DuckDNS 更新步驟本身的輸出（使用者在自己的終端機執行，我沒看到輸出，只以結果驗證：`rac001.duckdns.org` 指向 Elastic IP 且對外連線成功）、其餘四個每小時或每日排程計時器的實際觸發、Caddy 憑證續期與重啟 Caddy 後是否不重新簽發（只有第一次啟動的紀錄）、營運告警信進垃圾郵件匣的原因（7.3：推測是免費信箱網域當寄件者，沒看標頭）、管理員重設密碼信的實際寄出（兩個池已用新金鑰登入成功，但沒有真的寄過那封信）、`rollback` 與 `teardown`；`aws-demo.vars` 的 `OPENROUTER_MODEL` 是免費模型，8.3 已確認「一般與成人模式沒有使用免費模型的設定」**不成立**（見上表與營運文件缺口表第八項）；8.2 已完成（測試使用者四項通過）；`GOOGLE_OAUTH_CLIENT_ID` 沿用 `staging.vars`，除本環境外還有舊的 Render 回呼網址（不用了就該移除，待使用者處理）；Google 發佈為正式版與一般使用者登入、`duckdns.org` 作為授權網域沒有驗證。
 
 ## 撰寫新端點：權限與 IDOR 測試
 
