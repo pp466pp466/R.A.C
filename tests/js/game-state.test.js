@@ -1024,6 +1024,18 @@ test('lastTurnView keeps the known fields with the right types, and the reason o
   assert.equal(State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 1, revisable: false, reason: 'something_new' }).reason, '');
 });
 
+// admin-unlimited-coins：管理員的修訂幣價一律是 0（含免費次數用完之後）；0 與正整數都是有效值，不能被當成缺值。
+test('lastTurnView keeps a zero price as a real value even when the free times are used up (an exempt account), and a zero is not a missing number', () => {
+  const exempt = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 4, revisable: true, reason: null, free_left: 0, regenerate_cost: 0, edit_cost: 0 });
+  assert.deepEqual(exempt, { clientMsgId: 'c9', seq: 9, revision: 4, revisable: true, reason: '', freeLeft: 0, regenerateCost: 0, editCost: 0 });
+  assert.equal(exempt.freeLeft, 0);
+  assert.equal(exempt.regenerateCost, 0);
+  assert.equal(exempt.editCost, 0);
+  const missing = State.lastTurnView({ client_msg_id: 'c9', seq: 9, revision: 4, revisable: true, free_left: 0 });
+  assert.equal(missing.regenerateCost, null);                                                  // 缺值才是 null，與 0 不同
+  assert.equal(missing.editCost, null);
+});
+
 test('lastTurnView fails closed: only an explicit true is revisable, and a broken or incomplete record is null', () => {
   for (const revisable of ['true', 1, null, undefined, {}]) {
     assert.equal(State.lastTurnView({ client_msg_id: 'c', seq: 1, revision: 1, revisable }).revisable, false, String(revisable));

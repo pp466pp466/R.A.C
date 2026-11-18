@@ -459,7 +459,7 @@ const REVISION_REASON = '理由的獨特字樣Z7重複又無聊';
 const SESSION_PATH = /\/api\/game\/sessions\/[^/]+$/;
 
 /* 一個有兩輪、最後一輪可修訂的假伺服器；串流端點（`fetch`）的連線一直開著直到被中止。 */
-function revisionGame({ indexedDB = null, lastTurn = {} } = {}) {
+function revisionGame({ indexedDB = null, lastTurn = {}, wallet = {} } = {}) {
   const streams = [];
   const respond = (request) => {
     if (SESSION_PATH.test(request.url)) {
@@ -476,7 +476,7 @@ function revisionGame({ indexedDB = null, lastTurn = {} } = {}) {
         { seq: 2, client_msg_id: 't2', turn_number: 2, status: 'complete', action: '行動2', story: '劇情2', revision: 1 },
       ] } });
     }
-    if (/\/api\/wallet$/.test(request.url)) { return Promise.resolve({ data: { ok: true, wallet: { total: 230, turn_cost: { standard: 30 }, checkin: { claimable: true } } } }); }
+    if (/\/api\/wallet$/.test(request.url)) { return Promise.resolve({ data: { ok: true, wallet: Object.assign({ total: 230, turn_cost: { standard: 30 }, checkin: { claimable: true } }, wallet) } }); }
     return Promise.reject(new Error('unexpected ' + request.method + ' ' + request.url));
   };
   const fetchImpl = (url, init) => {
@@ -517,6 +517,47 @@ test('mounting the real page shows the revision buttons under the last turn of t
   assert.deepEqual(Array.from(page.items.value.filter((item) => item.key === page.reviseKey.value).map((item) => item.story)), ['劇情2']);
   assert.deepEqual(game.logs, []);
   assert.deepEqual(game.storageWrites, []);
+});
+
+// admin-unlimited-coins：整頁掛載（真的 game.js 接線）——管理員餘額 0、免費次數用完，畫面不提示餘額不足，修訂的文字與按鈕狀態都說明不消耗遊戲幣。
+const EXEMPT_PAGE = {
+  wallet: { total: 0, turn_cost: { standard: 0 }, coin_exempt: true },
+  lastTurn: { free_left: 0, regenerate_cost: 0, edit_cost: 0 },
+};
+
+test('the real page of an exempt account with a zero balance shows no low-balance hint and says the revisions do not consume game coins', async () => {
+  const { game } = await revisionMounted(EXEMPT_PAGE);
+  const { page } = game;
+  await waitFor(() => page.balanceText.value === '0' && page.reviseKey.value);
+  assert.equal(page.balanceText.value, '0');                                          // 餘額照實顯示
+  assert.equal(page.lowBalanceText.value, '');
+  assert.equal(page.reviseKey.value, 'turn:t2');
+  assert.equal(page.reviseDisabled.value, false);
+  assert.equal(page.regenerateNote.value, '不消耗遊戲幣');
+  assert.equal(page.editNote.value, '不消耗遊戲幣');
+  assert.equal(page.openRegenerate(), true);
+  assert.equal(page.regenerateCostLine.value, '這次重新生成不消耗遊戲幣。');
+  page.closeRegenerate();
+  assert.equal(page.openEdit(), true);
+  page.editDraft.value = '走後門';
+  assert.equal(page.editCostLine.value, '這次編輯不消耗遊戲幣。');
+  assert.equal(page.editInsufficient.value, false);
+  assert.equal(page.editCanSubmit.value, true);
+  assert.deepEqual(game.logs, []);
+  assert.deepEqual(game.storageWrites, []);
+});
+
+test('the real page of an ordinary account in the same situation keeps the hint, the price and the blocked edit', async () => {
+  const { game } = await revisionMounted({ wallet: { total: 0, turn_cost: { standard: 30 }, coin_exempt: false }, lastTurn: { free_left: 0, regenerate_cost: 30, edit_cost: 30 } });
+  const { page } = game;
+  await waitFor(() => page.balanceText.value === '0' && page.reviseKey.value);
+  assert.ok(page.lowBalanceText.value.includes('每一輪需要 30 幣'));
+  assert.equal(page.regenerateNote.value, '30 幣');
+  assert.equal(page.editNote.value, '30 幣');
+  assert.equal(page.openEdit(), true);
+  page.editDraft.value = '走後門';
+  assert.equal(page.editInsufficient.value, true);
+  assert.equal(page.editCanSubmit.value, false);
 });
 
 test('the real page has no revision buttons when the snapshot says it is not the last turn, and disabled ones with a reason while something is in progress', async () => {

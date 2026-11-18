@@ -19,9 +19,9 @@
 
 ## 3. 前端
 
-- [ ] 3.1 `app/static/js/game/game-state.js`／`game-api.js`：錢包回應的正規化加入 `coin_exempt`（只接受布林，缺值或型別不對視為 `false`）；`last_turn` 的費用維持「0 與正整數都是有效值」。更新 `game-api.js` 檔頭的錢包回應格式註解。驗證：`tests/js/game-state.test.js`、`tests/js/game-api.test.js` 擴充——`coin_exempt` 為 `true`／`false`／缺值／字串／數字的各種輸入。
-- [ ] 3.2 `app/static/js/game/game-wallet.js`：暴露 `exempt`（來自錢包回應，載入失敗時為 `false`）；`lowBalance` 與 `lowBalanceText` 在 `exempt` 時為假與空字串；`turnCost` 的處理不變（0 仍視為缺值）。驗證：`tests/js/game-wallet.test.js` 擴充——`coin_exempt: true` 且餘額 0、幣價 0 時沒有餘額不足提示；一般玩家餘額低於幣價仍有提示；錢包載入失敗時維持原本行為。
-- [ ] 3.3 `app/static/js/game/game-labels.js` 與 `game-revision.js`：`revisionRegenerateNote`、`revisionEditNote`、`revisionRegenerateCostLine`、`revisionEditCostLine` 多收一個 `exempt` 參數（放在最後，缺值視為假，維持既有呼叫相容）：免費次數用完且 `exempt` 時，備註回「不消耗遊戲幣」，重新生成 Modal 說明「這次重新生成不消耗遊戲幣」，編輯 Modal 說明「這次編輯不消耗遊戲幣」，不提餘額與簽到；`editInsufficient` 在 `exempt` 時為假。還有免費次數時的文字不變。全部純文字渲染，不使用 `v-html`。驗證：`tests/js/game-labels.test.js`、`tests/js/game-revision.test.js`、`tests/js/game.test.js` 擴充——管理員免費次數內、用完、餘額 0 三種組合的文字與按鈕狀態；一般玩家的既有案例不變；`tests/test_game_template.py`（或既有的樣板測試）通過，確認沒有新增 `v-html` 與 `data-bs-*`。
+- [x] 3.1 `app/static/js/game/game-state.js`／`game-api.js`：錢包回應的正規化加入 `coin_exempt`（只接受布林，缺值或型別不對視為 `false`）；`last_turn` 的費用維持「0 與正整數都是有效值」。更新 `game-api.js` 檔頭的錢包回應格式註解。驗證：`tests/js/game-state.test.js`、`tests/js/game-api.test.js` 擴充——`coin_exempt` 為 `true`／`false`／缺值／字串／數字的各種輸入。
+- [x] 3.2 `app/static/js/game/game-wallet.js`：暴露 `exempt`（來自錢包回應，載入失敗時為 `false`）；`lowBalance` 與 `lowBalanceText` 在 `exempt` 時為假與空字串；`turnCost` 的處理不變（0 仍視為缺值）。驗證：`tests/js/game-wallet.test.js` 擴充——`coin_exempt: true` 且餘額 0、幣價 0 時沒有餘額不足提示；一般玩家餘額低於幣價仍有提示；錢包載入失敗時維持原本行為。
+- [x] 3.3 `app/static/js/game/game-labels.js` 與 `game-revision.js`：`revisionRegenerateNote`、`revisionEditNote`、`revisionRegenerateCostLine`、`revisionEditCostLine` 多收一個 `exempt` 參數（放在最後，缺值視為假，維持既有呼叫相容）：免費次數用完且 `exempt` 時，備註回「不消耗遊戲幣」，重新生成 Modal 說明「這次重新生成不消耗遊戲幣」，編輯 Modal 說明「這次編輯不消耗遊戲幣」，不提餘額與簽到；`editInsufficient` 在 `exempt` 時為假。還有免費次數時的文字不變。全部純文字渲染，不使用 `v-html`。驗證：`tests/js/game-labels.test.js`、`tests/js/game-revision.test.js`、`tests/js/game.test.js` 擴充——管理員免費次數內、用完、餘額 0 三種組合的文字與按鈕狀態；一般玩家的既有案例不變；`tests/test_game_template.py`（或既有的樣板測試）通過，確認沒有新增 `v-html` 與 `data-bs-*`。
 
 ## 4. 文件、驗收與全套測試
 

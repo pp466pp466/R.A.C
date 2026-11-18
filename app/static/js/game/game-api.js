@@ -105,7 +105,8 @@
     /* 儲存玩家編輯的記事簿（`expectedVersion` 是開啟編輯時的版本）：{ notebook }；版本不符時以 409 `notebook_conflict` 拒絕並附後端最新的記事簿。 */
     saveNotebook: function (id, text, expectedVersion, options) { return send('put', gamePath(id) + '/notebook', { text: text, expected_version: expectedVersion }, options); },
 
-    /* 錢包：{ ok, wallet: { free_balance, paid_balance, total, free_cap, turn_cost: { standard }, checkin: { claimable, grant, would_gain, would_lose, next_reset_at } } } */
+    /* 錢包：{ ok, wallet: { free_balance, paid_balance, total, free_cap, turn_cost: { standard }, coin_exempt, checkin: { claimable, grant, would_gain, would_lose, next_reset_at } } }
+       `coin_exempt`：布林，管理員為 true（不消耗遊戲幣，此時 `turn_cost.standard` 為 0）；一般玩家為 false 與設定的幣價。畫面只認 true，缺值視為 false（game-wallet.js）。 */
     wallet: function (options) { return send('get', WALLET_BASE, undefined, options); },
     /* 每日簽到：成功回 { ok, wallet }；會使免費幣超過上限而未確認時 409 `checkin_overflow`（附預覽）；`confirmOverflow` 為真才帶 `confirm_overflow: true`。 */
     checkin: function (confirmOverflow, options) { return send('post', WALLET_BASE + '/checkin', { confirm_overflow: confirmOverflow === true }, options); }

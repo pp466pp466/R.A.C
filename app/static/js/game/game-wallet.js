@@ -10,6 +10,8 @@
  * 規則：
  * - **餘額以伺服器為準**：載入時讀 `GET /api/wallet` 的 `total`；每一輪結束用 `done.coins` 直接覆寫（不另外請求）；讀取失敗顯示「—」，不阻擋閱讀與輸入。
  * - **送出前的餘額不足只是提示，不阻止送出**（`lowBalance`／`lowBalanceText`）：快取的餘額可能過期，真正的拒絕永遠在伺服器（409 `insufficient_coins`）。
+ * - **管理員不消耗遊戲幣**（admin-unlimited-coins）：錢包回應的 `coin_exempt` 只認布林（缺值或型別不對視為 `false`），暴露為 `exempt`；為真時 `lowBalance` 為假、`lowBalanceText` 為空字串。
+ *   畫面只讀這個欄位、不看角色或其他欄位自行推論；真正的豁免永遠在伺服器，這裡只負責說明文字（修訂的費用文字見 game-revision.js 與 game-labels.js）。每份錢包回應都是完整的快照，`exempt` 隨之覆寫。
  * - 409 `insufficient_coins` 開自製 Modal（`openInsufficient`）：說明目前餘額與每輪所需、這一輪沒有扣款，並提供「每日簽到」與「關閉」；玩家的行動文字由呼叫端保留。
  *   **簽到成功不會自動重送**被擋的行動。
  * - 簽到：`claimCheckin` 呼叫 `POST /api/wallet/checkin`。409 `checkin_overflow` 回預覽（會入帳多少、會作廢多少）：「取消」不再呼叫（不消耗當日簽到）、
@@ -46,6 +48,7 @@
 
     var balance = ref(null);               // 合計餘額（免費＋付費）；null = 還不知道（顯示「—」）
     var turnCost = ref(null);              // 每輪幣價（`turn_cost.standard`）；缺值或不合理時為 null（不顯示幣價）
+    var exempt = ref(false);               // 這個帳號不消耗遊戲幣（`coin_exempt`，管理員）；缺值、型別不對或載入失敗時為 false
     var nextResetAt = ref(null);           // 下次可簽到的時間（UTC 的 ISO 字串）；只用來說明「今天已簽到」
     var coinModalOpen = ref(false);
     var coinModalText = ref('');
@@ -58,7 +61,7 @@
     var loading = false;
 
     var balanceText = computed(function () { return balance.value === null ? DASH : String(balance.value); });
-    var lowBalance = computed(function () { return balance.value !== null && turnCost.value !== null && balance.value < turnCost.value; });
+    var lowBalance = computed(function () { return !exempt.value && balance.value !== null && turnCost.value !== null && balance.value < turnCost.value; });
     var lowBalanceText = computed(function () {
       if (!lowBalance.value) { return ''; }
       return '目前餘額 ' + balance.value + ' 幣，每一輪需要 ' + turnCost.value + ' 幣。可以先簽到領取免費遊戲幣；餘額以伺服器為準，仍可直接送出。';
@@ -78,6 +81,7 @@
     function applyWallet(wallet) {
       if (!isObject(wallet)) { return false; }
       var changed = setBalance(wallet.total);
+      exempt.value = wallet.coin_exempt === true;                    // 只認布林 true；其餘一律視為 false（維持一般玩家的行為）
       var cost = isObject(wallet.turn_cost) ? wallet.turn_cost.standard : undefined;
       if (isCount(cost) && cost > 0) { turnCost.value = cost; }
       var checkin = isObject(wallet.checkin) ? wallet.checkin : null;
@@ -199,7 +203,7 @@
     }
 
     return {
-      balance: balance, turnCost: turnCost, balanceText: balanceText, lowBalance: lowBalance, lowBalanceText: lowBalanceText,
+      balance: balance, turnCost: turnCost, exempt: exempt, balanceText: balanceText, lowBalance: lowBalance, lowBalanceText: lowBalanceText,
       coinModalOpen: coinModalOpen, coinModalText: coinModalText, checkinBusy: checkinBusy, checkinPreview: checkinPreview,
       checkinMessage: checkinMessage, checkinFinished: checkinFinished,
       load: load, setBalance: setBalance, openInsufficient: openInsufficient, closeCoinModal: closeCoinModal,

@@ -108,8 +108,10 @@ function createHarness(options = {}) {
     wallet: (opts) => {
       calls.wallet.push(opts);
       if (server.walletFailure) { return Promise.reject(server.walletFailure); }
-      const cost = server.wallet.cost === undefined ? 30 : server.wallet.cost;                                              // cost: null 代表錢包沒有給每輪幣價
-      return Promise.resolve({ ok: true, wallet: { free_balance: server.wallet.total, paid_balance: 0, total: server.wallet.total, free_cap: 1000, turn_cost: cost === null ? {} : { standard: cost }, checkin: { claimable: true, grant: 200, would_gain: 200, would_lose: 0, next_reset_at: '2026-11-12T16:00:00+00:00' } } });
+      const exempt = server.wallet.exempt === true;                                                                         // exempt: true 代表管理員（回 coin_exempt: true、每輪幣價 0）；沒有設定時不帶這個欄位（舊版回應）
+      const cost = exempt ? 0 : (server.wallet.cost === undefined ? 30 : server.wallet.cost);                               // cost: null 代表錢包沒有給每輪幣價
+      const flag = server.wallet.exempt === undefined ? {} : { coin_exempt: exempt };
+      return Promise.resolve({ ok: true, wallet: Object.assign({ free_balance: server.wallet.total, paid_balance: 0, total: server.wallet.total, free_cap: 1000, turn_cost: cost === null ? {} : { standard: cost }, checkin: { claimable: true, grant: 200, would_gain: 200, would_lose: 0, next_reset_at: '2026-11-12T16:00:00+00:00' } }, flag) });
     },
     checkin: (confirm, opts) => { calls.checkin.push({ confirm, opts }); return Promise.resolve({ ok: true, wallet: { total: server.wallet.total + 200, turn_cost: { standard: 30 }, checkin: { claimable: false } } }); },
   };

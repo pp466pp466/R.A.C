@@ -363,6 +363,54 @@ test('when the free times are used up and the balance is short the edit modal sa
   assert.ok(!/undefined|null|NaN/.test(Game.revisionEditCostLine(undefined, undefined, undefined, false)));
 });
 
+// admin-unlimited-coins：管理員帳號不消耗遊戲幣。`exempt` 是最後一個參數；缺值、非 true 的值一律視為一般玩家（維持既有呼叫相容）。
+test('an exempt account sees "does not consume game coins" beside both buttons once the free times are used up, and the free count while there is one', () => {
+  assert.equal(Game.revisionRegenerateNote(0, 30, true), '不消耗遊戲幣');
+  assert.equal(Game.revisionRegenerateNote(0, 0, true), '不消耗遊戲幣');                         // 管理員的幣價是 0：仍是明確的說明，不是缺值
+  assert.equal(Game.revisionRegenerateNote(0, null, true), '不消耗遊戲幣');
+  assert.equal(Game.revisionRegenerateNote(null, null, true), '不消耗遊戲幣');                   // 免費次數不確定：沒有幣價可顯示，說明本身仍成立
+  assert.equal(Game.revisionRegenerateNote(2, 0, true), '免費還剩 2 次');                        // 還有免費次數時文字不變
+  assert.equal(Game.revisionRegenerateNote(1, 30, true), '免費還剩 1 次');
+  assert.equal(Game.revisionEditNote(0, 0, true), '不消耗遊戲幣');
+  assert.equal(Game.revisionEditNote(2, 0, true), '免費還剩 2 次');
+  for (const [freeLeft, cost] of [[2, 0], [1, 30], [0, 0], [0, 30], [null, null]]) {
+    assert.equal(Game.revisionEditNote(freeLeft, cost, true), Game.revisionRegenerateNote(freeLeft, cost, true), `${freeLeft}/${cost}`);   // 兩個按鈕旁仍然一致
+  }
+});
+
+test('an account that is not exempt keeps every existing text: a missing or non-true flag is the same as false', () => {
+  for (const flag of [undefined, false, null, 0, 1, 'true', {}]) {
+    assert.equal(Game.revisionRegenerateNote(0, 30, flag), '30 幣', String(flag));
+    assert.equal(Game.revisionRegenerateNote(0, null, flag), '', String(flag));
+    assert.equal(Game.revisionEditNote(0, 30, flag), '30 幣', String(flag));
+    assert.equal(Game.revisionRegenerateCostLine(0, 30, 230, flag), '這次重新生成會消耗 30 遊戲幣（目前餘額 230 幣）。', String(flag));
+    assert.equal(Game.revisionEditCostLine(0, 30, 230, false, flag), '這次編輯會消耗 30 幣，原本那輪已扣的幣不退（目前餘額 230 幣）。', String(flag));
+    assert.ok(Game.revisionEditCostLine(0, 30, 10, true, flag).includes('簽到'), String(flag));
+  }
+});
+
+test('the two modals of an exempt account say the action does not consume game coins, and mention neither the balance, the check-in nor a refund', () => {
+  assert.equal(Game.revisionRegenerateCostLine(0, 0, 0, true), '這次重新生成不消耗遊戲幣。');
+  assert.equal(Game.revisionRegenerateCostLine(0, 30, 230, true), '這次重新生成不消耗遊戲幣。');
+  assert.equal(Game.revisionEditCostLine(0, 0, 0, false, true), '這次編輯不消耗遊戲幣。');
+  assert.equal(Game.revisionEditCostLine(0, 30, 230, false, true), '這次編輯不消耗遊戲幣。');
+  assert.equal(Game.revisionEditCostLine(0, 30, 10, true, true), '這次編輯不消耗遊戲幣。');       // 即使被誤傳「不足」也不顯示不足與簽到
+  for (const line of [Game.revisionRegenerateCostLine(0, 30, 230, true), Game.revisionEditCostLine(0, 30, 10, true, true), Game.revisionEditCostLine(null, null, null, false, true)]) {
+    assert.ok(!line.includes('會消耗') && !line.includes('餘額') && !line.includes('簽到') && !line.includes('不退') && !line.includes('不足'), line);
+  }
+  assert.equal(Game.revisionRegenerateCostLine(2, 0, 0, true), '這次重新生成不用遊戲幣（免費還剩 2 次）。');   // 還有免費次數時文字不變
+  assert.equal(Game.revisionEditCostLine(2, 0, 0, false, true), '這次編輯免費（免費還剩 2 次）。');
+  assert.ok(!/undefined|null|NaN/.test(Game.revisionRegenerateCostLine(undefined, undefined, undefined, true) + Game.revisionEditCostLine(undefined, undefined, undefined, undefined, true)));
+});
+
+test('every one of these texts is plain text with no markup', () => {
+  const texts = [
+    Game.revisionRegenerateNote(0, 0, true), Game.revisionEditNote(0, 0, true),
+    Game.revisionRegenerateCostLine(0, 0, 0, true), Game.revisionEditCostLine(0, 0, 0, false, true),
+  ];
+  for (const text of texts) { assert.ok(!/[<>&]/.test(text), text); }
+});
+
 test('every not-revisable reason has its own explanation; an unknown reason has the general one and never shows the raw value', () => {
   const reasons = ['ended', 'not_last', 'in_progress', 'no_snapshot'];
   assert.deepEqual(Object.keys(Game.REVISION_NOT_REVISABLE_MESSAGES).sort(), [...reasons].sort());

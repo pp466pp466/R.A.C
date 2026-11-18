@@ -301,3 +301,82 @@ test('the module touches no browser storage, network or console, and never menti
     assert.ok(!source.includes(word), word);
   }
 });
+
+// ---- 管理員不消耗遊戲幣（admin-unlimited-coins）-------------------------------------------------------------
+
+const EXEMPT_WALLET = (total, extra) => Object.assign({}, WALLET(total), { turn_cost: { standard: 0 }, coin_exempt: true }, extra);
+
+test('coin_exempt is read as a real boolean only: true is exempt, and a missing or mistyped value is the same as false', async () => {
+  const cases = [[true, true], [false, false], [undefined, false], [null, false], ['true', false], [1, false], [0, false], [{}, false], [[], false]];
+  for (const [value, expected] of cases) {
+    const wallet = Object.assign(WALLET(10), value === undefined ? {} : { coin_exempt: value });
+    const { wallet: target } = setup({ wallet: [{ ok: true, wallet }] });
+    assert.equal(target.exempt.value, false);                         // 載入之前：一般玩家的行為
+    await target.load();
+    assert.equal(target.exempt.value, expected, JSON.stringify(value));
+  }
+});
+
+test('an exempt account with a zero balance and a zero price gets no low-balance hint, and its balance is still shown as it is', async () => {
+  const { wallet } = setup({ wallet: [{ ok: true, wallet: EXEMPT_WALLET(0) }] });
+  assert.equal(await wallet.load(), true);
+  assert.equal(wallet.exempt.value, true);
+  assert.equal(wallet.balanceText.value, '0');                        // 餘額照實顯示，不隱藏
+  assert.equal(wallet.turnCost.value, null);                          // 幣價 0 仍視為缺值（沒有數字可顯示）
+  assert.equal(wallet.lowBalance.value, false);
+  assert.equal(wallet.lowBalanceText.value, '');
+});
+
+test('exempt wins even when a price is known: a low balance is not a problem for an exempt account', async () => {
+  const { wallet } = setup({ wallet: [{ ok: true, wallet: EXEMPT_WALLET(0, { turn_cost: { standard: 30 } }) }] });
+  await wallet.load();
+  assert.equal(wallet.turnCost.value, 30);
+  assert.equal(wallet.exempt.value, true);
+  assert.equal(wallet.lowBalance.value, false);
+  assert.equal(wallet.lowBalanceText.value, '');
+  wallet.setBalance(5);                                               // 一輪結束後的餘額更新也不會出現提示
+  assert.equal(wallet.lowBalanceText.value, '');
+});
+
+test('an ordinary account below the price still gets the hint, whether or not the response carries the flag', async () => {
+  for (const extra of [{ coin_exempt: false }, {}]) {
+    const { wallet } = setup({ wallet: [{ ok: true, wallet: Object.assign(WALLET(0), extra) }] });
+    await wallet.load();
+    assert.equal(wallet.exempt.value, false);
+    assert.equal(wallet.lowBalance.value, true, JSON.stringify(extra));
+    assert.match(wallet.lowBalanceText.value, /目前餘額 0 幣/);
+    assert.match(wallet.lowBalanceText.value, /每一輪需要 30 幣/);
+  }
+});
+
+test('when the wallet cannot be loaded the account is treated as an ordinary one, and nothing is thrown', async () => {
+  const { wallet } = setup({ wallet: [rejects(serverFailure(503, 'wallet_busy'))] });
+  assert.equal(await wallet.load(), false);
+  assert.equal(wallet.exempt.value, false);
+  assert.equal(wallet.lowBalance.value, false);                       // 餘額與幣價都不知道：沒有提示
+  assert.equal(wallet.lowBalanceText.value, '');
+});
+
+test('every wallet snapshot overwrites the flag, including the one that comes back from a check-in', async () => {
+  const { wallet } = setup({
+    wallet: [{ ok: true, wallet: EXEMPT_WALLET(0) }, { ok: true, wallet: WALLET(0) }],
+    checkin: [{ ok: true, wallet: EXEMPT_WALLET(200, { checkin: { claimable: false } }) }],
+  });
+  await wallet.load();
+  assert.equal(wallet.exempt.value, true);
+  await wallet.claimCheckin();
+  assert.equal(wallet.exempt.value, true);                            // 簽到回的錢包也帶 coin_exempt
+  assert.equal(wallet.balanceText.value, '200');
+  await wallet.load();                                                // 之後讀到不再豁免的快照（例如角色被改變）：跟著伺服器
+  assert.equal(wallet.exempt.value, false);
+});
+
+test('exempt is exposed next to the other wallet state and nothing in the exempt path calls the server again', async () => {
+  const { wallet, calls } = setup({ wallet: [{ ok: true, wallet: EXEMPT_WALLET(0) }] });
+  await wallet.load();
+  wallet.setBalance(0);
+  assert.equal(wallet.lowBalance.value, false);
+  assert.equal(calls.wallet.length, 1);
+  assert.equal(calls.checkin.length, 0);
+  assert.equal(typeof wallet.exempt.value, 'boolean');
+});

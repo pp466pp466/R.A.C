@@ -19,6 +19,8 @@
  *   免費次數用完才提醒會消耗遊戲幣、原本那輪已扣的幣不退，並顯示費用與餘額。空白、超過字數、與原行動相同時不能送出，**需付費且餘額不足**時也不能送出
  *   （說明並可用既有的每日簽到；免費次數內餘額為 0 仍可送出，免費次數不確定時由伺服器決定）。字數與空白檢查與送出新行動一致（`Game.actionProblem`）。
  *   成功的編輯與重新生成一樣用掉一次免費次數（`done.free_left` 減 1，不歸零）。
+ * - **管理員不消耗遊戲幣**（admin-unlimited-coins）：錢包回應的 `coin_exempt` 為真（`deps.wallet.exempt`）時，免費次數用完後按鈕旁改顯示「不消耗遊戲幣」，兩個 Modal 說明
+ *   「這次重新生成／編輯不消耗遊戲幣」，不提醒消耗、不提餘額與簽到，`editInsufficient` 永遠為假；還有免費次數時文字不變。畫面只讀 `coin_exempt`，不自行判斷角色。
  * - **流程**：先寫在途紀錄（種類與 `expected_revision`，編輯另含新行動；**不含理由與分類**）-> `TurnStream.run`（`…/turns/<client_msg_id>/regenerate|edit/stream`）->
  *   事件到氣泡（新文字以打字機顯示在最後一輪的覆蓋層，舊內容原封不動留在歷史裡）-> `finally`：不論結果都從最後一輪的前一個序號起重讀、重讀快照、恢復按鈕。
  *   成功（`done` 為 complete／ended）以後端內容覆寫；被擋、錯誤、逾時、中斷、取消都拿掉覆蓋層就還原舊內容，並以 Toast 說明（確定的失敗一律說「已保留原本的回應，沒有扣遊戲幣、
@@ -134,9 +136,11 @@
       return isCount(fallback) && fallback > 0 ? fallback : null;
     }
     function freeLeft() { var last = host.lastTurn.value; return last ? last.freeLeft : null; }
+    /* 管理員帳號不消耗遊戲幣（admin-unlimited-coins）：只讀錢包回應的 `coin_exempt`（game-wallet.js 的 `exempt`），不自行判斷角色；錢包沒有這個欄位（舊替身）視為假。 */
+    function isExempt() { return !!wallet.exempt && wallet.exempt.value === true; }
 
-    var regenerateNote = computed(function () { return visible.value ? Game.revisionRegenerateNote(freeLeft(), priceOf(KIND_REGENERATE)) : ''; });
-    var editNote = computed(function () { return visible.value ? Game.revisionEditNote(freeLeft(), priceOf(KIND_EDIT)) : ''; });
+    var regenerateNote = computed(function () { return visible.value ? Game.revisionRegenerateNote(freeLeft(), priceOf(KIND_REGENERATE), isExempt()) : ''; });
+    var editNote = computed(function () { return visible.value ? Game.revisionEditNote(freeLeft(), priceOf(KIND_EDIT), isExempt()) : ''; });
 
     // ---- 重新生成 Modal -----------------------------------------------------------------------------
     var regenerateOptions = computed(function () {
@@ -155,7 +159,7 @@
     var regenerateCanSubmit = computed(function () {
       return limits.ok && !host.revising.value && limits.categories.indexOf(regenerateCategory.value) >= 0 && regenerateProblem.value === '';
     });
-    var regenerateCostLine = computed(function () { return Game.revisionRegenerateCostLine(freeLeft(), priceOf(KIND_REGENERATE), wallet.balance.value); });
+    var regenerateCostLine = computed(function () { return Game.revisionRegenerateCostLine(freeLeft(), priceOf(KIND_REGENERATE), wallet.balance.value, isExempt()); });
 
     // ---- 編輯 Modal ---------------------------------------------------------------------------------
     var editCount = computed(function () {
@@ -170,9 +174,9 @@
       return now && trim(editDraft.value) === trim(now.action) ? Game.revisionText('edit_unchanged') : '';
     });
     /* 只有「確定免費次數已用完（為 0）、需要付費、且餘額低於幣價」才算不足：免費次數內（餘額為 0 也一樣）不要求餘額；
-       免費次數、幣價或餘額不確定時前端不擋，由伺服器決定（需付費而不足時回 409 `insufficient_coins`）。 */
+       免費次數、幣價或餘額不確定時前端不擋，由伺服器決定（需付費而不足時回 409 `insufficient_coins`）。管理員不消耗遊戲幣，永遠不算不足。 */
     var editInsufficient = computed(function () {
-      if (freeLeft() !== 0) { return false; }
+      if (isExempt() || freeLeft() !== 0) { return false; }
       var price = priceOf(KIND_EDIT);
       var balance = wallet.balance.value;
       return isCount(price) && isCount(balance) && balance < price;
@@ -183,7 +187,7 @@
       var rejection = editRejection.value;
       return rejection && rejection.draft === editDraft.value ? rejection.message : '';
     });
-    var editCostLine = computed(function () { return Game.revisionEditCostLine(freeLeft(), priceOf(KIND_EDIT), wallet.balance.value, editInsufficient.value); });
+    var editCostLine = computed(function () { return Game.revisionEditCostLine(freeLeft(), priceOf(KIND_EDIT), wallet.balance.value, editInsufficient.value, isExempt()); });
 
     // ---- 小工具 -------------------------------------------------------------------------------------
     function newController() { return typeof deps.AbortController === 'function' ? new deps.AbortController() : null; }

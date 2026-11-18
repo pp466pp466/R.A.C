@@ -272,27 +272,33 @@
   /* 修訂用的固定文字；不認得的鍵退回通用說明。 */
   function revisionText(key) { return labelOf(REVISION_TEXTS, key, REVISION_TEXTS.unavailable); }
 
-  /* 「重新生成」與「編輯」旁的說明（兩者共用同一組免費次數，2026-11-16 規則修訂）：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。 */
-  function revisionRegenerateNote(freeLeft, cost) {
+  /* 「重新生成」與「編輯」旁的說明（兩者共用同一組免費次數，2026-11-16 規則修訂）：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。
+     `exempt`（最後一個參數，缺值視為假）：管理員帳號不消耗遊戲幣（admin-unlimited-coins），免費次數用完後改顯示「不消耗遊戲幣」，不顯示幣價；還有免費次數時文字不變。 */
+  function revisionRegenerateNote(freeLeft, cost, exempt) {
     if (isCount(freeLeft) && freeLeft > 0) { return '免費還剩 ' + freeLeft + ' 次'; }
+    if (exempt === true) { return '不消耗遊戲幣'; }
     if (isCount(cost) && cost > 0) { return cost + ' 幣'; }
     return '';
   }
 
-  /* 「編輯」旁的說明：與「重新生成」旁相同（共用免費次數，用完顯示一輪的幣價）。 */
-  function revisionEditNote(freeLeft, cost) { return revisionRegenerateNote(freeLeft, cost); }
+  /* 「編輯」旁的說明：與「重新生成」旁相同（共用免費次數，用完顯示一輪的幣價；管理員顯示「不消耗遊戲幣」）。 */
+  function revisionEditNote(freeLeft, cost, exempt) { return revisionRegenerateNote(freeLeft, cost, exempt); }
 
-  /* 重新生成 Modal 的費用說明（免費或會消耗多少、目前餘額）。數字不確定的部分不寫出來。 */
-  function revisionRegenerateCostLine(freeLeft, cost, balance) {
+  /* 重新生成 Modal 的費用說明（免費或會消耗多少、目前餘額）。數字不確定的部分不寫出來。
+     `exempt`（缺值視為假）：免費次數用完後說明「這次重新生成不消耗遊戲幣」，不提餘額與簽到。 */
+  function revisionRegenerateCostLine(freeLeft, cost, balance, exempt) {
     if (isCount(freeLeft) && freeLeft > 0) { return '這次重新生成不用遊戲幣（免費還剩 ' + freeLeft + ' 次）。'; }
+    if (exempt === true) { return '這次重新生成不消耗遊戲幣。'; }
     var price = isCount(cost) && cost > 0 ? '這次重新生成會消耗 ' + cost + ' 遊戲幣' : '這次重新生成會消耗遊戲幣';
     return price + (isCount(balance) ? '（目前餘額 ' + balance + ' 幣）。' : '。');
   }
 
   /* 編輯 Modal 的費用說明（與重新生成共用免費次數）：還有免費次數時只說明免費（不提餘額，也不要求餘額）；
-     需要付費時提醒會消耗遊戲幣、原本那輪已扣的幣不退，並顯示費用與目前餘額；餘額不足時改說明不足並指向簽到。數字不確定的部分不寫出來。 */
-  function revisionEditCostLine(freeLeft, cost, balance, insufficient) {
+     需要付費時提醒會消耗遊戲幣、原本那輪已扣的幣不退，並顯示費用與目前餘額；餘額不足時改說明不足並指向簽到。數字不確定的部分不寫出來。
+     `exempt`（最後一個參數，缺值視為假）：免費次數用完後說明「這次編輯不消耗遊戲幣」，不提醒消耗、不提餘額與簽到（`insufficient` 也不理會）。 */
+  function revisionEditCostLine(freeLeft, cost, balance, insufficient, exempt) {
     if (isCount(freeLeft) && freeLeft > 0) { return '這次編輯免費（免費還剩 ' + freeLeft + ' 次）。'; }
+    if (exempt === true) { return '這次編輯不消耗遊戲幣。'; }
     var price = isCount(cost) && cost > 0 ? cost + ' 幣' : '遊戲幣';
     if (insufficient) {
       return '遊戲幣不足' + (isCount(balance) ? '：目前餘額 ' + balance + ' 幣，' : '，') + '這次編輯需要 ' + price + '。可以先簽到領取免費遊戲幣。';

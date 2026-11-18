@@ -547,6 +547,119 @@ test('a free edit is sent and completes with a zero balance, and the free count 
   assert.equal(h.wallet.balance.value, 0);
 });
 
+// ---- 管理員不消耗遊戲幣（admin-unlimited-coins）----------------------------------------------------------------
+// 伺服器對管理員回 coin_exempt: true、每輪幣價 0，`last_turn` 的兩個費用也是 0（含免費次數用完之後）。畫面只讀這個欄位。
+
+const EXEMPT_USED_UP = () => ({ last_turn: lastTurnOf({ free_left: 0, regenerate_cost: 0, edit_cost: 0 }) });
+const exemptWallet = (total) => ({ total, exempt: true });
+
+test('an exempt account with free times left sees the same texts as everyone else, with a zero balance and no balance warning', async () => {
+  const h = await ready({ wallet: exemptWallet(0) });
+  assert.equal(h.wallet.exempt.value, true);
+  assert.equal(h.revision.regenerateNote.value, '免費還剩 2 次');
+  assert.equal(h.revision.editNote.value, '免費還剩 2 次');
+  h.revision.openRegenerate();
+  assert.equal(h.revision.regenerateCostLine.value, '這次重新生成不用遊戲幣（免費還剩 2 次）。');
+  h.revision.closeRegenerate();
+  h.revision.openEdit();
+  h.revision.editDraft.value = '走後門';
+  assert.equal(h.revision.editCostLine.value, '這次編輯免費（免費還剩 2 次）。');
+  assert.equal(h.revision.editInsufficient.value, false);
+  assert.equal(h.revision.editCanSubmit.value, true);
+  assert.equal(h.wallet.lowBalanceText.value, '');
+});
+
+test('an exempt account with the free times used up and a zero balance sees "does not consume game coins" on both buttons and in both modals, and can send', async () => {
+  const h = await ready({ wallet: exemptWallet(0), session: EXEMPT_USED_UP() });
+  assert.equal(h.revision.regenerateNote.value, '不消耗遊戲幣');
+  assert.equal(h.revision.editNote.value, '不消耗遊戲幣');
+  assert.equal(h.revision.reviseDisabled.value, false);
+  h.revision.openRegenerate();
+  assert.equal(h.revision.regenerateCostLine.value, '這次重新生成不消耗遊戲幣。');
+  h.revision.selectRegenerateCategory(CATEGORY);
+  h.revision.regenerateReason.value = REASON;
+  assert.equal(h.revision.regenerateCanSubmit.value, true);
+  h.revision.closeRegenerate();
+  h.revision.openEdit();
+  h.revision.editDraft.value = '走後門';
+  assert.equal(h.revision.editCostLine.value, '這次編輯不消耗遊戲幣。');
+  assert.equal(h.revision.editInsufficient.value, false);
+  assert.equal(h.revision.editCanSubmit.value, true);                                // 送出鈕不因餘額停用
+  for (const line of [h.revision.regenerateCostLine.value, h.revision.editCostLine.value, h.revision.regenerateNote.value, h.revision.editNote.value]) {
+    assert.ok(!line.includes('會消耗') && !line.includes('餘額') && !line.includes('簽到') && !line.includes('不退') && !/undefined|null|NaN/.test(line), line);
+  }
+  assert.equal(h.wallet.lowBalanceText.value, '');
+});
+
+test('an exempt account with a positive balance and the free times used up gets the same texts, and the balance is not mentioned', async () => {
+  const h = await ready({ wallet: exemptWallet(230), session: EXEMPT_USED_UP() });
+  h.revision.openEdit();
+  h.revision.editDraft.value = '走後門';
+  assert.equal(h.revision.editCostLine.value, '這次編輯不消耗遊戲幣。');
+  assert.equal(h.revision.editCanSubmit.value, true);
+  h.revision.closeEdit();
+  h.revision.openRegenerate();
+  assert.equal(h.revision.regenerateCostLine.value, '這次重新生成不消耗遊戲幣。');
+  assert.equal(h.revision.regenerateNote.value, '不消耗遊戲幣');
+});
+
+test('an ordinary account in the same situation (free times used up, zero balance) is still blocked from editing and still sees the price', async () => {
+  const h = await ready({ wallet: { total: 0, exempt: false }, session: USED_UP() });
+  assert.equal(h.wallet.exempt.value, false);
+  assert.equal(h.revision.regenerateNote.value, '30 幣');
+  assert.equal(h.revision.editNote.value, '30 幣');
+  h.revision.openEdit();
+  h.revision.editDraft.value = '走後門';
+  assert.equal(h.revision.editInsufficient.value, true);
+  assert.equal(h.revision.editCanSubmit.value, false);
+  assert.ok(h.revision.editCostLine.value.includes('遊戲幣不足') && h.revision.editCostLine.value.includes('簽到'));
+  h.revision.closeEdit();
+  h.revision.openRegenerate();
+  assert.equal(h.revision.regenerateCostLine.value, '這次重新生成會消耗 30 遊戲幣（目前餘額 0 幣）。');
+  assert.ok(h.wallet.lowBalanceText.value.includes('每一輪需要 30 幣'));
+});
+
+test('a wallet without the flag is treated as an ordinary account, and a wallet that cannot be read never blocks the edit on the client', async () => {
+  const oldWallet = await ready({ wallet: { total: 0 }, session: USED_UP() });              // 沒有 coin_exempt 欄位的舊版回應
+  assert.equal(oldWallet.wallet.exempt.value, false);
+  oldWallet.revision.openEdit();
+  oldWallet.revision.editDraft.value = '走後門';
+  assert.equal(oldWallet.revision.editInsufficient.value, true);                             // 一般玩家的既有行為不變
+  // 管理員的錢包第一次讀取就失敗：不知道是否豁免（視為一般玩家的文字），但餘額與幣價都不知道，前端不擋，由伺服器決定
+  const failed = createHarness({ turns: threeTurns(), wallet: exemptWallet(0) });
+  Object.assign(failed.server.session, { completed_turns: 3 }, EXEMPT_USED_UP());
+  failed.server.walletFailure = failureInfo(0, 'network', { kind: 'network' });
+  await failed.build();
+  await failed.session.load();
+  assert.equal(failed.wallet.exempt.value, false);
+  assert.equal(failed.wallet.balance.value, null);
+  failed.revision.openEdit();
+  failed.revision.editDraft.value = '走後門';
+  assert.equal(failed.revision.editInsufficient.value, false);
+  assert.equal(failed.revision.editCanSubmit.value, true);
+  assert.ok(!/undefined|null|NaN/.test(failed.revision.editCostLine.value + failed.revision.editNote.value));
+});
+
+test('the exempt texts follow the free count live: the last free edit of an exempt account turns both buttons to "does not consume game coins", and the next one is sent', async () => {
+  const h = await ready({ wallet: exemptWallet(0), session: { last_turn: lastTurnOf({ free_left: 1 }) } });
+  const plan = revisionPlan({ kind: 'edit', freeLeft: 0, coins: 0, action: '改成走後門' });
+  plan.apply = (server) => {
+    const stored = server.turns.find((item) => item.seq === 3);
+    stored.story = NEW_STORY;
+    stored.action = '改成走後門';
+    stored.revision = 2;
+    server.session.last_turn = Object.assign({}, server.session.last_turn, { revision: 2, free_left: 0, regenerate_cost: 0, edit_cost: 0 });   // 管理員用完免費次數後，伺服器的費用仍是 0
+  };
+  await edit(h, plan);
+  assert.equal(h.revision.regenerateNote.value, '不消耗遊戲幣');
+  assert.equal(h.revision.editNote.value, '不消耗遊戲幣');
+  assert.equal(h.wallet.balance.value, 0);
+  assert.deepEqual(h.toasts, []);
+  await edit(h, revisionPlan({ kind: 'edit', revision: 2, freeLeft: 0, coins: 0, action: '再改一次' }), '再改一次');   // 免費次數已用完、餘額 0：仍然送出
+  assert.equal(h.calls.streams.length, 2);
+  assert.deepEqual(h.calls.streams[1].body, { expected_revision: 2, action: '再改一次' });
+});
+
 test('the edit action is trimmed before it is sent and shown as plain text: markup in it is never interpreted', async () => {
   const h = await ready();
   await edit(h, revisionPlan({ kind: 'edit', action: '<b>改</b>' }), '  <b>改</b>  ');

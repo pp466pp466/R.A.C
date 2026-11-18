@@ -72,6 +72,17 @@ test('wallet and notebook are plain reads', async () => {
   ]);
 });
 
+test('the wallet response is returned untouched, so the coin_exempt flag and the zero price of an exempt account reach the page as the server sent them', async () => {
+  const exempt = { ok: true, wallet: { free_balance: 0, paid_balance: 0, total: 0, free_cap: 1000, turn_cost: { standard: 0 }, coin_exempt: true, checkin: { claimable: true } } };
+  assert.deepEqual(plain(await sandboxWith(ok(exempt)).api.wallet()), exempt);
+  const ordinary = { ok: true, wallet: { total: 230, turn_cost: { standard: 30 }, coin_exempt: false, checkin: { claimable: true } } };
+  assert.deepEqual(plain(await sandboxWith(ok(ordinary)).api.wallet()), ordinary);
+  const sent = sandboxWith(ok(exempt));
+  await sent.api.wallet({ coin_exempt: true, admin: true });                                  // 呼叫端的選項不會變成請求的內容：豁免只由伺服器決定
+  assert.deepEqual(sent.requests.map((r) => [r.method, r.url, r.data, r.params]), [['get', '/api/wallet', undefined, undefined]]);
+  assert.deepEqual(Object.keys(sent.requests[0]).sort(), ['method', 'signal', 'url']);
+});
+
 test('checkin sends confirm_overflow only as a real boolean, true only when the caller confirmed', async () => {
   const { api, requests } = sandboxWith(ok({ ok: true }));
   await api.checkin();
