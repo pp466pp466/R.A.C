@@ -56,7 +56,7 @@
 
 ### D4：簽到狀態機抽成共用模組，失敗訊息沿用 `Game.describeCheckinFailure`
 
-新增 `ui/wallet-checkin.js`：`createCheckin({ Vue, api, store, describeFailure, hooks })`，持有 `busy`、`preview`、`message`、`finished`，提供 `claim()`、`confirmOverflow()`、`cancelOverflow()`，行為與 `game-wallet.js` 現行的一致（重複點擊只一個請求、`finally` 恢復、取消不送請求、領取才帶 `confirm_overflow`）。與介面相關的部分用 `hooks`（`onOverflow`、`onAlready`、`onError`、`onSuccess`、`onCanceled`，另有 `onFailure`、`onLogin`）交給呼叫端：進行頁把它們接到既有的簽到 Modal，錢包頁接到頁內的簽到卡。實作（批 ②）時的細節：`onOverflow`／`onAlready`／`onError` 在預覽與說明寫入**之前**呼叫（進行頁在這裡打開 Modal，且 Modal 已開著時沿用）；`onSuccess(current)` 與 `onCanceled(text)` 的回傳值讓頁面取代預設說明（字串）或表示已自行呈現（`true`）；`onFailure(info)` 收分類前的原始失敗（遊戲頁用來辨識「被鎖定」）；模組另提供 `reset()`（重新打開簽到畫面時依錢包重判 `finished`）與 `dropPreview()`（呼叫端的視窗被 Esc 或遮罩關掉時清預覽）。模組只由需要簽到的頁面載入（進行頁、錢包頁），不放進 `base.html`。
+新增 `ui/wallet-checkin.js`：`createCheckin({ Vue, api, store, describeFailure, hooks })`，持有 `busy`、`preview`、`message`、`finished`，提供 `claim()`、`confirmOverflow()`、`cancelOverflow()`，行為與 `game-wallet.js` 現行的一致（重複點擊只一個請求、`finally` 恢復、取消不送請求、領取才帶 `confirm_overflow`）。與介面相關的部分用 `hooks`（`onOverflow`、`onAlready`、`onError`、`onSuccess`、`onCanceled`，另有 `onFailure`、`onLogin`）交給呼叫端：進行頁把它們接到既有的簽到 Modal，錢包頁接到頁內的簽到卡。實作（批 ②）時的細節：`onOverflow`／`onAlready`／`onError` 在預覽與說明寫入**之前**呼叫（進行頁在這裡打開 Modal，且 Modal 已開著時沿用）；`onSuccess(current)` 與 `onCanceled(text)` 的回傳值讓頁面取代預設說明（字串）或表示已自行呈現（`true`）；`onFailure(info)` 收分類前的原始失敗（遊戲頁用來辨識「被鎖定」）；模組另提供 `reset(options)`（重新打開簽到畫面時依錢包重判 `finished`；批 ③ 加了選用的 `{ authoritative: true }`：呼叫端剛從伺服器重讀了錢包（錢包頁倒數歸零、重試），那份快照比「這個頁面看過今天簽過了」的記憶新，所以先忘掉記憶，新的一天才能再簽到；不帶參數時行為不變）與 `dropPreview()`（呼叫端的視窗被 Esc 或遮罩關掉時清預覽）。模組只由需要簽到的頁面載入（進行頁、錢包頁），不放進 `base.html`。
 
 - **為什麼不把 `describeCheckinFailure` 一起搬走**：它依賴 `game-state.js` 內部的 `fromInfo`、`transportFailure`、`gateFailure` 與 `game-labels.js` 的文字；搬動會牽動整個失敗分類，風險與範圍遠大於這個 change。改為由呼叫端注入 `describeFailure`，錢包頁載入 `game-labels.js` 與 `game-state.js`（兩者都是不碰 DOM 的純模組）只為了取得 `Game.describeCheckinFailure` 與台灣時間的格式化函式。這個耦合寫進程式註解與測試，日後若要拆除，是另一個重構 change。
 - **備選：錢包頁直接用 `Game.createWallet`**。→ 要連 `game-api.js`（整套遊戲 API）一起載入，也把 Modal 狀態拖進一個沒有 Modal 的頁面，並且會動到「寫入呼叫恰好四個」的守門。否決。
@@ -84,7 +84,7 @@
 
 ### D8：倒數以時間相減計算，歸零只重讀一次並節流
 
-剩餘時間 = `next_reset_at` − 目前時間（每秒由計時器觸發重新計算，而不是每秒減一，所以背景分頁被節流後恢復仍正確）。歸零時呼叫 `store.load()` 一次；若重讀後 `claimable` 仍為 `false` 且 `next_reset_at` 仍在過去（本機時鐘比伺服器快），60 秒內不再重讀。計時器在離開簽到卡的檢視、頁面卸載時清除。
+剩餘時間 = `next_reset_at` − 目前時間（每秒由計時器觸發重新計算，而不是每秒減一，所以背景分頁被節流後恢復仍正確）。歸零時呼叫 `store.load()` 一次；若重讀後 `claimable` 仍為 `false` 且 `next_reset_at` 仍在過去（本機時鐘比伺服器快），60 秒內不再重讀。計時器在離開簽到卡的檢視、頁面卸載時清除。實作（批 ③）：計時器只在「主檢視、免費分頁、今天已簽到、下次時間可用」時啟動，由預設時機（非同步）的 `watch` 啟停——不用同步時機，因為狀態庫的 `apply` 是一欄一欄寫入的，同步觸發會在寫到一半（已簽到但下次時間還是舊的）誤判歸零；重讀後以 `reset({ authoritative: true })` 讓簽到狀態機採用新快照（見 D4）。
 
 - **為什麼不信任本機時鐘就多問一次伺服器**：簽到的「今天」由伺服器的台北時間日界決定，本機時鐘只能用來顯示。節流避免時鐘錯誤時無限重讀。
 

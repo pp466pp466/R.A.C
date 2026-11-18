@@ -1,0 +1,109 @@
+{% extends "base.html" %}
+{# 錢包頁 `/wallet`：Vue 3 全域變數模式。分頁、檢視（「紀錄」）、簽到的預覽與按鈕的顯示與禁用完全由 Vue 的響應式變數接管（v-if／v-show），
+   所有文字以 {{ }} 插值顯示（純文字），不解析任何標記語言，也不使用 Bootstrap 的 JavaScript 外掛。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。
+   餘額、帳本與簽到狀態都不在初始狀態裡（初始狀態只有會員等級），由前端呼叫既有的錢包 API 取得。
+
+   與 wallet-hub.js 的約定（樣板用到的每個名稱，wallet-hub.js 的 setup() 都要回傳；tests/js/wallet-hub-template.test.js 兩邊對照）：
+   狀態：memberText（會員等級的文字）、restriction（被鎖定或暫停發佈時的申訴捷徑種類）、balance（頂部餘額：amountText、splitText、exempt、failed、loading、aria）、
+        view（'main' 或 'records'）、tab（'free' 或 'topup'）、checkinCard（簽到卡：mode、headline）、checkinBusy、checkinMessage、checkinFailed、
+        countdownText（倒數的 時:分:秒）、signupGift（註冊贈幣卡的說明）、capNote（免費幣上限說明）。
+   方法：retryWallet、openRecords、closeRecords、selectTab、onTabKeydown、claimCheckin、confirmOverflow、cancelOverflow。 #}
+{% block title %}錢包{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/wallet.css') }}">
+{% endblock %}
+{% block content %}
+<div id="wallet-app" class="wh-shell" v-cloak>
+{% raw %}
+  <header class="wh-topbar">
+    <h1 class="wh-topbar__title">錢包</h1>
+    <span class="wh-chip" :title="'會員等級：' + memberText">{{ memberText }}會員</span>
+    <a class="wh-topbar__link" href="/game">冒險</a>
+    <a class="wh-topbar__link" href="/cs">客服</a>
+    <a class="wh-topbar__link" href="/scripts">創作</a>
+    <a class="wh-topbar__link" href="/account">帳號</a>
+  </header>
+
+  <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
+
+  <main class="wh-main">
+    <!-- ===== 頂部餘額：合計、付費與贈送、紀錄入口 ===== -->
+    <section class="wh-balance" aria-label="遊戲幣餘額">
+      <p class="wh-balance__label">目前餘額</p>
+      <p class="wh-balance__amount" role="status" :aria-label="balance.aria">
+        <strong class="wh-balance__number">{{ balance.amountText }}</strong>
+        <span class="wh-balance__unit">遊戲幣</span>
+        <span v-if="balance.exempt" class="wh-badge">不消耗</span>
+      </p>
+      <p v-if="balance.splitText" class="wh-balance__split">{{ balance.splitText }}</p>
+      <p v-if="balance.failed" class="wh-error" role="alert">
+        無法讀取餘額，請稍後再試。
+        <button type="button" class="ui-btn" :disabled="balance.loading" @click="retryWallet">重試</button>
+      </p>
+      <p v-if="view === 'main'" class="wh-balance__actions">
+        <button type="button" class="ui-btn" @click="openRecords">紀錄</button>
+      </p>
+    </section>
+
+    <!-- ===== 分頁列（進入「紀錄」時隱藏）===== -->
+    <div v-if="view === 'main'" class="wh-tabs" role="tablist" aria-label="錢包分頁" @keydown="onTabKeydown">
+      <button type="button" class="wh-tab" role="tab" id="wh-tab-free" aria-controls="wh-panel-free"
+              :class="{ 'wh-tab--active': tab === 'free' }" :aria-selected="tab === 'free' ? 'true' : 'false'" :tabindex="tab === 'free' ? 0 : -1" @click="selectTab('free')">免費</button>
+      <button type="button" class="wh-tab" role="tab" id="wh-tab-topup" aria-controls="wh-panel-topup"
+              :class="{ 'wh-tab--active': tab === 'topup' }" :aria-selected="tab === 'topup' ? 'true' : 'false'" :tabindex="tab === 'topup' ? 0 : -1" @click="selectTab('topup')">儲值</button>
+    </div>
+
+    <!-- ===== 免費：每日簽到與註冊贈幣 ===== -->
+    <section v-if="view === 'main'" v-show="tab === 'free'" class="wh-panel" id="wh-panel-free" role="tabpanel" aria-labelledby="wh-tab-free">
+      <div class="wh-cards">
+        <article class="wh-card" aria-labelledby="wh-checkin-title">
+          <h2 class="wh-card__title" id="wh-checkin-title">每日簽到</h2>
+          <p class="wh-card__text">{{ checkinCard.headline }}</p>
+          <p v-if="checkinCard.mode === 'done' && countdownText" class="wh-countdown" role="timer">
+            距離下次簽到 <strong class="wh-countdown__value">{{ countdownText }}</strong>
+          </p>
+          <p v-if="checkinMessage" class="wh-card__note" :class="{ 'wh-card__note--error': checkinFailed }" :role="checkinFailed ? 'alert' : 'status'">{{ checkinMessage }}</p>
+          <p v-if="checkinCard.mode === 'claimable'" class="wh-card__actions">
+            <button type="button" class="ui-btn ui-btn--primary" :disabled="checkinBusy" :aria-busy="checkinBusy ? 'true' : 'false'" @click="claimCheckin">{{ checkinBusy ? '處理中…' : '領取' }}</button>
+          </p>
+          <p v-if="checkinCard.mode === 'preview'" class="wh-card__actions">
+            <button type="button" class="ui-btn" :disabled="checkinBusy" @click="cancelOverflow">取消</button>
+            <button type="button" class="ui-btn ui-btn--primary" :disabled="checkinBusy" :aria-busy="checkinBusy ? 'true' : 'false'" @click="confirmOverflow">{{ checkinBusy ? '處理中…' : '領取' }}</button>
+          </p>
+        </article>
+
+        <article class="wh-card" aria-labelledby="wh-signup-title">
+          <h2 class="wh-card__title" id="wh-signup-title">註冊贈幣</h2>
+          <p v-if="signupGift" class="wh-card__text">{{ signupGift }}</p>
+        </article>
+      </div>
+      <p v-if="capNote" class="wh-hint">{{ capNote }}</p>
+    </section>
+
+    <!-- ===== 儲值 ===== -->
+    <section v-if="view === 'main'" v-show="tab === 'topup'" class="wh-panel" id="wh-panel-topup" role="tabpanel" aria-labelledby="wh-tab-topup">
+      <p class="wh-hint">儲值功能尚未開放。</p>
+    </section>
+
+    <!-- ===== 紀錄（頁內檢視，沒有獨立網址）===== -->
+    <section v-if="view === 'records'" class="wh-panel" id="wh-panel-records" aria-labelledby="wh-records-title">
+      <p class="wh-back"><button type="button" class="ui-btn" @click="closeRecords">返回</button></p>
+      <h2 class="wh-card__title" id="wh-records-title">遊戲幣紀錄</h2>
+      <p class="wh-hint">紀錄清單準備中。</p>
+    </section>
+  </main>
+
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
+</div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取。只有會員等級，沒有餘額、帳本、email、生日與年齡 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-state.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/ui/wallet-checkin.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/wallet/wallet-hub-state.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/wallet/wallet-hub.js') }}"></script>
+{% endblock %}

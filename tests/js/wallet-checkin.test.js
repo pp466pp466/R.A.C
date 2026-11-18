@@ -225,6 +225,41 @@ test('after a successful check-in this page does not offer it again, even if the
   assert.equal(checkin.finished.value, true);
 });
 
+test('an authoritative reset forgets "already claimed today" so a fresh server snapshot of a new day offers the check-in again (wallet page countdown)', async () => {
+  const { checkin, store } = setup({
+    wallet: [{ ok: true, wallet: WALLET(210, { claimable: false }) }, { ok: true, wallet: WALLET(210, { claimable: true }) }],
+    checkin: [{ ok: true, wallet: WALLET(210, { claimable: false }) }],
+  });
+  await store.load();
+  await checkin.claim();
+  assert.equal(checkin.finished.value, true);
+  await store.load({ force: true });                                  // 倒數歸零後重讀：伺服器說新的一天可以簽到了
+  checkin.reset();                                                    // 沒帶參數：仍記得這個頁面看過「今天簽過了」，蓋過新快照
+  assert.equal(checkin.finished.value, true);
+  checkin.reset({ authoritative: true });                             // 剛從伺服器重讀的快照比那個記憶新
+  assert.equal(checkin.finished.value, false);
+  assert.equal(checkin.message.value, '');
+  assert.equal(checkin.preview.value, null);
+});
+
+test('an authoritative reset on a snapshot that still says "not claimable" keeps the card finished, and only the boolean true counts as authoritative', async () => {
+  const { checkin, store } = setup({
+    wallet: [{ ok: true, wallet: WALLET(5, { claimable: false }) }],
+    checkin: [rejects(serverFailure(409, 'already_checked_in'))],
+  });
+  await store.load();
+  await checkin.claim();
+  checkin.reset({ authoritative: true });
+  assert.equal(checkin.finished.value, true);                         // 伺服器仍說今天不能簽
+  const stale = setup({ wallet: [{ ok: true, wallet: WALLET(5, { claimable: true }) }], checkin: [rejects(serverFailure(409, 'already_checked_in'))] });
+  await stale.store.load();
+  await stale.checkin.claim();
+  for (const value of [undefined, null, 1, 'true', {}, []]) {
+    stale.checkin.reset(value === undefined ? undefined : { authoritative: value });
+    assert.equal(stale.checkin.finished.value, true, String(value)); // 只有布林 true 才算「剛從伺服器重讀」
+  }
+});
+
 test('reset reads the wallet: claimable false means finished, claimable true or unknown means not finished', async () => {
   const claimed = setup({ wallet: [{ ok: true, wallet: WALLET(5, { claimable: false }) }] });
   await claimed.store.load();

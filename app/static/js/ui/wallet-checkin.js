@@ -24,7 +24,8 @@
  *   claim()           「每日簽到」；進行中或等待預覽選擇時不送請求，回傳 Promise<boolean>（成功為 true；失敗與未送出為 false）
  *   confirmOverflow() 預覽的「領取」：這時才帶 `confirm_overflow: true`；沒有預覽時什麼都不做（不會未經確認就以確認的方式簽到）
  *   cancelOverflow()  預覽的「取消」：不呼叫任何請求，也不消耗當日簽到
- *   reset()           清掉預覽與說明，並依錢包重新判斷 `finished`（呼叫端在重新打開簽到畫面時使用）
+ *   reset(options)    清掉預覽與說明，並依錢包重新判斷 `finished`（呼叫端在重新打開簽到畫面時使用）。`options.authoritative === true`：呼叫端剛剛才從伺服器重讀了錢包
+ *                     （錢包頁的倒數歸零、重試），這份快照一定比「這個頁面看過今天簽過了」更新，所以先忘掉那個記憶（新的一天又可以簽到）；其餘情況不帶參數
  *   dropPreview()     只清掉預覽（呼叫端的視窗被 Esc 或遮罩關掉時使用）
  *
  * 規則：
@@ -76,7 +77,8 @@
     /* 錢包說今天還能不能簽到（`checkin.claimable`）；不知道時為 null */
     function claimable() { return claimedToday ? false : store.state.checkin.claimable; }
 
-    function reset() {
+    function reset(options) {
+      if (isObject(options) && options.authoritative === true) { claimedToday = false; }
       preview.value = null;
       message.value = '';
       finished.value = claimable() === false;                       // 錢包已說今天簽過了就不再提供簽到按鈕

@@ -65,6 +65,7 @@ REQUIRED_TO_BE_FOUND = {
     ("POST", "/api/account/cancel-deletion"),
     ("GET", "/api/sessions/catalog"), ("GET", "/api/sessions"),     # RC-3a 的兩個入口清單：不寫進允許清單，三種受限狀態都必須被擋
     ("GET", "/game"), ("GET", "/game/<session_public_id>"), ("GET", "/game/start/<version_public_id>"),     # RC-3a 的三個頁面：同樣不在允許清單內
+    ("GET", "/wallet"),                                                  # wallet-hub 的錢包頁：不在允許清單內，三種受限狀態都必須導向各自的頁面
     # rpg-turn-revision 的兩個修訂串流端點：同樣不寫進允許清單（掃描本來就會涵蓋新路由，這裡讓它們被明確點名）
     ("POST", "/api/game/sessions/<session_id>/turns/<client_msg_id>/regenerate/stream"),
     ("POST", "/api/game/sessions/<session_id>/turns/<client_msg_id>/edit/stream"),
