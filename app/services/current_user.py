@@ -90,6 +90,12 @@ class CurrentUser:
         )
 
     @property
+    def is_active_admin(self) -> bool:
+        """角色為 admin 且帳號啟用中。後台權限（`AccessPolicy.is_admin`）與 RPG 遊戲幣豁免共用這個唯一的定義；
+        只看伺服器端的使用者紀錄，會員等級與任何請求內容都不參與。"""
+        return self.role == ROLE_ADMIN and self.status == STATUS_ACTIVE
+
+    @property
     def restriction(self) -> str | None:
         """目前的受限登入狀態，沒有受限時為 None。管理員不會被鎖定，也不會是待確認年齡（只是未確認前不能用 AI 功能）。"""
         if self.role != ROLE_ADMIN:

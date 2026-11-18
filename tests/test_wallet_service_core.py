@@ -189,6 +189,21 @@ def test_the_view_reports_the_free_cap_the_price_and_the_checkin_preview(wallet_
     assert payload["checkin"]["claimable"] is True and payload["checkin"]["grant"] == 200
     assert (payload["checkin"]["would_gain"], payload["checkin"]["would_lose"]) == (200, 0)
     assert payload["checkin"]["next_reset_at"].endswith("Z") and "id" not in payload
+    assert payload["coin_exempt"] is False
+
+
+def test_the_view_of_an_active_admin_is_exempt_with_a_free_price_and_unchanged_balances(wallet_kit):
+    admin = wallet_kit.admin()
+    payload = wallet_kit.service.view(admin).to_dict()
+    assert payload["coin_exempt"] is True and payload["turn_cost"] == {"standard": 0}
+    assert (payload["free_balance"], payload["paid_balance"]) == (0, 0)             # 查詢不會發放任何幣
+
+
+def test_the_view_of_a_suspended_admin_is_not_exempt(wallet_kit):
+    import dataclasses
+    admin = dataclasses.replace(wallet_kit.admin(), status="suspended")
+    payload = wallet_kit.service.view(admin).to_dict()
+    assert payload["coin_exempt"] is False and payload["turn_cost"] == {"standard": 30}
 
 
 def test_seq_equals_the_wallet_version_and_stays_gapless_across_operation_kinds(wallet_kit):

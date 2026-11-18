@@ -84,7 +84,7 @@ class AccessPolicy:
 
     def is_admin(self, user: CurrentUser) -> bool:
         """只有角色為 admin 且帳號啟用中才是管理員。"""
-        return user.role == ROLE_ADMIN and user.status == STATUS_ACTIVE
+        return user.is_active_admin
 
     def require_admin(self, user: CurrentUser) -> None:
         """所有後台功能的唯一入口：不是「角色為 `admin` 且帳號為 `active`」就以 `NotFound`（404）拒絕。

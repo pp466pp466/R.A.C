@@ -353,3 +353,15 @@ def test_a_refusal_logs_one_event_with_only_the_internal_id_and_a_fixed_reason(l
 def test_the_age_gate_does_not_apply_to_the_admin_check():
     """後台不呼叫模型：沒有完成年齡確認的管理員仍可使用後台（年齡閘門只擋會呼叫模型的功能）。"""
     POLICY.require_admin(member(role=ROLE_ADMIN, age=None))
+
+
+# ---- 啟用中的管理員：後台權限與遊戲幣豁免共用同一個定義（admin-unlimited-coins） -----------------
+
+@pytest.mark.parametrize("role", [ROLE_USER, ROLE_ADMIN])
+@pytest.mark.parametrize("status", USER_STATUSES)
+@pytest.mark.parametrize("tier", MEMBER_TIERS)
+def test_is_active_admin_is_only_true_for_an_active_admin_whatever_the_tier(role, status, tier):
+    user = member(role=role, status=status, member_tier=tier)
+    expected = role == ROLE_ADMIN and status == STATUS_ACTIVE
+    assert user.is_active_admin is expected
+    assert POLICY.is_admin(user) is expected          # 兩邊不能分歧：政策委派給同一個屬性

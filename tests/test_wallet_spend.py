@@ -403,3 +403,90 @@ def test_the_administrators_read_does_not_release_anything(wallet_kit):
     wallet_kit.clock.advance(seconds=500)
     assert wallet_kit.balances(player) == (170, 0)
     assert wallet_kit.entry(player, "turn:a").resolution is None
+
+
+# ---- 管理員不扣幣（admin-unlimited-coins：game-wallet「管理員帳號的預扣不扣幣」「豁免只依伺服器端的角色與帳號狀態判斷」） -------------
+
+
+def test_an_admin_with_an_empty_wallet_can_hold_and_gets_a_zero_ledger_row(wallet_kit):
+    admin = wallet_kit.admin()
+    hold = wallet_kit.service.hold(admin, key="turn:a", session_public_id="11111111-1111-4111-8111-111111111111")
+    assert (hold.cost, hold.free_taken, hold.paid_taken, hold.existed) == (0, 0, 0, False)
+    assert wallet_kit.balances(admin) == (0, 0)                       # 管理員沒有贈幣，餘額本來就是 0
+    entry = wallet_kit.entry(admin, "turn:a")
+    assert (entry.kind, entry.free_delta, entry.paid_delta, entry.free_after, entry.paid_after) == ("turn_hold", 0, 0, 0, 0)
+    assert entry.session_public_id == "11111111-1111-4111-8111-111111111111"
+    assert wallet_kit.ledger_matches_balances(admin)
+
+
+def test_an_admin_with_a_balance_is_not_charged_and_settling_changes_nothing(wallet_kit):
+    admin = wallet_kit.admin()
+    wallet_kit.service.adjust(admin.id, bucket="free", delta=100)
+    wallet_kit.service.adjust(admin.id, bucket="paid", delta=50)
+    wallet_kit.service.hold(admin, key="turn:a")
+    wallet_kit.service.settle(admin, "turn:a")
+    assert wallet_kit.balances(admin) == (100, 50)
+    assert wallet_kit.entry(admin, "turn:a").resolution == "settled"
+    assert wallet_kit.ledger_matches_balances(admin)
+
+
+def test_an_admin_hold_is_idempotent(wallet_kit):
+    admin = wallet_kit.admin()
+    first = wallet_kit.service.hold(admin, key="turn:a")
+    again = wallet_kit.service.hold(admin, key="turn:a")
+    assert (first.existed, again.existed, again.cost) == (False, True, 0)
+    assert [e.idempotency_key for e in wallet_kit.all_entries(admin)] == ["turn:a"]
+
+
+def test_an_admin_hold_follows_the_same_settle_and_refund_exclusion(wallet_kit):
+    admin = wallet_kit.admin()
+    wallet_kit.service.hold(admin, key="turn:a")
+    wallet_kit.service.refund(admin, "turn:a")
+    with pytest.raises(HoldAlreadyRefunded):
+        wallet_kit.service.settle(admin, "turn:a")
+    assert wallet_kit.balances(admin) == (0, 0)
+    assert wallet_kit.entry(admin, "refund:turn:a") is not None       # 退回列也是金額 0
+    wallet_kit.service.hold(admin, key="turn:b")
+    wallet_kit.service.settle(admin, "turn:b")
+    with pytest.raises(HoldAlreadySettled):
+        wallet_kit.service.refund(admin, "turn:b")
+
+
+def test_a_stale_admin_hold_is_released_and_the_balance_stays_the_same(wallet_kit):
+    admin = wallet_kit.admin()
+    wallet_kit.service.adjust(admin.id, bucket="free", delta=40)
+    wallet_kit.service.hold(admin, key="turn:a")
+    wallet_kit.clock.advance(seconds=181)
+    assert wallet_kit.service.view(admin).free_balance == 40
+    assert wallet_kit.entry(admin, "turn:a").resolution == "refunded"
+
+
+def test_an_admin_does_not_get_a_signup_grant_by_holding(wallet_kit):
+    admin = wallet_kit.admin()
+    wallet_kit.service.hold(admin, key="turn:a")
+    assert wallet_kit.entry(admin, f"signup:{admin.id}") is None
+
+
+def test_an_ordinary_player_with_no_coins_is_still_refused_whatever_the_tier(wallet_kit):
+    for n, tier in ((1, "free"), (2, "plus"), (3, "vip")):
+        player = wallet_kit.player(n, member_tier=tier)
+        fund(wallet_kit, player, 0, 0)
+        with pytest.raises(InsufficientCoins):
+            wallet_kit.service.hold(player, key=f"turn:{n}")
+        assert wallet_kit.entry(player, f"turn:{n}") is None
+
+
+def test_an_admin_who_is_not_active_is_not_exempt(wallet_kit):
+    import dataclasses
+    from app.models.user import STATUS_DELETION_PENDING, STATUS_SUSPENDED
+    admin = wallet_kit.admin()
+    for status in (STATUS_SUSPENDED, STATUS_DELETION_PENDING):
+        inactive = dataclasses.replace(admin, status=status)
+        with pytest.raises(InsufficientCoins):
+            wallet_kit.service.hold(inactive, key=f"turn:{status}")
+
+
+def test_the_price_setting_does_not_change_what_an_admin_pays(wallet_kit):
+    admin = wallet_kit.admin()
+    wallet_kit.set_limit("coin.turn_cost.standard", 999)
+    assert wallet_kit.service.hold(admin, key="turn:a").cost == 0

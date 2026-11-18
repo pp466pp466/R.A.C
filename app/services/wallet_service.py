@@ -76,6 +76,7 @@ class WalletView:
     free_cap: int
     turn_cost: dict[str, int]
     checkin: CheckinPreview
+    coin_exempt: bool = False           # 管理員（角色為 admin 且啟用中）不消耗遊戲幣：幣價為 0，畫面據此顯示「不消耗遊戲幣」
 
     @property
     def total(self) -> int:
@@ -89,6 +90,7 @@ class WalletView:
             "total": self.total,
             "free_cap": self.free_cap,
             "turn_cost": dict(self.turn_cost),
+            "coin_exempt": self.coin_exempt,
             "checkin": {
                 "claimable": self.checkin.claimable,
                 "grant": self.checkin.grant,
@@ -210,7 +212,11 @@ class WalletService:
 
     def hold(self, current: CurrentUser, *, key: str, session_public_id: str | None = None, model_key: str = DEFAULT_MODEL_KEY) -> Hold:
         """以冪等鍵預扣一輪的幣價（先扣免費、不足的部分扣付費）。同一個鍵重送回傳既有的預扣（`existed=True`）。
-        合計餘額不足拋出 `InsufficientCoins`，不改變任何東西。"""
+        合計餘額不足拋出 `InsufficientCoins`，不改變任何東西。
+
+        **管理員（角色為 admin 且帳號啟用中，見 `CurrentUser.is_active_admin`）不扣幣**：不檢查餘額、不改變餘額，
+        仍寫入一筆兩個增減量都是 0 的 `turn_hold` 列，回傳的 `cost` 為 0；之後的結算、退回與逾時釋放與一般預扣相同（金額皆為 0）。
+        豁免只看伺服器端的使用者紀錄，不由請求內容決定。"""
         if not isinstance(key, str) or not 1 <= len(key) <= HOLD_KEY_MAX:
             raise ValidationError(fields={"key": f"冪等鍵必須是 1 至 {HOLD_KEY_MAX} 字的文字。"})
         if session_public_id is not None and (not isinstance(session_public_id, str) or len(session_public_id) > 36):
@@ -225,8 +231,14 @@ class WalletService:
         existing = self._wallets.entry(current.id, key)
         if existing is not None:
             return self._existing_hold(existing, key)
+        exempt = current.is_active_admin
 
         def plan(state: WalletState) -> _Plan:
+            if exempt:                                          # 管理員：不檢查餘額、不扣款，帳本仍寫一筆金額 0 的預扣（結算、退回、逾時釋放照舊）
+                return _Plan(
+                    state.free_balance, state.paid_balance,
+                    EntryDraft(ENTRY_TURN_HOLD, key, 0, 0, session_public_id=session_public_id),
+                )
             total = state.free_balance + state.paid_balance
             if total < cost:
                 wallet_events.log_insufficient(user_id=current.id, balance=total, coins=cost)
@@ -241,8 +253,10 @@ class WalletService:
         result = self._transact(current.id, key, plan, now)
         if result.status == DUPLICATE:
             return self._existing_hold(result.entry, key)
-        wallet_events.log_hold(user_id=current.id, coins=cost, model_key=model_key)
-        return Hold(key, cost, -result.entry.free_delta, -result.entry.paid_delta, existed=False)
+        wallet_events.log_hold(user_id=current.id, coins=-(result.entry.free_delta + result.entry.paid_delta), model_key=model_key)
+        return Hold(
+            key, -(result.entry.free_delta + result.entry.paid_delta), -result.entry.free_delta, -result.entry.paid_delta, existed=False,
+        )
 
     def settle(self, current: CurrentUser, key: str) -> None:
         """確認扣款：餘額不再變動，預扣標記為已結算。重送成功；已退回的預扣拋出 `HoldAlreadyRefunded`；
@@ -385,6 +399,7 @@ class WalletService:
             free_balance=state.free_balance,
             paid_balance=state.paid_balance,
             free_cap=cap,
-            turn_cost={model: self._limits.coin_turn_cost(model) for model in WALLET_MODEL_KEYS},
+            turn_cost={model: 0 if current.is_active_admin else self._limits.coin_turn_cost(model) for model in WALLET_MODEL_KEYS},
             checkin=CheckinPreview(claimable, grant, gain, lost, end),
+            coin_exempt=current.is_active_admin,
         )

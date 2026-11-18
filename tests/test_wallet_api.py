@@ -71,7 +71,7 @@ def seed_free(app, n: int, amount: int, client=None):
 def test_a_new_player_sees_200_free_coins_nothing_paid_and_a_claimable_checkin(app):
     body = wallet(player(app).get("/api/wallet"))
     assert (body["free_balance"], body["paid_balance"], body["total"]) == (200, 0, 200)
-    assert body["free_cap"] == 1000 and body["turn_cost"] == {"standard": 30}
+    assert body["free_cap"] == 1000 and body["turn_cost"] == {"standard": 30} and body["coin_exempt"] is False
     assert body["checkin"]["claimable"] is True and body["checkin"]["grant"] == 200
     assert (body["checkin"]["would_gain"], body["checkin"]["would_lose"]) == (200, 0)
     assert body["checkin"]["next_reset_at"] == "2026-10-27T16:00:00Z"               # 假時鐘是台北 20:00 → 當日 24:00
@@ -96,7 +96,7 @@ def test_the_response_has_no_internal_numbers_or_ledger_details(app):
     client = player(app)
     text = client.get("/api/wallet").get_data(as_text=True)
     body = client.get("/api/wallet").get_json()
-    assert set(body["wallet"]) == {"free_balance", "paid_balance", "total", "free_cap", "turn_cost", "checkin"}
+    assert set(body["wallet"]) == {"free_balance", "paid_balance", "total", "free_cap", "turn_cost", "coin_exempt", "checkin"}
     for forbidden in ("user_id", "\"id\"", "idempotency", "version", "seq", "signup:"):
         assert forbidden not in text
 
@@ -286,3 +286,25 @@ def test_the_only_player_route_that_changes_the_balance_is_the_checkin(app):
 @pytest.mark.parametrize("path", ["/api/wallet/hold", "/api/wallet/spend", "/api/wallet/refund", "/api/wallet/settle", "/api/wallet/adjust"])
 def test_there_is_no_endpoint_to_spend_refund_or_adjust(app, path):
     assert player(app).post(path, json={"amount": 1000}).status_code in (404, 405)
+
+
+# ---- 管理員不扣幣（admin-unlimited-coins：wallet-api「查詢錢包」） ---------------------------------------
+
+
+def test_an_admin_sees_a_free_price_and_the_exempt_flag_and_is_given_no_coins(app):
+    body = wallet(player(app, 2, role="admin").get("/api/wallet"))
+    assert body["coin_exempt"] is True and body["turn_cost"] == {"standard": 0}
+    assert (body["free_balance"], body["paid_balance"], body["total"]) == (0, 0, 0)
+
+
+@pytest.mark.parametrize("tier", ["free", "plus", "vip"])
+def test_a_player_of_any_tier_keeps_the_configured_price_and_is_not_exempt(app, tier):
+    body = wallet(player(app, 3, member_tier=tier).get("/api/wallet"))
+    assert body["coin_exempt"] is False and body["turn_cost"] == {"standard": 30}
+
+
+def test_nothing_in_the_request_can_turn_the_exemption_on(app):
+    client = player(app, 4)
+    response = client.get("/api/wallet?coin_exempt=true&admin=1&role=admin", headers={"X-Coin-Exempt": "1", "X-Role": "admin"})
+    body = wallet(response)
+    assert body["coin_exempt"] is False and body["turn_cost"] == {"standard": 30}

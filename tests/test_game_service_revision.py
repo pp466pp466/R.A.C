@@ -814,3 +814,81 @@ def test_last_turn_for_a_turn_without_a_snapshot_says_no_snapshot(kit):
     kit.sessions.complete_turn(user.id, save.public_id, "old", llm_raw_response="舊劇情。", structured_result=None, now=kit.clock())
     view = kit.game.session_snapshot(user, save.public_id)["last_turn"]
     assert (view["revisable"], view["reason"]) == (False, "no_snapshot")
+
+
+# ---- 管理員不扣幣（admin-unlimited-coins：rpg-turn-revision「重新生成與編輯共用的免費次數與費用」） --------------------------------
+
+
+def ready_admin(kit):
+    """一位餘額為 0 的管理員、一個存檔、一個已完成並有快照的第 1 輪；回傳（管理員, 存檔）。"""
+    admin = kit.player(90, role="admin")
+    save = kit.open_save(admin)
+    make_turn(kit, admin, save)
+    assert kit.total(admin) == 0
+    return admin, save
+
+
+@pytest.mark.parametrize("third", [KIND_REGENERATE, KIND_EDIT])
+def test_an_admin_past_the_free_count_holds_zero_coins_instead_of_being_refused(kit, third):
+    admin, save = ready_admin(kit)
+    for revision in (1, 2):
+        succeed(kit, admin, save, regenerate(kit, admin, save, revision=revision))
+    plan = revise(kit, admin, save, third, revision=3)
+    assert (plan.is_free, plan.cost, plan.attempt) == (False, 0, 4)
+    assert plan.hold_key == hold_key(save.public_id, "m-1", 4)
+    entry = kit.wallets.entry(admin.id, plan.hold_key)
+    assert (entry.kind, entry.free_delta, entry.paid_delta) == ("turn_hold", 0, 0)
+    assert feedback(kit, save)[-1].is_free is False and kit.total(admin) == 0
+    succeed(kit, admin, save, plan)
+    assert turn_row(kit, save).regen_count == 3 and kit.total(admin) == 0             # 計次與一般玩家相同
+
+
+def test_a_failed_admin_revision_past_the_free_count_releases_the_claim_and_the_next_one_gets_a_new_key(kit):
+    admin, save = ready_admin(kit)
+    kit.set_limit("rpg.free_regenerations", 0)
+    first = regenerate(kit, admin, save)
+    fail(kit, admin, save, first)
+    assert turn_row(kit, save).regen_count == 0 and kit.total(admin) == 0
+    second = regenerate(kit, admin, save)
+    assert second.hold_key != first.hold_key and second.attempt == first.attempt + 1 and second.cost == 0
+
+
+def test_an_ordinary_player_with_no_coins_past_the_free_count_is_refused_and_nothing_is_claimed(kit):
+    user, save, _ = ready(kit)
+    for revision in (1, 2):
+        succeed(kit, user, save, regenerate(kit, user, save, revision=revision))
+    kit.wallet.adjust(user.id, bucket="free", delta=-kit.total(user))
+    row = turn_row(kit, save)
+    attempt_before, revision_before = row.attempt, row.revision
+    with pytest.raises(InsufficientCoins):
+        regenerate(kit, user, save, revision=3)
+    row = turn_row(kit, save)
+    assert (row.attempt, row.revision, row.regen_count, row.revising_started_at) == (attempt_before, revision_before, 2, None)
+
+
+def test_last_turn_prices_are_zero_for_an_admin_while_free_left_is_reported_as_it_is(kit):
+    admin, save = ready_admin(kit)
+    view = kit.game.session_snapshot(admin, save.public_id)["last_turn"]
+    assert (view["free_left"], view["regenerate_cost"], view["edit_cost"]) == (2, 0, 0)
+    for revision in (1, 2):
+        succeed(kit, admin, save, regenerate(kit, admin, save, revision=revision))
+    view = kit.game.session_snapshot(admin, save.public_id)["last_turn"]
+    assert (view["free_left"], view["regenerate_cost"], view["edit_cost"]) == (0, 0, 0)
+
+
+def test_last_turn_prices_for_a_vip_player_are_still_the_configured_price(kit):
+    user = kit.player(7, member_tier="vip")
+    save = kit.open_save(user)
+    make_turn(kit, user, save)
+    for revision in (1, 2):
+        succeed(kit, user, save, regenerate(kit, user, save, revision=revision))
+    view = kit.game.session_snapshot(user, save.public_id)["last_turn"]
+    assert (view["free_left"], view["regenerate_cost"], view["edit_cost"]) == (0, 30, 30)
+
+
+def test_an_admin_revision_is_still_refused_when_the_site_token_budget_is_exhausted_and_nothing_is_claimed(kit):
+    admin, save = ready_admin(kit)
+    kit.budget_exhausted = True
+    with pytest.raises(SystemBusy):
+        regenerate(kit, admin, save)
+    assert_untouched(kit, admin, save, 0)

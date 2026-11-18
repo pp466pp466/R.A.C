@@ -411,7 +411,7 @@ class GameService:
         7. 全站每日 token 上限（`system_busy`）；
         8. 同一個 SAVEPOINT：認領（條件式 UPDATE，`attempt` 加 1）→ 接手時把舊的 `pending` 回饋標為 `failed` → 回饋列 `pending` →
            （免費次數用完之後的修訂，重新生成與編輯共用同一組次數）`wallet.hold`，鍵含認領後的 `attempt`；免費者不預扣、不檢查餘額；
-           餘額不足時整段復原，**不留認領、不留回饋列**。
+           餘額不足時整段復原，**不留認領、不留回饋列**。管理員超過免費次數後照樣呼叫 `wallet.hold`，預扣金額為 0、不會餘額不足。
 
         回傳純資料的 `RevisionPlan`：世界狀態是回合前快照，歷史不含目標回合。理由與分類只寫入回饋表，不在計畫裡，也不進模型。"""
         self._policy.require_chat_access(current)
@@ -636,14 +636,14 @@ class GameService:
 
     def _last_turn_view(self, current: CurrentUser, session_public_id: str) -> dict[str, Any] | None:
         """最後一輪的修訂資訊（玩家端 `last_turn`）：與 `begin_revision` 用同一個判斷（`revision_state`），畫面與端點不會各說各話。
-        沒有完成的回合時為 `None`。沒有快照、認領與內部編號。還有免費次數時，重新生成與編輯的幣價都是 0（兩種操作共用次數）。"""
+        沒有完成的回合時為 `None`。沒有快照、認領與內部編號。還有免費次數時，重新生成與編輯的幣價都是 0（兩種操作共用次數）；管理員（`is_active_admin`）永遠是 0。"""
         state = self._sessions.revision_state(
             current.id, session_public_id, now=self._clock(), stale_after_seconds=self._limits.coin_hold_timeout(),
         )
         if state is None or state.client_msg_id is None:
             return None
         free_left = free_left_of(self._limits.rpg_free_regenerations(), state.regen_count or 0)
-        cost = self._limits.coin_turn_cost(DEFAULT_MODEL_KEY)
+        cost = 0 if current.is_active_admin else self._limits.coin_turn_cost(DEFAULT_MODEL_KEY)     # 管理員不消耗遊戲幣：費用為 0
         return {
             "client_msg_id": state.client_msg_id, "seq": state.seq, "revision": state.revision, "revisable": state.revisable,
             "reason": state.reason, "free_left": free_left, "regenerate_cost": 0 if free_left > 0 else cost,

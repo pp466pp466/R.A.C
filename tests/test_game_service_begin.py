@@ -381,3 +381,36 @@ def test_the_started_event_has_only_whitelisted_fields(kit, caplog):
     assert (record.user_id, record.session_id, record.turn_number, record.attempt) == (user.id, save.id, 1, 1)
     text = str(record.__dict__)
     assert ACTION not in text and save.public_id not in text and MARKER not in text and "m-1" not in text
+
+
+# ---- 管理員不扣幣（admin-unlimited-coins：rpg-turn-engine「回合開始時以含嘗試序號的冪等鍵預扣遊戲幣」） ----------------------
+
+def test_an_admin_with_an_empty_wallet_begins_a_turn_and_holds_zero_coins(kit):
+    admin = kit.player(90, role="admin")
+    save = kit.open_save(admin)
+    plan = begin(kit, admin, save).plan
+    assert plan is not None and (plan.cost, plan.attempt) == (0, 1)
+    assert plan.hold_key == hold_key(save.public_id, "m-1", 1)
+    entry = kit.wallets.entry(admin.id, plan.hold_key)
+    assert (entry.kind, entry.free_delta, entry.paid_delta) == ("turn_hold", 0, 0) and kit.total(admin) == 0
+
+
+def test_an_admin_resend_after_an_interruption_uses_a_new_attempt_and_key_and_still_pays_nothing(kit):
+    admin = kit.player(90, role="admin")
+    save = kit.open_save(admin)
+    first = begin(kit, admin, save).plan
+    kit.sessions.interrupt_turn(admin.id, save.public_id, "m-1", partial_response="半截", attempt=1)
+    kit.wallet.refund(admin, first.hold_key)
+    second = begin(kit, admin, save).plan
+    assert (second.attempt, second.cost) == (2, 0) and second.hold_key == hold_key(save.public_id, "m-1", 2) != first.hold_key
+    assert kit.total(admin) == 0
+
+
+def test_the_same_situation_for_an_ordinary_player_is_still_refused(kit):
+    user = kit.player()
+    save = kit.open_save(user)
+    kit.wallet.view(user)
+    kit.wallet.adjust(user.id, bucket="free", delta=-200)
+    with pytest.raises(InsufficientCoins):
+        begin(kit, user, save)
+    assert turn_rows(kit, save) == []
