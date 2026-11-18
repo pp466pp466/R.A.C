@@ -157,6 +157,22 @@ def test_the_terms_no_longer_point_to_a_registration_page(client):
     assert "請到「帳號設定」補填" not in html                                       # 舊的補填說法已不存在
 
 
+def test_the_privacy_policy_no_longer_points_to_a_registration_page_either(client):
+    """沒有 /register：隱私權政策與條款一樣，底部連結是登入頁（登入與註冊合一）與條款。"""
+    html = client.get("/privacy").get_data(as_text=True)
+    assert 'href="/register"' not in html and "前往註冊" not in html
+    assert 'href="/login"' in html and 'href="/terms"' in html
+
+
+def test_the_terms_say_new_accounts_start_in_the_safe_mode(client):
+    """adult-only-signup（design D5）：新帳號的預設內容模式是安全模式；條款不得再說成年者預設一般模式。"""
+    html = client.get("/terms").get_data(as_text=True)
+    section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+    assert "新帳號預設使用安全模式，可以自行調整為一般模式" in section
+    assert "預設使用一般模式" not in section and "成年的使用者預設" not in section
+    assert "成人模式預設關閉" in section                                            # 成人模式的說明不變（留給 safe-mode-toggle）
+
+
 # ---- RPG、劇本與主角（rpg-script-authoring、rpg-character-creation）新增的揭露 ----------------------------------
 
 def test_the_retention_table_lists_the_rpg_rows_with_the_same_periods_as_the_purge_command(client):

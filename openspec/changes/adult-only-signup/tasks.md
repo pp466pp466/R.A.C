@@ -34,6 +34,7 @@
 - [ ] 6.1 `app/services/personal_export_service.py` 的帳號資料加 `adult_declared_at` 與 `adult_declaration_version`（JSON 與 CSV，沒有紀錄時為空值）。驗證：更新 `tests/test_personal_export_service.py`（有聲明、沒有聲明的管理員）通過。
 - [ ] 6.2 `scripts/mint_test_sessions.py` 產生的測試玩家同時寫入聲明的時間與版本；`tests/test_mint_test_sessions.py` 驗證產生的欄位與真實註冊一致。驗證：測試通過。
 - [ ] 6.3 全專案搜尋仍以舊流程假設的程式與腳本：`scripts/verify_container.py`、`scripts/staging_smoke.py`、`loadtest/`、`scripts/acceptance_*.py` 中只帶 `accept_terms` 的發起請求、「13 歲」的假設與 `is_adult` 的呼叫，逐一更新並以對應測試（`tests/test_staging_smoke.py` 等）驗證。驗證：`grep` 沒有殘留，相關測試通過。
+- [ ] 6.4 客服提示詞的平台資料（2026-11-18 第 3 批後由使用者決定併入第 4 批）：`app/services/cs_prompt.py` 的 `_platform_facts` 改為如實描述新流程——登入頁有兩個勾選框（同意服務條款與隱私權政策、我確認已滿最低年齡；第一次登入都必須勾選，回訪不必）、生日與年齡區間「僅供年齡確認」（拿掉「內容分級」）；**刪除**「`{min_use_age} 至 {adult_age - 1} 歲可以使用，但只能使用安全模式…」那一句**（預設 18／18 時它會變成「18 至 17 歲」並送進 Gemini 的 system_instruction；全站只限滿最低年齡者，沒有可使用的未成年區間）**，數字仍取自 `DEFAULT_AGE_POLICY`。同步新增 `specs/cs-nlp-contract/spec.md` 的 delta：MODIFIED「客服的平台資料如實描述 Google 登入」（主規格仍寫「首次登入須勾選同意服務條款與隱私權政策」與「未滿 13 歲者不得使用」；MODIFIED 須保留既有情境名稱），並在 `proposal.md` 的 Impact 補上這個能力。驗證：更新 `tests/test_cs_prompt.py`（兩個勾選、沒有「內容分級」與「至 … 歲可以使用」；自訂年齡政策時數字跟著變且不會產生下界大於上界的區間；既有的 Google-only 與禁用字樣檢查照舊）通過，`test_cs_*` 其餘測試通過，`openspec validate adult-only-signup --strict` 通過。
 
 ## 7. 部署到展示環境與驗收（使用者在場）
 
