@@ -25,7 +25,7 @@ const STATE = {
 };
 
 const SCRIPTS = [
-  'js/auth/auth-common.js', 'js/ui/typewriter.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/ui-components.js',
+  'js/auth/auth-common.js', 'js/ui/typewriter.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/wallet-api.js', 'js/ui/wallet-store.js', 'js/ui/ui-components.js',
   'js/game/game-labels.js', 'js/game/sse-parser.js', 'js/game/turn-stream.js', 'js/game/game-state.js', 'js/game/game-store.js', 'js/game/game-sync.js',
   'js/game/game-api.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-revision.js', 'js/game/game-session.js',
 ];

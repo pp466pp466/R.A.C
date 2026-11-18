@@ -9,8 +9,11 @@
  * 用法（在頁面的 <script> 內）：
  *   const { createApp, ref } = Vue;
  *   const app = createApp({ ... });
- *   UI.install(app);                 // 註冊 <ui-modal> 與 <ui-toast-region>
+ *   UI.install(app);                 // 註冊 <ui-modal>、<ui-toast-region>、<ui-restriction-notice> 與 <ui-wallet-balance>
  *   UI.toast('已儲存');              // 顯示提示（等同 UI.useToast().show）
+ *
+ * 全站的遊戲幣餘額標籤：`<ui-wallet-balance></ui-wallet-balance>`（指向 /wallet 的連結；見 shared-wallet-balance 規格）。
+ * 標籤掛載時呼叫全站單例 `UI.wallet.load()`（wallet-store.js；同一頁只請求一次、不快取、不寫瀏覽器儲存）；頁面自己的錢包邏輯共用同一個 `UI.wallet`。
  */
 (function (root) {
   'use strict';
@@ -30,6 +33,27 @@
   root.UI.toasts = toasts;
   root.UI.useToast = function () { return { show: toasts.show, dismiss: toasts.dismiss, clear: toasts.clear }; };
   root.UI.toast = function (message, settings) { return toasts.show(message, settings); };
+
+  // ---- 遊戲幣狀態庫（全站單例）與餘額標籤 ---------------------------------------
+  // 預設的 fetcher 是 wallet-api.js 的 `wallet()`（axios 在呼叫時才取用）；`load()` 永不拋出，失敗時標籤顯示「—」。
+  var wallet = root.UI.createWalletStore({ reactive: Vue.reactive, fetcher: function (settings) { return root.UI.walletApi.wallet(settings); } });
+  root.UI.wallet = wallet;
+
+  // 標籤：顯示合計餘額（載入中與失敗為「—」）；手機寬度由 CSS 隱藏「遊戲」二字而成為「幣 N」；管理員附「不消耗」。文字一律 {{ }} 純文字插值。
+  var WalletBalance = {
+    name: 'UiWalletBalance',
+    setup: function () {
+      onMounted(function () { wallet.load(); });
+      return { label: Vue.computed(function () { return root.UI.walletLabelOf(wallet.state); }) };
+    },
+    template:
+      '<a class="ui-wallet-balance" href="/wallet" :aria-label="label.aria">' +
+      '<span class="ui-wallet-balance__word" aria-hidden="true">遊戲</span>' +
+      '<span class="ui-wallet-balance__coin" aria-hidden="true">幣</span>' +
+      '<strong class="ui-wallet-balance__amount" aria-hidden="true">{{ label.amount }}</strong>' +
+      '<span v-if="label.exempt" class="ui-wallet-balance__note" aria-hidden="true">不消耗</span>' +
+      '</a>'
+  };
 
   // ---- Toast 容器元件 ------------------------------------------------------
   var ToastRegion = {
@@ -186,9 +210,11 @@
   root.UI.Modal = Modal;
   root.UI.ToastRegion = ToastRegion;
   root.UI.RestrictionNotice = RestrictionNotice;
+  root.UI.WalletBalance = WalletBalance;
   root.UI.install = function (app) {
     app.component('ui-modal', Modal);
     app.component('ui-toast-region', ToastRegion);
     app.component('ui-restriction-notice', RestrictionNotice);
+    app.component('ui-wallet-balance', WalletBalance);
   };
 })(typeof self !== 'undefined' ? self : this);

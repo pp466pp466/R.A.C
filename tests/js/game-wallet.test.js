@@ -8,6 +8,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { loadVue, plain, settle, ROOT } = require('./support/vue-runtime.js');
 const { createWallet } = require('../../app/static/js/game/game-wallet.js');
+const { createWalletStore, walletLabelOf } = require('../../app/static/js/ui/wallet-store.js');
 
 const Vue = loadVue();
 const WALLET = (total, extra) => ({
@@ -367,7 +368,7 @@ test('every wallet snapshot overwrites the flag, including the one that comes ba
   await wallet.claimCheckin();
   assert.equal(wallet.exempt.value, true);                            // 簽到回的錢包也帶 coin_exempt
   assert.equal(wallet.balanceText.value, '200');
-  await wallet.load();                                                // 之後讀到不再豁免的快照（例如角色被改變）：跟著伺服器
+  await wallet.load({ force: true });                                // 之後讀到不再豁免的快照（例如角色被改變）：跟著伺服器（已讀到的錢包只有明確要求才重讀）
   assert.equal(wallet.exempt.value, false);
 });
 
@@ -379,4 +380,104 @@ test('exempt is exposed next to the other wallet state and nothing in the exempt
   assert.equal(calls.wallet.length, 1);
   assert.equal(calls.checkin.length, 0);
   assert.equal(typeof wallet.exempt.value, 'boolean');
+});
+
+// ---- 與全站的錢包狀態庫共用（wallet-hub 1.5）-----------------------------------------------------------------------
+
+/* 共用的狀態庫（頂列標籤讀的就是它）加上用它建立的遊戲幣邏輯；`fetches` 記錄真正送出的錢包請求。 */
+function sharedSetup({ wallet = [], checkin = [] } = {}) {
+  const fetches = [];
+  const respond = (queue) => {
+    const next = queue.length > 1 ? queue.shift() : queue[0];
+    return next instanceof Error || (next && next.__reject) ? Promise.reject(next.__reject || next) : Promise.resolve(next);
+  };
+  const store = createWalletStore({
+    reactive: Vue.reactive,
+    fetcher: (settings) => { fetches.push(settings); return respond(wallet); },
+  });
+  const toasts = [];
+  const logins = [];
+  const noted = [];
+  const checkins = [];
+  const api = { wallet: () => { throw new Error('頁面不該再自己讀錢包'); }, checkin: (confirm) => { checkins.push(confirm); return respond(checkin); } };
+  const target = createWallet({
+    Vue: { ref: Vue.ref, computed: Vue.computed, watch: Vue.watch }, api, store,
+    toast: (message) => toasts.push(message), goLogin: () => logins.push(true), noteFailure: (info) => noted.push(info),
+  });
+  const label = () => walletLabelOf(store.state);
+  return { wallet: target, store, label, fetches, checkins, toasts, logins, noted };
+}
+
+test('with a shared store the label and the page logic ask once and read the same number', async () => {
+  const { wallet, store, label, fetches } = sharedSetup({ wallet: [{ ok: true, wallet: WALLET(230) }] });
+  const fromLabel = store.load();                                     // 標籤的 onMounted 先到
+  const fromPage = wallet.load({ signal: 'S' });                      // 頁面自己的載入合併進同一個請求
+  assert.deepEqual(await Promise.all([fromLabel, fromPage]), [true, true]);
+  assert.equal(fetches.length, 1);
+  assert.equal(label().amount, '230');
+  assert.equal(wallet.balanceText.value, '230');
+  assert.equal(wallet.turnCost.value, 30);
+  assert.equal(await wallet.load(), true);                            // 已讀到：再載入不會再請求
+  assert.equal(fetches.length, 1);
+});
+
+test('done.coins updates the label and the low-balance hint from the same state without a request', async () => {
+  const { wallet, label, fetches } = sharedSetup({ wallet: [{ ok: true, wallet: WALLET(230) }] });
+  await wallet.load();
+  assert.equal(wallet.lowBalance.value, false);
+  assert.equal(wallet.setBalance(20), true);
+  assert.equal(label().amount, '20');
+  assert.equal(wallet.balanceText.value, '20');
+  assert.equal(wallet.lowBalance.value, true);
+  assert.ok(wallet.lowBalanceText.value.includes('目前餘額 20 幣，每一輪需要 30 幣'));
+  assert.equal(fetches.length, 1);
+});
+
+test('an exempt account with a zero balance: the label shows 0 and the note, the page shows no low-balance hint', async () => {
+  const { wallet, label } = sharedSetup({ wallet: [{ ok: true, wallet: EXEMPT_WALLET(0) }] });
+  await wallet.load();
+  assert.equal(label().amount, '0');
+  assert.equal(label().exempt, true);
+  assert.equal(wallet.lowBalance.value, false);
+  assert.equal(wallet.lowBalanceText.value, '');
+});
+
+test('a failed read shows a dash on the label, and the failure still reaches noteFailure and the login redirect when the label started it', async () => {
+  const { wallet, store, label, noted, logins } = sharedSetup({ wallet: [rejects(serverFailure(401, 'unauthorized'))] });
+  assert.equal(await store.load(), false);                            // 標籤發起，不是頁面
+  assert.equal(label().amount, '—');
+  assert.equal(noted.length, 1);
+  assert.equal(noted[0].status, 401);
+  assert.deepEqual(logins, [true]);
+  assert.equal(wallet.balanceText.value, '—');
+  const unavailable = sharedSetup({ wallet: [rejects(serverFailure(503, 'wallet_busy'))] });
+  await unavailable.wallet.load();
+  assert.equal(unavailable.label().amount, '—');
+  assert.deepEqual(unavailable.logins, []);
+  assert.equal(unavailable.noted.length, 1);
+});
+
+test('a successful check-in updates the label through the shared store without another wallet request', async () => {
+  const { wallet, label, fetches, checkins } = sharedSetup({
+    wallet: [{ ok: true, wallet: WALLET(10) }],
+    checkin: [{ ok: true, wallet: WALLET(210, { checkin: { claimable: false } }) }],
+  });
+  await wallet.load();
+  assert.equal(label().amount, '10');
+  await wallet.claimCheckin();
+  assert.deepEqual(checkins, [false]);
+  assert.equal(label().amount, '210');
+  assert.equal(wallet.checkinFinished.value, true);
+  assert.equal(fetches.length, 1);
+});
+
+test('a check-in response without a wallet makes the page read the wallet once more (force), and the label follows', async () => {
+  const { wallet, label, fetches } = sharedSetup({
+    wallet: [{ ok: true, wallet: WALLET(10) }, { ok: true, wallet: WALLET(210, { checkin: { claimable: false } }) }],
+    checkin: [{ ok: true }],
+  });
+  await wallet.load();
+  await wallet.claimCheckin();
+  assert.equal(fetches.length, 2);
+  assert.equal(label().amount, '210');
 });

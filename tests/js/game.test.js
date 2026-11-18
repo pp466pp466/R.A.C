@@ -8,6 +8,8 @@ const assert = require('node:assert/strict');
 const { setupGame, STATE } = require('./support/game-sandbox.js');
 const { settle } = require('./support/vue-runtime.js');
 const { CONTRACT_NAMES, CONTRACT } = require('./support/game-contract.js');
+/* 頂列顯示的餘額：全站共用的餘額標籤讀的就是 UI.wallet（樣板不再有自己的餘額欄位）。 */
+const shownBalance = (game) => game.sandbox.UI.walletLabelOf(game.sandbox.UI.wallet.state).amount;
 
 const DESKTOP = 1280;
 const PHONE = 360;
@@ -159,7 +161,7 @@ test('mounting loads the save through the snapshot endpoint and keeps the whole 
   assert.equal(game.page.phase.value, 'ready');
   assert.equal(game.page.items.value.length, 1);
   assert.equal(game.page.items.value[0].text, '第零幕的獨特文字');
-  assert.equal(game.page.balanceText.value, '230');
+  assert.equal(shownBalance(game), '230');
   assert.deepEqual(game.requests.map((request) => request.method), ['get', 'get', 'get']);   // 快照、回合、錢包：全是唯讀
   assert.ok(game.requests.every((request) => request.method === 'get'));
   assert.deepEqual(game.fetches, []);                                                 // 第 0 幕已 ready：沒有串流
@@ -528,8 +530,8 @@ const EXEMPT_PAGE = {
 test('the real page of an exempt account with a zero balance shows no low-balance hint and says the revisions do not consume game coins', async () => {
   const { game } = await revisionMounted(EXEMPT_PAGE);
   const { page } = game;
-  await waitFor(() => page.balanceText.value === '0' && page.reviseKey.value);
-  assert.equal(page.balanceText.value, '0');                                          // 餘額照實顯示
+  await waitFor(() => shownBalance(game) === '0' && page.reviseKey.value);
+  assert.equal(shownBalance(game), '0');                                          // 餘額照實顯示
   assert.equal(page.lowBalanceText.value, '');
   assert.equal(page.reviseKey.value, 'turn:t2');
   assert.equal(page.reviseDisabled.value, false);
@@ -550,7 +552,7 @@ test('the real page of an exempt account with a zero balance shows no low-balanc
 test('the real page of an ordinary account in the same situation keeps the hint, the price and the blocked edit', async () => {
   const { game } = await revisionMounted({ wallet: { total: 0, turn_cost: { standard: 30 }, coin_exempt: false }, lastTurn: { free_left: 0, regenerate_cost: 30, edit_cost: 30 } });
   const { page } = game;
-  await waitFor(() => page.balanceText.value === '0' && page.reviseKey.value);
+  await waitFor(() => shownBalance(game) === '0' && page.reviseKey.value);
   assert.ok(page.lowBalanceText.value.includes('每一輪需要 30 幣'));
   assert.equal(page.regenerateNote.value, '30 幣');
   assert.equal(page.editNote.value, '30 幣');
@@ -664,4 +666,81 @@ test('the whole revision flow keeps the reason and the category out of IndexedDB
   assert.deepEqual(game.storageWrites, []);
   assert.ok(JSON.stringify(streams[0].body).includes(REVISION_REASON));          // 理由只在請求本文
   assert.ok(!JSON.stringify(game.toasts).includes(REVISION_REASON));
+});
+
+// ---- 頂列的餘額標籤與頁面共用同一份錢包狀態（wallet-hub 1.5）-----------------------------------------------------
+
+const walletPage = (wallet, options = {}) => {
+  const snapshot = {
+    session: { id: STATE.session.id, title: '青雲問道', content_tier: 'safe', status: 'active', ended: false, version: 1, completed_turns: 0,
+      opening: { state: 'ready', text: '第零幕' }, world: { elapsed_months: 0, location: '山門', summary: '', goals: [], places: [], protagonist_age: 16 } },
+  };
+  return setupGame({ ...options, respond: (request) => {
+    if (/\/api\/game\/sessions\/[^/]+$/.test(request.url)) { return Promise.resolve({ data: snapshot }); }
+    if (/\/turns$/.test(request.url)) { return Promise.resolve({ data: { turns: [], has_more: false } }); }
+    if (/\/api\/wallet$/.test(request.url)) { return wallet instanceof Error ? Promise.reject({ response: { status: 503, data: { error: { code: 'wallet_busy' } } } }) : Promise.resolve({ data: { ok: true, wallet } }); }
+    return Promise.reject(new Error('unexpected ' + request.url));
+  } });
+};
+const walletRequests = (game) => game.requests.filter((request) => /\/api\/wallet$/.test(request.url));
+
+test('the page and the top-bar label share one wallet request, whichever of them asks first', async () => {
+  const wallet = { total: 230, free_balance: 230, paid_balance: 0, turn_cost: { standard: 30 }, coin_exempt: false, checkin: { claimable: true } };
+  const labelFirst = walletPage(wallet);
+  const pending = labelFirst.sandbox.UI.wallet.load();                                // 標籤的 onMounted 先到：請求已經在途
+  await labelFirst.mount();
+  await settle(20);
+  assert.equal(await pending, true);
+  assert.equal(walletRequests(labelFirst).length, 1);                                  // 頁面自己的載入合併進同一個請求
+  assert.equal(shownBalance(labelFirst), '230');
+
+  const pageFirst = walletPage(wallet);
+  await pageFirst.mount();
+  await settle(20);
+  assert.equal(await pageFirst.sandbox.UI.wallet.load(), true);                        // 標籤之後才掛載：已讀到，不再請求
+  assert.equal(walletRequests(pageFirst).length, 1);
+  assert.equal(shownBalance(pageFirst), '230');
+});
+
+test('a finished turn (done.coins) updates the label and the low-balance hint from the same state with no further wallet request', async () => {
+  const game = walletPage({ total: 230, free_balance: 230, paid_balance: 0, turn_cost: { standard: 30 }, coin_exempt: false, checkin: { claimable: true } });
+  await game.mount();
+  await settle(20);
+  assert.equal(shownBalance(game), '230');
+  assert.equal(game.page.lowBalanceText.value, '');
+  game.sandbox.UI.wallet.setTotal(20);                                                 // done.coins 經由 wallet.setBalance 寫入的就是這份狀態
+  assert.equal(shownBalance(game), '20');
+  assert.ok(game.page.lowBalanceText.value.includes('目前餘額 20 幣'));                  // 輸入區提示依同一份數字
+  assert.equal(walletRequests(game).length, 1);
+});
+
+test('an exempt account with a zero balance shows 0 and the note on the label and no low-balance hint', async () => {
+  const game = walletPage({ total: 0, free_balance: 0, paid_balance: 0, turn_cost: { standard: 0 }, coin_exempt: true, checkin: { claimable: true } });
+  await game.mount();
+  await settle(20);
+  const label = game.sandbox.UI.walletLabelOf(game.sandbox.UI.wallet.state);
+  assert.equal(label.amount, '0');
+  assert.equal(label.exempt, true);
+  assert.equal(game.page.lowBalanceText.value, '');
+});
+
+test('when the wallet cannot be read the label shows a dash while the page itself stays usable', async () => {
+  const game = walletPage(new Error('busy'));
+  await game.mount();
+  await settle(20);
+  assert.equal(shownBalance(game), '—');
+  assert.equal(game.sandbox.UI.wallet.state.status, 'failed');
+  assert.equal(game.page.phase.value, 'ready');
+  assert.equal(game.page.inputDisabled.value, false);
+  assert.deepEqual(game.logs, []);
+  assert.deepEqual(game.storageWrites, []);
+});
+
+test('a 401 on the wallet request still sends the player to the login page when the label started the request', async () => {
+  const unauthorized = () => Promise.reject({ response: { status: 401, data: { error: { code: 'unauthorized' } } } });
+  const game = setupGame({ respond: unauthorized });
+  await game.sandbox.UI.wallet.load();                                                 // 標籤發起的請求（頁面自己的載入還沒開始）
+  await settle();
+  assert.equal(game.sandbox.UI.wallet.state.status, 'failed');
+  assert.ok(game.navigations.some((target) => String(target).startsWith('/login')), '登入已過期應該導向登入頁');
 });

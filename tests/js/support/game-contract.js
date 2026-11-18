@@ -5,7 +5,7 @@ const CONTRACT = {
   state: [
     'phase', 'loadFailure', 'restriction', 'title', 'playerName', 'tierLabel', 'modeNote', 'gateNotice', 'ended', 'offline', 'notice', 'openingNotice',
     'items', 'hasEarlier', 'jumpVisible', 'scroller', 'input', 'draft', 'actionError', 'draftCount', 'draftOver', 'actionMax', 'sending', 'sendDisabled',
-    'inputDisabled', 'blockerText', 'world', 'locationLine', 'balanceText', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'sideTab', 'modal', 'coinModalOpen',
+    'inputDisabled', 'blockerText', 'world', 'locationLine', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'sideTab', 'modal', 'coinModalOpen',
     'coinModalText', 'checkinBusy', 'checkinPreview', 'checkinMessage', 'checkinFinished',
     // 記事簿面板（game-notebook.js）
     'notebook', 'notebookLoading', 'notebookError', 'notebookEmpty', 'notebookUsage', 'notebookReserveNote', 'notebookFull', 'notebookFullText', 'notebookEmptyText',

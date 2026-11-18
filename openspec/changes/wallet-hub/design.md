@@ -50,7 +50,7 @@
 
 ### D3：`game-wallet.js` 改為讀寫共用狀態庫，對外介面不變
 
-`Game.createWallet(deps)` 新增選用的 `deps.store`（沒給就用 `UI.createWalletStore` 建一份本地的，Node 測試不必改）。`balance`、`exempt`、`turnCost`、`nextResetAt` 改為從 store 衍生（`computed`），`load()` 轉呼叫 `store.load()`，`done.coins` 與簽到結果經 `store.setTotal`／`store.apply` 寫入。回傳的物件欄位與方法維持不變，所以 `game.js`、樣板與既有的 `game-wallet.test.js` 只需要小幅調整。`gm-balance` 以標籤取代，`balanceText` 仍保留給輸入區的提示文字使用。
+`Game.createWallet(deps)` 新增選用的 `deps.store`（沒給就用 `UI.createWalletStore` 建一份本地的，Node 測試不必改）。`balance`、`exempt`、`turnCost`、`nextResetAt` 改為從 store 衍生（`computed`），`load()` 轉呼叫 `store.load()`，`done.coins` 與簽到結果經 `store.setTotal`／`store.apply` 寫入。回傳的物件欄位與方法維持不變，所以 `game.js`、樣板與既有的 `game-wallet.test.js` 只需要小幅調整。`gm-balance` 以標籤取代；樣板的輸入區提示用的是 `lowBalanceText`（已含餘額數字），`balanceText` 不再被樣板使用，從樣板約定與 `game.js` 的回傳移除（模組本身仍提供）。
 
 - 這讓頂列標籤與輸入區的「餘額不足」提示永遠依同一份數字，不會分歧（對應 `rpg-wallet-ui` 的新場景）。
 

@@ -12,7 +12,8 @@
      openingNotice（{ tone, text, retry }｜null）。
    - 時間軸：items（最近 60 項：opening｜turn｜note｜inflight）、hasEarlier、jumpVisible、scroller（捲動區的元素參照）。
    - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
-   - 世界與餘額：world（Game.worldView 的形狀）、locationLine、balanceText、lowBalanceText。
+   - 世界與餘額提示：world（Game.worldView 的形狀）、locationLine、lowBalanceText。頂列的餘額是全站共用的 ui-wallet-balance 元件（由 UI.install 註冊，讀全站的 UI.wallet；
+     game.js 把同一個 UI.wallet 交給 game-wallet.js，所以標籤與輸入區的餘額不足提示依同一份狀態，整頁只有一個 GET /api/wallet），樣板不再需要 balanceText。
    - 側欄與 Modal：sidebarOpen、sidebarMode（'push'｜'overlay'）、sideTab（'world'｜'notebook'）、modal（{ leave, abandon }）。
    - 遊戲幣 Modal：coinModalOpen、coinModalText、checkinBusy、checkinPreview（{ wouldGain, wouldLose }｜null）、checkinMessage、checkinFinished。
    - 記事簿面板（game-notebook.js）：notebook（{ text, version, length, capacity, reserve, full }｜null）、notebookLoading、notebookError（{ message, link, retry }｜null）、
@@ -48,7 +49,7 @@
         <template v-if="!sidebarOpen"><span v-if="locationLine" class="gm-topbar__where">{{ locationLine }}</span></template>
       </p>
     </div>
-    <p class="gm-balance" aria-live="polite">遊戲幣 <strong>{{ balanceText }}</strong></p>
+    <ui-wallet-balance></ui-wallet-balance>
     <nav class="gm-nav" aria-label="站內連結">
       <a class="gm-nav__link" href="/game" @click="leaveClick">回到冒險</a>
       <a class="gm-nav__link" href="/cs">客服</a>

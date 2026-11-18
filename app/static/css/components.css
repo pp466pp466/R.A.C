@@ -54,6 +54,52 @@ a.ui-btn {
 
 .ui-restriction__link { flex: none; }
 
+/* ---- 遊戲幣餘額標籤（<ui-wallet-balance>，指向 /wallet 的連結）：顏色只用 theme.css 的變數 ------------ */
+.ui-wallet-balance {
+  display: inline-flex;
+  flex: none;
+  align-items: baseline;
+  gap: 0;
+  max-width: 100%;
+  padding: 0.125rem 0.625rem;
+  border: var(--border-hairline);
+  color: var(--color-text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+
+.ui-wallet-balance:hover,
+.ui-wallet-balance:focus-visible {
+  color: var(--color-accent);
+  border-color: var(--color-accent);
+}
+
+.ui-wallet-balance__amount {
+  margin-left: 0.4em;
+  color: var(--color-text);
+  font-weight: 500;
+}
+
+.ui-wallet-balance:hover .ui-wallet-balance__amount,
+.ui-wallet-balance:focus-visible .ui-wallet-balance__amount {
+  color: var(--color-accent);
+}
+
+.ui-wallet-balance__note {
+  margin-left: 0.6em;
+  padding-left: 0.6em;
+  border-left: var(--border-hairline);
+  font-size: 0.75rem;
+}
+
+/* 未滿 576px：隱藏「遊戲」二字，只留「幣 N」（無障礙名稱仍是完整的句子） */
+@media (max-width: 575.98px) {
+  .ui-wallet-balance__word { display: none; }
+}
+
 /* ---- Modal --------------------------------------------------------------- */
 body.ui-modal-open {
   overflow: hidden;

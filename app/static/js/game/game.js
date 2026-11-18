@@ -60,7 +60,7 @@
       });
       var noteRestriction = null;                                          // 錢包的失敗要交給 session 辨識「被鎖定」之類的受限狀態；session 建好之後才接上
       var wallet = Game.createWallet({
-        Vue: Vue, api: Game.api, toast: UI.toast, goLogin: goLogin,
+        Vue: Vue, api: Game.api, store: UI.wallet, toast: UI.toast, goLogin: goLogin,          // UI.wallet：全站共用的錢包狀態庫，頂列的餘額標籤讀同一份（整頁只有一個錢包請求）
         noteFailure: function (info) { if (noteRestriction) { noteRestriction(info); } }
       });
       var session = Game.createSession({
@@ -175,7 +175,7 @@
         input: input, draft: session.draft, actionError: session.actionError, draftCount: session.draftCount, draftOver: session.draftOver,
         actionMax: session.actionMax, sending: session.sending, sendDisabled: session.sendDisabled, inputDisabled: session.inputDisabled,
         blockerText: session.blockerText,
-        world: session.world, locationLine: session.locationLine, balanceText: wallet.balanceText, lowBalanceText: wallet.lowBalanceText,
+        world: session.world, locationLine: session.locationLine, lowBalanceText: wallet.lowBalanceText,
         sidebarOpen: sidebarOpen, sidebarMode: sidebarMode, modal: modal,
         coinModalOpen: wallet.coinModalOpen, coinModalText: wallet.coinModalText, checkinBusy: wallet.checkinBusy, checkinPreview: wallet.checkinPreview,
         checkinMessage: wallet.checkinMessage, checkinFinished: wallet.checkinFinished,
