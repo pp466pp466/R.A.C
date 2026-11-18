@@ -1,0 +1,49 @@
+# Spec Delta
+
+## MODIFIED Requirements
+
+### Requirement: 頂列顯示餘額並隨回合更新
+遊戲頁頂列 SHALL 以共用的餘額標籤（見 `shared-wallet-balance`）顯示遊戲幣合計；載入時由共用的錢包狀態庫呼叫 `GET /api/wallet`（頁面自己的錢包邏輯 SHALL NOT 重複請求），每次 `done` 後 SHALL 以 `done.coins` 寫入狀態庫而不另外請求。餘額 SHALL 以純文字渲染，載入失敗時 SHALL 顯示「—」而不阻擋閱讀。送出前若餘額已知且低於每輪幣價，SHALL 在輸入區說明本輪需要的幣數並提供簽到入口，但 SHALL NOT 阻止玩家嘗試送出（餘額以伺服器為準）。錢包回應的 `coin_exempt` 為 `true`（管理員）時，SHALL NOT 顯示上述餘額不足的提示。
+
+#### Scenario: 載入時顯示
+- **WHEN** 玩家開啟遊戲頁
+- **THEN** 頂列的餘額標籤顯示目前的合計餘額，整頁只有一個錢包請求
+
+#### Scenario: 一輪結束
+- **WHEN** 一輪以 `done.coins=170` 結束
+- **THEN** 餘額顯示 170，沒有額外的錢包請求
+
+#### Scenario: 錢包讀取失敗
+- **WHEN** `GET /api/wallet` 失敗
+- **THEN** 餘額顯示「—」，時間軸與輸入仍可使用
+
+#### Scenario: 餘額為 0 的管理員
+- **WHEN** `coin_exempt` 為 `true` 且餘額為 0 的管理員開啟遊戲頁
+- **THEN** 頂列顯示餘額 0 與「不消耗」標示，輸入區沒有餘額不足的提示，送出行動不受影響
+
+#### Scenario: 標籤與輸入區提示一致
+- **WHEN** 一輪結束後餘額低於每輪幣價
+- **THEN** 頂列標籤與輸入區的餘額不足提示依同一份狀態同時更新
+
+### Requirement: 最小簽到入口與超過上限的確認
+簽到 SHALL 呼叫 `POST /api/wallet/checkin`。伺服器回 409 `checkin_overflow` 時 SHALL 顯示預覽（會入帳多少、會作廢多少），由玩家選「取消」（不消耗當日簽到）或「領取」（以 `confirm_overflow: true` 再次呼叫）。回 409 `already_checked_in` SHALL 顯示今日已簽到與下次可簽到的時間（台灣時間）。簽到進行中按鈕 SHALL 禁用，`finally` 恢復。簽到狀態機 SHALL 與錢包頁共用同一份實作，兩處行為一致。遊戲頁的簽到入口 SHALL 只負責餘額不足時的快速簽到；記錄與儲值方向由錢包頁（`wallet-hub-page`）提供，**真實的儲值與訂閱仍不提供**（待金流規範）。
+
+#### Scenario: 一般簽到
+- **WHEN** 玩家按簽到，餘額未超過上限
+- **THEN** 餘額增加並顯示 Toast
+
+#### Scenario: 超過上限
+- **WHEN** 伺服器回 `checkin_overflow` 與預覽
+- **THEN** 顯示會作廢的幣數，選「取消」不送第二次請求，選「領取」才帶 `confirm_overflow`
+
+#### Scenario: 今日已簽到
+- **WHEN** 伺服器回 `already_checked_in`
+- **THEN** 顯示今日已簽到與下次可簽到時間，餘額不變
+
+#### Scenario: 重複點擊
+- **WHEN** 簽到請求進行中玩家再次按下
+- **THEN** 只送出一個請求
+
+#### Scenario: 遊戲頁與錢包頁一致
+- **WHEN** 同一個玩家在遊戲頁與錢包頁分別遇到超過上限的簽到
+- **THEN** 兩處的預覽內容、取消與領取的行為相同
