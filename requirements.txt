@@ -9,3 +9,5 @@ python-dotenv==1.2.4
 argon2-cffi==25.1.0
 PyJWT==2.15.1
 cryptography==50.0.2
+# RPG 模型輸出的簡體轉繁體（純 Python、離線；見 app/services/zh_text.py）
+opencc-python-reimplemented==0.1.7

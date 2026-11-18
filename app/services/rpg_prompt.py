@@ -31,7 +31,7 @@ MARKER_LENGTH = 24
 
 DEFAULT_LANGUAGE = "zh-Hant-TW"
 LANGUAGE_INSTRUCTIONS = {
-    "zh-Hant-TW": "請全程使用繁體中文（台灣常用用語）撰寫，不要夾雜簡體字或其他語言（人名與專有名詞除外）。",
+    "zh-Hant-TW": "請全程使用繁體中文（台灣常用用語）撰寫：所有文字一律使用繁體字，絕對不要輸出簡體字（例如寫「風」不寫「风」、寫「門」不寫「门」），也不要夾雜其他語言（人名與專有名詞除外）。",
 }
 
 NARRATION_MIN_CHARS = 350

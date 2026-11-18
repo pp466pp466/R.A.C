@@ -21,6 +21,7 @@ from app.services.content_tier import parse_tier
 from app.services.rpg_output_rules import RuleOutcome, evaluate, leak_categories
 from app.services.rpg_world import CharacterAge
 from app.services.script_rules import DEFAULT_ADULT_AGE, SENTENCE_BREAKS, Lexicon, load_lexicon
+from app.services.zh_text import to_traditional
 
 
 @dataclass(frozen=True)
@@ -112,7 +113,11 @@ class OutputGuard:
         self._tail = ""
 
     def _process(self, unit: str, out: list[str]) -> bool:
-        """處理一個單位；命中時回傳 True（`out` 保留命中之前已確定可釋放的文字）。"""
+        """處理一個單位；命中時回傳 True（`out` 保留命中之前已確定可釋放的文字）。
+
+        單位先轉成繁體（模型不一定遵守提示詞的繁體要求），再做洩漏與規則檢查：規則層與釋放給玩家的都是繁體；轉換只依這一句本身，
+        不受片段怎麼切影響。"""
+        unit = to_traditional(unit)
         if not any(char.isalnum() for char in unit):             # 只有標點或空白：依附在保留句後面，不參與判定
             if self._held is not None:
                 self._held += unit
