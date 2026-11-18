@@ -136,7 +136,7 @@ Google 登入、管理員的二階段登入與重設密碼、帳號設定。玩�
 | `/api/auth/verify-age` | POST | 補填生日與年齡區間（請求 `birth_date`、`age_range`，驗證規則同註冊，回應最新的帳號資料；**未滿 13 歲的玩家立即抹除帳號與全部個資**並清除登入狀態（400 `age_not_eligible`，管理員只拒絕不抹除）；生日與區間不一致回通用的 400 `age_mismatch` 並計入帳號鎖定的計次；已完成的帳號再次提交一律成功但不改動原紀錄）。取代舊的 `/api/auth/confirm-adult`（已移除） | 是 |
 | `/api/auth/change-password` | POST | 變更密碼（只有已設定密碼者，實際上是管理員；其他裝置被登出，目前裝置維持登入；玩家得到 400 `no_password`） | 是 |
 | `/api/auth/reset-password` | POST | 管理員以重設權杖設定新密碼（沒有寄信設定時 404；非管理員的權杖視為無效） | 否 |
-| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位只有 `accept_terms`（新使用者必須勾選，回訪的使用者不必）與 `next`；**不再收生日與年齡區間**（請求若仍帶著就忽略、不保存），年齡確認改在登入之後的 `/age` 補填。空的請求（`{}`）也可以 | 否 |
+| `/api/auth/google/start` | POST | 發起 Google 登入（Google 未設定時 404）。請求欄位只有 `accept_terms` 與 `declare_adult`（「我確認已滿 18 歲」；新使用者兩者都必須勾選，回訪的使用者不必；缺條款回 `terms_required`、缺聲明回 `adult_required`，兩者都缺時先回報條款）與 `next`；**不再收生日與年齡區間**，聲明的時間與版本也由伺服器在建立帳號時決定（請求若仍帶著這些欄位就忽略、不保存），年齡確認改在登入之後的 `/age` 補填。空的請求（`{}`）也可以 | 否 |
 
 | 頁面 | 說明 |
 |---|---|

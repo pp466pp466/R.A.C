@@ -120,8 +120,11 @@ def google_start():
     if get_identity_provider() is None:
         abort(404)
     body = read_json_object()
-    # 只收條款旗標；請求若仍帶著生日與年齡區間，一律忽略（年齡確認在登入之後才填）
-    start = get_google_sign_in_service().begin(accept_terms=body.get("accept_terms"))
+    # 只收條款與年滿 18 歲兩個勾選旗標；請求若帶著生日、年齡區間，或聲明的時間與版本，一律忽略
+    # （年齡確認在登入之後才填；聲明的時間與版本由伺服器在建立帳號時決定）
+    start = get_google_sign_in_service().begin(
+        accept_terms=body.get("accept_terms"), declare_adult=body.get("declare_adult")
+    )
     transaction = {**start.transaction, "x": safe_next(body.get("next"))}     # 登入後的返回位置：此時就先驗證
     response = jsonify(authorization_url=start.authorization_url)
     store_transaction(response, transaction)

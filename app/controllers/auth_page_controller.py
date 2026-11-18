@@ -18,7 +18,7 @@ from app.services.age_policy import EARLIEST_BIRTH_DATE, taipei_today
 from app.services.appeal_service import APPEAL_HOURLY_LIMIT, MAX_APPEAL_CHARS
 from app.services.current_user import RESTRICTION_AGE_PENDING
 from app.services.google_sign_in_service import (
-    ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
+    ERROR_ADULT, ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, GoogleLoginRefused,
 )
 from app.services.account_deletion_service import CONFIRM_TEXT
 from app.services.game_service import REASON_MAX, REASON_MIN
@@ -33,6 +33,7 @@ LOGIN_ERROR_MESSAGES = {
     ERROR_UNAVAILABLE: "Google 登入暫時無法使用，請稍後再試。",
     ERROR_REJECTED: "Google 登入沒有完成或被拒絕，請再試一次。",
     ERROR_TERMS: "第一次使用 Google 註冊時，請先勾選同意服務條款與隱私權政策。",
+    ERROR_ADULT: "本服務僅限滿 18 歲者使用。第一次使用 Google 註冊時，請先勾選「我確認已滿 18 歲」。",
     ERROR_DISABLED: "此帳號已停用，無法登入。",
 }
 

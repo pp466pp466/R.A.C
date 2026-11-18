@@ -11,11 +11,14 @@
   - 信箱已驗證 → 綁定，原有密碼仍可使用；
   - 信箱未驗證（遷移前以密碼註冊、尚未驗證的遺留玩家帳號）→ **清除其密碼憑證**、視為已驗證、`token_version` 加 1
     （撤銷任何以該密碼建立的登入狀態），再綁定。這是防止「預先佔用信箱」的帳號劫持；
-  - 沒有帳號 → 建立新帳號（已驗證、沒有密碼），需要發起時已勾選同意條款；**不要求生日與年齡區間**：
+  - 沒有帳號 → 建立新帳號（已驗證、沒有密碼），需要發起時已勾選同意條款與「我確認已滿 18 歲」（兩者都缺時
+    先回報條款）；聲明的時間與當時的年齡政策版本由伺服器決定並記在帳號上，只是稽核紀錄、不是年齡判斷的依據
+    （年齡一律由年齡確認的生日於當下計算）。**不要求生日與年齡區間**：
     帳號建立時沒有年齡資料，並記錄 24 小時的補填期限（`age_deadline_at`），登入後只能到年齡確認頁補填
     （`AuthService.verify_age`，逾時由 `purge-unconfirmed-accounts` 刪除）。
 - 該帳號已綁定另一個 Google 身分、或停用中 → 拒絕，不新增綁定。
-- 已存在的帳號（已綁定、或以信箱合併）登入時不需要勾選條款，也**不會**被順便標記為已確認年齡：
+- 已存在的帳號（已綁定、或以信箱合併）登入時不需要勾選條款與年滿 18 歲聲明（管理員與升級前的帳號本來就沒有聲明紀錄），
+  也**不會**被順便標記為已確認年齡：
   補確認只能在年齡確認頁明確完成。
 所有拒絕都以固定的錯誤代碼表示（Controller 轉成 `/login?error=<代碼>`），不夾帶任何外部提供的文字。
 """
@@ -36,6 +39,7 @@ from app.repositories.errors import DuplicateIdentityError, DuplicateUserError
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_lock_service import AccountLockService
+from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.current_user import CurrentUser
 from app.services.google_oidc import (
     GoogleAuthError, GoogleIdentityProvider, GoogleProfile, code_challenge_for, new_code_verifier, new_state_or_nonce,
@@ -52,6 +56,7 @@ ERROR_STATE = "google_state"
 ERROR_UNAVAILABLE = "google_unavailable"
 ERROR_REJECTED = "google_rejected"
 ERROR_TERMS = "terms_required"
+ERROR_ADULT = "adult_required"
 ERROR_DISABLED = "account_disabled"
 
 OUTCOME_LOGIN = "login"
@@ -89,8 +94,10 @@ class GoogleSignInService:
         provider: GoogleIdentityProvider,
         clock: Callable[[], datetime],
         lock: AccountLockService | None = None,
+        age_policy: AgePolicy = DEFAULT_AGE_POLICY,
     ) -> None:
-        self._lock = lock                # 已辨識出帳號卻被拒絕時計入帳號鎖定的計次（沒有帳號的身分與無法辨識的失敗不計）
+        self._age_policy = age_policy    # 只取政策版本字串，記在年滿 18 歲聲明上
+        self._lock = lock               # 已辨識出帳號卻被拒絕時計入帳號鎖定的計次（沒有帳號的身分與無法辨識的失敗不計）
         self._users = users
         self._identities = identities
         self._provider = provider
@@ -98,18 +105,21 @@ class GoogleSignInService:
 
     # ---- 發起 ----------------------------------------------------------------
 
-    def begin(self, *, accept_terms: object) -> GoogleStart:
-        """發起只收條款旗標 `t`（只有明確為 `True` 才成立）；回訪的使用者不需要任何欄位，空的請求也可以。
+    def begin(self, *, accept_terms: object, declare_adult: object) -> GoogleStart:
+        """發起只收條款旗標 `t` 與年滿 18 歲聲明旗標 `a`（各自只有明確為 `True` 才成立）；回訪的使用者不需要任何
+        欄位，空的請求也可以。聲明的時間與版本不從請求取得，建立帳號時由伺服器決定。
 
         生日與年齡區間不在這裡處理：新帳號建立之後才在年齡確認頁補填。交易 cookie（簽章、10 分鐘有效、
-        回呼結束即刪除）只放 state、nonce、PKCE 驗證碼與條款旗標。
+        回呼結束即刪除）只放 state、nonce、PKCE 驗證碼與兩個勾選旗標。
         """
         state, nonce, verifier = new_state_or_nonce(), new_state_or_nonce(), new_code_verifier()
         url = self._provider.build_authorization_url(
             state=state, nonce=nonce, code_challenge=code_challenge_for(verifier)
         )
         security_events.log_event(security_events.GOOGLE_STARTED)
-        transaction: dict[str, Any] = {"s": state, "n": nonce, "v": verifier, "t": accept_terms is True}
+        transaction: dict[str, Any] = {
+            "s": state, "n": nonce, "v": verifier, "t": accept_terms is True, "a": declare_adult is True,
+        }
         return GoogleStart(authorization_url=url, transaction=transaction)
 
     # ---- 回呼 ----------------------------------------------------------------
@@ -138,7 +148,10 @@ class GoogleSignInService:
                 self._refuse(ERROR_UNAVAILABLE, security_events.GOOGLE_REJECTED_UNAVAILABLE)
             self._refuse(ERROR_REJECTED, security_events.GOOGLE_REJECTED_TOKEN)
         # 更新前發起、尚未回呼的交易可能還帶著生日 `b` 與區間 `r`：一律忽略，不讀取也不保存
-        return self._resolve(profile, accepted_terms=transaction.get("t") is True)
+        # 部署前發起的交易沒有 `a`：視為未聲明（只有新使用者受影響，提示重新勾選；回訪者不檢查）
+        return self._resolve(
+            profile, accepted_terms=transaction.get("t") is True, declared_adult=transaction.get("a") is True
+        )
 
     def _check_state(self, state: object, transaction: dict[str, Any] | None) -> None:
         valid = (
@@ -159,7 +172,7 @@ class GoogleSignInService:
 
     # ---- 帳號對應 ------------------------------------------------------------
 
-    def _resolve(self, profile: GoogleProfile, *, accepted_terms: bool) -> GoogleLoginResult:
+    def _resolve(self, profile: GoogleProfile, *, accepted_terms: bool, declared_adult: bool) -> GoogleLoginResult:
         now = self._clock()
 
         identity = self._identities.get_by_subject(PROVIDER_GOOGLE, profile.subject)
@@ -180,6 +193,8 @@ class GoogleSignInService:
         if user is None:
             if not accepted_terms:
                 self._refuse(ERROR_TERMS, security_events.GOOGLE_REJECTED_TERMS)
+            if not declared_adult:                                    # 條款優先；兩者都缺時只回報條款
+                self._refuse(ERROR_ADULT, security_events.GOOGLE_REJECTED_ADULT)
             user = self._create_account(profile, canonical, now)
             if user is not None:
                 self._bind(user, profile.subject)
@@ -225,6 +240,8 @@ class GoogleSignInService:
             status=STATUS_ACTIVE,
             terms_version=CURRENT_TERMS_VERSION,
             terms_accepted_at=now,
+            adult_declared_at=now,                                  # 時間與版本只由伺服器決定；只是稽核紀錄，不是年齡判斷的依據
+            adult_declaration_version=self._age_policy.version,
             age_deadline_at=now + AGE_CONFIRMATION_DEADLINE,       # 沒有年齡資料；逾時未補填由排程刪除
         )
         try:

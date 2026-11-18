@@ -70,6 +70,43 @@ def test_the_age_gate_events_are_registered_with_the_expected_levels(log_lines):
         assert (payload["event"], payload["level"], payload["user_id"]) == (name, level, 5)
 
 
+def test_the_missing_adult_declaration_event_is_a_warning_with_only_the_name(log_lines):
+    """adult-only-signup：新使用者沒勾「我確認已滿 18 歲」而被拒絕建立帳號時只記事件名稱（此時還沒有帳號，也就沒有內部編號）。"""
+    assert security_events.GOOGLE_REJECTED_ADULT == "auth.google_rejected.adult" and "auth.google_rejected.adult" in EVENT_NAMES
+    log_event(security_events.GOOGLE_REJECTED_ADULT)
+    payload = log_lines()[-1]
+    assert (payload["event"], payload["level"]) == ("auth.google_rejected.adult", "WARNING")
+    assert "user_id" not in payload
+    assert set(payload) <= {"time", "level", "logger", "message", *ALLOWED_FIELDS}
+
+
+def test_the_underage_erasure_event_carries_only_the_event_name_and_the_internal_id(log_lines):
+    """未滿 18 歲被抹除：事件名稱加內部整數編號，沒有 email、生日、年齡區間或暱稱的欄位（日誌欄位白名單也不允許）。"""
+    assert security_events.ACCOUNT_UNDERAGE_ERASED == "account.underage_erased" and "account.underage_erased" in EVENT_NAMES
+    log_event(security_events.ACCOUNT_UNDERAGE_ERASED, user_id=77)
+    payload = log_lines()[-1]
+    assert (payload["event"], payload["user_id"]) == ("account.underage_erased", 77)
+    assert set(payload) <= {"time", "level", "logger", "message", *ALLOWED_FIELDS}
+    assert not {"email", "birth_date", "age_range", "nickname", "display_name"} & set(ALLOWED_FIELDS)
+
+
+@pytest.mark.parametrize(
+    ("code", "event"),
+    [("age_not_eligible", "auth.age_rejected.underage"), ("age_mismatch", "auth.age_rejected.mismatch")],
+)
+def test_a_refused_age_step_logs_one_warning_without_any_input(log_lines, code, event):
+    security_events.log_age_rejection(code)
+    (payload,) = [line for line in log_lines() if line.get("event")]
+    assert (payload["event"], payload["level"]) == (event, "WARNING")
+    assert "user_id" not in payload and set(payload) <= {"time", "level", "logger", "message", *ALLOWED_FIELDS}
+
+
+@pytest.mark.parametrize("code", ["birth_date_required", "age_range_required", "invalid_birth_date", "something_else"])
+def test_fixable_field_errors_in_the_age_step_are_not_logged_as_events(log_lines, code):
+    security_events.log_age_rejection(code)
+    assert [line for line in log_lines() if line.get("event")] == []
+
+
 def test_an_unregistered_event_name_is_refused():
     with pytest.raises(ValueError):
         log_event("auth.something_made_up")

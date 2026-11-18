@@ -5,7 +5,7 @@
 - [x] 1.1 `AgePolicy`（`app/services/age_policy.py`）：最低註冊年齡與最低使用年齡改為 18、版本字串改為 `2026-11-17-adults-only`，說明文字與錯誤訊息只由最低年齡組成；更新 `tests/test_age_policy.py`（15 歲、17 歲邊界、18 歲生日當天通過；選「未滿 13 歲」「13–17」一律 `age_not_eligible`；不一致仍是 `age_mismatch`；日後把最低年齡改為 21 也只需換設定）。驗證：`pytest tests/test_age_policy.py` 通過。
 - [x] 1.2 玩家補填未滿 18 歲的帳號被抹除（沿用 `erase_underage`）、管理員不被抹除、不保存生日與暱稱：更新 `tests/test_age_step_service.py`、`tests/test_age_gate_api.py`、`tests/test_account_erasure_service.py` 與暱稱步驟的測試（15 歲與 12 歲都抹除、生日與暱稱不在資料庫與日誌）。驗證：這些測試通過。
 - [x] 1.3 `AccessPolicy` 的最低使用年齡情境：更新 `tests/test_access_policy.py`（由生日算出 15 歲 → `age_restricted`、剛滿 18 歲 → 通過、未完成確認 → `age_confirmation_required` 的順序不變），並確認 `app/services/access_policy.py` 沒有程式變更（只靠最低使用年齡自然拒絕，見 design D7）。驗證：測試通過，`git diff --stat` 沒有 `access_policy.py`。
-- [ ] 1.4 年齡事件與日誌：`tests/test_security_events.py` 與 `tests/test_log_scan_full_flow.py` 涵蓋「未滿 18 歲被抹除」只有事件名稱與內部編號、日誌掃描找不到生日、區間、暱稱與 email。驗證：測試通過。
+- [x] 1.4 年齡事件與日誌：`tests/test_security_events.py` 與 `tests/test_log_scan_full_flow.py` 涵蓋「未滿 18 歲被抹除」只有事件名稱與內部編號、日誌掃描找不到生日、區間、暱稱與 email。驗證：測試通過。（第 2 批：完整流程新增 12 歲與 17 歲兩位被抹除者，掃描樣本含生日、17 歲的區間代碼、暱稱與 email；`test_security_events` 新增 `account.underage_erased`、`log_age_rejection` 的兩個事件與可就地修正的欄位錯誤不記錄的測試。）
 
 ## 2. 資料庫欄位、遷移與紀錄
 
@@ -15,9 +15,9 @@
 
 ## 3. Google 登入的年滿 18 歲聲明
 
-- [ ] 3.1 `GoogleSignInService`（`app/services/google_sign_in_service.py`）：`begin` 多收 `declare_adult`（必須嚴格為 `true`）並放進簽章的交易 cookie；`_resolve` 在沒有帳號的分支先檢查條款、再檢查聲明，缺聲明以新的 `ERROR_ADULT = "adult_required"` 拒絕並記錄 `auth.google_rejected.adult`（新增於 `app/observability/security_events.py`）；建立帳號時寫入 `adult_declared_at` 與 `adult_declaration_version`（取伺服器時鐘與 `AgePolicy.version`）；回訪與合併既有帳號的路徑不檢查。驗證：更新 `tests/test_google_sign_in_service.py`（兩項都勾、缺條款、缺聲明、兩者都缺的優先順序、回訪者、管理員合併、舊交易 cookie 沒有聲明旗標）通過。
-- [ ] 3.2 `app/controllers/auth_api_controller.py` 的 `/api/auth/google/start` 只讀 `accept_terms` 與 `declare_adult` 兩個布林，忽略任何時間、版本、生日與年齡區間欄位；`app/controllers/auth_page_controller.py` 的 `LOGIN_ERROR_MESSAGES` 加 `adult_required` 的繁體中文提示。驗證：更新 `tests/test_google_endpoints.py` 與 `tests/test_auth_pages.py`（請求帶假的時間或版本被忽略、`/login?error=adult_required` 顯示提示、純文字渲染）通過。
-- [ ] 3.3 記錄聲明的日誌掃描：`tests/test_log_scan_full_flow.py` 的完整流程（註冊、年齡確認、登出、再登入）涵蓋新的拒絕事件，日誌沒有 email、Google 識別、授權碼與任何個資。驗證：測試通過。
+- [x] 3.1 `GoogleSignInService`（`app/services/google_sign_in_service.py`）：`begin` 多收 `declare_adult`（必須嚴格為 `true`）並放進簽章的交易 cookie；`_resolve` 在沒有帳號的分支先檢查條款、再檢查聲明，缺聲明以新的 `ERROR_ADULT = "adult_required"` 拒絕並記錄 `auth.google_rejected.adult`（新增於 `app/observability/security_events.py`）；建立帳號時寫入 `adult_declared_at` 與 `adult_declaration_version`（取伺服器時鐘與 `AgePolicy.version`）；回訪與合併既有帳號的路徑不檢查。驗證：更新 `tests/test_google_sign_in_service.py`（兩項都勾、缺條款、缺聲明、兩者都缺的優先順序、回訪者、管理員合併、舊交易 cookie 沒有聲明旗標）通過。
+- [x] 3.2 `app/controllers/auth_api_controller.py` 的 `/api/auth/google/start` 只讀 `accept_terms` 與 `declare_adult` 兩個布林，忽略任何時間、版本、生日與年齡區間欄位；`app/controllers/auth_page_controller.py` 的 `LOGIN_ERROR_MESSAGES` 加 `adult_required` 的繁體中文提示。驗證：更新 `tests/test_google_endpoints.py` 與 `tests/test_auth_pages.py`（請求帶假的時間或版本被忽略、`/login?error=adult_required` 顯示提示、純文字渲染）通過。
+- [x] 3.3 記錄聲明的日誌掃描：`tests/test_log_scan_full_flow.py` 的完整流程（註冊、年齡確認、登出、再登入）涵蓋新的拒絕事件，日誌沒有 email、Google 識別、授權碼與任何個資。驗證：測試通過。（第 2 批：完整流程新增「勾條款、沒勾聲明」的新帳號，確認 `auth.google_rejected.adult` 出現、導向 `/login?error=adult_required`、沒有建帳號，其 email、Google 識別與授權碼不在日誌與指令輸出。）
 
 ## 4. 登入頁、年齡確認頁與帳號設定頁
 

@@ -41,6 +41,7 @@ GOOGLE_REJECTED_STATE = "auth.google_rejected.state"
 GOOGLE_REJECTED_TOKEN = "auth.google_rejected.token"
 GOOGLE_REJECTED_UNAVAILABLE = "auth.google_rejected.unavailable"
 GOOGLE_REJECTED_TERMS = "auth.google_rejected.terms"
+GOOGLE_REJECTED_ADULT = "auth.google_rejected.adult"                           # 新使用者沒勾「我確認已滿 18 歲」：不建立帳號
 GOOGLE_REJECTED_DISABLED = "auth.google_rejected.disabled"
 GOOGLE_REJECTED_CONFLICT = "auth.google_rejected.conflict"
 

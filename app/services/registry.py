@@ -184,6 +184,7 @@ def get_google_sign_in_service() -> GoogleSignInService:
     return GoogleSignInService(
         users=UserRepository(session), identities=UserIdentityRepository(session), provider=provider, clock=clock,
         lock=build_account_lock_service(session, clock=clock, persist=keep_changes_on_error),
+        age_policy=get_age_policy(),
     )
 
 

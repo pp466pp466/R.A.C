@@ -8,11 +8,12 @@ from app.models import User, UserIdentity
 from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
+from app.services.age_policy import AgePolicy
 from app.services.auth_service import AuthService
 from app.services.errors import Unauthenticated
 from app.services.google_oidc import GoogleAuthError, GoogleProfile, code_challenge_for
 from app.services.google_sign_in_service import (
-    ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, OUTCOME_LINKED,
+    ERROR_ADULT, ERROR_DISABLED, ERROR_REJECTED, ERROR_STATE, ERROR_TERMS, ERROR_UNAVAILABLE, OUTCOME_LINKED,
     OUTCOME_LINKED_UNVERIFIED, OUTCOME_LOGIN, OUTCOME_REGISTERED, GoogleLoginRefused, GoogleSignInService,
 )
 from app.services.legal import CURRENT_TERMS_VERSION
@@ -27,9 +28,9 @@ def make_service(session, provider=None, clock=None) -> GoogleSignInService:
     )
 
 
-def login_with(service, *, accept_terms=True, extra_transaction=None, **overrides):
+def login_with(service, *, accept_terms=True, declare_adult=True, extra_transaction=None, **overrides):
     """走一遍完整流程：begin 取得交易，再以正確的 state 完成回呼。`extra_transaction` 模擬交易裡多出來的欄位（例如舊版的生日）。"""
-    start = service.begin(accept_terms=accept_terms)
+    start = service.begin(accept_terms=accept_terms, declare_adult=declare_adult)
     transaction = {**start.transaction, **(extra_transaction or {})}
     args = dict(code="code-from-google", state=start.transaction["s"], provider_error=None, transaction=transaction)
     args.update(overrides)
@@ -59,29 +60,46 @@ def identities(session) -> list[UserIdentity]:
 def test_begin_builds_the_url_from_fresh_random_values_and_returns_the_transaction(member_session):
     provider = FakeProvider()
     service = make_service(member_session, provider)
-    start = service.begin(accept_terms=True)
+    start = service.begin(accept_terms=True, declare_adult=True)
     tx = start.transaction
-    assert set(tx) == {"s", "n", "v", "t"} and tx["t"] is True                  # 只有 state、nonce、PKCE 驗證碼與條款旗標
+    assert set(tx) == {"s", "n", "v", "t", "a"}                                 # 只有 state、nonce、PKCE 驗證碼與兩個勾選旗標
+    assert tx["t"] is True and tx["a"] is True
     sent = provider.urls[0]
     assert (sent["state"], sent["nonce"]) == (tx["s"], tx["n"])
     assert sent["code_challenge"] == code_challenge_for(tx["v"])
     query = parse_qs(urlsplit(start.authorization_url).query)
     assert query["state"] == [tx["s"]] and tx["s"] != tx["n"]
-    other = service.begin(accept_terms=True).transaction
+    other = service.begin(accept_terms=True, declare_adult=True).transaction
     assert {other["s"], other["n"], other["v"]}.isdisjoint({tx["s"], tx["n"], tx["v"]})
 
 
-@pytest.mark.parametrize("value", [False, None, "true", 1, "yes"])
+@pytest.mark.parametrize("value", [False, None, "true", 1, "yes", 0, [], {}])
 def test_only_a_real_true_counts_as_accepting_the_terms(member_session, value):
-    assert make_service(member_session).begin(accept_terms=value).transaction["t"] is False
+    transaction = make_service(member_session).begin(accept_terms=value, declare_adult=True).transaction
+    assert transaction["t"] is False and transaction["a"] is True                # 兩個旗標各自判斷，互不影響
+
+
+@pytest.mark.parametrize("value", [False, None, "true", 1, "yes", 0, [], {}])
+def test_only_a_real_true_counts_as_the_adult_declaration(member_session, value):
+    transaction = make_service(member_session).begin(accept_terms=True, declare_adult=value).transaction
+    assert transaction["a"] is False and transaction["t"] is True
 
 
 def test_begin_no_longer_takes_a_birthday_or_a_range_so_none_can_reach_the_transaction(member_session):
-    """年齡確認改在登入之後才填：發起的簽名裡沒有這兩個欄位（Controller 也不會傳）。"""
+    """年齡確認改在登入之後才填：發起的簽名裡沒有這兩個欄位，也沒有聲明的時間或版本（Controller 也不會傳）。"""
     service = make_service(member_session)
     with pytest.raises(TypeError):
-        service.begin(accept_terms=True, **age_fields(30))
-    assert set(service.begin(accept_terms=True).transaction) == {"s", "n", "v", "t"}
+        service.begin(accept_terms=True, declare_adult=True, **age_fields(30))
+    for forged in ({"adult_declared_at": "2001-01-01"}, {"adult_declaration_version": "forged"}):
+        with pytest.raises(TypeError):
+            service.begin(accept_terms=True, declare_adult=True, **forged)
+    assert set(service.begin(accept_terms=True, declare_adult=True).transaction) == {"s", "n", "v", "t", "a"}
+
+
+def test_begin_requires_the_adult_flag_to_be_passed_explicitly(member_session):
+    """沒有預設值：呼叫端不會「忘了傳」而默默變成未聲明（或默默通過）。"""
+    with pytest.raises(TypeError):
+        make_service(member_session).begin(accept_terms=True)
 
 
 @pytest.mark.parametrize(
@@ -101,7 +119,7 @@ def test_begin_no_longer_takes_a_birthday_or_a_range_so_none_can_reach_the_trans
 def test_a_state_that_does_not_match_the_browser_binding_is_refused_before_google_is_contacted(member_session, mutate):
     provider = FakeProvider()
     service = make_service(member_session, provider)
-    start = service.begin(accept_terms=True)
+    start = service.begin(accept_terms=True, declare_adult=True)
     with pytest.raises(GoogleLoginRefused) as exc:
         service.complete(**{"code": "c", "state": start.transaction["s"], "provider_error": None,
                             "transaction": start.transaction, **mutate(start.transaction)})
@@ -112,7 +130,7 @@ def test_a_state_that_does_not_match_the_browser_binding_is_refused_before_googl
 def test_the_code_verifier_and_nonce_from_the_binding_are_what_google_is_asked_to_check(member_session):
     provider = FakeProvider()
     service = make_service(member_session, provider)
-    start = service.begin(accept_terms=True)
+    start = service.begin(accept_terms=True, declare_adult=True)
     service.complete(code="the-code", state=start.transaction["s"], provider_error=None, transaction=start.transaction)
     assert provider.exchanges == [{"code": "the-code", "code_verifier": start.transaction["v"], "expected_nonce": start.transaction["n"]}]
 
@@ -207,15 +225,87 @@ def test_a_new_address_without_the_terms_creates_nothing(member_session):
     assert users(member_session) == [] and identities(member_session) == []
 
 
-@pytest.mark.parametrize(("accept_terms", "expected_refusal"), [(True, None), (False, ERROR_TERMS)])
-def test_a_new_account_needs_only_the_terms(member_session, accept_terms, expected_refusal):
+@pytest.mark.parametrize(
+    ("accept_terms", "declare_adult", "expected_refusal"),
+    [
+        (True, True, None),
+        (False, True, ERROR_TERMS),
+        (True, False, ERROR_ADULT),
+        (False, False, ERROR_TERMS),                  # 兩者都缺：條款優先
+    ],
+)
+def test_a_new_account_needs_both_the_terms_and_the_adult_declaration(
+    member_session, accept_terms, declare_adult, expected_refusal
+):
     service = make_service(member_session)
     if expected_refusal is None:
-        assert login_with(service, accept_terms=accept_terms).outcome == OUTCOME_REGISTERED
+        assert login_with(service, accept_terms=accept_terms, declare_adult=declare_adult).outcome == OUTCOME_REGISTERED
         assert len(users(member_session)) == 1 and len(identities(member_session)) == 1
     else:
-        assert refusal_of(service, accept_terms=accept_terms) == expected_refusal
+        assert refusal_of(service, accept_terms=accept_terms, declare_adult=declare_adult) == expected_refusal
         assert users(member_session) == [] and identities(member_session) == []
+
+
+def test_a_new_address_without_the_adult_declaration_creates_nothing_and_asks_for_it(member_session):
+    assert refusal_of(make_service(member_session), declare_adult=False) == ERROR_ADULT == "adult_required"
+    assert users(member_session) == [] and identities(member_session) == []
+
+
+def test_the_adult_declaration_is_recorded_with_the_server_clock_and_the_policy_version(member_session):
+    clock = FakeClock()
+    clock.advance(hours=5)
+    login_with(make_service(member_session, clock=clock))
+    (user,) = users(member_session)
+    assert user.adult_declared_at == START + timedelta(hours=5)
+    assert user.adult_declaration_version == AgePolicy().version == "2026-11-17-adults-only"
+    assert user.birth_date is None and user.age_confirmed_at is None            # 聲明只是記錄，不是年齡判斷的依據
+
+
+def test_the_recorded_declaration_version_follows_the_policy_the_service_was_given(member_session):
+    service = GoogleSignInService(
+        users=UserRepository(member_session), identities=UserIdentityRepository(member_session),
+        provider=FakeProvider(), clock=FakeClock(), age_policy=AgePolicy(version="a-later-policy"),
+    )
+    login_with(service)
+    assert users(member_session)[0].adult_declaration_version == "a-later-policy"
+
+
+def test_a_transaction_started_before_the_deployment_has_no_adult_flag_and_counts_as_not_declared(member_session):
+    """部署前發起的授權流程（交易只有 s、n、v、t）：新使用者會被拒絕並提示重新勾選，不建立帳號。"""
+    service = make_service(member_session)
+    start = service.begin(accept_terms=True, declare_adult=True)
+    old = {key: start.transaction[key] for key in ("s", "n", "v", "t")}
+    with pytest.raises(GoogleLoginRefused) as exc:
+        service.complete(code="c", state=old["s"], provider_error=None, transaction=old)
+    assert exc.value.code == ERROR_ADULT
+    assert users(member_session) == [] and identities(member_session) == []
+
+
+def test_a_returning_member_does_not_need_the_declaration_and_none_is_added(member_session):
+    user = add_user(member_session, 1, password=None, email_verified_at=START)
+    member_session.add(UserIdentity(user_id=user.id, provider="google", provider_subject=SUB))
+    member_session.commit()
+    result = login_with(make_service(member_session), accept_terms=False, declare_adult=False)
+    assert result.outcome == OUTCOME_LOGIN
+    member_session.refresh(user)
+    assert user.adult_declared_at is None and user.adult_declaration_version is None      # 回訪不補寫
+
+
+def test_merging_into_an_existing_account_without_a_declaration_record_still_works(member_session):
+    """管理員與升級前的帳號沒有聲明紀錄：第一次以同信箱的 Google 登入（綁定）不檢查聲明，也不補寫。"""
+    admin = add_user(member_session, 1, role="admin", email_verified_at=START)
+    result = login_with(make_service(member_session, _provider_for("user1@example.com")), accept_terms=False, declare_adult=False)
+    assert result.outcome == OUTCOME_LINKED and result.user.id == admin.id
+    member_session.refresh(admin)
+    assert admin.adult_declared_at is None and admin.adult_declaration_version is None
+    assert len(users(member_session)) == 1 and len(identities(member_session)) == 1
+
+
+@pytest.mark.parametrize("declare_adult", [True, False])
+def test_an_unverified_legacy_account_merge_also_skips_the_declaration(member_session, declare_adult):
+    add_user(member_session, 1)
+    result = login_with(make_service(member_session, _provider_for("user1@example.com")), declare_adult=declare_adult)
+    assert result.outcome == OUTCOME_LINKED_UNVERIFIED
 
 
 @pytest.mark.parametrize(
@@ -224,7 +314,7 @@ def test_a_new_account_needs_only_the_terms(member_session, accept_terms, expect
         {"b": age_fields(30)["birth_date"], "r": "25_34"},            # 更新前發起、尚未回呼的交易
         {"b": age_fields(12)["birth_date"], "r": "under_13"},         # 即使帶的是未滿 13 歲，也不讀取
         {"b": "not-a-date", "r": "nope"},
-        {"a": True},
+        {"adult_declared_at": "2001-01-01T00:00:00", "adult_declaration_version": "forged"},   # 交易裡夾帶的時間與版本也不採用
     ],
 )
 def test_a_birthday_or_range_left_in_an_old_transaction_is_ignored_and_never_saved(member_session, legacy):
@@ -232,6 +322,7 @@ def test_a_birthday_or_range_left_in_an_old_transaction_is_ignored_and_never_sav
     assert result.outcome == OUTCOME_REGISTERED
     (user,) = users(member_session)
     assert user.birth_date is None and user.age_range is None and user.age_confirmed_at is None
+    assert user.adult_declared_at == START and user.adult_declaration_version == AgePolicy().version
 
 
 def test_existing_accounts_signing_in_are_never_marked_as_age_confirmed(member_session):
@@ -391,7 +482,7 @@ def test_losing_a_registration_race_falls_back_to_linking_instead_of_failing(mem
 
 def test_events_are_logged_by_outcome_without_the_address_the_subject_or_the_state(member_session, log_lines):
     service = make_service(member_session)
-    start = service.begin(accept_terms=True)
+    start = service.begin(accept_terms=True, declare_adult=True)
     service.complete(code="c", state=start.transaction["s"], provider_error=None, transaction=start.transaction)
     login_with(service)                                                                     # 第二次：已綁定
     with pytest.raises(GoogleLoginRefused):

@@ -160,11 +160,32 @@ def test_an_unsafe_next_never_reaches_the_page_state(app, bad):
 @pytest.mark.parametrize(
     ("code", "fragment"),
     [("google_state", "Google 登入的驗證"), ("google_unavailable", "暫時無法使用"), ("google_rejected", "沒有完成"),
-     ("terms_required", "勾選同意"), ("account_disabled", "已停用")],
+     ("terms_required", "勾選同意"), ("adult_required", "我確認已滿 18 歲"), ("account_disabled", "已停用")],
 )
 def test_known_error_codes_become_chinese_notices(full_app, code, fragment):
     notice = state_of(full_app.test_client().get(f"/login?error={code}"))["notice"]
     assert fragment in notice
+
+
+def test_the_adult_required_notice_says_the_service_is_for_adults_and_is_fixed_text_in_the_page_state(full_app):
+    """adult-only-signup：`/login?error=adult_required` 顯示固定的繁體中文提示；提示是伺服器的固定文字（不是請求帶來的字串），
+    以 JSON 狀態傳給前端，頁面不內嵌任何請求內容。"""
+    from app.controllers.auth_page_controller import LOGIN_ERROR_MESSAGES
+
+    response = full_app.test_client().get("/login?error=adult_required&detail=<script>alert(1)</script>")
+    notice = state_of(response)["notice"]
+    assert notice == LOGIN_ERROR_MESSAGES["adult_required"]
+    assert "僅限滿 18 歲" in notice and "我確認已滿 18 歲" in notice
+    assert "alert(1)" not in response.get_data(as_text=True)
+
+
+def test_every_google_refusal_code_has_a_fixed_login_notice(full_app):
+    """Service 的每個固定錯誤代碼都有登入頁的說明文字（新增代碼卻忘了加說明，就會變成沒有提示的空白登入頁）。"""
+    from app.controllers.auth_page_controller import LOGIN_ERROR_MESSAGES
+    from app.services import google_sign_in_service as service
+
+    codes = {value for name, value in vars(service).items() if name.startswith("ERROR_") and isinstance(value, str)}
+    assert codes == set(LOGIN_ERROR_MESSAGES)
 
 
 def test_the_retired_age_error_code_is_now_just_an_unknown_value(full_app):

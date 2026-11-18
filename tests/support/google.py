@@ -29,11 +29,11 @@ class FakeProvider:
 # ---- 走完整的 Google 登入流程（發起 → 回呼）-----------------------------------------------------------------
 
 def google_sign_in(app, client, **start_body):
-    """以假的供應商走一遍 Google 登入：發起（預設勾選條款）再以正確的 state 完成回呼。回傳回呼的回應（302）。"""
+    """以假的供應商走一遍 Google 登入：發起（預設勾選條款與「我確認已滿 18 歲」）再以正確的 state 完成回呼。回傳回呼的回應（302）。"""
     from app.security.cookies import SignedCookies
     from app.security.oauth_cookie import OAUTH_SALT
 
-    started = client.post("/api/auth/google/start", json={"accept_terms": True, **start_body})
+    started = client.post("/api/auth/google/start", json={"accept_terms": True, "declare_adult": True, **start_body})
     assert started.status_code == 200, started.get_data(as_text=True)
     cookies = SignedCookies(app.extensions["app_config"], app.extensions["clock"])
     transaction = cookies.loads(OAUTH_SALT, client.get_cookie("oauth_tx").value, max_age_seconds=600)

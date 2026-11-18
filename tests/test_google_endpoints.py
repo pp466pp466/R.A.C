@@ -17,7 +17,7 @@ from tests.support.auth import FakeClock, add_user
 from tests.support.client import raw_client
 from tests.support.google import SUB, FakeProvider
 
-FIXED_CODES = {"google_state", "google_unavailable", "google_rejected", "terms_required", "account_disabled"}
+FIXED_CODES = {"google_state", "google_unavailable", "google_rejected", "terms_required", "adult_required", "account_disabled"}
 
 
 @pytest.fixture()
@@ -42,7 +42,8 @@ def db(app) -> Session:
 
 
 def start(client, **body):
-    return client.post("/api/auth/google/start", json={"accept_terms": True, **body})
+    """發起（預設勾選條款與「我確認已滿 18 歲」）；要測沒勾選時以 `accept_terms=False`、`declare_adult=False` 覆寫。"""
+    return client.post("/api/auth/google/start", json={"accept_terms": True, "declare_adult": True, **body})
 
 
 def transaction_of(app, client) -> dict:
@@ -81,7 +82,8 @@ def test_start_returns_the_authorization_url_and_binds_the_transaction_to_this_b
     body = response.get_json()
     assert set(body) == {"authorization_url"} and body["authorization_url"].startswith("https://accounts.example/auth?")
     tx = transaction_of(app, client)
-    assert set(tx) == {"s", "n", "v", "t", "x"} and tx["t"] is True and tx["x"] == "/account"      # 交易裡沒有年齡資料
+    assert set(tx) == {"s", "n", "v", "t", "a", "x"} and tx["t"] is True and tx["a"] is True       # 交易裡只有兩個勾選旗標，沒有年齡資料
+    assert tx["x"] == "/account"
     assert f"state={tx['s']}" in body["authorization_url"]
     assert tx["v"] not in response.get_data(as_text=True)                                  # PKCE 驗證碼不回傳給前端
 
@@ -99,6 +101,29 @@ def test_a_birthday_and_range_in_the_start_request_are_ignored_and_never_saved(a
         assert s.query(User).count() == 0
 
 
+def test_the_start_request_reads_only_the_two_booleans_and_ignores_any_declaration_time_or_version(app):
+    """聲明的時間與版本由伺服器在建立帳號時決定：請求帶了這些欄位也不進交易 cookie，更不會被記下。"""
+    client = app.test_client()
+    fake = {"adult_declared_at": "2001-01-01T00:00:00Z", "adult_declaration_version": "forged-version", "version": "x", "declared_at": "y"}
+    assert start(client, **fake).status_code == 200
+    tx = transaction_of(app, client)
+    assert set(tx) == {"s", "n", "v", "t", "a", "x"}
+    assert "forged-version" not in str(tx) and "2001-01-01" not in str(tx)
+    run = callback(client, tx["s"])
+    assert run.status_code == 302
+    with db(app) as s:
+        user = s.query(User).one()
+        assert user.adult_declared_at == app.extensions["clock"]()                         # 伺服器時鐘，不是請求帶的
+        assert user.adult_declaration_version == app.extensions["age_policy"].version
+
+
+@pytest.mark.parametrize("value", [False, None, "true", 1, "yes", 0, [], {}])
+def test_only_a_real_true_counts_as_the_adult_declaration(app, value):
+    client = app.test_client()
+    assert start(client, declare_adult=value).status_code == 200
+    assert transaction_of(app, client)["a"] is False
+
+
 def test_a_returning_member_signs_in_from_an_empty_request_without_being_asked_for_the_terms(app, provider):
     with db(app) as s:
         add_user(s, 1, email_verified_at=app.extensions["clock"]())
@@ -106,7 +131,8 @@ def test_a_returning_member_signs_in_from_an_empty_request_without_being_asked_f
     client = app.test_client()
     response = client.post("/api/auth/google/start", json={})
     assert response.status_code == 200 and response.get_json()["authorization_url"].startswith("https://accounts.example/auth?")
-    assert transaction_of(app, client)["t"] is False                                       # 沒有勾選，也沒有被要求
+    tx = transaction_of(app, client)
+    assert tx["t"] is False and tx["a"] is False                                           # 沒有勾選，也沒有被要求
     done = callback(client, transaction_of(app, client)["s"])
     assert done.status_code == 302 and done.headers["Location"] == DEFAULT_AFTER_LOGIN
     assert client.get("/api/auth/me").get_json()["user"]["email"] == "user1@example.com"
@@ -166,7 +192,7 @@ def test_an_existing_verified_member_is_linked_and_logged_in(app, provider):
         add_user(s, 1, age=None, email_verified_at=app.extensions["clock"]())
     provider.profile = GoogleProfile(SUB, "user1@example.com", True, "x")
     client = app.test_client()
-    start(client, accept_terms=False)                                                       # 已有帳號：不必勾選條款
+    start(client, accept_terms=False, declare_adult=False)                                  # 已有帳號：不必勾選條款與年滿 18 歲聲明
     response = callback(client, transaction_of(app, client)["s"])
     assert response.headers["Location"] == "/age"                                           # 沒有年齡資料：只能去年齡確認頁
     me = client.get("/api/auth/me").get_json()["user"]
@@ -250,6 +276,29 @@ def test_a_new_member_who_did_not_accept_the_terms_is_sent_back_and_nothing_is_c
         assert s.query(User).count() == 0 and s.query(UserIdentity).count() == 0
 
 
+def test_a_new_member_who_did_not_declare_being_18_is_sent_back_and_nothing_is_created(app, provider):
+    client = app.test_client()
+    assert error_of(run_flow(app, client, declare_adult=False)) == "adult_required"
+    assert provider.exchanges and client.get("/api/auth/me").status_code == 401
+    with db(app) as s:
+        assert s.query(User).count() == 0 and s.query(UserIdentity).count() == 0
+
+
+def test_when_both_boxes_are_missing_the_terms_are_reported_first(app):
+    assert error_of(run_flow(app, app.test_client(), accept_terms=False, declare_adult=False)) == "terms_required"
+    with db(app) as s:
+        assert s.query(User).count() == 0
+
+
+def test_the_adult_declaration_is_recorded_with_the_server_clock_and_policy_version(app):
+    run_flow(app, app.test_client())
+    with db(app) as s:
+        user = s.query(User).one()
+        assert user.adult_declared_at == app.extensions["clock"]()
+        assert user.adult_declaration_version == app.extensions["age_policy"].version == "2026-11-17-adults-only"
+        assert user.birth_date is None                                                      # 聲明只是記錄，年齡仍待年齡確認頁
+
+
 def test_a_new_member_who_accepted_the_terms_gets_an_account_without_age_data_and_goes_to_the_age_page(app):
     client = app.test_client()
     response = run_flow(app, client)
@@ -297,8 +346,9 @@ def test_every_error_code_is_from_the_fixed_set(app, provider):
         seen.add(error_of(run_flow(app, app.test_client())))
     provider.error = None
     seen.add(error_of(run_flow(app, app.test_client(), accept_terms=False)))
+    seen.add(error_of(run_flow(app, app.test_client(), declare_adult=False)))
     seen.add(error_of(callback(app.test_client(), "nope")))
-    assert seen <= FIXED_CODES and len(seen) == 4
+    assert seen <= FIXED_CODES and len(seen) == 5
 
 
 # =============================================================================
@@ -357,6 +407,8 @@ def test_failures_that_cannot_be_tied_to_an_account_are_never_counted(app, provi
     provider.error = None
     for _ in range(12):
         run_flow(app, app.test_client(), accept_terms=False)                         # 還沒有帳號的身分（沒勾條款）
+    for _ in range(12):
+        run_flow(app, app.test_client(), declare_adult=False)                        # 還沒有帳號的身分（沒勾年滿 18 歲）
     assert lock_state(app) == (None, None, 0)
     with db(app) as s:
         assert s.query(LockStrike).count() == 0 and s.query(User).count() == 1
@@ -395,4 +447,14 @@ def test_the_flow_is_logged_without_state_subject_code_or_address(app, log_lines
     assert events == ["auth.google_started", "auth.google_registered", "auth.google_rejected.state"]
     raw = log_lines.raw()
     for secret in (state, "very-secret-authorization-code", "forged-state-value", SUB, "person@example.com"):
+        assert secret not in raw
+
+
+def test_a_missing_adult_declaration_is_logged_as_one_event_name_without_any_personal_data(app, log_lines):
+    client = app.test_client()
+    run_flow(app, client, declare_adult=False)
+    events = [line["event"] for line in log_lines() if "event" in line]
+    assert events == ["auth.google_started", "auth.google_rejected.adult"]
+    raw = log_lines.raw()
+    for secret in (SUB, "person@example.com", "code-from-google", "王小明"):
         assert secret not in raw
