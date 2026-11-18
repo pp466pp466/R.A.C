@@ -1,6 +1,7 @@
 # 前端架構
 
 > 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 注意（2026-11-18）：本文件已納入 change `adult-only-signup` 的前端變化（登入頁第二個勾選框「我確認已滿 18 歲」、請求多一個 `declare_adult`、年齡確認頁的僅限滿 18 歲提示、帳號頁移除未成年的安全模式提示）。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
@@ -90,7 +91,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Login["login.js<br/>Google 按鈕＋條款勾選框"] -->|"POST /api/auth/google/start<br/>只送 accept_terms 與 next"| Provider["導向 Google（https 才導向）"]
+    Login["login.js<br/>Google 按鈕＋兩個勾選框"] -->|"POST /api/auth/google/start<br/>只送 accept_terms、declare_adult 與 next"| Provider["導向 Google（https 才導向）"]
     Provider --> Callback["/auth/google/callback"]
     Callback -->|"新帳號"| Age["age.js<br/>生日＋年齡區間"]
     Callback -->|"被鎖定"| Appeal["appeal.js<br/>申訴＋自己的申訴狀態"]
@@ -107,8 +108,8 @@ flowchart LR
     Flows -.-> Pw
 ```
 
-- **登入頁只有 Google 與條款**：沒有電子郵件、密碼、生日與年齡欄位，也沒有註冊與忘記密碼的連結；按鈕在條款沒勾選時仍可按（回訪的使用者不必勾選，新使用者沒勾由伺服器擋下並導回提示），只在送出中禁用。`/register` 與註冊頁的範本、腳本已移除。
-- **年齡確認頁**：伺服器提供年齡規則（區間選項與範圍）放在初始狀態，沒有任何個人資料；`age_mismatch` 顯示通用說明並清空兩個欄位；`age_not_eligible`（帳號已抹除）只顯示說明與回登入頁的連結；登入逾時導向登入頁。生日只存在輸入框的響應式欄位，不寫入任何瀏覽器儲存體。
+- **登入頁只有 Google 與兩個勾選框**（「同意服務條款與隱私權政策」、「我確認已滿 18 歲」）：沒有電子郵件、密碼、生日與年齡欄位，也沒有註冊與忘記密碼的連結；按鈕在勾選框沒勾時仍可按（回訪的使用者不必勾選，新使用者缺任一項由伺服器擋下並導回提示：`terms_required`、`adult_required`，提示文字是伺服器固定的 `LOGIN_ERROR_MESSAGES`，前端不另存一份），只在送出中禁用；請求只送兩個布林與 `next`（`googleStartBody`）。範本與腳本不寫死年齡數字：勾選框與說明用 Vue 插值 `ageRules.minRegisterAge`（`login.js` 回傳 `ageRules`，由伺服器放進初始狀態）。`/register` 與註冊頁的範本、腳本已移除。
+- **年齡確認頁**：伺服器提供年齡規則（區間選項與範圍）放在初始狀態，沒有任何個人資料；`age_mismatch` 顯示通用說明並清空兩個欄位；頁面有「本服務僅限滿 N 歲者使用」的提示（`#adults-only-note`，N 取自年齡規則）；`age_not_eligible`（帳號已抹除，說明依 `AgePolicy` 的最低年齡組成）只顯示說明與回登入頁的連結；登入逾時導向登入頁。生日只存在輸入框的響應式欄位，不寫入任何瀏覽器儲存體。
 - **申訴頁**：字數提示（以 Unicode 字元計）、自己的申訴與處理狀態、已有待處理的申訴時不顯示表單；申訴內容一律純文字；沒有被鎖定時 API 回 404，頁面導向預設頁面。
 - **管理員密碼驗證頁**：密碼在送出的當下立即清空；沒有或已過期的中間狀態導回 `/login?error=google_state`；「忘記密碼」只在伺服器說有寄信設定時顯示。
 - **重設密碼確認頁**（`/reset-password`，`reset-password.js`，只服務管理員；玩家沒有密碼，也不會收到這類信）：權杖在信中連結的網址片段（`#token=…`），頁面讀取後立即從網址列移除，**載入時不自動送出任何動作**，使用者輸入新密碼（8 至 128 字）與確認、按下按鈕才 `POST /api/auth/reset-password`。兩次輸入不一致在前端擋下；成功後清空兩個欄位，只顯示結果訊息與「前往登入」；缺少權杖時顯示「連結不完整」的說明與回到登入的連結。沒有寄信設定（寄信器與 `BASE_URL`）時伺服器回 404，這個頁面不存在。
@@ -127,7 +128,7 @@ flowchart LR
     Acc -.->|"撤銷成功"| Reload["Toast 後重新載入 /account"]
 ```
 
-- 年齡補填區塊只留給管理員（玩家沒完成年齡確認之前連這一頁都進不來，會被導向 `/age`）。
+- 年齡補填區塊只留給管理員（玩家沒完成年齡確認之前連這一頁都進不來，會被導向 `/age`）。adult-only-signup 移除了 `ageGroup === 'minor'` 的安全模式提示區塊與 `account.js` 的對應狀態；補填區塊的說明改為「只用於年齡確認與去識別的統計」。
 - **匯出**：`POST /api/account/export` 以 `responseType: 'blob'`、逾時 60 秒、`AbortController` 送出（離開頁面時中止），回應轉成物件網址以 `<a download>` 下載；無論成功、失敗或中斷，`finally` 恢復按鈕。失敗時錯誤本文也是 Blob，`unwrapBlobError` 先讀成 JSON 再交給共用的錯誤整理。
 - **刪除**：自製 Modal（Vue 狀態接管）說明 7 天寬限、抹除範圍並建議先匯出；有密碼者輸入密碼，其餘輸入確認文字（文字由伺服器放進初始狀態，前端不寫死第二份）。**確認前不送出請求**；送出後密碼欄位立即清空；成功後所有裝置登出並導向登入頁，登入頁以固定列舉的代碼顯示寬限期說明。
 - **等待刪除**：另一份 HTML 只有預定刪除時間（台灣時間）、撤銷與登出；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕；頁面開著時剛好過期則由前端處理 `grace_expired`（顯示說明、按鈕恢復）。登入頁與 Google 回呼在 `deletion_pending` 時一律去 `/account`，不依 `next`。

@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -18,7 +18,7 @@ stateDiagram-v2
     deletion_pending --> active : 7 天內撤銷
     deletion_pending --> [*] : 寬限期滿由 execute-account-deletions 抹除
     active --> [*] : 連續 12 個月未登入直接刪除（管理員不納入）
-    active --> [*] : 24 小時內未完成年齡確認（purge-unconfirmed-accounts）或補填時未滿 13 歲（立即抹除）
+    active --> [*] : 24 小時內未完成年齡確認（purge-unconfirmed-accounts）或補填時未滿 18 歲（立即抹除）
 ```
 
 - 只有三種狀態：`active`、`suspended`、`deletion_pending`。**`pending_verification` 已退役**（玩家的信箱在建立帳號時就由 Google 驗證）：遷移 `0011` 把殘留的 `pending_verification`（含申請刪除前的狀態）改為 `active`，程式不再產生它。
@@ -62,7 +62,7 @@ flowchart LR
 
 ## 4. Google 登入
 
-登入與註冊合一：`/login` 只有「使用 Google 登入」按鈕與「同意服務條款與隱私權政策」勾選框（新使用者必須勾選，回訪的使用者不必）。年齡不在這裡填，登入之後才做（第 7b 節）。
+登入與註冊合一：`/login` 只有「使用 Google 登入」按鈕與兩個勾選框——「同意服務條款與隱私權政策」與「我確認已滿 18 歲」（全站只限滿 18 歲；新使用者**兩者都必須勾選**，回訪的使用者不必）。年齡不在這裡填，登入之後才做（第 7b 節）。
 
 ```mermaid
 sequenceDiagram
@@ -72,7 +72,7 @@ sequenceDiagram
     participant C as /auth/google/callback
     participant S as GoogleSignInService
 
-    B->>A: POST（accept_terms 與 next；請求帶生日也忽略）
+    B->>A: POST（accept_terms、declare_adult 與 next；請求帶生日、時間或版本也忽略）
     A-->>B: 設定 oauth_tx cookie（PKCE verifier、state、nonce、條款旗標）並回授權網址
     B->>G: 授權（Authorization Code + PKCE S256）
     G-->>B: 導回 callback（code、state）
@@ -84,8 +84,8 @@ sequenceDiagram
         S->>S: 直接登入（不因 Google 端信箱變更而重新比對）
     else 信箱已有本機帳號
         S->>S: 已驗證直接綁定，未驗證則清除未驗證的密碼憑證後綁定並視為已驗證
-    else 全新信箱（需已勾選條款）
-        S->>S: 建立帳號：信箱已驗證、沒有密碼、沒有生日，age_deadline_at 為建立後 24 小時
+    else 全新信箱（需已勾選條款與年滿 18 歲聲明）
+        S->>S: 建立帳號：信箱已驗證、沒有密碼、沒有生日，記錄 adult_declared_at 與 adult_declaration_version，age_deadline_at 為建立後 24 小時
     end
     alt 管理員
         C-->>B: 302 /login/password，核發 10 分鐘的中間狀態 cookie（第 7c 節），沒有登入 session
@@ -94,8 +94,9 @@ sequenceDiagram
     end
 ```
 
-- 已有帳號者登入不需要勾選條款；沒有帳號而沒勾條款不建立帳號，導回 `/login?error=terms_required`。
-- **政策頁與條款版本**：`/terms`、`/privacy` 是應用程式內的繁體中文頁面（沒有外部資源），版本字串 `CURRENT_TERMS_VERSION`（`app/services/legal.py`，目前 `2026-11-16-draft-7`）由伺服器決定，只影響之後新註冊者記錄的 `terms_version`，不強迫既有使用者重新同意。rpg-turn-revision 補了：服務條款「重新生成與編輯最後一輪」一條（重新生成與編輯**共用**每回合前幾次免費、免費次數內不扣幣也不需要餘額、用完後每次消耗一輪的幣、原本那輪已扣的幣不退、餘額不足無法送出、編輯不使免費次數歸零；條文不寫死幣價與次數）；隱私權政策補玩家於重新生成時填寫的理由（供營運團隊檢視、不送給 AI、隨存檔與帳號刪除、納入匯出）與遊戲幣錢包與帳本的保存。尚待處理：隱私權政策沒有明寫「遊玩時的行動與劇情歷史」也送往 RPG 模型服務，列入法務覆核。
+- 已有帳號者登入不需要勾選；沒有帳號時先檢查條款、再檢查聲明：沒勾條款不建立帳號，導回 `/login?error=terms_required`；沒勾年滿 18 歲聲明不建立帳號，導回 `/login?error=adult_required` 並記錄 `auth.google_rejected.adult`（兩項都沒勾時只回報條款）。
+- **年滿 18 歲聲明**（adult-only-signup）：新使用者建立帳號時寫入 `users.adult_declared_at`（伺服器時鐘）與 `users.adult_declaration_version`（當時的 `AgePolicy.version`；遷移 `0019`，皆可為空，管理員與升級前的帳號為空）。它只是稽核紀錄，**不是年齡判斷的依據**：年齡一律由 `birth_date` 於當下計算，與生日不一致時以生日為準。`/api/auth/google/start` 只讀 `accept_terms` 與 `declare_adult` 兩個布林，請求帶的任何時間、版本、生日與年齡區間一律忽略；兩個旗標放在簽章的交易 cookie（鍵 `t`、`a`），部署瞬間仍在進行中的舊授權流程（沒有 `a`）視為未聲明，被拒絕並提示重新勾選。
+- **政策頁與條款版本**：`/terms`、`/privacy` 是應用程式內的繁體中文頁面（沒有外部資源），版本字串 `CURRENT_TERMS_VERSION`（`app/services/legal.py`，目前 `2026-11-18-draft-8`）由伺服器決定，只影響之後新註冊者記錄的 `terms_version`，不強迫既有使用者重新同意。rpg-turn-revision 補了：服務條款「重新生成與編輯最後一輪」一條（重新生成與編輯**共用**每回合前幾次免費、免費次數內不扣幣也不需要餘額、用完後每次消耗一輪的幣、原本那輪已扣的幣不退、餘額不足無法送出、編輯不使免費次數歸零；條文不寫死幣價與次數）；隱私權政策補玩家於重新生成時填寫的理由（供營運團隊檢視、不送給 AI、隨存檔與帳號刪除、納入匯出）與遊戲幣錢包與帳本的保存。尚待處理：隱私權政策沒有明寫「遊玩時的行動與劇情歷史」也送往 RPG 模型服務，列入法務覆核。adult-only-signup（draft-8）：服務條款改為僅限滿 18 歲、註冊時須聲明已滿 18 歲且據實聲明並自行承擔謊報的責任、未滿 18 歲者不得使用且帳號與資料立即刪除（移除「13 歲以上」與「13 至 17 歲僅限安全模式」）；隱私權政策的生日用途改為「年齡確認」與「去識別的統計」，未滿 13 歲改為未滿 18 歲。「服務含露骨內容」與「敏感內容可能被模型供應商留存」要等到安全模式可關閉的功能（`safe-mode-toggle`）上線才寫，屆時再提高一次版本。
 - 已存在的帳號（已綁定或以信箱合併）登入時**不會**被順便標記為已確認年齡。
 - 已辨識出帳號卻被拒絕（帳號停用、已綁定另一個 Google 身分）會計入帳號鎖定的計次（第 7b 節）；無法辨識身分的失敗與還沒有帳號的 Google 身分不計。
 - 開發與正式環境使用不同的 OAuth 用戶端；失敗一律導回 `/login?error=<固定代碼>`，Google 回傳的任何文字都不會進入網址或頁面。
@@ -103,7 +104,7 @@ sequenceDiagram
 
 ## 5. 年齡閘門與內容模式
 
-年齡規則的所有數字（最低註冊年齡 13、最低使用年齡 13、成年門檻 18、區間選項、政策版本）只在 `app/services/age_policy.py` 的 `AgePolicy`；年齡一律由生日於「當下」計算，不用儲存的結果判斷。
+年齡規則的所有數字（最低註冊年齡 18、最低使用年齡 18、成年門檻 18、區間選項、政策版本）只在 `app/services/age_policy.py` 的 `AgePolicy`；年齡一律由生日於「當下」計算，不用儲存的結果判斷。**全站只限滿 18 歲**（adult-only-signup，政策版本 `2026-11-17-adults-only`）：區間選項不變，選到「未滿 13 歲」或「13–17」一律是 `age_not_eligible`（讓未成年者自行表明並被拒絕）；日後調整最低年齡只需換一個 `AgePolicy` 並提高版本。
 
 ```mermaid
 flowchart TD
@@ -118,9 +119,11 @@ flowchart TD
 
 - `chat_gate` 是純查詢（不拋例外、不記錄事件）；`require_chat_access` 以它判斷並對年齡拒絕記錄一筆事件，兩者不會分歧（測試逐一比對）。
 - 管理員與各會員等級都不豁免年齡閘門。管理員帳號由指令建立，沒有生日，第一次登入後須到 `/account` 補填；**玩家**則是登入後除了年齡確認與登出什麼都不能做（受限登入狀態 `age_pending`，第 7b 節），所以玩家不會走到 `chat_gate`。
-- 13 至 17 歲可以使用（含 AI 功能）但固定安全模式；此設定以供應商同意為前提，換供應商時只需換 `AgePolicy` 並提高版本（見 [路線圖-roadmap.md](路線圖-roadmap.md) 的待決定事項）。
+- 全站只限滿 18 歲：最低註冊年齡與最低使用年齡都是 18，沒有可使用的未成年區間。補填時算出未滿 18 歲的玩家立即抹除（第 7b 節）；已有生日但未滿 18 歲的帳號（資料庫裡不會存在，只在單元測試製造）呼叫模型功能得到 `age_restricted`。先前「13 至 17 歲可以使用但固定安全模式」的設定已取消（它以供應商同意為前提，與 Gemini 條款的 18 歲門檻不符）。
 
 ### 內容模式（change `rpg-data-and-script`，取代 `sexual_content_level` 0 至 3）
+
+> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）**：全站只限滿 18 歲；內容模式改為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車。**程式尚未跟進**（屬 `safe-mode-toggle`）：以下的三種模式、`ADULT_MODE_ENABLED`、`ADULT_MODE_MODELS` 與成年確認描述的是目前的實作，由該 change 取代；依年齡決定內容上限的分支在最低年齡 18 之下不會被觸發（只剩單元測試製造的情境）。
 
 三種模式由保守到寬鬆：`safe`（安全模式）、`standard`（一般模式）、`adult`（成人模式）；順序與「取較保守者」在 `app/services/content_tier.py`（純邏輯，無法判定視為 `safe`）。**生效模式 = 玩家偏好、年齡上限、劇本宣告、存檔記錄中最保守者**（`AccessPolicy.effective_tier`）。
 
@@ -135,10 +138,10 @@ flowchart TD
     Cap3 --> Eff
 ```
 
-- **偏好與預設**：`users.content_tier_preference` 預設 `safe`；年齡確認成功的當下依年齡設定（已滿 18 歲 `standard`，未滿 `safe`）。**滿 18 歲不自動調高**：年齡上限解除，但偏好與既有存檔的模式不變，`GET /api/account/content-mode` 的 `selectable.standard` 變成真值，介面提示玩家自行切換。成年玩家也可以自行選擇 `safe`。偏好為 `adult` 但條件不齊時退為 `standard`，不是錯誤。
+- **偏好與預設**：`users.content_tier_preference` 預設 `safe`；年齡確認成功時**一律**設為 `safe`（adult-only-signup；先前成年者為 `standard`，且 `is_adult_at_confirmation` 不再寫入）。**不自動調高**：玩家須自行切換，`GET /api/account/content-mode` 的 `selectable.standard` 為真值。成年玩家也可以自行選擇 `safe`。偏好為 `adult` 但條件不齊時退為 `standard`，不是錯誤。
 - **成人模式須同時滿足**：部署開關 `ADULT_MODE_ENABLED` 開啟；已滿 18 歲；在目前的安全規範版本（`ADULT_RULES_VERSION`）下完成成年確認；偏好為 `adult`。成年確認在切換為成人模式時完成：同時確認「我確定已滿 18 歲」與同意安全規範兩項（缺一回 400 並指出缺哪一項），記錄確認時間、規範版本與方式（目前 `self_declared`，不蒐集證件、不接第三方驗證）；規範版本改變後先前的確認失效，須重新確認；離開成人模式不清除紀錄。
 - **API**（需登入、CSRF、先過年齡閘門；受限登入狀態依既有規則被拒絕）：`GET /api/account/content-mode` 與 `PUT /api/account/content-mode`。回應只有 `preference`、`effective`、`selectable`（三種模式各是否可選）、`adult_reason`（`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`，**不含**生日、年齡區間、年齡確認時間或內部編號。錯誤：400（`mode` 不是三種之一，或缺少確認的那一項）、403 `content_mode_restricted`（未滿成年門檻者要求 `standard` 或 `adult`）、403 `adult_mode_unavailable`（部署開關關閉）、403 `age_confirmation_required`、401。成功時記錄 `account.content_mode.safe`／`standard`／`adult` 事件（只有事件名稱與使用者編號）。
-- `/account` 對 13 至 17 歲的使用者顯示安全模式的提示與原因，依生日於當下計算的年齡群組決定，不看儲存的偏好；目前**沒有切換內容模式的介面**（RC-3）。
+- `/account` 不再有未成年的安全模式提示（adult-only-signup 移除；`/api/auth/me` 的 `age_group` 欄位保留，已完成確認者必為 `adult`）；目前**沒有切換內容模式的介面**（RC-3）。
 - **故事偏好**（change `story-preference`）：`users.story_preference`（`all`／`male`／`female`，預設 `all`）**只影響劇本清單的排序**，與內容模式是兩回事——不影響生效的內容模式、可看或可玩的劇本、敘事、提示詞與額度，也不被年齡確認、切換內容模式或滿 18 歲自動改變。端點 `GET`／`PUT /api/account/story-preference` 用 `require_login()`（受限登入狀態一律被拒），**不過年齡閘門 `require_chat_access`**——那一道檢查的是「能不能呼叫模型」，偏好不涉及模型。值必須完全等於三個列舉值之一（否則 400 並指出 `story_preference`，偏好不變，錯誤不回顯輸入）；請求中沒有任何可指定他人的欄位。`CurrentUser.public_dict` 多一個 `story_preference` 鍵（`/api/auth/me`），不含生日與年齡區間。成功只記 `account.story_preference_changed`（事件名稱與使用者編號，不含值）。
 - 年齡規則的數字不在 `AccessPolicy` 內嵌（測試以 AST 掃描不得出現 13、17、18）；`AccessPolicy.content_access(user)` 回傳 `ContentAccess`（偏好、年齡上限、生效模式、是否已成年、成人模式是否可選、是否已確認、原因）。
 
@@ -150,7 +153,7 @@ flowchart TD
 
 - 舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS` 已淘汰：忽略、啟動時各警告一次（只含變數名稱），**忽略 = 成人模式維持關閉**；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕。
 - 清單只在開關開啟時才驗證，關閉時完全不影響行為；它是「防止換了模型卻忘了許可範圍」的護欄，不是許可本身的證明。**許可涵蓋的供應商與日期須由人另外記錄**（使用者尚未提供，見 [路線圖-roadmap.md](路線圖-roadmap.md)）。
-- **這只是資料與政策基礎**：RPG 尚未實作，目前沒有任何送出露骨內容的入口。任何入口出現之前，仍須先完成**自家審查層**（安全模式與一般模式的界線、擋未成年、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕，屬 RC-2）、書面許可與法務意見。
+- **這只是資料與政策基礎**：RPG 尚未實作，目前沒有任何送出露骨內容的入口。任何入口出現之前，仍須先完成**自家審查層**（安全模式與一般模式的界線、擋未成年、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕，屬 RC-2；**審查層已於 rpg-turn-engine 實作**）。書面許可與法務意見原本也列為前提，**2026-11-17 規範修訂後不再是前提**（見本節開頭的說明）。
 
 ## 6. 權限規則與端點清單
 
@@ -173,10 +176,10 @@ flowchart TD
 | `/api/auth/logout` | POST | 否 | 登出目前裝置 |
 | `/api/auth/logout-all` | POST | 是 | 登出所有裝置 |
 | `/api/auth/me` | GET | 是 | 本人資料（不含生日與內部編號） |
-| `/api/auth/verify-age` | POST | 是（含待確認年齡） | 補填生日、年齡區間與暱稱（玩家必填，管理員可省略）；暱稱先驗證，不合格只回欄位錯誤、不計入鎖定計次；未滿 13 歲的玩家立即抹除、不一致計入鎖定計次 |
+| `/api/auth/verify-age` | POST | 是（含待確認年齡） | 補填生日、年齡區間與暱稱（玩家必填，管理員可省略）；暱稱先驗證，不合格只回欄位錯誤、不計入鎖定計次；未滿 18 歲的玩家立即抹除、不一致計入鎖定計次 |
 | `/api/auth/change-password` | POST | 是 | 變更密碼（只有已設定密碼者，實際上是管理員；玩家得到 400 `no_password`） |
 | `/api/auth/reset-password` | POST | 否 | 管理員以重設權杖設定新密碼（沒有寄信設定時 404；非管理員的權杖視為無效） |
-| `/api/auth/google/start` | POST | 否 | 發起 Google 登入（未設定時 404）；只收 `accept_terms` 與 `next` |
+| `/api/auth/google/start` | POST | 否 | 發起 Google 登入（未設定時 404）；只收 `accept_terms`、`declare_adult` 與 `next` |
 | `/api/appeals` | POST | 是（含被鎖定） | 被鎖定或被暫停發佈的玩家向管理員申訴（其他人 404） |
 | `/api/appeals/mine` | GET | 是（含被鎖定） | 自己的申訴與處理狀態 |
 
@@ -327,7 +330,7 @@ flowchart TD
 
 - **允許清單不變**：`/api/account/story-preference` 與其他需要登入的端點一樣被三種受限登入狀態預設拒絕（`locked` 回 `account_locked`、`age_pending` 回 `age_confirmation_required`、`deletion_pending` 回 `account_deletion_pending`），不在任何狀態的允許清單內；`tests/test_restricted_session.py` 的全路由掃描自動涵蓋，`tests/test_story_preference_api.py` 另逐一證明三種狀態的代碼且偏好不變。
 - **入口清單端點同樣不在允許清單內**（change `rpg-entry-ui`）：`GET /api/sessions/catalog` 與 `GET /api/sessions` 用 `require_login()`，三種受限登入狀態各回自己的 403 代碼（`tests/test_session_api.py` 逐一證明，`test_restricted_session.py` 的 `REQUIRED_TO_BE_FOUND` 也列入它們，確保掃描真的看得到）。**它們不過年齡閘門 `require_chat_access`**，原因是 `/game` 是登入後的預設頁面，而未確認年齡的**管理員**（不是 `age_pending`）也會落在那裡：清單不花成本，內容模式對未確認年齡者本來就是安全模式，所以回安全模式的清單而不是 403；真正會花成本的開存檔、AI 生成與回合仍由既有的閘門拒絕（`tests/test_session_api.py` 證明未確認年齡的管理員讀得到清單、開存檔得 403 `age_confirmation_required`）。
-- **年齡確認**：玩家首次以 Google 登入只建立帳號（沒有生日，`age_deadline_at` = 建立後 24 小時），登入後被導向 `/age`；`POST /api/auth/verify-age` 驗證生日與區間：未滿 13 歲立即抹除（`AccountErasureService.erase_underage`，不保存生日）、不一致回通用訊息並計入鎖定計次、成功則寫入並清空期限。逾時由 `purge-unconfirmed-accounts` 每小時清除。
+- **年齡確認**：玩家首次以 Google 登入只建立帳號（沒有生日，`age_deadline_at` = 建立後 24 小時），登入後被導向 `/age`；`POST /api/auth/verify-age` 驗證生日與區間：未滿 18 歲（或所選區間為未滿 13 歲、13–17）立即抹除（`AccountErasureService.erase_underage`，不保存生日）、不一致回通用訊息並計入鎖定計次、成功則寫入並清空期限。逾時由 `purge-unconfirmed-accounts` 每小時清除。
 - **帳號鎖定**：`AccountLockService.register_strike` 把兩類計次寫入 `lock_strikes`——`identity_rejected`（已辨識出帳號卻被拒絕的 Google 登入、補填年齡不一致；15 分鐘內 5 次）與 `rate_limited`（被每分鐘訊息數上限擋下；15 分鐘內 10 次）；達門檻時以條件式 UPDATE 鎖定並寫 `account.lock` 稽核（管理員欄位為空）。計次發生在會以 4xx 結束的請求裡，所以寫入後呼叫 `keep_changes_on_error`。無法辨識出帳號的失敗不計次。
 - **申訴**：`/api/appeals` 對被鎖定或被暫停發佈的玩家有效（兩者皆非則 404，管理員也一樣），1000 字、每小時 3 則、同時 1 則待處理，兩種狀態共用同一套上限；內容是個資，日誌與稽核只有字數（`appeal.submit`）。`/appeal` 頁面由 `CurrentUser.appeal_kind`（`locked` 優先、`suspended`）決定說明文字，兩者皆非時導向預設頁面。
 

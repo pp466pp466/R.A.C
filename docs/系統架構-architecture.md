@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-18 ｜ 對應 change：adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -116,7 +116,7 @@ flowchart TD
 
 | 規則 | 守法 |
 |---|---|
-| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 13 歲的立即抹除，都共用 `AccountErasureService`：先把別人的存檔對這位作者的劇本版本的來源參照清為空值（無動作的外鍵，不清會擋住刪除）、再清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
+| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 18 歲的立即抹除，都共用 `AccountErasureService`：先把別人的存檔對這位作者的劇本版本的來源參照清為空值（無動作的外鍵，不清會擋住刪除）、再清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
 | 每張指向使用者、對話、存檔、劇本或版本的資料表都要登記（任意父表的串聯與無動作的外鍵都分類），沒有外鍵的整數參照與無動作的外鍵必須由抹除流程在刪除使用者之前明確清除 | `tests/architecture/test_account_erasure_coverage.py`（新增資料表漏掉就失敗，並有自我驗證）；`test_account_erasure_rpg_data.py` 以行為證明作者被抹除時別人的存檔保留 |
 | 劇本版本的狀態與兩個輔助欄位（`live_script_id`、`open_script_id`）只由 `ScriptRepository` 寫入；不得在別處建立 `ScriptVersion`、對它 `update`／`delete` 或對它的 `status` 賦值 | `tests/architecture/test_script_state_writes.py`（AST 掃描 `app/`，並附反向驗證） |
 | `RetentionRepository`（依期限刪除對話、帳本、權杖、稽核、鎖定計次、RPG 存檔與回合的部分內容）只被 `data_retention_service.py` 與 `registry.py` 匯入；`AdminAuditRepository` 仍沒有更新與刪除 | `tests/architecture/test_retention_boundaries.py` |
@@ -445,7 +445,7 @@ flowchart LR
 | 擁有者條件寫進簽名 | 對話相關的 Repository 方法第一個參數都是 `user_id` | 避免只憑識別碼取資料；AST 測試守住                          |
 | 後台走專用路徑     | 管理員讀他人資料只能經 `AdminService` 與後台專用 Repository，每個方法先 `require_admin`、每次讀取先寫稽核 | 不放寬一般路徑的隔離保證；「只有管理員」與「後台資料只走後台路徑」由測試守住，不靠審查 |
 | 非擁有者一律 404   | 他人的資源與不存在的回應逐字相同                     | 不洩漏資源是否存在                                          |
-| 抹除只有一個出口   | 閒置清除、自助刪除、逾時未補填年齡與未滿 13 歲都走 `AccountErasureService`；新增資料表要登記 | 避免每個功能各做一套刪除而漏掉某張表；帳本的對話編號沒有外鍵，順序錯了就會留下錯指的參照 |
+| 抹除只有一個出口   | 閒置清除、自助刪除、逾時未補填年齡與未滿 18 歲都走 `AccountErasureService`；新增資料表要登記 | 避免每個功能各做一套刪除而漏掉某張表；帳本的對話編號沒有外鍵，順序錯了就會留下錯指的參照 |
 | 受限登入狀態預設拒絕 | 待刪除、待確認年齡與被鎖定的帳號可登入但只能做各自的一小組事情；`require_login` 預設拒絕，允許清單明確列出 | 新增端點漏了檢查也是安全的一邊；以掃描全部路由的測試證明 |
 
 ## 7. 規劃中的 RPG 模組

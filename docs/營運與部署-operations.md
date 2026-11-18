@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-17 ｜ 對應 change：aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作與驗收皆已完成並於 2026-11-17 封存，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：adult-only-signup（第 3 節：遷移 `0019`；第 8 節缺口表第八項的更正）、aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作與驗收皆已完成並於 2026-11-17 封存，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的營運變化（新排程指令 `purge-unconfirmed-accounts`、告警改名為「帳號鎖定激增」、期限清除納入鎖定計次）與 change ② `remove-player-password-auth`：`EMAIL_VERIFICATION_REQUIRED` 已淘汰（留著只會警告一次，部署計畫檔含有它會被拒絕）；寄信設定只供營運告警信與管理員的重設密碼信使用，玩家不收任何信；部署多一個資料遷移 `0011`；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie（`scripts/mint_test_sessions.py`）。
 > 注意（2026-11-03）：本文件已納入 change `rpg-data-and-script`：成人模式的環境變數改為 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`（舊的 `SEXUAL_CONTENT_LEVEL3_*` 已淘汰：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕；staging 與 production 不再一律禁止，須明確設定才生效）、新的人工類指令 `seed-scripts`（部署之後執行）、`purge-expired-data` 新增 RPG 存檔與回合部分內容兩類，以及遷移 `0012`。
 
@@ -115,6 +115,7 @@ sequenceDiagram
     Op->>Db: 之後的 change 才回填資料並加上約束（contract）
 ```
 
+- `0019_adult_declaration`（adult-only-signup）只新增兩個 `users` 欄位（`adult_declared_at`、`adult_declaration_version`：皆可為空、不回填、不建索引；downgrade 以 `recreate="never"` 直接移除），是 expand-only：舊版程式在新結構上照常運作（不讀這兩欄）。部署順序不變：備份（展示環境為手動快照）→ migration → 新版程式；`is_adult_at_confirmation` 不再寫入（欄位保留，日後的 contract 遷移再移除）。**狀態**：程式碼在 0019；本機 `project` 在 0017、展示環境 RDS 在 0018，0019 尚未套用（部署與驗收紀錄於 adult-only-signup 的任務 7.x 完成後補入）；`rpg-ops-loadtest` 若需要遷移，編號順延為 `0020`。
 - `0013_rpg_script_authoring` 的 `runtime_limits` 的初始值由遷移以 ORM 資料表寫入（`0013` 七個，`0014` 再補三個每日主角生成次數，只插入資料庫還沒有的鍵）；之後調整只用 `flask set-script-limit`（不必重新部署，程式每次使用時現讀）。資料缺值或不合法時（例如某一列被誤刪）讀取端用保守的保底預設並記一筆警告（只記鍵名）；表本身仍須先由遷移建立，所以順序不能反過來。
 
 ### 部署與回復（C-5a）
@@ -273,7 +274,7 @@ flowchart LR
 
 **排程與第一次執行**（排程器設定屬 C-5）：`execute-account-deletions` 與 `purge-expired-data` 各每日一次、可重複執行。第一次在正式環境執行前，先備份資料庫，並各以 `--dry-run` 檢視筆數；`purge-expired-data` 以非零結束代碼回報失敗的類別，排程器應把它接到告警（C-4d）。備份最長 30 天後自然汰除；備份還原後，依 `deletion_tombstones` 與日誌取出的檔案以 `replay-deletions` 重新執行刪除（指令與腳本已實作並在本機 SQL Server 演練，見「資料庫還原與重新抹除」；預備環境的實際演練屬 C-5b）。
 
-**RPG 敘事用途的模型端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：不是 staging 與 production 的必要機密（沒有設定時 RPG 用途不可用：兩個串流端點回 503 `service_unavailable`，唯讀端點照常）；金鑰與主要模型只設一個會啟動失敗。基底網址只允許 https（development 與 testing 另允許回送位址的 http，供本機模型）。免費換付費只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`）。**推理由 `OPENROUTER_REASONING` 控制**（預設 `false`＝每個請求，含備援模型，都明確帶 `reasoning: {"enabled": false}`；推理型模型預設首字 5 至 35 秒，關閉後不到 1 秒；設為 `true` 前先用 `flask llm-probe` 量首字時間，它會顯示目前的推理設定）。劇情是串流呼叫，**每個進行中的串流多佔一條讀取執行緒**，容量估算見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 11 節。**成人模式的部署開關 `ADULT_MODE_ENABLED`**（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_ENABLED`）預設關閉，各環境規則相同：staging 與 production 須明確設為 `true` 才生效，開啟時 RPG 用途必須已設定，且 `ADULT_MODE_MODELS`（書面許可涵蓋的模型）須涵蓋主要與備援模型，否則啟動失敗；這只是玩家能使用成人模式的條件之一（玩家仍須已滿 18 歲並完成成年確認）；殘留的舊變數只警告、不開啟任何東西；細節見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節與 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 10 節。換成不同模型或供應商時，也要依新方案重設下面的全站用量上限。
+**RPG 敘事用途的模型端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：不是 staging 與 production 的必要機密（沒有設定時 RPG 用途不可用：兩個串流端點回 503 `service_unavailable`，唯讀端點照常）；金鑰與主要模型只設一個會啟動失敗。基底網址只允許 https（development 與 testing 另允許回送位址的 http，供本機模型）。免費換付費只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`）。**推理由 `OPENROUTER_REASONING` 控制**（預設 `false`＝每個請求，含備援模型，都明確帶 `reasoning: {"enabled": false}`；推理型模型預設首字 5 至 35 秒，關閉後不到 1 秒；設為 `true` 前先用 `flask llm-probe` 量首字時間，它會顯示目前的推理設定）。劇情是串流呼叫，**每個進行中的串流多佔一條讀取執行緒**，容量估算見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 11 節。**成人模式的部署開關 `ADULT_MODE_ENABLED`**（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_ENABLED`）預設關閉，各環境規則相同：staging 與 production 須明確設為 `true` 才生效，開啟時 RPG 用途必須已設定，且 `ADULT_MODE_MODELS`（書面許可涵蓋的模型）須涵蓋主要與備援模型，否則啟動失敗（**2026-11-17 規範修訂後不再以書面許可為前提**，這個開關與清單隨 `safe-mode-toggle` 改為緊急煞車，程式尚未跟進）；這只是玩家能使用成人模式的條件之一（玩家仍須已滿 18 歲並完成成年確認）；殘留的舊變數只警告、不開啟任何東西；細節見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節與 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 10 節。換成不同模型或供應商時，也要依新方案重設下面的全站用量上限。
 
 全站每日用量上限由環境變數設定（逐項說明在 README 與 `.env.example`）：`USAGE_DAILY_TOKEN_LIMIT`（預設 1,000,000）與 `USAGE_DAILY_CALL_LIMIT`（預設 450）。預設值依目前使用的 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、每日 500 次請求），**換模型或換供應商（例如正式環境改用 OpenAI）時必須重設**；部署時須確認它們與供應商的實際配額一致。
 
@@ -425,7 +426,7 @@ flowchart BT
 | 託管資料庫的成本評估與同意（N-9） | 使用者 | 未開始 | 本機開發使用本機 SQL Server；Cloud SQL 費用未評估；使用者目前沒有可計費的 Google Cloud 專案（2026-11-02），雲端部分屬 C-5c |
 | 負載測試達到通過標準 | 系統（腳本）、使用者（預備環境） | 進行中 | 測試與判定腳本已完成；2026-11-02 本機容器預演留下兩輪記錄（README「驗收紀錄（C-5b）」），**兩輪都不是容量依據**也都沒有通過；雲端的實測屬 C-5c（`cloud-staging-run`） |
 | 入口層 IP 限流的決定 | 使用者 | 未開始 | 2026-10-30 使用者決定先不做；上線前必須重新決定（見下方） |
-| 成年驗證方式（只有要開放成人模式時才需要） | 使用者 | 未開始 | 方式已決定為切換時勾選確認（report.md 的 U-28），尚待法務確認足夠；程式已改為三種內容模式（`rpg-data-and-script`），成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉，另須書面許可、法務意見與劇情輸出的審查層（RC-2）到位才能對外開啟 |
+| 成年驗證方式（只有要開放成人模式時才需要） | 使用者 | 未開始 | 方式已決定為切換時勾選確認（report.md 的 U-28），尚待法務確認足夠；程式已改為三種內容模式（`rpg-data-and-script`），成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉。**2026-11-17 規範修訂**：全站只限滿 18 歲（新使用者註冊時勾選聲明），關閉安全模式不再以書面許可或法務意見為前提，部署層開關改為緊急煞車；劇情輸出的審查層（RC-2）已實作。這一列隨 `safe-mode-toggle` 重新評估 |
 
 ### 未滿足的規範項目
 
@@ -791,6 +792,7 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - **成人模式**：`ADULT_MODE_ENABLED` 沒有設定，所以關閉，不會用到這個免費模型。
 - **一般模式**：沒有被擋。只要有宣告為一般模式的劇本、並用它開存檔，就會用這個免費模型。**這次沒有跑到**：測試存檔的 `content_tier` 是 `safe`，因為目錄裡唯一的劇本（`xianxia-qingyun`）自己宣告安全，有效模式取玩家設定、劇本宣告與年齡上限三者中最保守者；要跑一般模式必須先有宣告為一般模式的劇本（玩家創作、送審、管理員核可），不在本批範圍。
 - 這項列入下方缺口表（「一般與成人模式不得使用免費模型」）。使用者在第 7 批選擇「維持免費模型」；展示環境沒有真實個資，隱私權政策也已寫明現階段免費模型不得輸入真實個資。
+- **更正（2026-11-18）**：AGENTS.md 第 7、11 節於 2026-11-17 修訂後，關閉安全模式（原成人露骨）「不以取得供應商書面許可、法務意見或付費模型為前提，可使用免費模型」，只須在隱私權政策告知敏感內容可能被供應商留存或人工審閱；所以上面的「不成立」不再是缺口，缺口表第八項已撤銷（見下方）。仍成立的事實：RPG 只有一個免費模型、沒有備援（供應商塞車時回合降級或回 503）與零保存，屬上線前的模型供應商評估。
 
 **證據限度**：一位測試玩家、各一次執行；時間包含網際網路與 TLS，不是容量依據；RPG 免費模型的延遲不穩定（6.4 曾 30 秒逾時），這次剛好順暢，不代表穩定；沒有測重新生成、編輯、記事簿抓取（要滿 10 輪）與被擋回合；一般模式與成人模式都沒有跑到。
 
@@ -813,7 +815,7 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 
 ### 展示環境未達 production 的缺口（task 7.4）
 
-**狀態**：2026-11-17 整理（第 6 批；第 7 批依 8.3 的結果加第八項「一般與成人模式不得使用免費模型」）。這一節只整理文件，沒有對 AWS 執行任何指令；「展示環境現況」取自計畫、design D11 與 task 4.x 至 7.x 的實際紀錄，本批沒有重新查詢。
+**狀態**：2026-11-17 整理（第 6 批；第 7 批依 8.3 的結果加第八項「一般與成人模式不得使用免費模型」，**2026-11-18 因 AGENTS.md 修訂而撤銷，現為七項**）。這一節只整理文件，沒有對 AWS 執行任何指令；「展示環境現況」取自計畫、design D11 與 task 4.x 至 7.x 的實際紀錄，本批沒有重新查詢。
 
 展示環境不是 production（見本節開頭的限制）。下表列出它與 AGENTS.md 第 9、11 節要求之間的缺口：每項寫明展示環境現況、不做的原因、風險與暫行做法、何時重新評估。不做的共同原因是展示用途（沒有真實會員，展示期到 2026-12-31）、費用與時程（design D11），**不是技術上做不到**。已列在「未滿足的規範項目」的入口層 IP 限流與內容安全政策，在展示環境同樣沒有（Caddy 不限流、應用程式不送 CSP），不在此重複。
 
@@ -826,9 +828,11 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 | **備份保留 30 天、跨帳號或跨區域存放、每季還原演練**（第 11 節） | RDS 自動備份只保留 **1 天**（Free plan 不接受 7 天，AWS 回 `FreeTierRestrictionError`，2026-11-16；規格只要求大於 0）；與資料庫同帳號同區域（雪梨）、單一可用區；加密已開；每次部署前另有手動快照 `<資料庫>-pre-<提交短碼>`（不隨 RDS 消失；拆除時預設刪除，見 design D14）。**還原演練沒有做** | Free plan 的限制加上展示用途；跨帳號或跨區域複製是額外的費用與流程 | 時間點還原只能回到最近 1 天；資料毀損超過一天才發現就回不去（展示環境的資料可重建：測試帳號與種子）。手動快照是唯一較長的保留，但留著會持續計費。暫行：遷移之前一定先快照 | 資料變得不可重建之前（有真實會員，或要保留 `rpg-ops-loadtest` 的量測資料）；改用付費方案或搬到 production 時：保留提高到 30 天、加跨帳號或跨區域複製，並做第一次還原演練 |
 | **應用程式日誌保存 30 天**（第 11 節） | 沒有集中式日誌。每個容器只有 Docker 的循環日誌（`json-file`，單檔 10 MB、最多 3 個，每個容器上限約 30 MB，**依大小而不是依時間**，流量大時保存更短）；單元的輸出依 systemd 預設也進 journald（單元沒有另外設定輸出；排程單元用 `journalctl -u` 讀到過，常駐單元沒有另外驗證），但保存時間與是否跨重開機保存**沒有設定也沒有查證**；排程容器是 `--rm`，容器日誌隨容器消失，只剩 journald；主機終止時日誌全部消失。格式（結構化 JSON、不含個資）符合規範 | 沒有日誌代理或集中式服務；費用與時程 | 事後調查（幾天前的 5xx、告警失敗、模型逾時）可能已經沒有日誌。暫行：事件發生時立即看 `docker logs` 與 `journalctl -o cat`（本 change 的雲端批次都是這樣做） | 有真實會員之前；或需要保留量測期間的日誌時（`rpg-ops-loadtest`） |
 | **營運告警信的投遞品質**（上線前關卡「網域取得，Google 登入與信件的 SPF／DKIM／DMARC 設定」） | 進入告警與已恢復兩封信**都進了使用者的垃圾郵件匣**；原因沒有驗證（沒看標頭與 Brevo 的投遞紀錄），推測是寄件者與收件者都是免費信箱網域，DKIM 與 SPF 無法對齊。只有**一個收件人**；Brevo 免費方案的每日寄送上限**沒有查**；管理員重設密碼信**沒有真的寄過**（只驗證了兩個池的 SMTP 登入）。EC2 告警（SNS）的信在收件匣收到 | 沒有自己的網域可以在 Brevo 驗證寄件網域；展示環境不做 | 告警信可能被信箱判為垃圾信而漏看。暫行：使用者自己把寄件者標為「非垃圾信」並定期看垃圾郵件匣 | 取得自己的網域時（與上線前關卡同一項）；增加收件人或寄信量之前先查寄送上限 |
-| **一般與成人模式不得使用免費模型**（第 11 節「RPG 模型供應商與個資」；第 7 批 8.3 新增） | RPG 只有一個模型設定，是免費模型 `nvidia/nemotron-3.5-lightning:free`，沒有備援（`OPENROUTER_FALLBACK_MODEL` 未設，備援就是主要模型）、沒有零保存（`OPENROUTER_ZDR` 未設）。成人模式沒有開（`ADULT_MODE_ENABLED` 未設），不會用到它；**一般模式沒有被擋**：有宣告為一般模式的劇本時，用它開的存檔就用這個免費模型。目前目錄只有一份劇本、宣告安全，所以一般模式在展示環境沒有跑過。供應商塞車時開存檔回 503（6.4 觀察） | 使用者選擇維持免費模型（第 7 批）；展示環境沒有真實個資，隱私權政策已寫明現階段免費模型不得輸入真實個資；付費模型與零保存的費用與設定屬上線前評估 | 若有人建立宣告為一般模式的劇本再用它開存檔，輸入輸出會送到免費模型的供應商，可能被留存；供應商塞車或故障時沒有備援，回合降級或回 503。暫行：只用測試帳號、不輸入真實個資 | 對外開放真實會員之前（上線前關卡「模型供應商方案與資料使用條款的重新評估」）；改用付費模型時同時設定備援模型與 `OPENROUTER_ZDR` |
+| ~~一般與成人模式不得使用免費模型~~ **（2026-11-18 撤銷，見表後說明）**（原依據：第 11 節「RPG 模型供應商與個資」；第 7 批 8.3 新增） | RPG 只有一個模型設定，是免費模型 `nvidia/nemotron-3.5-lightning:free`，沒有備援（`OPENROUTER_FALLBACK_MODEL` 未設，備援就是主要模型）、沒有零保存（`OPENROUTER_ZDR` 未設）。成人模式沒有開（`ADULT_MODE_ENABLED` 未設），不會用到它；**一般模式沒有被擋**：有宣告為一般模式的劇本時，用它開的存檔就用這個免費模型。目前目錄只有一份劇本、宣告安全，所以一般模式在展示環境沒有跑過。供應商塞車時開存檔回 503（6.4 觀察） | 使用者選擇維持免費模型（第 7 批）；展示環境沒有真實個資，隱私權政策已寫明現階段免費模型不得輸入真實個資；付費模型與零保存的費用與設定屬上線前評估 | 若有人建立宣告為一般模式的劇本再用它開存檔，輸入輸出會送到免費模型的供應商，可能被留存；供應商塞車或故障時沒有備援，回合降級或回 503。暫行：只用測試帳號、不輸入真實個資 | 對外開放真實會員之前（上線前關卡「模型供應商方案與資料使用條款的重新評估」）；改用付費模型時同時設定備援模型與 `OPENROUTER_ZDR` |
 
 **不是缺口、但仍未驗證**（只是還沒量到，不代表達不到要求；逐項見 README「驗收紀錄（aws-demo-environment）」的未驗證段）：心跳經入口的到達時間、HTTP/2 下的串流、一般回合（非第 0 幕）的串流、其餘四個排程計時器的實際觸發、Caddy 憑證續期、`rollback` 與 `teardown` 的真實執行。
+
+**撤銷第八項（2026-11-18）**：AGENTS.md 第 7、11 節於 2026-11-17 修訂：全站只限滿 18 歲、內容模式為「安全模式開／關」，**關閉安全模式不以付費模型為前提，可使用免費模型**（輸入輸出可能被供應商留存或人工審閱，隱私權政策須告知）。因此「一般與成人模式不得使用免費模型」不再是規範要求，這一列保留原文與刪除線以備查，不計入缺口。該列最後一欄的事實仍有參考價值（沒有備援與零保存），併入上線前的模型供應商評估。
 
 **已處理、不再是缺口**：兩個池曾握著舊的佔位 SMTP 密碼，已於 2026-11-17 重啟並驗證（見「告警與寄信」）。
 

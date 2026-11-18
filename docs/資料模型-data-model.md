@@ -426,7 +426,7 @@ flowchart TD
     Msg["對話與訊息"] -->|"使用者主動刪除，或最後活動後 365 天（purge-expired-data）"| Del1["永久刪除，帳本的對話編號先清為空值"]
     Acc["帳號（含生日與年齡區間）"] -->|"連續 12 個月未登入（purge-inactive-accounts，管理員不納入）"| Era["抹除一個人（AccountErasureService）"]
     Acc -->|"建立後 24 小時內未完成年齡確認（purge-unconfirmed-accounts，每小時；管理員與沒有期限記錄的舊帳號不納入）"| Era
-    Acc -->|"補填年齡時發現未滿 13 歲（立即，不保存生日）"| Era
+    Acc -->|"補填年齡時發現未滿 18 歲（立即，不保存生日）"| Era
     Acc -->|"使用者申請刪除"| Pend["deletion_pending：立即停用，所有裝置登出，7 天寬限期"]
     Pend -->|"7 天內登入並撤銷"| Acc
     Pend -->|"寬限期滿（execute-account-deletions）"| Era
