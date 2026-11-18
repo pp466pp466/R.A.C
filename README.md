@@ -1359,6 +1359,7 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | `scripts/rpg_acceptance_harness.py` | 驗收用的測試替身：假的 RPG 模型（OpenAI 相容，串流、狀態呼叫、記事簿抓取與 `GET /_status` 計數；動作文字的關鍵字 `測試被擋一次`、`測試被擋兩次`、`測試中斷`、`測試慢速`、`測試結局`，以及記事簿的 `測試記事簿超量`、`測試記事簿放棄`、`測試記事簿違規`、`測試記事簿慢速`、修訂（重新生成與編輯最後一輪）的 `測試重生`、`測試重生被擋一次`、`測試重生被擋兩次`、`測試重生中斷`、`測試重生慢速`、`測試重生狀態失敗`、`測試編輯`、`測試狀態失敗` 決定行為；`GET /_status` 另有 `marker_calls`，計算請求內容含「驗收理由標記」的次數，用來證明重新生成的理由沒有送進模型）與「建立全新玩家」小幫手（`GET /fresh/rpg[?coins=N]`，`coins` 是額外補給的付費幣、上限 5000）。本機驗收環境（專案之外的 `newprojet-acceptance`）與 `scripts/verify_container.py` 的容器驗收共用同一份 |
 | `python scripts/acceptance_rpg_notebook.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only basic,full,abandon,rules,eof] [--assert-eof]` | 記事簿的 HTTP 驗收（rpg-notebook 任務 5.1、5.2，開發伺服器加日誌 112 項，約 90 秒）：五個案例各用一位全新玩家——`basic`（11 輪：第 10 輪後仍空、`done` 先到而抓取 5 秒後才完成並在客戶端離開後仍完成、遊戲幣與帳本沒有異動，接著玩家編輯、版本衝突、太長、規則層命中、清空、未登入／缺 CSRF／他人 404）、`full`（31 輪：超量而已滿、原文再儲存被拒、已滿時不呼叫模型、刪到容量以內才能儲存、AI 恢復更新）、`abandon`（精簡重試後仍超過而放棄）、`rules`（規則層整次放棄）、`eof`（11 輪、慢速、第 11 輪不提早離開：量 `done` 到伺服器結束回應的間隔與結束當下的記事簿；`--assert-eof` 才把「間隔小於 1 秒、結束當下仍是空的」當通過條件，容器內的 gunicorn 驗收使用，開發伺服器預設只記錄數字）。提供 `--server-log` 時另驗 `rpg.notebook_*` 事件、模型呼叫的用途 `rpg_notebook` 與整段日誌沒有記事簿文字。同樣只接受本機位址、不含機密、結束代碼同上 |
 | `python scripts/acceptance_rpg_revision.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only journey,privacy,failures,conflicts,rejections,coins,notebook]` | 重新生成與編輯最後一輪的 HTTP 驗收（rpg-turn-revision 任務 5.2 與規則修訂後的 6.4，開發伺服器加日誌 181 項，約 80 秒）：七個案例各用一位全新玩家——`journey`（一輪 → 重新生成免費 → 編輯免費、帳本不動 → 重新生成付費淨扣 30 → 編輯付費淨扣 30 → 再重新生成仍付費；重新生成與編輯共用免費次數、編輯不歸零；每次替換後輪數與序號不變、`revision` 加 1、世界狀態是「還原再套用」）、`privacy`（理由帶標記文字，重新生成的所有模型呼叫都不含它；先以對照回合確認偵測有效）、`failures`（被擋一次自動重生、被擋兩次、上游中斷、狀態呼叫失敗、免費編輯被擋兩次沒有預扣且次數不變、付費編輯被擋與狀態失敗後退回且再付費只淨扣一次、串流中途斷線釋放認領：都保留舊內容且不消耗免費次數）、`conflicts`（修訂進行中同一個 `expected_revision`、編輯與新行動都得到 409 `turn_in_progress`，完成後以舊的 `expected_revision` 得到 `revision_conflict`）、`rejections`（`not_last`、`ended`、404、驗證、規則層、未登入與缺 CSRF）、`coins`（餘額不足一輪時，免費次數內的編輯與重新生成都仍可進行，用完後兩者都得到 409 `insufficient_coins`）、`notebook`（第 11 輪修訂後記事簿與抓取呼叫不變）。提供 `--server-log` 時另驗 `rpg.revision_*` 事件的筆數、種類與失敗原因，以及整段日誌沒有理由、行動、劇情與被擋的句子。同樣只接受本機位址、不含機密、結束代碼同上 |
+| `python scripts/acceptance_rpg_admin_coins.py [--base-url …] [--helper-url …] [--model-url …] [--server-log …] [--only journey,interrupt,ordinary]` | 管理員不消耗遊戲幣的 HTTP 驗收（admin-unlimited-coins 任務 4.2，開發伺服器加日誌 49 項，約 16 秒）：小幫手 `GET /fresh/rpg?admin=1` 建立**全新管理員**（角色 admin、不發首登贈幣、餘額 0；`coins` 被忽略）。`journey`：一輪 → 兩次免費修訂 → 三次超過免費次數的修訂（重新生成、編輯、再重新生成）都成功，`done.coins` 一律 0、餘額始終 0、`last_turn` 的兩個費用是 0、`/api/wallet` 回 `coin_exempt: true` 且 `turn_cost` 為 0、記錄頁只有金額 0 的 `turn_hold`（4 筆，免費的修訂沒有帳本列）、假模型確實收到每次呼叫；`interrupt`：上游中途斷線 → 退回（0）→ 同一編號重送 `attempt` 為 2、仍是 0 幣（記錄頁不顯示已退回的預扣，所以只看到重送的那一筆）；`ordinary`：一般玩家用到餘額不足一輪後 `coin_exempt` 為假、`turn_cost` 為 30、再送一輪得到 409 `insufficient_coins`、沒有回合列。沿用修訂腳本的類別與小工具，只對本機位址執行，輸出只有項目名稱與結果 |
 | `python scripts/acceptance_rpg_real_model.py --base-url http://localhost:5011 [--server-log …] [--notebook]` | **真實模型驗證**（人工執行、不是自動測試）：對第二個應用程式行程（用 `.env` 的 OpenRouter 設定，資料庫用驗收環境的；要讀日誌就把該行程的輸出導向檔案）各跑一次第 0 幕與三個回合，輸出首字與整段時間、字數、狀態事件與日誌事件。`--notebook`（rpg-notebook 任務 5.3）改為走 11 輪（向小幫手補給 330 付費幣），第 11 輪結束後輪詢記事簿，輸出條數與各條字數（對照提示詞的 5 條、50 字）、耗時與全文，並統計日誌事件。只送劇本內建內容與寫死的示範行動，沒有個資 |
 
 ### 驗收紀錄（rpg-turn-engine，2026-11-10，已提交 `70e6786`，已封存）
@@ -2043,6 +2044,31 @@ app.mount('#app');
 - 安全模式的玩家在遊戲入口看不到宣告為一般或成人模式的劇本（入口頁顯示「部分劇本不會顯示」）；內建劇本 `xianxia-qingyun` 的欄位預設值為 `safe`（程式預設 `CONTENT_TIER_SAFE`，**我沒有查展示資料庫裡那一列的實際值**），玩家創作且宣告更高模式的劇本才會被藏起來。
 - **design.md 的風險寫「玩家仍可用現有的個人頁開關調整」與實際不符**：`PUT /api/account/content-mode` 存在且有測試，但搜尋 `app/static` 與 `app/templates` **沒有任何前端呼叫它**，帳號頁沒有切換內容模式的畫面，遊戲入口頁的說明連到帳號頁也沒有。所以在展示環境，新玩家**無法從介面離開安全模式**（只能直接呼叫 API）；完整的「關閉安全模式」流程屬 `safe-mode-toggle`（尚未實作）。
 - 展示環境本來就沒有開成人模式：部署計畫與 `aws-demo.vars` 都沒有設定 `ADULT_MODE_ENABLED`（預設關閉；我沒有讀主機上的 `plain.env`）。所以 2026-11-24、11-25 的展示若要含露骨內容，現況做不到；一般模式也要等切換介面或手動呼叫 API。
+
+### 驗收紀錄（admin-unlimited-coins，2026-11-18，任務 1.1 至 4.2 與 4.4 已記入；4.3 瀏覽器實測由使用者親自做、4.5 簡報與圖解尚未做）
+
+日期 2026-11-18；對應的提交：規範修訂 `9232f18`、規劃 `bde7f06`、批 ①（後端）`338da6f`、批 ②（前端）`fe603a4`；批 ③（文件、驗收腳本）尚未提交。規則：管理員帳號（角色 admin 且帳號啟用中）不消耗遊戲幣，預扣仍寫入帳本但金額為 0；沒有 migration、資料表或設定鍵異動。**沒有實際執行的項目一律標為未驗證，不以預期結果代替。**
+
+| 檔案 | 內容 |
+|---|---|
+| `app/services/current_user.py`（`is_active_admin`）、`access_policy.py`（`is_admin` 委派）、`wallet_service.py`（`hold`、`WalletView.coin_exempt`）、`game_service.py`（`_last_turn_view`） | 批 ①：豁免的唯一判斷、預扣金額 0、錢包回應的 `coin_exempt` 與管理員的 `turn_cost` 為 0、`last_turn` 的兩個費用為 0 |
+| `app/static/js/game/game-wallet.js`、`game-labels.js`、`game-revision.js`、`game-api.js` | 批 ②：`exempt`（只認 `coin_exempt === true`）、「不消耗遊戲幣」文字、`editInsufficient` 為假 |
+| `scripts/acceptance_rpg_admin_coins.py`、`scripts/rpg_acceptance_harness.py`（`fresh_player(admin=…)`、`admin_from_path`）、`tests/test_acceptance_rpg_scripts.py` | 批 ③：HTTP 驗收腳本與小幫手的 `?admin=1`（見上方「驗收工具」） |
+| `docs/RPG.md` 7.7.1、`系統架構-architecture.md`、`帳號與安全-auth-security.md`、`前端結構-frontend.md`、`資料模型-data-model.md`、`營運與部署-operations.md`、`路線圖-roadmap.md` | 批 ③：設計文件 |
+
+| 已驗證 | 結果 |
+|---|---|
+| 驗收腳本（4.2，開發伺服器加日誌，驗收環境 `newprojet-acceptance`：SQLite、假 RPG 模型） | `scripts/acceptance_rpg_admin_coins.py` **49 項通過、0 失敗、0 未驗證**（16.1 秒）：①`journey` 餘額 0 的管理員一輪加兩次免費與三次超過免費次數的修訂都成功，`done.coins` 一律 0、餘額始終 0、`last_turn` 的重新生成與編輯費用在免費次數用完後仍是 0、`/api/wallet` 回 `coin_exempt: true` 且 `turn_cost.standard` 為 0、記錄頁 4 筆 `turn_hold` 全是金額 0 且沒有仍在預扣中的項目（免費的修訂沒有帳本列）、假模型確實收到每次呼叫；②`interrupt` 上游中途斷線後餘額仍 0，同一編號重送 `attempt` 為 2、仍是 0 幣；③`ordinary` 一般玩家 6 輪後餘額 20，`coin_exempt` 為假、`turn_cost` 為 30，再送一輪得到 409 `insufficient_coins`、沒有回合列、餘額不變；應用程式日誌（42042 字元）沒有行動、劇情與被擋的句子 |
+| 既有驗收腳本的回歸（同一環境、同一份程式） | `acceptance_rpg_turn.py` **68／68**（16.0 秒）、`acceptance_rpg_revision.py` **181／181**（78.4 秒）：一般玩家的扣幣、退回、免費次數與餘額不足行為沒有因批 ① 改變 |
+| 腳本的單元測試 | `tests/test_acceptance_rpg_scripts.py` 新增 18 個案例（含參數化；拒絕非本機位址與未知案例、`?admin=1` 只有 `1` 為真、`fresh_player(admin=True)` 建立啟用中的管理員且沒有錢包、其 cookie 登入後 `/api/wallet` 回 `coin_exempt: true`、腳本與應用程式的幣價、贈幣、免費次數與帳本種類一致），該檔 115 通過 |
+| 設計文件測試 | `tests/test_design_docs.py` 與 `tests/test_readme.py` 通過（與腳本測試合跑 184 通過） |
+| 全套測試（4.4，批 ③ 程式與文件的最終狀態） | 全套 `pytest` **11539 通過、2 略過、0 失敗**（1167 秒；略過＝`test_aws_demo_script` 的 Windows ACL 與 `test_container_files` 的 `grp` 模組，都是平台限制），包含 `tests/architecture`、`tests/test_design_docs.py`、`tests/test_agents_skill_sync.py`、`tests/test_readme.py` 與連真實 SQL Server `project_test` 的整合測試（`tests/test_rpg_admin_flow.py` 的 `sqlserver` 標記案例）；Node `node --test "tests/js/**/*.test.js"` **1121 通過、0 失敗**（與批 ② 相同）。上一版 adult-only-signup 的 pytest 是 11446 通過、Node 1100 |
+
+**與 tasks.md 的出入**：①4.2 寫「`scripts/acceptance_rpg_turn.py`（或新增小腳本）」，採新增小腳本 `acceptance_rpg_admin_coins.py`，沿用修訂腳本的類別與小工具；②驗收環境的 `acceptance.py`（在專案之外）的 `/fresh/rpg` 多傳一個 `admin=`，改過之後須重新啟動驗收環境，小幫手才認得 `?admin=1`；③腳本第一版預期「中斷後重送的記錄頁有 2 筆預扣」，實際只有 1 筆——記錄頁依設計不顯示已退回的預扣與退回列（`WalletService.entries`），是腳本的預期錯了，已更正（`attempt` 為 2 已由 `meta` 證明）。
+
+**4.4 的過程**：Node 第一次執行有 5 個檔案（`game-sync`、`game-template`、`game-wallet`、`game`、`milestone-preview`）因 `Zone Allocation failed - process out of memory` 崩潰（執行當時可用記憶體約 290 MB／8 GB，不是斷言失敗，只跑完 964 筆）；使用者重置記憶體後以 `--test-concurrency=2` 單獨重跑，1121 全數通過；pytest 第一次跑到約 9% 時依使用者要求停止，之後單獨重跑完整一次（沒有與 Node 同時執行）。
+
+**未驗證**：①**瀏覽器實測（4.3）**：頂列沒有「餘額不足」提示、修訂用完 2 次免費後按鈕旁顯示「不消耗遊戲幣」、兩個 Modal 的文字、換一般玩家確認行為沒變，都要使用者親自做（Node 測試以 Vue 的真實掛載驗證過文字與按鈕狀態，但沒有人眼看過畫面）。②簡報與圖解（4.5）尚未做。③腳本只對開發伺服器與 SQLite 執行，沒有對 gunicorn、容器或 SQL Server 跑；SQL Server 上的行為由 `tests/test_rpg_admin_flow.py`（標記 `sqlserver`）檢查。④客服額度、全站 token 上限與 `llm_call_logs` 不經 HTTP 驗收腳本，由 `tests/test_rpg_admin_flow.py` 與批 ① 的測試檢查。⑤**展示環境（AWS）沒有部署這個 change**，管理員在展示環境仍會被扣幣，直到下一次部署。
 
 ## 容器建置與驗收
 

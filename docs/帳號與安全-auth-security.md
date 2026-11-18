@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -164,7 +164,7 @@ flowchart TD
 | 非擁有者存取資源 | 一律 `NotFound`（404），與不存在的回應逐字相同 |
 | 會員等級 | 只影響額度，不參與任何權限判斷 |
 | 管理員存取他人資料 | 一般端點與一般使用者相同（404）；只有 `/api/admin/*` 能讀他人的內容，走後台專用的 Repository、每次都寫稽核（見第 7 節） |
-| 是否為管理員 | `AccessPolicy.require_admin(user)`：不是 `admin` 或帳號不是 `active` 就記錄 `admin.access_denied` 並拋出 `NotFound`（404）；後台的唯一入口 |
+| 是否為管理員 | `AccessPolicy.require_admin(user)`：不是 `admin` 或帳號不是 `active` 就記錄 `admin.access_denied` 並拋出 `NotFound`（404）；後台的唯一入口。「角色為 admin 且帳號啟用中」只有一個定義：`CurrentUser.is_active_admin`，`AccessPolicy.is_admin` 委派它，遊戲幣豁免（`WalletService`，見 7f）直接用同一個屬性，測試窮舉角色、狀態與會員等級證明兩者一致 |
 | 權限測試 | `tests/support/idor.py` 依序以「他人、不存在、未登入、擁有者」檢查每個帶識別碼的端點 |
 
 `/api/auth/*` 端點（全部需 CSRF；「登入」欄指是否需要已登入）。**已移除**：`register`、`login`、`verify-email`、`resend-verification`、`forgot-password`（回 404）。
@@ -407,7 +407,7 @@ flowchart TD
 
 ## 7f. 遊戲幣的存取與稽核（game-wallet）
 
-- **誰能用**：`/api/wallet/*` 用 `require_login()`（預設拒絕受限登入狀態）：待確認年齡 403 `age_confirmation_required`、鎖定 403 `account_locked`，所以尚未確認年齡的帳號也不會領到任何幣。這不是 AI 功能，不另做 `require_chat_access`；管理員與各會員等級一視同仁（等級只影響額度，幣價不因等級而異）。
+- **誰能用**：`/api/wallet/*` 用 `require_login()`（預設拒絕受限登入狀態）：待確認年齡 403 `age_confirmation_required`、鎖定 403 `account_locked`，所以尚未確認年齡的帳號也不會領到任何幣。這不是 AI 功能，不另做 `require_chat_access`；管理員與各會員等級在「誰能用」上一視同仁（等級只影響額度，幣價不因等級而異）。**唯一的例外是扣款**：管理員帳號（`is_active_admin`）不消耗遊戲幣（`admin-unlimited-coins`）——預扣仍寫入帳本但金額為 0、不因餘額不足被拒；判斷只依伺服器端的角色與狀態，不因會員等級而異，不由前端或請求內容決定（`GET /api/wallet` 的 `coin_exempt` 只是告知畫面）。客服的額度與全站每日 token 上限對管理員照舊，模型呼叫照常記入 `llm_call_logs`。
 - **玩家無法經 HTTP 花費或增加餘額**（簽到除外）：預扣、結算與退回只由伺服器端的回合流程（RC-2）呼叫 `WalletService`。
 - **贈幣時機**：首次註冊的 200 免費幣在年齡確認通過時由 `AuthService` 呼叫錢包回呼發放（帳號 24 小時內未確認會被刪除，不會送出又收不回）；回呼失敗不影響年齡確認，記 `wallet.grant_deferred`，由下一次存取錢包補發，冪等鍵相同；既有玩家同樣在第一次存取時補發。
 - **管理員調整**：高風險，與停權、調整等級同一套重新輸入密碼（失敗寫 `reauth.failed`）；稽核 `wallet.adjust` 的細節只有餘額種類、增減量與調整後的餘額，原因放在理由欄；目標只能是一般使用者；後台檢視餘額不觸發逾時預扣的清理。

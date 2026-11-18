@@ -31,9 +31,11 @@
 容量 2000、仍在容量加預備空間 2500 之內，記事簿因此「已滿」）；`放棄` 回 5 條各 520 字（合計 2604 字：超過 2500，精簡重試後仍超過而放棄）；
 `違規` 在預設條目之外加一條必擋的句子（規則層整次放棄）；`慢速` 在回覆前先等 5 秒（讓串流先結束、抓取後完成）。
 
-**小幫手**：`GET /fresh/rpg[?coins=N]` 建立一位全新、尚未年齡確認的玩家並回傳登入 cookie（`Set-Cookie`）與可開存檔的劇本版本
+**小幫手**：`GET /fresh/rpg[?coins=N][&admin=1]` 建立一位全新、尚未年齡確認的玩家並回傳登入 cookie（`Set-Cookie`）與可開存檔的劇本版本
 （`{"ok": true, "versions": {"endless": …, "custom_ending": …}}`）；`custom_ending` 是驗收專用的自訂結局內建劇本（`ensure_ending_script` 冪等建立）。
 `coins` 是額外補給的**付費幣**（管理員調整，上限 5000，預設 0）：記事簿的驗收要走 11 輪以上（每輪 30 幣），首登的 200 幣不夠。
+`admin=1`（admin-unlimited-coins）建立的是**管理員**（角色 admin、啟用中、尚未年齡確認）：登入 cookie 與玩家相同（只含 user_id 與 token_version），
+不經 Google 與密碼兩步驟；管理員不會被發放首登贈幣，也不補給付費幣（`coins` 被忽略），所以餘額是 0，用來驗證管理員不消耗遊戲幣。
 """
 from __future__ import annotations
 
@@ -333,11 +335,18 @@ def coins_from_path(path: str) -> int:
         return 0
 
 
-def fresh_player(app, coins: int = 0) -> tuple[str, dict[str, str | None]]:
+def admin_from_path(path: str) -> bool:
+    """小幫手網址的 `?admin=1`：建立管理員而不是玩家。只有 `1` 為真，其餘（缺值、`0`、`true`、任何別的字串）一律是玩家。"""
+    values = parse_qs(urlsplit(path).query).get("admin") or []
+    return bool(values) and values[0] == "1"
+
+
+def fresh_player(app, coins: int = 0, admin: bool = False) -> tuple[str, dict[str, str | None]]:
     """建立一位全新、尚未年齡確認的玩家：回傳 `Set-Cookie` 的值與兩份可開存檔的劇本版本（對外識別碼）。
 
-    `coins` 大於 0 時另補給這麼多**付費幣**（走管理員調整的同一條路，不受免費幣上限限制）；首登贈幣仍在年齡確認通過時才發放。"""
-    from app.models.user import STATUS_ACTIVE, User
+    `coins` 大於 0 時另補給這麼多**付費幣**（走管理員調整的同一條路，不受免費幣上限限制）；首登贈幣仍在年齡確認通過時才發放。
+    `admin` 為真時建立的是管理員（角色 admin）：管理員不發首登贈幣、不消耗遊戲幣，也不補給付費幣（`coins` 被忽略，餘額是 0）。"""
+    from app.models.user import ROLE_ADMIN, ROLE_USER, STATUS_ACTIVE, User
     from app.repositories.script_repository import ScriptRepository
     from app.repositories.user_repository import UserRepository
     from app.services.age_policy import DEFAULT_AGE_POLICY
@@ -346,18 +355,18 @@ def fresh_player(app, coins: int = 0) -> tuple[str, dict[str, str | None]]:
     from app.services.registry import build_wallet_service
 
     now = datetime.now(timezone.utc)
-    email = f"accept-rpg-{secrets.token_hex(5)}@{EMAIL_DOMAIN}"
+    email = f"accept-rpg-{'admin-' if admin else ''}{secrets.token_hex(5)}@{EMAIL_DOMAIN}"
     serializer = app.session_interface.get_signing_serializer(app)
     with app.extensions["db_session_factory"]() as session:
         user = User(
             email=normalize_email(email), email_canonical=canonical_email(email), display_name="驗收-rpg", password_hash=None,
             email_verified_at=now, status=STATUS_ACTIVE, terms_version=CURRENT_TERMS_VERSION, terms_accepted_at=now,
             adult_declared_at=now, adult_declaration_version=DEFAULT_AGE_POLICY.version,     # 與真實的 Google 註冊相同（adult-only-signup）
-            age_deadline_at=now + timedelta(days=30),
+            age_deadline_at=now + timedelta(days=30), role=ROLE_ADMIN if admin else ROLE_USER,
         )
         UserRepository(session).add_user(user)
         session.flush()
-        if coins > 0:
+        if coins > 0 and not admin:
             build_wallet_service(session, clock=lambda: datetime.now(timezone.utc)).adjust(user.id, bucket="paid", delta=min(coins, FRESH_COINS_MAX))
         value = serializer.dumps({"uid": user.id, "tv": user.token_version})
         versions: dict[str, str | None] = {}
@@ -379,7 +388,7 @@ def make_fresh_handler(app):
             if self.path.split("?")[0] != "/fresh/rpg":
                 self.send_error(404)
                 return
-            cookie, versions = fresh_player(app, coins=coins_from_path(self.path))
+            cookie, versions = fresh_player(app, coins=coins_from_path(self.path), admin=admin_from_path(self.path))
             raw = json.dumps({"ok": True, "versions": versions}, ensure_ascii=False).encode("utf-8")
             self.send_response(200)
             self.send_header("Content-Type", "application/json; charset=utf-8")

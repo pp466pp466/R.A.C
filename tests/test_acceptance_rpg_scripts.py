@@ -710,3 +710,78 @@ def test_a_request_carrying_the_reason_marker_is_counted_and_others_are_not(fake
 def test_the_harness_status_reports_the_marker_counter():
     assert harness.RPG_STATS.keys() >= {"stream_calls", "state_calls", "capture_calls", "upstream_closed", "marker_calls"}
     assert isinstance(harness.REASON_MARKER, str) and len(harness.REASON_MARKER) >= 4
+
+
+# ---- 管理員不消耗遊戲幣（admin-unlimited-coins 任務 4.2）-------------------------------------------------------------------
+
+admin_script = load("acceptance_rpg_admin_coins")
+
+
+@pytest.mark.parametrize("args", [["--base-url", "http://example.com:5010"], ["--helper-url", "https://localhost:5001"], ["--model-url", "http://10.1.2.3:5002"]])
+def test_the_admin_coins_script_refuses_to_run_against_a_remote_address_before_sending_anything(args, capsys):
+    assert admin_script.main(args) == 2
+    assert "拒絕執行" in capsys.readouterr().err
+
+
+def test_the_admin_coins_script_refuses_an_unknown_case_name_before_sending_anything(capsys):
+    assert admin_script.main(["--only", "journey,nonsense"]) == 2
+    assert "nonsense" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("path,expected", [
+    ("/fresh/rpg?admin=1", True), ("/fresh/rpg?coins=700&admin=1", True), ("/fresh/rpg?admin=1&coins=700", True),
+    ("/fresh/rpg", False), ("/fresh/rpg?admin=0", False), ("/fresh/rpg?admin=true", False), ("/fresh/rpg?admin=", False),
+    ("/fresh/rpg?admin=11", False), ("/fresh/rpg?admin=yes", False), ("/fresh/rpg?coins=30", False),
+])
+def test_the_helper_url_admin_parameter_is_true_only_for_exactly_one(path, expected):
+    assert harness.admin_from_path(path) is expected
+
+
+def test_a_fresh_admin_is_an_active_admin_without_coins_even_when_coins_are_asked_for_and_a_fresh_player_stays_a_player(player_app):
+    from sqlalchemy import select
+
+    from app.models.user import ROLE_ADMIN, ROLE_USER, STATUS_ACTIVE, User
+    from app.repositories.wallet_repository import WalletRepository
+
+    harness.fresh_player(player_app, coins=700, admin=True)          # 管理員不補給付費幣：coins 被忽略
+    harness.fresh_player(player_app, coins=700)
+    harness.fresh_player(player_app)
+    with player_app.extensions["db_session_factory"]() as session:
+        users = list(session.scalars(select(User).order_by(User.id)))
+        wallets = [WalletRepository(session).state(user.id) for user in users]
+    assert [(user.role, user.status) for user in users] == [(ROLE_ADMIN, STATUS_ACTIVE), (ROLE_USER, STATUS_ACTIVE), (ROLE_USER, STATUS_ACTIVE)]
+    assert wallets[0] is None                                       # 沒有錢包、沒有任何幣
+    assert (wallets[1].free_balance, wallets[1].paid_balance) == (0, 700) and wallets[2] is None
+    assert users[0].email.startswith("accept-rpg-admin-") and users[0].email.endswith("@" + harness.EMAIL_DOMAIN)
+    assert users[0].birth_date is None                              # 尚未年齡確認：腳本自己走帳號設定頁的補填
+
+
+def test_the_cookie_of_a_fresh_admin_signs_in_and_the_wallet_says_the_account_does_not_spend_coins(player_app):
+    cookie, _ = harness.fresh_player(player_app, admin=True)
+    name, _, rest = cookie.partition("=")
+    client = player_app.test_client()
+    client.set_cookie(name, rest.split(";")[0])
+    wallet = client.get("/api/wallet").get_json()["wallet"]
+    assert (wallet["coin_exempt"], wallet["turn_cost"], wallet["total"]) == (True, {"standard": 0}, 0)
+    player_cookie, _ = harness.fresh_player(player_app)
+    player = player_app.test_client()
+    player_name, _, player_rest = player_cookie.partition("=")
+    player.set_cookie(player_name, player_rest.split(";")[0])
+    assert player.get("/api/wallet").status_code == 403             # 一般玩家尚未年齡確認：什麼都不能用（管理員不受這個限制）
+
+
+def test_the_admin_coins_script_and_the_application_agree_on_numbers_and_ledger_kinds():
+    from app.models.wallet import ENTRY_TURN_HOLD, ENTRY_TURN_REFUND
+    from app.services.runtime_limits import COIN_SIGNUP_GRANT_KEY, COIN_TURN_COST_PREFIX, LIMIT_SPECS, RPG_FREE_REGENERATIONS_KEY
+
+    assert admin_script.CASES == ("journey", "interrupt", "ordinary")
+    assert admin_script.LEDGER_KINDS == {ENTRY_TURN_HOLD, ENTRY_TURN_REFUND}
+    assert admin_script.FREE_REGENERATIONS == LIMIT_SPECS[RPG_FREE_REGENERATIONS_KEY].default
+    assert admin_script.TURN_COST == LIMIT_SPECS[f"{COIN_TURN_COST_PREFIX}.standard"].default == turn_script.TURN_COST
+    assert admin_script.SIGNUP_GRANT == LIMIT_SPECS[COIN_SIGNUP_GRANT_KEY].default == turn_script.SIGNUP_GRANT
+    assert admin_script.KW_CUT in "測試中斷 驗收" and admin_script.KW_REGEN == harness.KW_REGEN
+
+
+def test_the_admin_coins_cases_are_a_subclass_of_the_revision_acceptance_so_the_helpers_are_shared():
+    assert issubclass(admin_script.AdminCoinsAcceptance, revision_script.RevisionAcceptance)
+    assert admin_script.EDIT_MARK == revision_script.EDIT_MARK and admin_script.REGEN_MARK == revision_script.REGEN_MARK
