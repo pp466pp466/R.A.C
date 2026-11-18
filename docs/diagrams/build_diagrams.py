@@ -10,88 +10,15 @@ Azure 圖示的使用條款見 docs/diagrams/README.md。
 from __future__ import annotations
 
 import sys
-import tempfile
-from pathlib import Path
 
-from render_tools import DOCS_DIR, FONTS_CSS, FONT_STACK, PALETTE, file_url, html_to_png, write_text
-from svg_kit import Svg, tw, wrap
+from diagram_common import W, band, header, mapping_table, render_png
+from render_tools import DOCS_DIR, PALETTE
+from svg_kit import Svg
 
 P = PALETTE
-W = 1800
 
 LOGIN_PNG = DOCS_DIR / "登入與註冊架構圖解.png"
 MCP_PNG = DOCS_DIR / "MCP架構圖解.png"
-
-
-# ---- 共用版面 ---------------------------------------------------------------------------------
-
-
-def header(svg: Svg, *, tag: str, title: str, subtitle: str, title_size: int = 40) -> None:
-    svg.text(40, 36, tag, size=14, fill=P["accent"], mono=True)
-    svg.text(40, 82, title, size=title_size, weight=700)
-    svg.text(40, 116, subtitle, size=19, fill=P["muted"])
-    svg.text(W - 40, 40, "圖示：Azure Architecture Icons（僅作元件符號；實際部署為 Google Cloud）", size=14, fill=P["muted"], anchor="end")
-    svg.text(W - 40, 62, "卡片內「Azure 圖示：…」是圖示名稱，並不代表使用該 Azure 服務", size=13, fill=P["muted"], anchor="end")
-    svg.text(W - 40, 84, "橘色圓圈的數字＝流程步驟，對應下方的「功能對應」表", size=13, fill=P["muted"], anchor="end")
-
-
-def mapping_table(svg: Svg, y: float, *, title: str, headers: tuple[str, str, str, str], rows: list[tuple[str, str, str, str]],
-                  widths: tuple[int, int, int] = (400, 760, 480)) -> float:
-    """底部的「功能對應」表：步驟徽章 ｜ 動作 ｜ 程式 ｜ 資料表。回傳表格下方的 y。"""
-    svg.text(40, y + 8, title, size=26, weight=700)
-    y += 30
-    x_badge, x_action = 56, 100
-    x_code = x_action + widths[0] + 20
-    x_db = x_code + widths[1] + 20
-    svg.rect(30, y, W - 60, 40, fill=P["panel"], stroke=P["line"], rx=8)
-    svg.text(x_action, y + 26, headers[0], size=16, fill=P["accent"], weight=700)
-    svg.text(x_code, y + 26, headers[1], size=16, fill=P["accent"], weight=700)
-    svg.text(x_db, y + 26, headers[2], size=16, fill=P["accent"], weight=700)
-    svg.text(x_badge, y + 26, headers[3], size=16, fill=P["accent"], weight=700, anchor="middle")
-    y += 48
-    size, lh = 15, 22
-    for index, (number, action, code, db) in enumerate(rows):
-        a = wrap(action, size, widths[0], mono=False)
-        c = wrap(code, size, widths[1], mono=False)
-        d = wrap(db, size, widths[2], mono=False)
-        height = max(len(a), len(c), len(d)) * lh + 20
-        if index % 2 == 0:
-            svg.rect(30, y, W - 60, height, fill="#14161A", rx=8)
-        svg.badge(x_badge, y + 20, number, r=13, size=15)
-        svg.lines(x_action, y + 25, a, size=size, lh=lh, weight=600)
-        svg.lines(x_code, y + 25, c, size=size, lh=lh, fill=P["text"])
-        svg.lines(x_db, y + 25, d, size=size, lh=lh, fill=P["muted"])
-        y += height + 4
-    return y
-
-
-def page_html(svg_markup: str, width: int, height: int) -> str:
-    return (
-        f'<!doctype html><html lang="zh-Hant-TW"><head><meta charset="UTF-8">'
-        f'<link rel="stylesheet" href="{file_url(FONTS_CSS)}">'
-        f'<style>html,body{{margin:0;padding:0;background:{P["bg"]};font-family:{FONT_STACK}}}svg{{display:block}}</style>'
-        f"</head><body>{svg_markup}</body></html>"
-    )
-
-
-def render_png(svg: Svg, png: Path) -> None:
-    markup = svg.render()
-    with tempfile.TemporaryDirectory(prefix="diagram-") as folder:
-        page = Path(folder) / "diagram.html"
-        write_text(page, page_html(markup, svg.width, svg.height))
-        html_to_png(page, png, width=svg.width, height=svg.height, scale=2)
-    print(f"已輸出 {png}（版面 {svg.width} x {svg.height}）")
-
-
-def band(svg: Svg, x: float, y: float, w: float, *, label: str, chips: list, size: float = 14, mono: bool = False) -> float:
-    """分層的色帶：標籤 + 膠囊標籤。先量高度再畫底，回傳色帶高度。"""
-    tmp = Svg(W, 10)
-    bottom = tmp.chips(x + 14, y + 36, w - 28, chips, size=size, mono=mono)
-    height = bottom - y + 12
-    svg.rect(x, y, w, height, fill=P["panel_alt"], stroke=P["line"], rx=10)
-    svg.text(x + 14, y + 22, label, size=12, fill=P["accent"], mono=True)
-    svg.parts.extend(tmp.parts)
-    return height
 
 
 # ---- 登入與註冊 -------------------------------------------------------------------------------
@@ -100,14 +27,14 @@ def band(svg: Svg, x: float, y: float, w: float, *, label: str, chips: list, siz
 def login_diagram() -> Svg:
     svg = Svg(W, 100)
     header(svg, tag="[ AUTH_FLOW ]", title="登入與註冊架構圖解",
-           subtitle="Google 登入即註冊：玩家走 Authorization Code ＋ PKCE → 年齡確認 → 贈送遊戲幣；管理員在 Google 之後再輸入密碼（二階段）")
+           subtitle="Google 登入即註冊（全站只限滿 18 歲）：玩家走 Authorization Code ＋ PKCE → 年齡確認 → 贈送遊戲幣；管理員在 Google 之後再輸入密碼（二階段）")
 
     top = 140
     # -- 使用者端（A 欄）
     ax, aw = 30, 225
     y = top + 56
     h = svg.card(ax + 10, y, aw - 20, icon="users", azure="Users", title="玩家", badges=(1,),
-                 body=["首次登入＝註冊，須勾選「同意服務條款與隱私權政策」", "回訪者一鍵登入，不必勾選"])
+                 body=["首次登入＝註冊，須勾選兩項：「同意服務條款與隱私權政策」與「我確認已滿 18 歲」", "回訪者一鍵登入，不必勾選"])
     y += h + 12
     browser_y = y
     h = svg.card(ax + 10, y, aw - 20, icon="browser", azure="Browser", title="瀏覽器", badges=(3, 2),
@@ -126,7 +53,7 @@ def login_diagram() -> Svg:
     # -- 入口層（B 欄）
     bx, bw = 290, 210
     h = svg.card(bx + 10, top + 56, bw - 20, icon="front-door", azure="Front Door and CDN Profiles", title="HTTPS",
-                 body=["HTTPS／HTTP/2、HSTS", "ProxyFix 信任轉發標頭", "security_headers.py", "Cloud Run 容器"], body_size=14)
+                 body=["HTTPS／HTTP/2、HSTS", "ProxyFix 信任轉發標頭", "security_headers.py", "展示環境：Caddy（AWS）；production 規劃：Cloud Run"], body_size=14)
     edge_mid = top + 56 + 40
     y = top + 56 + h + 12
     h = svg.card(bx + 10, y, bw - 20, icon="conditional-access", azure="Conditional Access", title="受限登入", badges=(9, 6),
@@ -237,12 +164,12 @@ def login_diagram() -> Svg:
         svg.text(lane_x + 16, top + 50, title, size=21, weight=700)
 
     rows_data = [
-        ("1", "開啟登入頁；新使用者勾選條款",
+        ("1", "開啟登入頁；新使用者勾選條款與年滿 18 歲聲明",
          "GET /login → auth_page_controller.login_page（已登入者以 landing_for 導向）；前端 auth/login.js",
          "已登入者：current_user() 讀 users（token_version、status）；匿名：不碰資料庫"),
         ("2", "按「使用 Google 登入」：發起授權",
-         "POST /api/auth/google/start → GoogleSignInService.begin(accept_terms)：產生 state、nonce、PKCE verifier → oauth_cookie.store_transaction（簽章 cookie，10 分鐘）→ 回傳授權網址；先通過 CSRF（X-CSRF-Token＋Origin）",
-         "不碰資料庫（條款旗標只放在簽章 cookie）"),
+         "POST /api/auth/google/start → GoogleSignInService.begin(accept_terms, declare_adult)：產生 state、nonce、PKCE verifier → oauth_cookie.store_transaction（簽章 cookie，10 分鐘）→ 回傳授權網址；先通過 CSRF（X-CSRF-Token＋Origin）；請求帶的時間、版本、生日一律忽略",
+         "不碰資料庫（兩個旗標只放在簽章 cookie）"),
         ("3", "瀏覽器導向 Google 授權頁並同意",
          "Authorization Code ＋ PKCE（S256），不經過伺服器",
          "—（外部：Google OIDC）"),
@@ -250,14 +177,14 @@ def login_diagram() -> Svg:
          "GET /auth/google/callback → google_callback → GoogleSignInService.complete：_check_state（hmac）→ GoogleOidcClient.exchange_code（驗 iss、aud、exp、nonce；email_verified 為真）",
          "不碰資料庫；失敗只導回 /login?error=固定代碼並記日誌"),
         ("5", "帳號對應：已綁定登入、同信箱合併、全新信箱註冊、被拒計次",
-         "GoogleSignInService._resolve → UserIdentityRepository.get_by_subject → UserRepository.get_by_canonical_email → add_user＋add_identity（須勾選條款；age_deadline_at＝建立後 24 小時）；被拒 → AccountLockService.register_strike",
-         "R users、user_identities；W users（新帳號）、user_identities；被拒 W lock_strikes（達門檻 W users.locked_at、admin_audit_logs）"),
+         "GoogleSignInService._resolve → UserIdentityRepository.get_by_subject → UserRepository.get_by_canonical_email → add_user＋add_identity（先檢查條款、再檢查聲明；缺聲明回 adult_required 並記錄 auth.google_rejected.adult；建立時寫入 adult_declared_at、adult_declaration_version；age_deadline_at＝建立後 24 小時）；被拒 → AccountLockService.register_strike",
+         "R users、user_identities；W users（新帳號，含聲明時間與版本）、user_identities；被拒 W lock_strikes（達門檻 W users.locked_at、admin_audit_logs）"),
         ("6", "建立登入狀態並依狀態導向",
          "玩家：login_user（session cookie 只含 uid、tv；換發 CSRF）→ landing_for：待確認年齡 /age、被鎖定 /appeal、等待刪除 /account，否則 /game；管理員：store_admin_step → /login/password（此時尚無 session）",
          "W users.last_login_at（_finish）"),
         ("7", "年齡確認（玩家登入後的第一步）",
-         "POST /api/auth/verify-age → AuthService.verify_age：check_nickname、validate_age_input；未滿 13 歲 → AccountErasureService.erase_underage；不一致 → register_strike；成功 → UserRepository.complete_age_verification_if_unset → 回呼 WalletService.ensure_signup_grant（贈 200 幣）",
-         "W users（birth_date、age_range、nickname、age_confirmed_at）；W wallets、wallet_entries；未滿 13 歲 D users（CASCADE）＋W deletion_tombstones；不一致 W lock_strikes"),
+         "POST /api/auth/verify-age → AuthService.verify_age：check_nickname、validate_age_input（AgePolicy：最低年齡 18）；未滿 18 歲 → AccountErasureService.erase_underage；不一致 → register_strike；成功 → UserRepository.complete_age_verification_if_unset（內容模式偏好一律 safe）→ 回呼 WalletService.ensure_signup_grant（贈 200 幣）",
+         "W users（birth_date、age_range、nickname、age_confirmed_at）；W wallets、wallet_entries；未滿 18 歲 D users（CASCADE）＋W deletion_tombstones；不一致 W lock_strikes"),
         ("8", "管理員第二道：輸入密碼",
          "POST /api/auth/admin-password → AuthService.verify_admin_password（Argon2id；連續 5 次失敗鎖定 15 分鐘）→ login_user；忘記密碼：EmailFlowService.request_admin_password_reset（SMTP）",
          "R／W users（failed_login_count、locked_until、last_login_at）；W auth_tokens（只存 SHA-256 雜湊）"),

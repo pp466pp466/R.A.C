@@ -1,9 +1,10 @@
-"""把 docs/1.0簡報.md 轉成 16:9 的 PDF（docs/1.0簡報.pdf）。
+"""把 docs/2.0簡報.md 轉成 16:9 的 PDF（docs/2.0簡報.pdf）。
 
 用法（專案根目錄）：
     python docs/diagrams/build_deck.py --libs <資料夾>            產生 PDF
     python docs/diagrams/build_deck.py --libs <資料夾> --check    只檢查渲染結果（Mermaid 語法、圖片），不產生 PDF
     python docs/diagrams/build_deck.py --libs <資料夾> --html out.html   另存渲染用的 HTML 供除錯
+    python docs/diagrams/build_deck.py --libs <資料夾> --source docs/1.0簡報.md --output docs/1.0簡報.pdf   重新產生舊版（1.0）
 
 <資料夾> 必須含 mermaid.min.js 與 marked.umd.js。它們是**只在產生文件時用到**的工具，不屬於應用程式，不放進版本庫：
     npm install --prefix <資料夾> mermaid@11.4.1 marked@12.0.2
@@ -30,8 +31,8 @@ from pathlib import Path
 from render_tools import DOCS_DIR, FONTS_CSS, FONT_STACK, MONO_STACK, PALETTE, RenderError, file_url, html_dump_dom, html_to_pdf, read_text, write_text
 
 P = PALETTE
-SOURCE = DOCS_DIR / "1.0簡報.md"
-OUTPUT = DOCS_DIR / "1.0簡報.pdf"
+SOURCE = DOCS_DIR / "2.0簡報.md"
+OUTPUT = DOCS_DIR / "2.0簡報.pdf"
 
 DIRECTIVE = re.compile(r"^<!--\s*(layout|tag|src|ratio|size|dmax):\s*(.*?)\s*-->\s*$")
 COL_MARK = re.compile(r"^<!--\s*col\s*-->\s*$")
@@ -291,7 +292,7 @@ def render_html(slides: list[dict], libs: Path, base_dir: Path) -> str:
 
 
 def main(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(description="把 docs/1.0簡報.md 轉成 PDF")
+    parser = argparse.ArgumentParser(description="把 docs/2.0簡報.md 轉成 PDF")
     parser.add_argument("--libs", default=os.environ.get("DECK_LIBS"), help="含 mermaid.min.js 與 marked.umd.js 的資料夾（或其 node_modules）")
     parser.add_argument("--check", action="store_true", help="只檢查渲染結果，不產生 PDF")
     parser.add_argument("--html", help="另存渲染用的 HTML")

@@ -23,7 +23,7 @@ DESIGN_DOCS = (
 # 不是設計文件的既有檔案（探索與決策紀錄、舊版報告）
 OTHER_DOCS = {
     "README.md", "report.md", "RPG.md", "spec_report_v2.1.1.md", "spec_report_v2.2.0.md", "ai_v2_0_0.md",
-    "content-policy-research.md", "1.0簡報.md",     # 簡報：摘要設計文件的報告用素材，不是設計文件（PDF 與圖解 PNG 不是 .md，不在此列）
+    "content-policy-research.md", "1.0簡報.md", "2.0簡報.md",     # 簡報：摘要設計文件的報告用素材，不是設計文件（PDF 與圖解 PNG 不是 .md，不在此列）
 }
 DIAGRAM_TYPES = ("flowchart", "sequenceDiagram", "erDiagram", "stateDiagram-v2", "graph")
 
