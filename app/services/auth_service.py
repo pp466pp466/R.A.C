@@ -74,7 +74,7 @@ class AuthService:
         self._age_policy = age_policy
         # 補填年齡確認成功之後呼叫（game-wallet：玩家的首次註冊贈幣）。它失敗**不影響**年齡確認，由呼叫端之後補做
         self._on_age_verified = on_age_verified
-        self._erasure = erasure          # 補填年齡時發現未滿 13 歲的玩家：走單一抹除出口
+        self._erasure = erasure          # 補填年齡時發現未滿 18 歲的玩家：走單一抹除出口
         self._lock = lock                # 補填年齡時的不一致：計入帳號鎖定的計次
         self._users = users
         self._identities = identities
@@ -176,7 +176,7 @@ class AuthService:
           不合格以暱稱欄位的錯誤回應，不保存任何資料，也**不**計入帳號鎖定的計次（不是年齡資料的不一致）。管理員在帳號設定頁
           補填時可不提供暱稱（提供了就一併驗證與保存）。
         - 驗證規則與註冊相同；不通過時不寫入任何年齡資料，日誌只記事件名稱。
-        - **未滿 13 歲的玩家**（生日算出的年齡，或所選區間為未滿 13 歲）：立即抹除帳號與全部個資，不保存填寫的生日，
+        - **未滿 18 歲的玩家**（生日算出的年齡，或所選區間為未滿 13 歲、13–17）：立即抹除帳號與全部個資，不保存填寫的生日，
           拋出 `UnderageAccountErased`（400，Controller 據此清除目前裝置的登入狀態）。管理員只拒絕、不抹除。
         - **不一致**：回應通用的「資料有誤」，不指出是哪個欄位；帳號保留、可立即重填，並計入帳號鎖定的計次。
         - 回傳最新的帳號快照，讓前端立刻知道已完成。
@@ -190,7 +190,7 @@ class AuthService:
             clean_nickname, nickname_error = check_nickname(nickname)
         verified, error = self._check_age_input(birth_date, age_range)
         if nickname_error is not None:
-            # 暱稱不合格：什麼都不保存、不計入鎖定計次（不一致與未滿 13 歲的處理在這之後，所以不會被觸發）。
+            # 暱稱不合格：什麼都不保存、不計入鎖定計次（不一致與未滿 18 歲的處理在這之後，所以不會被觸發）。
             # 年齡欄位只是格式錯誤（沒有填、日期不合法）時，把欄位錯誤一併回報，使用者一次改完。
             fields = {"nickname": nickname_error}
             if error is not None and error.code == "validation_error":
@@ -204,7 +204,6 @@ class AuthService:
             user,
             birth_date=verified.birth_date,
             age_range=verified.age_range,
-            is_adult=verified.is_adult,
             confirmed_at=self._clock(),
             policy_version=self._age_policy.version,
             nickname=clean_nickname,
@@ -224,10 +223,10 @@ class AuthService:
             logger.error("年齡確認後的回呼失敗", extra=describe_exception(exc))
 
     def _age_step_error(self, user: User, error: ValidationError) -> ValidationError:
-        """補填年齡不通過時要拋出的錯誤；未滿 13 歲的玩家會在這裡被抹除，不一致會在這裡計次。"""
+        """補填年齡不通過時要拋出的錯誤；未滿 18 歲的玩家會在這裡被抹除，不一致會在這裡計次。"""
         if error.code == "age_not_eligible" and user.role != ROLE_ADMIN:
             if self._erasure is None:
-                raise RuntimeError("沒有設定帳號抹除元件，無法處理未滿 13 歲的帳號。")
+                raise RuntimeError("沒有設定帳號抹除元件，無法處理未滿 18 歲的帳號。")
             self._erasure.erase_underage(user.id, now=self._clock())
             return UnderageAccountErased(f"本服務僅供 {self._age_policy.min_register_age} 歲以上使用，您的帳號與相關資料已刪除。")
         if error.code == "age_mismatch":

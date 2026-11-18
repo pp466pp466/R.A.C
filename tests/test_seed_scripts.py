@@ -267,10 +267,10 @@ def test_the_shipped_script_has_no_real_personal_data_or_secret_markers():
         assert pattern not in text
 
 
-def test_a_fifteen_year_old_can_start_a_save_from_the_shipped_script(member_session):
+def test_a_safe_mode_player_can_start_a_save_from_the_shipped_script(member_session):
     service, clock = make_service(member_session, SEED_DIRECTORY)
     service.run()
-    teen = CurrentUser.from_model(add_user(member_session, 1, age=15))
+    teen = CurrentUser.from_model(add_user(member_session, 1, content_tier_preference="safe"))        # 選了安全模式的成年玩家（全站只限滿 18 歲）
     sessions = SessionService(
         scripts=ScriptRepository(member_session), sessions=SessionRepository(member_session), policy=AccessPolicy(clock=clock),
         reviews=PassingReviews(), protagonist_reviews=PassingProtagonistReviews(), protagonist_marker=PROTAGONIST_MARKER, clock=clock,

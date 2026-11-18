@@ -49,7 +49,7 @@ def test_the_overdue_delete_rechecks_the_condition_at_delete_time(member_session
     assert users.find_overdue_unconfirmed_ids(NOW) == [user.id]
     # 選出之後、刪除之前，使用者剛好完成年齡確認
     assert users.complete_age_verification_if_unset(
-        user, birth_date=NOW.date().replace(year=NOW.year - 30), age_range="25-34", is_adult=True, confirmed_at=NOW, policy_version="v-test",
+        user, birth_date=NOW.date().replace(year=NOW.year - 30), age_range="25-34", confirmed_at=NOW, policy_version="v-test",
     ) is True
     s.commit()
     assert users.delete_overdue_unconfirmed(user.id, NOW) is False
@@ -61,7 +61,7 @@ def test_completing_the_age_confirmation_clears_the_deadline(member_session):
     user = unconfirmed(s, 1, deadline=NOW + timedelta(hours=5))
     users = UserRepository(s)
     users.complete_age_verification_if_unset(
-        user, birth_date=NOW.date().replace(year=NOW.year - 30), age_range="25-34", is_adult=True, confirmed_at=NOW, policy_version="v-test",
+        user, birth_date=NOW.date().replace(year=NOW.year - 30), age_range="25-34", confirmed_at=NOW, policy_version="v-test",
     )
     s.commit()
     s.refresh(user)

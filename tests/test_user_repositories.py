@@ -160,7 +160,7 @@ def test_bump_token_version_returns_the_new_value_each_time(session, users):
 
 def age_args(**overrides):
     values = dict(
-        birth_date=date(1996, 1, 5), age_range="25_34", is_adult=True, confirmed_at=utcnow(), policy_version="v1",
+        birth_date=date(1996, 1, 5), age_range="25_34", confirmed_at=utcnow(), policy_version="v1",
     )
     values.update(overrides)
     return values
@@ -172,13 +172,13 @@ def test_completing_the_age_verification_writes_every_field_once_and_never_overw
     first = utcnow()
 
     assert users.complete_age_verification_if_unset(user, **age_args(confirmed_at=first)) is True
-    assert (user.birth_date, user.age_range, user.is_adult_at_confirmation) == (date(1996, 1, 5), "25_34", True)
+    assert (user.birth_date, user.age_range, user.is_adult_at_confirmation) == (date(1996, 1, 5), "25_34", None)       # 不再寫入成年紀錄
     assert user.age_confirmed_at == first and user.age_policy_version == "v1"
 
-    again = age_args(birth_date=date(2011, 10, 28), age_range="13_17", is_adult=False,
+    again = age_args(birth_date=date(2011, 10, 28), age_range="13_17",
                      confirmed_at=first + timedelta(hours=1), policy_version="v2")
     assert users.complete_age_verification_if_unset(user, **again) is False
-    assert (user.birth_date, user.age_range, user.is_adult_at_confirmation) == (date(1996, 1, 5), "25_34", True)
+    assert (user.birth_date, user.age_range, user.is_adult_at_confirmation) == (date(1996, 1, 5), "25_34", None)       # 不再寫入成年紀錄
     assert user.age_confirmed_at == first and user.age_policy_version == "v1"          # 原本的紀錄一個欄位都不變
     assert other.birth_date is None and other.age_range is None and other.age_confirmed_at is None    # 不影響別人
 
@@ -193,16 +193,16 @@ def test_an_account_with_only_the_old_checkbox_time_still_counts_as_not_complete
 
 # ---- 內容模式偏好與成年確認（content-tier-modes 規格）------------------------------------
 
-MINOR_ARGS = dict(birth_date=date(2011, 10, 28), age_range="13_17", is_adult=False)
+MINOR_ARGS = dict(birth_date=date(2011, 10, 28), age_range="13_17")      # 儲存層不檢查年齡資格（資格由 Service 的驗證負責）
 
 
-def test_the_preference_defaults_to_safe_until_the_age_is_confirmed_and_then_follows_the_age_at_confirmation(session, users):
+def test_the_preference_defaults_to_safe_and_stays_safe_after_the_age_is_confirmed_whatever_the_age(session, users):
     adult = users.add_user(make_user(1))
     minor = users.add_user(make_user(2))
     assert (adult.content_tier_preference, minor.content_tier_preference) == ("safe", "safe")
     assert users.complete_age_verification_if_unset(adult, **age_args()) is True
     assert users.complete_age_verification_if_unset(minor, **age_args(**MINOR_ARGS)) is True
-    assert (adult.content_tier_preference, minor.content_tier_preference) == ("standard", "safe")
+    assert (adult.content_tier_preference, minor.content_tier_preference) == ("safe", "safe")       # 全站預設為安全模式
 
 
 def test_a_repeated_age_confirmation_neither_overwrites_nor_changes_the_preference(session, users):
@@ -219,7 +219,7 @@ def test_setting_the_preference_writes_only_that_column_for_that_user(session, u
     for member in (user, other):
         users.complete_age_verification_if_unset(member, **age_args())
     assert users.set_content_preference(user, "adult") is True
-    assert (user.content_tier_preference, other.content_tier_preference) == ("adult", "standard")
+    assert (user.content_tier_preference, other.content_tier_preference) == ("adult", "safe")
     assert user.adult_confirmed_at is None and user.birth_date == date(1996, 1, 5)
 
 
@@ -237,7 +237,7 @@ def test_an_unknown_tier_is_a_programming_error_and_writes_nothing(session, user
     users.complete_age_verification_if_unset(user, **age_args())
     with pytest.raises(ValueError):
         users.set_content_preference(user, tier)
-    assert user.content_tier_preference == "standard"
+    assert user.content_tier_preference == "safe"
 
 
 def test_the_adult_confirmation_is_recorded_replaced_and_kept_when_the_preference_changes(session, users):
@@ -291,7 +291,7 @@ def test_setting_the_story_preference_writes_only_that_column_for_that_user(sess
     before = user.content_tier_preference
     assert users.set_story_preference(user, "female") is True
     assert (user.story_preference, other.story_preference) == ("female", "all")
-    assert user.content_tier_preference == before == "standard" and user.birth_date == date(1996, 1, 5)
+    assert user.content_tier_preference == before == "safe" and user.birth_date == date(1996, 1, 5)
 
 
 def test_the_story_preference_does_not_need_a_completed_age_check(session, users):
@@ -324,7 +324,7 @@ def test_the_age_statistics_count_per_range_and_expose_nothing_individual(sessio
     ):
         user = users.add_user(make_user(n))
         if birth:
-            users.complete_age_verification_if_unset(user, **age_args(birth_date=birth, age_range=chosen, is_adult=chosen != "13_17"))
+            users.complete_age_verification_if_unset(user, **age_args(birth_date=birth, age_range=chosen))
     stats = users.count_by_age_range()
     assert stats == {"13_17": 2, "25_34": 3, None: 1}
     assert all(isinstance(key, (str, type(None))) and isinstance(value, int) for key, value in stats.items())

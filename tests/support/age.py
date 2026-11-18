@@ -39,7 +39,8 @@ def age_fields(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: 
 def age_columns(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: date = TODAY, confirmed_at: datetime = TODAY_UTC) -> dict[str, Any]:
     """直接寫入 `users` 的年齡欄位值（不經過 Service），代表「已完成年齡確認」的帳號。
 
-    內容模式偏好與正式流程一致：確認當下已成年為 `standard`，未成年為 `safe`（之後滿 18 歲不會自動調高）。
+    內容模式偏好：這個輔助值沿用「成年者 `standard`、未成年 `safe`」，方便測試涵蓋各種模式；**正式的年齡確認流程自 adult-only-signup 起一律設為 `safe`**
+    （見 `UserRepository.complete_age_verification_if_unset`），需要正式流程的結果時請走 Service 而不是這個輔助。
     """
     chosen = range_for_age(age, policy)
     assert chosen is not None

@@ -31,7 +31,7 @@ class ValidationError(ServiceError):
 
 
 class UnderageAccountErased(ValidationError):
-    """補填年齡時發現未滿 13 歲（400）：帳號與其全部個資已經抹除，Controller 據此清除目前裝置的登入狀態。
+    """補填年齡時發現未滿 18 歲（400）：帳號與其全部個資已經抹除，Controller 據此清除目前裝置的登入狀態。
     訊息是通用說明，不重述使用者填的內容，也不保存其生日。"""
 
     code = "age_not_eligible"

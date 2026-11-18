@@ -14,6 +14,7 @@ from app.config import load_config
 from app.models import Base
 from app.models.user import CONTENT_TIERS, ROLE_ADMIN, ROLE_USER
 from app.services.access_policy import AccessPolicy
+from app.services.age_policy import AgePolicy
 from app.services.content_tier import ADULT_RULES_VERSION
 from tests.support.age import TODAY_UTC
 from tests.support.age_gate import ENDPOINT, add_ai_endpoint
@@ -162,9 +163,9 @@ def test_an_adult_may_choose_the_safe_mode_and_keeps_it():
 
 # ---- 從環境設定到 HTTP ---------------------------------------------------------------------------------------
 
-def make_app(**environ):
+def make_app(age_policy=None, **environ):
     config = load_config(environ={"APP_ENV": "testing", **environ})
-    application = create_app(config, clock=FakeClock())
+    application = create_app(config, clock=FakeClock(), age_policy=age_policy)
     Base.metadata.create_all(application.extensions["db_engine"])
     add_ai_endpoint(application)
     return application
@@ -196,8 +197,11 @@ def test_with_the_switch_on_the_whole_stack_lets_a_confirmed_adult_reach_the_adu
         "preference": "adult", "age_cap": "adult", "effective": "adult", "reason": None,
     }
     assert content_for(app, 2, age=30, content_tier_preference="adult")["reason"] == "needs_confirmation"       # 開關開了，沒有確認
-    assert content_for(app, 3, age=17, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"
-    assert content_for(app, 4, age=15, role=ROLE_ADMIN, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"   # 管理員不豁免
+    # 未滿 18 歲者在預設規則下根本不能使用（age_restricted）；依年齡決定上限的程式碼仍保留到 safe-mode-toggle，
+    # 以「舊的 13 歲規則」注入的應用程式涵蓋它（未成年者固定安全模式、管理員不豁免）
+    legacy = make_app(age_policy=AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13"), **ADULT_ENV)
+    assert content_for(legacy, 3, age=17, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"
+    assert content_for(legacy, 4, age=15, role=ROLE_ADMIN, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"   # 管理員不豁免
 
 
 def test_the_policy_the_requests_use_is_built_from_the_config_not_from_a_constant():

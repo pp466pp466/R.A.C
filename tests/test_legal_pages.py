@@ -213,7 +213,7 @@ def test_the_terms_describe_the_rpg_the_content_modes_and_the_absolute_prohibiti
 def test_the_age_numbers_in_the_new_terms_section_come_from_the_age_policy(client):
     html = client.get("/terms").get_data(as_text=True)
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
-    assert "13 至 17 歲的使用者固定使用安全模式" in section and "我確定已滿 18 歲" in section        # 數字來自年齡政策
+    assert "13 至 17 歲" not in section and "我確定已滿 18 歲" in section        # 數字來自年齡政策：最低年齡 18，沒有未成年者的固定安全模式說明
 
 
 # ---- 重新生成與編輯最後一輪（rpg-turn-revision）新增的揭露 ----------------------------------------------------

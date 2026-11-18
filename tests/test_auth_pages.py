@@ -187,18 +187,18 @@ def test_a_logged_in_member_is_sent_to_the_default_page_from_the_login_page(app)
 
 def test_the_page_state_carries_the_age_rules_from_the_policy_and_the_dates_of_today(app):
     rules = state_of(app.test_client().get("/login"))["ageRules"]
-    assert rules["minRegisterAge"] == 13 and rules["adultAge"] == 18
+    assert rules["minRegisterAge"] == 18 and rules["adultAge"] == 18
     assert [r["code"] for r in rules["ranges"]] == [r.code for r in DEFAULT_AGE_POLICY.ranges]
     assert all(set(r) == {"code", "label"} and r["label"] for r in rules["ranges"])
     assert rules["birthDateMin"] == "1900-01-01" and rules["birthDateMax"] == "2026-10-27"      # 假時鐘的台北日期
 
 
 def test_a_custom_policy_changes_the_state_the_options_and_the_wording_without_touching_the_pages():
-    strict = make_app(age_policy=AgePolicy(min_register_age=18, min_use_age=18, version="test"))
-    rules = state_of(strict.test_client().get("/login"))["ageRules"]
-    assert rules["minRegisterAge"] == 18
-    terms = strict.test_client().get("/terms").get_data(as_text=True)
-    assert "18 歲以上" in terms and "13 歲" not in terms and "至 17 歲" not in terms
+    other = make_app(age_policy=AgePolicy(min_register_age=21, min_use_age=21, version="test"))
+    rules = state_of(other.test_client().get("/login"))["ageRules"]
+    assert rules["minRegisterAge"] == 21
+    terms = other.test_client().get("/terms").get_data(as_text=True)
+    assert "21 歲以上" in terms and "13 歲" not in terms
 
 
 def test_no_template_or_script_hardcodes_an_age_number():
@@ -333,10 +333,10 @@ def test_the_account_script_skips_the_request_for_an_empty_nickname_and_shows_th
 
 def test_verifying_the_age_on_the_account_page_flow_updates_the_state(full_app):
     client = logged_in_admin_without_age(full_app)
-    body = {"birth_date": birth_date_for_age(15).isoformat(), "age_range": "13_17"}
+    body = {"birth_date": birth_date_for_age(25).isoformat(), "age_range": "25_34"}
     assert client.post("/api/auth/verify-age", json=body).status_code == 200
     user = state_of(client.get("/account"))["user"]
-    assert user["age_confirmed"] is True and user["age_group"] == "minor"
+    assert user["age_confirmed"] is True and user["age_group"] == "adult"
 
 
 def test_the_account_script_skips_the_request_when_a_field_is_missing_and_updates_the_state_on_success():
@@ -532,8 +532,8 @@ def test_the_terms_describe_the_service_as_ai_only(app):
 
 def test_the_terms_set_the_minimum_age_and_the_teen_safe_mode_and_say_how_age_is_declared(app):
     html = app.test_client().get("/terms").get_data(as_text=True)
-    assert "13 歲以上" in html and "未滿 13 歲者不得使用" in html
-    assert "13 至 17 歲" in html and "只能使用安全模式" in html and "滿 18 歲之後會自動解除" in html
+    assert "18 歲以上" in html and "未滿 18 歲者不得使用" in html                   # 全站只限滿 18 歲者使用
+    assert "13 至 17 歲" not in html and "滿 18 歲之後會自動解除" not in html
     assert "年齡區間" in html and "互相對照" in html and "自行聲明" in html and "年齡確認" in html
     assert "另外勾選確認" not in html and "僅供年滿 18 歲者使用" not in html            # 舊的勾選版說法已不存在
     assert "草稿" in html and CURRENT_TERMS_VERSION in html                          # 仍是草稿，版本照舊顯示
@@ -544,7 +544,7 @@ def test_the_terms_set_the_minimum_age_and_the_teen_safe_mode_and_say_how_age_is
 def test_the_privacy_policy_discloses_the_birthday_its_purposes_and_its_retention(app):
     html = app.test_client().get("/privacy").get_data(as_text=True)
     assert "生日與年齡區間" in html and "不蒐集證件" in html
-    assert "發現未滿 13 歲者" in html and "立即刪除" in html and "不會保存" in html
+    assert "發現未滿 18 歲者" in html and "立即刪除" in html and "不會保存" in html
     assert "不蒐集生日、年齡或證件" not in html and "年齡確認紀錄" not in html           # 舊的說法已不存在
     for purpose in ("年齡確認", "內容分級", "去識別的統計方式了解用戶群"):
         assert purpose in html, purpose

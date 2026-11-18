@@ -12,8 +12,8 @@ def test_versions_are_non_empty_strings_that_fit_their_columns(version):
     assert len(version) <= User.__table__.c.age_policy_version.type.length
 
 
-def test_the_age_policy_version_names_the_birthdate_and_range_approach_and_comes_from_the_policy():
+def test_the_age_policy_version_names_the_adults_only_rule_and_comes_from_the_policy():
     from app.services.age_policy import DEFAULT_AGE_POLICY
 
     assert CURRENT_AGE_POLICY_VERSION == DEFAULT_AGE_POLICY.version
-    assert CURRENT_AGE_POLICY_VERSION.endswith("birthdate-range")
+    assert CURRENT_AGE_POLICY_VERSION == "2026-11-17-adults-only"          # 全站只限滿 18 歲（adult-only-signup）

@@ -122,12 +122,12 @@ def test_the_owner_may_preview_with_their_own_draft(member_session):
 
 
 def test_a_script_declared_above_the_players_mode_is_a_403_with_no_model_call_and_no_count(member_session):
-    teen = player(member_session, 1, age=15)
+    safe_player = player(member_session, 1, content_tier_preference="safe")          # 選了安全模式的成年玩家
     version = script_version(member_session, content_tier="standard")
     provider = FakeLLMProvider()
     service = make_service(member_session, provider)
     with pytest.raises(ContentTierRestricted):
-        service.suggest(teen, version.public_id, INTRO)
+        service.suggest(safe_player, version.public_id, INTRO)
     assert provider.calls == [] and ledger(member_session) == []
 
 
@@ -364,13 +364,13 @@ def test_setup_reflects_the_remaining_count_and_whether_the_model_is_configured(
 
 
 def test_setup_has_the_same_visibility_and_tier_rules_as_starting(member_session):
-    owner, other, teen = player(member_session, 1), player(member_session, 2), player(member_session, 3, age=15)
+    owner, other, safe_player = player(member_session, 1), player(member_session, 2), player(member_session, 3, content_tier_preference="safe")
     draft = draft_script(member_session, owner)
     service = make_service(member_session, FakeLLMProvider())
     with pytest.raises(NotFound):
         service.setup(other, draft.public_id)
     with pytest.raises(ContentTierRestricted):
-        service.setup(teen, script_version(member_session, title="一般", content_tier="standard").public_id)
+        service.setup(safe_player, script_version(member_session, title="一般", content_tier="standard").public_id)
     assert service.setup(owner, draft.public_id)["title"]
 
 

@@ -69,7 +69,7 @@ def test_a_minor_protagonist_is_fine_and_the_players_own_age_has_nothing_to_do_w
     adult_player = player(member_session)
     save = open_save(service, adult_player, script(member_session), **start_kwargs(name="小舟", age=10, anchor={"kind": "location", "ref": "古劍山莊", "text": "出生的地方"}))
     assert save.character_age == 10
-    teen = player(member_session, 2, age=15)
+    teen = player(member_session, 2, age=18)                              # 玩家自己的年齡（全站只限滿 18 歲）與主角的年齡無關
     assert open_save(service, teen, script(member_session, title="另一個"), **start_kwargs(name="老舟", age=300)).character_age == 300
 
 

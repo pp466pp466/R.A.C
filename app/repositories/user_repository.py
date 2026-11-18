@@ -17,7 +17,7 @@ from app.models.llm_call_log import LlmCallLog
 from app.models.rpg_session import RpgSession
 from app.models.script import Script, ScriptVersion
 from app.models.user import (
-    AUDIENCES, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIERS, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
+    AUDIENCES, CONTENT_TIER_SAFE, CONTENT_TIERS, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
     STATUS_DELETION_PENDING, User,
 )
 from app.repositories.base import BaseRepository
@@ -119,7 +119,6 @@ class UserRepository(BaseRepository[User]):
         *,
         birth_date: date,
         age_range: str,
-        is_adult: bool,
         confirmed_at: datetime,
         policy_version: str,
         nickname: str | None = None,
@@ -131,9 +130,9 @@ class UserRepository(BaseRepository[User]):
         視為尚未完成）：並行的兩次補填只有一次會寫入，第一次寫入的內容不會被覆蓋，所以「已完成的帳號再次提交」
         不會改變原本的紀錄。年齡欄位與內容模式偏好在同一個 UPDATE 寫入，不會出現只寫一半的狀態。
 
-        **內容模式偏好依確認當下的年齡設定**：已成年為 `standard`（一般模式，成年玩家的預設），未成年為 `safe`；
-        之後滿 18 歲不會自動調高，玩家須自行切換（content-tier-modes 規格）。失敗（不一致、未滿 13 歲）的流程
-        在呼叫這裡之前就結束，不會留下任何偏好。
+        **內容模式偏好一律設為 `safe`**（全站預設為安全模式；全站只限滿 18 歲者使用，adult-only-signup）：
+        之後不會自動調高，玩家須自行切換（content-tier-modes 規格）。不再寫入 `is_adult_at_confirmation`（欄位保留、日後收縮）。
+        失敗（不一致、未滿 18 歲）的流程在呼叫這裡之前就結束，不會留下任何偏好。
 
         **暱稱與短代號在同一個 UPDATE 寫入**（rpg-script-authoring）：暱稱與生日、年齡區間是同一個步驟，全有或全無。
         管理員在帳號設定頁補填時可不提供暱稱（兩者都為 `None`，不改動這兩欄）。
@@ -141,11 +140,10 @@ class UserRepository(BaseRepository[User]):
         values: dict[str, object] = dict(
             birth_date=birth_date,
             age_range=age_range,
-            is_adult_at_confirmation=is_adult,
             age_confirmed_at=confirmed_at,
             age_policy_version=policy_version,
             age_deadline_at=None,                    # 完成了，不再有逾時清除的期限
-            content_tier_preference=CONTENT_TIER_STANDARD if is_adult else CONTENT_TIER_SAFE,
+            content_tier_preference=CONTENT_TIER_SAFE,
         )
         if nickname is not None and nickname_code is not None:
             values.update(nickname=nickname, nickname_code=nickname_code)
@@ -355,7 +353,7 @@ class UserRepository(BaseRepository[User]):
         return result.rowcount == 1
 
     def delete_unconfirmed_player(self, user_id: int) -> bool:
-        """補填時發現未滿 13 歲：條件式刪除「還沒有生日的非管理員帳號」。管理員絕不抹除。回傳是否真的刪除。"""
+        """補填時發現未滿 18 歲：條件式刪除「還沒有生日的非管理員帳號」。管理員絕不抹除。回傳是否真的刪除。"""
         result = self._session.execute(
             delete(User)
             .where(User.id == user_id, User.role != ROLE_ADMIN, User.birth_date.is_(None))

@@ -142,11 +142,9 @@ def test_a_safe_mode_player_cannot_start_a_script_declared_standard(member_sessi
     service, _ = service_for(member_session)
     version = publish_script(member_session, content_tier="standard")
     safe_adult = player(member_session, 1, content_tier_preference="safe")
-    teenager = player(member_session, 2, age=15)
-    for user in (safe_adult, teenager):
-        with pytest.raises(ContentTierRestricted) as caught:
-            start(service, user, version)
-        assert caught.value.code == "content_tier_restricted"
+    with pytest.raises(ContentTierRestricted) as caught:
+        start(service, safe_adult, version)
+    assert caught.value.code == "content_tier_restricted"
     assert count(member_session, RpgSession) == 0
 
 
@@ -169,9 +167,9 @@ def test_an_adult_declared_script_needs_the_adult_mode_to_be_active(member_sessi
     assert start(on, confirmed, adult_script).content_tier == "adult"
 
 
-def test_a_fifteen_year_old_can_play_a_safe_builtin_script(member_session):
+def test_a_safe_mode_player_can_play_a_safe_builtin_script(member_session):
     service, _ = service_for(member_session)
-    save = start(service, player(member_session, age=15), publish_script(member_session, content_tier="safe"))
+    save = start(service, player(member_session, content_tier_preference="safe"), publish_script(member_session, content_tier="safe"))
     assert save.content_tier == "safe"
 
 
@@ -245,7 +243,7 @@ def test_a_new_save_starts_with_an_empty_notebook_even_when_another_save_has_one
 
 def test_the_protagonist_name_is_normalised_and_the_age_is_a_character_age_not_the_players(member_session):
     service, _ = service_for(member_session)
-    teenager = player(member_session, age=15)
+    teenager = player(member_session, age=18)                                  # 玩家自己的年齡與主角的年齡無關
     save = start(service, teenager, publish_script(member_session), name="  旅\n  人 ", age=3)
     assert (save.player_name, save.character_age) == ("旅 人", 3)
 

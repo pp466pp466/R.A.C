@@ -101,13 +101,13 @@ def test_a_bad_nickname_with_a_mismatched_age_reports_only_the_nickname_and_coun
     """暱稱不合格時，年齡不一致的處理（計入鎖定計次）不會被觸發。"""
     client = client_for(app, age=None)
     for _ in range(6):                                              # 超過 5 次的鎖定門檻也不會鎖定
-        response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="13_17", nickname="官方客服"))
+        response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="18_24", nickname="官方客服"))
         assert response.status_code == 400 and set(response.get_json()["error"]["fields"]) == {"nickname"}
     with db(app) as s:
         assert s.query(LockStrike).count() == 0 and s.scalar(select(User.locked_at)) is None
 
 
-def test_a_player_under_13_is_erased_and_the_nickname_is_not_kept(app):
+def test_a_player_under_18_is_erased_and_the_nickname_is_not_kept(app):
     client = client_for(app, age=None)
     response = client.post("/api/auth/verify-age", json=age_fields(10, age_range="13_17", nickname=VALID))
     assert response.status_code == 400
@@ -117,7 +117,7 @@ def test_a_player_under_13_is_erased_and_the_nickname_is_not_kept(app):
 
 def test_a_mismatch_still_counts_once_when_the_nickname_is_fine(app):
     client = client_for(app, age=None)
-    response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="13_17"))
+    response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="18_24"))
     assert response.get_json()["error"]["code"] == "age_mismatch"
     with db(app) as s:
         assert s.query(LockStrike).count() == 1

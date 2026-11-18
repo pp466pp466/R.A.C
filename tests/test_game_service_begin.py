@@ -184,9 +184,9 @@ def test_the_effective_tier_is_the_most_conservative_of_the_save_and_the_players
     adult = kit.player(1)
     save = kit.open_save(adult, tier="standard")
     assert begin(kit, adult, save).plan.tier == "standard"
-    teen = kit.player(2, age=15)
-    teen_save = kit.open_save(teen, tier="standard")                             # 存檔記錄較寬鬆，但玩家未滿 18 歲
-    assert begin(kit, teen, teen_save).plan.tier == "safe"
+    safe_player = kit.player(2, content_tier_preference="safe")                  # 全站只限滿 18 歲：上限來自玩家自己選的安全模式
+    safe_save = kit.open_save(safe_player, tier="standard")                      # 存檔記錄較寬鬆，但玩家目前選的是安全模式
+    assert begin(kit, safe_player, safe_save).plan.tier == "safe"
 
 
 def test_a_spent_global_budget_is_system_busy_without_a_hold(kit):

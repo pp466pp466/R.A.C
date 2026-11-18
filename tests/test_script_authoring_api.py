@@ -14,6 +14,7 @@ from app import create_app
 from app.config import load_config
 from app.models import Base, RuntimeLimit, Script, ScriptSubmission, ScriptVersion, User
 from app.repositories.script_repository import ScriptRepository
+from app.services.age_policy import AgePolicy
 from app.services.script_seed_service import SEED_DIRECTORY, ScriptSeedService
 from app.services.script_spec import validate_script
 from tests.support.auth import FakeClock, add_user, sign_in_as
@@ -24,9 +25,14 @@ from tests.support.script_data import valid, validated
 UNIQUE = "獨特的劇本文字SCRIPT-API-SECRET-TEXT"
 
 
+# 預設規則的最低使用年齡是 18（adult-only-signup），依年齡決定內容上限的程式碼在預設規則下無法到達，但仍保留到後續的
+# safe-mode-toggle 才移除；涵蓋它的測試以「舊的 13 歲規則」注入的應用程式執行（`indirect` 參數化 `app`）。
+LEGACY_13 = AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13")
+
+
 @pytest.fixture()
-def app():
-    application = create_app(load_config(environ={"APP_ENV": "testing"}), clock=FakeClock())
+def app(request):
+    application = create_app(load_config(environ={"APP_ENV": "testing"}), clock=FakeClock(), age_policy=getattr(request, "param", None))
     Base.metadata.create_all(application.extensions["db_engine"])
     return application
 
@@ -218,11 +224,15 @@ def test_a_missing_or_malformed_content_is_a_validation_error(app, body):
 # ---- 作者的內容模式上限 -----------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize(("age", "tier", "ok"), [
-    (15, "safe", True), (15, "standard", False), (15, "adult", False), (17, "standard", False),
-    (18, "standard", True), (18, "adult", True), (30, "adult", True),
-])
+@pytest.mark.parametrize(("age", "tier", "ok"), [(18, "standard", True), (18, "adult", True), (30, "adult", True)])
 def test_the_declared_tier_may_not_exceed_the_authors_age_cap(app, age, tier, ok):
+    response = create(author(app, age=age), content_tier=tier)
+    assert response.status_code == 201
+
+
+@pytest.mark.parametrize("app", [LEGACY_13], indirect=True)
+@pytest.mark.parametrize(("age", "tier", "ok"), [(15, "safe", True), (15, "standard", False), (15, "adult", False), (17, "standard", False)])
+def test_under_a_legacy_13_policy_a_minor_author_may_not_declare_above_the_safe_cap(app, age, tier, ok):
     response = create(author(app, age=age), content_tier=tier)
     if ok:
         assert response.status_code == 201

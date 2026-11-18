@@ -69,10 +69,19 @@ def test_neither_admins_nor_top_tier_members_are_exempt_from_the_age_gate(tier, 
     assert POLICY.can_use_chat(member(member_tier=tier, role=role)) is True
 
 
-@pytest.mark.parametrize("age", [13, 15, 17, 18, 30, 80])
-def test_everyone_from_the_minimum_use_age_up_may_use_chat_including_teens(age):
+@pytest.mark.parametrize("age", [18, 30, 80])
+def test_everyone_from_the_minimum_use_age_up_may_use_chat(age):
     assert POLICY.can_use_chat(member(age=age)) is True
     POLICY.require_chat_access(member(age=age))
+
+
+@pytest.mark.parametrize("age", [13, 15, 17])
+def test_teens_are_refused_with_the_age_restricted_code_because_the_minimum_use_age_is_18(age):
+    """全站只限滿 18 歲者使用（adult-only-signup）：沒有「未成年者只能使用安全模式」的例外。"""
+    assert POLICY.can_use_chat(member(age=age)) is False
+    with pytest.raises(AgeRestricted) as denied:
+        POLICY.require_chat_access(member(age=age))
+    assert denied.value.code == "age_restricted"
 
 
 @pytest.mark.parametrize("age", [0, 5, 12])
@@ -90,7 +99,7 @@ def test_someone_below_the_minimum_use_age_cannot_even_if_an_account_somehow_exi
 @pytest.mark.parametrize("status", USER_STATUSES)
 def test_chat_access_requires_every_condition_and_the_two_methods_agree(tier, role, age, verified, status):
     user = member(age=age, member_tier=tier, role=role, email_verified=verified, status=status)
-    allowed = status == STATUS_ACTIVE and age is not None and age >= 13          # 信箱是否驗證不影響結果
+    allowed = status == STATUS_ACTIVE and age is not None and age >= 18          # 信箱是否驗證不影響結果
     assert POLICY.can_use_chat(user) is allowed
     if allowed:
         POLICY.require_chat_access(user)
@@ -119,6 +128,7 @@ def test_chat_gate_returns_the_documented_codes():
     assert POLICY.chat_gate(member()) is None
     assert POLICY.chat_gate(member(age=None)) == "age_confirmation_required"
     assert POLICY.chat_gate(member(age=12)) == "age_restricted"
+    assert POLICY.chat_gate(member(age=17)) == "age_restricted"
     assert POLICY.chat_gate(member(status=STATUS_SUSPENDED)) == "forbidden"
     assert POLICY.chat_gate(member(email_verified=False, age=None)) == "age_confirmation_required"       # 信箱不是閘門，直接引導補填年齡
     assert POLICY.chat_gate(member(email_verified=False)) is None
@@ -139,13 +149,15 @@ def test_a_too_young_member_gets_a_different_code_that_does_not_point_to_the_acc
     assert denied.value.code == "age_restricted" and "年齡確認" not in denied.value.message
 
 
-def test_raising_the_minimum_age_to_18_in_the_policy_blocks_teens_and_nobody_else():
-    strict = policy_for(age_policy=AgePolicy(min_register_age=18, min_use_age=18))
-    assert strict.can_use_chat(member(age=17)) is False and strict.can_use_chat(member(age=18)) is True
+def test_the_minimum_use_age_comes_only_from_the_policy_so_a_looser_policy_still_lets_teens_in():
+    """最低年齡只由 `AgePolicy` 決定（預設 18）；另一份規則（例如舊的 13 歲）不需要改任何其他程式。"""
+    loose = policy_for(age_policy=AgePolicy(min_register_age=13, min_use_age=13))
+    assert loose.can_use_chat(member(age=17)) is True and loose.can_use_chat(member(age=12)) is False
+    loose.require_chat_access(member(age=17))
+    assert POLICY.can_use_chat(member(age=17)) is False and POLICY.can_use_chat(member(age=18)) is True      # 預設規則是 18
     with pytest.raises(AgeRestricted):
-        strict.require_chat_access(member(age=17))
-    strict.require_chat_access(member(age=18))
-    assert POLICY.can_use_chat(member(age=17)) is True                  # 預設規則不受影響
+        POLICY.require_chat_access(member(age=17))
+    POLICY.require_chat_access(member(age=18))                                                              # 剛滿 18 歲通過
 
 
 def test_turning_18_lifts_the_limit_without_any_stored_flag_changing():

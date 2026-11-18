@@ -1,8 +1,8 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-16 ｜ 對應 change：rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0018_rpg_turn_revision`（實際的 `project` 目前為 `0017_story_preference`，0018 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-17 ｜ 對應 change：adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0019_adult_declaration`（實際的 `project` 目前為 `0017_story_preference`，0018 與 0019 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
-本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、249 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、251 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
 流程與資料表的對應（登入與註冊、客服對話各碰到哪些資料表）見第 10.1 節；簡報 [1.0簡報.md](1.0簡報.md) 摘要了本文件。
 
@@ -16,13 +16,13 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0018_rpg_turn_revision`；實際的 `project` 目前為 `0017_story_preference`（`alembic_version` 只有一列；0017 已於 2026-11-11 套用，0018 尚未套用，見第 14 節） |
-| 資料表與欄位 | 21 張業務資料表、249 個欄位、51 個索引與唯一約束、18 個外鍵 |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0019_adult_declaration`；實際的 `project` 目前為 `0017_story_preference`（`alembic_version` 只有一列；0017 已於 2026-11-11 套用，0018 與 0019 尚未套用，見第 14 節） |
+| 資料表與欄位 | 21 張業務資料表、251 個欄位、51 個索引與唯一約束、18 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
 
-**`0018_rpg_turn_revision`（`memory_logs` 的四個修訂欄位、新表 `turn_regenerations`、設定鍵 `rpg.free_regenerations`）尚未套用到實際的 `project`**：本文第 5 節以 ORM 以 SQL Server 方言編譯的結構為準，已由 `tests/test_project_db_schema_doc.py` 逐項比對，並在整合測試資料庫 `project_test` 上完成 upgrade → downgrade → upgrade；套用到 `project` 時依第 14 節的做法先備份、再升級並追加「套用」列。
+**`0018_rpg_turn_revision`（`memory_logs` 的四個修訂欄位、新表 `turn_regenerations`、設定鍵 `rpg.free_regenerations`）與 `0019_adult_declaration`（`users` 的兩個年滿 18 歲聲明欄位）尚未套用到實際的 `project`**：本文第 5 節以 ORM 以 SQL Server 方言編譯的結構為準，已由 `tests/test_project_db_schema_doc.py` 逐項比對，並在整合測試資料庫 `project_test` 上完成 upgrade → downgrade → upgrade；套用到 `project` 時依第 14 節的做法先備份、再升級並追加「套用」列。
 
 **`0016_rpg_turn_engine`（`memory_logs.attempt`、`sessions` 的第 0 幕三欄、`llm_call_logs.first_chunk_ms`、設定鍵 `rpg.max_months_per_turn`）已於 2026-11-09 套用到實際的 `project`**：`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 回報 `No new upgrade operations detected.`，`flask show-rpg-settings` 列出 `rpg.max_months_per_turn = 24`（來自資料庫，不是保底預設），唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，與本文一致。
 
@@ -55,7 +55,7 @@ flowchart LR
 
 | 資料表 | 中文名稱 | 領域 | 用途 | 主要寫入者 | 保存與刪除 | 欄位 |
 |---|---|---|---|---|---|---|
-| `users` | 會員 | 帳號與身分 | 玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱、故事偏好。 | UserRepository（條件式更新）；後台操作走 AdminRepository | 連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口 | 36 |
+| `users` | 會員 | 帳號與身分 | 玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱、故事偏好。 | UserRepository（條件式更新）；後台操作走 AdminRepository | 連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口 | 38 |
 | `user_identities` | 第三方登入身分 | 帳號與身分 | Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分，一個 Google 身分只屬於一個帳號。 | UserIdentityRepository | 隨帳號刪除（CASCADE） | 5 |
 | `auth_tokens` | 管理員重設密碼權杖 | 帳號與身分 | 管理員「忘記密碼」寄出的一次性權杖；只存 SHA-256 雜湊，原值只出現在信件中。 | AuthTokenRepository | 到期後 7 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 7 |
 | `deletion_tombstones` | 帳號刪除紀錄 | 帳號與身分 | 記錄「哪個內部編號在何時、因何原因被抹除」，備份還原後據此重新執行刪除；不含任何個資。 | DeletionTombstoneRepository（隨抹除流程同一交易寫入） | 不設期限、不納入期限清除（還原後要靠它重播刪除） | 4 |
@@ -220,7 +220,7 @@ erDiagram
         string age_policy_version "確認當時的年齡政策版本"
         date birth_date "生日"
         string age_range "自行選擇的年齡區間"
-        bool is_adult_at_confirmation "確認當時是否已滿 18 歲"
+        bool is_adult_at_confirmation "確認當時是否已滿 18 歲（已不再寫入）"
         datetime last_login_at "最後一次登入時間"
         datetime deletion_requested_at "申請刪除的時間"
         string status_before_deletion "申請刪除前的狀態"
@@ -235,6 +235,8 @@ erDiagram
         string nickname_code "系統產生的穩定短代號"
         datetime publish_suspended_at "連續被自動拒絕而被暫停發佈的時間"
         string story_preference "故事偏好"
+        datetime adult_declared_at "註冊時年滿 18 歲聲明的時間"
+        string adult_declaration_version "聲明當時的年齡政策版本"
         string public_id UK "對外識別碼"
         datetime created_at "建立時間"
         datetime updated_at "最後更新時間"
@@ -657,7 +659,7 @@ flowchart TD
 | 16 | `age_policy_version` | NVARCHAR(40) | 是 | — | — | 確認當時的年齡政策版本。 |
 | 17 | `birth_date` | DATE | 是 | — | — | 生日（個資）；是否成年一律由它於當下計算；不進 API 回應、日誌與模型。 |
 | 18 | `age_range` | NVARCHAR(20) | 是 | — | — | 自行選擇的年齡區間（個資），與生日對照通過才寫入；值見第 6 節。 |
-| 19 | `is_adult_at_confirmation` | BIT | 是 | — | — | 確認當時是否已滿 18 歲；只供紀錄，不參與任何判斷。 |
+| 19 | `is_adult_at_confirmation` | BIT | 是 | — | — | 確認當時是否已滿 18 歲；只供紀錄，不參與任何判斷。**自 adult-only-signup 起不再寫入**（全站只限滿 18 歲，通過確認即成年），欄位保留、日後收縮；先前寫入的值不變。 |
 | 20 | `last_login_at` | DATETIME2(6) | 是 | — | — | 最後一次登入時間；連續 12 個月未登入即刪除帳號的依據。 |
 | 21 | `deletion_requested_at` | DATETIME2(6) | 是 | — | — | 申請刪除的時間；只有 deletion_pending 才有值（7 天寬限期的起點）。 |
 | 22 | `status_before_deletion` | NVARCHAR(20) | 是 | — | — | 申請刪除前的狀態（只會是 active）；撤銷刪除時還原。 |
@@ -672,9 +674,11 @@ flowchart TD
 | 31 | `nickname_code` | NVARCHAR(8) | 是 | — | — | 系統產生的穩定短代號（4 碼）；第一次設定暱稱時產生，之後更改暱稱也不變；不要求唯一。 |
 | 32 | `publish_suspended_at` | DATETIME2(6) | 是 | — | — | 連續被自動拒絕而被暫停發佈的時間；獨立於 locked_at，只停止送審；只由條件式更新寫入。 |
 | 33 | `story_preference` | NVARCHAR(10) | 否 | `'all'` | — | 故事偏好：all（全讀者，預設）｜male（男頻）｜female（女頻）；**只影響劇本清單的排序**，不影響內容分級、敘事與權限；系統從不自動改變它。資料庫預設 'all'，讓舊版程式的 INSERT 在新結構上仍有效；既有帳號全部為 all。0017 新增。 |
-| 34 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
-| 35 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 36 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
+| 34 | `adult_declared_at` | DATETIME2(6) | 是 | — | — | 註冊時年滿 18 歲聲明的時間（UTC）：新使用者在登入頁勾選「我確認已滿 18 歲」的時間。只是稽核紀錄，**不參與任何判斷**（年齡一律由 `birth_date` 於當下計算）；管理員與升級前的帳號沒有，維持空值；不回填、不建索引。0019 新增。 |
+| 35 | `adult_declaration_version` | NVARCHAR(40) | 是 | — | — | 聲明當時的年齡政策版本（`AgePolicy.version`），由伺服器決定、不接受前端傳入；空值同上。0019 新增。 |
+| 36 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
+| 37 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 38 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
 
 索引與約束：
 
@@ -1612,6 +1616,7 @@ flowchart LR
 | `0016_rpg_turn_engine` | 2026-11-09 | RPG 回合引擎：memory_logs 新增 attempt（NOT NULL、預設 1）；sessions 新增 opening_text、opening_state、opening_started_at（可為空）；llm_call_logs 新增 first_chunk_ms（可為空）；runtime_limits 補 rpg.max_months_per_turn（只插入缺少的） | 新增欄位，寫入初始資料 |
 | `0017_story_preference` | 2026-11-10 | 故事偏好與劇本讀者頻道：users 新增 story_preference（NOT NULL、預設 'all'）；script_versions 新增 audience（可為空，既有版本不回填） | 新增欄位 |
 | `0018_rpg_turn_revision` | 2026-11-12 | 重新生成與編輯最後一輪：memory_logs 新增 revision（NOT NULL、預設 1）、regen_count（NOT NULL、預設 0）、revising_started_at 與 state_before_json（可為空，不回填）；新增 turn_regenerations；runtime_limits 補 rpg.free_regenerations（只插入缺少的） | 新增欄位與資料表，寫入初始資料 |
+| `0019_adult_declaration` | 2026-11-17 | 全站只限滿 18 歲（adult-only-signup）：users 新增 adult_declared_at（DATETIME2(6)）與 adult_declaration_version（NVARCHAR(40)），皆可為空、不回填、不建索引；`is_adult_at_confirmation` 保留但不再寫入 | 新增欄位 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1715,3 +1720,4 @@ flowchart TD
 | 2026-11-12 | 新增 | `runtime_limits` 的一列初始資料（`rpg.free_regenerations` = 2） | 每個回合前幾次重新生成免費；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋；`runtime_limits` 由 16 列變 17 列 | `0018_rpg_turn_revision` |
 | 2026-11-16 | 文件 | 本文件 | 校對並補充：以 `tests/test_project_db_schema_doc.py` 與 `tests/test_design_docs.py` 確認與 ORM 一致；對照實際的 `project`（唯讀，只查詢版本與結構計數，不讀任何資料列）：`alembic_version` 為 `0017_story_preference`、20 張資料表、234 個欄位、17 個外鍵、`runtime_limits` 16 列，與第 1 節的記載一致；新增第 10.1 節「流程與資料表的對應」（登入與註冊、客服對話）。**沒有結構變更、沒有遷移、沒有套用到 `project`**；`0018_rpg_turn_revision` 仍待備份後套用 | 本文件；`docs/1.0簡報.md` |
 | 2026-11-16 | 文件 | 本文件 | 同步 rpg-turn-revision 的規則修訂（AGENTS.md 第 7 節「玩家重新生成與編輯輸入」，`437a5f5`）：編輯由「一律付費並使免費次數歸零」改為與重新生成共用每回合前 N 次免費、成功才計次、編輯不歸零；修訂 `memory_logs.regen_count`（第 5 節欄位說明，成功的重新生成與編輯都加 1）、`turn_regenerations.is_free`（第 5 節欄位說明，編輯在免費次數內也是免費）、`turn_regenerations.kind`（第 7 節固定值）與 `rpg.free_regenerations`（`runtime_limits` 的初始資料說明）四處的語意。**只是語意說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：欄位型別、預設值與 `0018_rpg_turn_revision` 的內容都不變 | 本文件 |
+| 2026-11-17 | 新增 | 欄位 `users.adult_declared_at`（DATETIME2(6)，可為空）、`users.adult_declaration_version`（NVARCHAR(40)，可為空） | 全站只限滿 18 歲：新使用者在登入頁勾選「我確認已滿 18 歲」的時間與當時的年齡政策版本，只是稽核紀錄、不參與年齡判斷；管理員與升級前的帳號維持空值；`is_adult_at_confirmation` 保留但不再寫入（日後收縮）；`users` 由 36 欄變 38 欄、全庫欄位共 251 個。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0019_adult_declaration` |

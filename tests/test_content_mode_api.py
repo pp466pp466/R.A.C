@@ -10,6 +10,7 @@ import pytest
 from sqlalchemy.orm import Session
 
 from app import create_app
+from app.services.age_policy import AgePolicy
 from app.config import load_config
 from app.models import Base, User
 from app.models.user import ROLE_ADMIN
@@ -29,8 +30,13 @@ STATE_KEYS = {"preference", "effective", "selectable", "adult_reason", "adult_co
 CONFIRMED = {"adult_confirmed_at": TODAY_UTC - timedelta(days=3), "adult_rules_version": ADULT_RULES_VERSION, "adult_confirm_method": "self_declared"}
 
 
-def make_app(clock=None, **environ):
-    application = create_app(load_config(environ={"APP_ENV": "testing", **environ}), clock=clock or FakeClock())
+# 預設規則的最低使用年齡是 18（adult-only-signup），依年齡決定內容上限的程式碼在預設規則下無法到達，但仍保留到後續的
+# safe-mode-toggle 才移除；涵蓋它的測試以「舊的 13 歲規則」注入的應用程式執行。
+LEGACY_13 = AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13")
+
+
+def make_app(clock=None, age_policy=None, **environ):
+    application = create_app(load_config(environ={"APP_ENV": "testing", **environ}), clock=clock or FakeClock(), age_policy=age_policy)
     Base.metadata.create_all(application.extensions["db_engine"])
     return application
 
@@ -43,6 +49,11 @@ def app():
 @pytest.fixture()
 def adult_app():
     return make_app(**ADULT_ENV)
+
+
+@pytest.fixture()
+def legacy_adult_app():
+    return make_app(age_policy=LEGACY_13, **ADULT_ENV)
 
 
 def seed(app, n: int = 1, **overrides) -> int:
@@ -156,7 +167,8 @@ def test_a_put_without_a_csrf_token_is_refused_and_changes_nothing(app):
 
 @pytest.mark.parametrize("age", [13, 15, 17])
 @pytest.mark.parametrize("mode", ["standard", "adult"])
-def test_a_minor_cannot_choose_the_standard_or_adult_mode(adult_app, age, mode):
+def test_under_a_legacy_13_policy_a_minor_cannot_choose_the_standard_or_adult_mode(legacy_adult_app, age, mode):
+    adult_app = legacy_adult_app
     user_id = seed(adult_app, age=age)
     response = put(client_for(adult_app, user_id), mode, **BOTH)
     assert response.status_code == 403 and error(response)["code"] == "content_mode_restricted"
@@ -164,7 +176,8 @@ def test_a_minor_cannot_choose_the_standard_or_adult_mode(adult_app, age, mode):
     assert user.content_tier_preference == "safe" and user.adult_confirmed_at is None
 
 
-def test_a_minor_sees_the_safe_mode_and_the_reason_and_may_choose_the_safe_mode(adult_app):
+def test_under_a_legacy_13_policy_a_minor_sees_the_safe_mode_and_the_reason_and_may_choose_the_safe_mode(legacy_adult_app):
+    adult_app = legacy_adult_app
     client = client_for(adult_app, seed(adult_app, age=15))
     assert state(client.get(URL)) == {
         "preference": "safe", "effective": "safe", "selectable": {"safe": True, "standard": False, "adult": False},
@@ -173,14 +186,15 @@ def test_a_minor_sees_the_safe_mode_and_the_reason_and_may_choose_the_safe_mode(
     assert state(put(client, "safe"))["effective"] == "safe"
 
 
-def test_an_admin_who_is_a_minor_is_not_exempt(adult_app):
+def test_under_a_legacy_13_policy_an_admin_who_is_a_minor_is_not_exempt(legacy_adult_app):
+    adult_app = legacy_adult_app
     client = client_for(adult_app, seed(adult_app, age=15, role=ROLE_ADMIN))
     assert error(put(client, "standard"))["code"] == "content_mode_restricted"
 
 
-def test_turning_18_lifts_the_limit_but_not_the_preference_and_the_player_can_then_switch():
+def test_under_a_legacy_13_policy_turning_18_lifts_the_limit_but_not_the_preference_and_the_player_can_then_switch():
     clock = FakeClock()
-    app = make_app(clock=clock)
+    app = make_app(clock=clock, age_policy=LEGACY_13)
     tomorrow_18 = birth_date_for_age(18) + timedelta(days=1)
     user_id = seed(app, age=17, birth_date=tomorrow_18)
     client = client_for(app, user_id)

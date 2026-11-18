@@ -15,6 +15,7 @@ from app.models import Base, User
 from app.models.user import ROLE_ADMIN, STATUS_DELETION_PENDING
 from app.repositories.script_repository import ScriptRepository
 from app.services.access_policy import AccessPolicy
+from app.services.age_policy import AgePolicy
 from app.services.current_user import CurrentUser
 from app.services.startable import StartableVersions
 from tests.support.age import age_fields
@@ -28,9 +29,14 @@ CONTENT_MODE_URL = "/api/account/content-mode"
 EVENT = "account.story_preference_changed"
 
 
+# 預設規則的最低使用年齡是 18（adult-only-signup），依年齡決定內容上限的程式碼在預設規則下無法到達，但仍保留到後續的
+# safe-mode-toggle 才移除；涵蓋它的測試以「舊的 13 歲規則」注入的應用程式執行（`indirect` 參數化 `app`）。
+LEGACY_13 = AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13")
+
+
 @pytest.fixture()
-def app():
-    application = create_app(load_config(environ={"APP_ENV": "testing"}), clock=FakeClock())
+def app(request):
+    application = create_app(load_config(environ={"APP_ENV": "testing"}), clock=FakeClock(), age_policy=getattr(request, "param", None))
     Base.metadata.create_all(application.extensions["db_engine"])
     return application
 
@@ -265,7 +271,8 @@ def test_changing_the_preference_changes_neither_the_effective_mode_nor_the_play
         assert (content_mode_of(client), startable_ids(app, user, catalogue)) == before, value
 
 
-def test_a_minor_stays_in_the_safe_mode_whatever_the_preference_is(app, catalogue):
+@pytest.mark.parametrize("app", [LEGACY_13], indirect=True)
+def test_under_a_legacy_13_policy_a_minor_stays_in_the_safe_mode_whatever_the_preference_is(app, catalogue):
     user = seed(app, age=15)
     client = logged_in_client(app, user)
     for value in ("male", "female", "all"):

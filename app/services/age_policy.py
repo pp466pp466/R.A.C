@@ -1,8 +1,9 @@
 """年齡規則的單一來源，以及生日與年齡區間的驗證（見 AGENTS.md 第 7、10 節與 age-confirmation 規格）。
 
 所有年齡數字（最低註冊年齡、最低使用年齡、成年門檻）、年齡區間選項與政策版本都只在這裡；頁面、端點與其他 Service
-不得內嵌年齡數字，需要時一律向 `AgePolicy` 取用。日後改規則（例如換 LLM 供應商而要把最低年齡改為 18）只需要換一個
-`AgePolicy` 並提高 `version`，不需要改資料結構或頁面。
+不得內嵌年齡數字，需要時一律向 `AgePolicy` 取用。改規則只需要換一個 `AgePolicy` 並提高 `version`，不需要改資料結構或頁面；
+2026-11-17 全站改為只限滿 18 歲者使用（最低註冊年齡與最低使用年齡都是 18，年齡區間選項不變：選到「未滿 13 歲」或「13–17」
+一律是 `age_not_eligible`，讓未成年者自行表明並被拒絕）。
 
 驗證規則（`validate_age_input`）：
 1. 缺少或格式不合法 → `ValidationError`，欄位 `birth_date`、`age_range` 各自說明；
@@ -58,11 +59,11 @@ DEFAULT_RANGES = (
 
 @dataclass(frozen=True)
 class AgePolicy:
-    min_register_age: int = 13        # 低於它不得註冊
-    min_use_age: int = 13             # 低於它不得使用任何會呼叫 Gemini 的功能（既有帳號亦同）
-    adult_age: int = 18               # 達到它才不受安全模式限制
+    min_register_age: int = 18        # 低於它不得註冊（全站只限滿 18 歲者使用）
+    min_use_age: int = 18             # 低於它不得使用任何會呼叫 Gemini 的功能（既有帳號亦同）
+    adult_age: int = 18               # 成年門檻（目前與最低年齡相同；內容分級的年齡上限由後續的 safe-mode-toggle 處理）
     ranges: tuple[AgeRange, ...] = DEFAULT_RANGES
-    version: str = "2026-10-28-birthdate-range"
+    version: str = "2026-11-17-adults-only"
 
     def range_by_code(self, code: object) -> AgeRange | None:
         return next((r for r in self.ranges if r.code == code), None) if isinstance(code, str) else None

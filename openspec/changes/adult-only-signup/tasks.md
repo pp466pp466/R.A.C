@@ -2,16 +2,16 @@
 
 ## 1. 年齡規則與未滿 18 歲抹除
 
-- [ ] 1.1 `AgePolicy`（`app/services/age_policy.py`）：最低註冊年齡與最低使用年齡改為 18、版本字串改為 `2026-11-17-adults-only`，說明文字與錯誤訊息只由最低年齡組成；更新 `tests/test_age_policy.py`（15 歲、17 歲邊界、18 歲生日當天通過；選「未滿 13 歲」「13–17」一律 `age_not_eligible`；不一致仍是 `age_mismatch`；日後把最低年齡改為 21 也只需換設定）。驗證：`pytest tests/test_age_policy.py` 通過。
-- [ ] 1.2 玩家補填未滿 18 歲的帳號被抹除（沿用 `erase_underage`）、管理員不被抹除、不保存生日與暱稱：更新 `tests/test_age_step_service.py`、`tests/test_age_gate_api.py`、`tests/test_account_erasure_service.py` 與暱稱步驟的測試（15 歲與 12 歲都抹除、生日與暱稱不在資料庫與日誌）。驗證：這些測試通過。
-- [ ] 1.3 `AccessPolicy` 的最低使用年齡情境：更新 `tests/test_access_policy.py`（由生日算出 15 歲 → `age_restricted`、剛滿 18 歲 → 通過、未完成確認 → `age_confirmation_required` 的順序不變），並確認 `app/services/access_policy.py` 沒有程式變更（只靠最低使用年齡自然拒絕，見 design D7）。驗證：測試通過，`git diff --stat` 沒有 `access_policy.py`。
+- [x] 1.1 `AgePolicy`（`app/services/age_policy.py`）：最低註冊年齡與最低使用年齡改為 18、版本字串改為 `2026-11-17-adults-only`，說明文字與錯誤訊息只由最低年齡組成；更新 `tests/test_age_policy.py`（15 歲、17 歲邊界、18 歲生日當天通過；選「未滿 13 歲」「13–17」一律 `age_not_eligible`；不一致仍是 `age_mismatch`；日後把最低年齡改為 21 也只需換設定）。驗證：`pytest tests/test_age_policy.py` 通過。
+- [x] 1.2 玩家補填未滿 18 歲的帳號被抹除（沿用 `erase_underage`）、管理員不被抹除、不保存生日與暱稱：更新 `tests/test_age_step_service.py`、`tests/test_age_gate_api.py`、`tests/test_account_erasure_service.py` 與暱稱步驟的測試（15 歲與 12 歲都抹除、生日與暱稱不在資料庫與日誌）。驗證：這些測試通過。
+- [x] 1.3 `AccessPolicy` 的最低使用年齡情境：更新 `tests/test_access_policy.py`（由生日算出 15 歲 → `age_restricted`、剛滿 18 歲 → 通過、未完成確認 → `age_confirmation_required` 的順序不變），並確認 `app/services/access_policy.py` 沒有程式變更（只靠最低使用年齡自然拒絕，見 design D7）。驗證：測試通過，`git diff --stat` 沒有 `access_policy.py`。
 - [ ] 1.4 年齡事件與日誌：`tests/test_security_events.py` 與 `tests/test_log_scan_full_flow.py` 涵蓋「未滿 18 歲被抹除」只有事件名稱與內部編號、日誌掃描找不到生日、區間、暱稱與 email。驗證：測試通過。
 
 ## 2. 資料庫欄位、遷移與紀錄
 
-- [ ] 2.1 `app/models/user.py` 新增 `adult_declared_at`（`UTCDateTime`，可為空）與 `adult_declaration_version`（`Unicode(40)`，可為空）；新增遷移 `0019_adult_declaration`（`op.batch_alter_table`、ORM 型別、沒有原生 SQL；downgrade 用 `recreate="never"`；檔頭說明 expand 階段與回復限制，同 0017 的格式）。驗證：`tests/test_migrations.py`（升級、降級、再升級、每個欄位可為空）通過。
-- [ ] 2.2 `UserRepository.confirm_age`（見 design D5）：不再寫 `is_adult_at_confirmation`、`content_tier_preference` 固定為 `safe`、移除 `is_adult` 參數與呼叫端；`tests/test_user_repositories.py` 與 `tests/test_age_step_service.py` 更新（18 歲整與 25 歲確認後偏好都是 `safe`、失敗時沒有偏好、已完成者再次提交不改紀錄、`is_adult_at_confirmation` 為空）。驗證：測試通過。
-- [ ] 2.3 同步 `docs/project資料結構文件.md`（`users` 逐欄字典與欄位數、ERD 若有、固定值、migration 歷程）與第 14 節最下方追加一列 `0019` 的異動紀錄（日期與 migration 檔名一致），並更新 `docs/資料模型-data-model.md` 的欄位說明與 migration 歷程。驗證：`pytest tests/test_project_db_schema_doc.py tests/test_design_docs.py` 通過。
+- [x] 2.1 `app/models/user.py` 新增 `adult_declared_at`（`UTCDateTime`，可為空）與 `adult_declaration_version`（`Unicode(40)`，可為空）；新增遷移 `0019_adult_declaration`（`op.batch_alter_table`、ORM 型別、沒有原生 SQL；downgrade 用 `recreate="never"`；檔頭說明 expand 階段與回復限制，同 0017 的格式）。驗證：`tests/test_migrations.py`（升級、降級、再升級、每個欄位可為空）通過。
+- [x] 2.2 `UserRepository.confirm_age`（見 design D5）：不再寫 `is_adult_at_confirmation`、`content_tier_preference` 固定為 `safe`、移除 `is_adult` 參數與呼叫端；`tests/test_user_repositories.py` 與 `tests/test_age_step_service.py` 更新（18 歲整與 25 歲確認後偏好都是 `safe`、失敗時沒有偏好、已完成者再次提交不改紀錄、`is_adult_at_confirmation` 為空）。驗證：測試通過。
+- [x] 2.3 同步 `docs/project資料結構文件.md`（`users` 逐欄字典與欄位數、ERD 若有、固定值、migration 歷程）與第 14 節最下方追加一列 `0019` 的異動紀錄（日期與 migration 檔名一致），並更新 `docs/資料模型-data-model.md` 的欄位說明與 migration 歷程。驗證：`pytest tests/test_project_db_schema_doc.py tests/test_design_docs.py` 通過。
 
 ## 3. Google 登入的年滿 18 歲聲明
 

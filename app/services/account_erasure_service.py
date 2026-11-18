@@ -83,7 +83,7 @@ class AccountErasureService:
         )
 
     def erase_underage(self, user_id: int, *, now: datetime) -> bool:
-        """補填年齡時發現未滿 13 歲的玩家帳號（還沒有生日、非管理員；條件在刪除當下再確認一次）。"""
+        """補填年齡時發現未滿 18 歲的玩家帳號（還沒有生日、非管理員；條件在刪除當下再確認一次）。"""
         return self.erase(
             user_id,
             delete=self._users.delete_unconfirmed_player,

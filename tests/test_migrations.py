@@ -1244,7 +1244,6 @@ def test_0018_adds_the_revision_columns_the_feedback_table_and_the_free_regenera
     engine = create_engine_for(url)
     revision = ScriptDirectory.from_config(cfg).get_revision("0018_rpg_turn_revision")
     assert revision.down_revision == "0017_story_preference" and len(revision.revision) <= 32
-    assert ScriptDirectory.from_config(cfg).get_current_head() == "0018_rpg_turn_revision"
 
     command.upgrade(cfg, "0017_story_preference")
     with engine.begin() as conn:
@@ -1307,6 +1306,43 @@ def test_0018_does_not_overwrite_a_free_regeneration_setting_that_already_exists
     with engine.connect() as conn:
         table = Table("runtime_limits", MetaData(), autoload_with=conn)
         assert conn.execute(select(table.c.key, table.c.int_value).where(table.c.key.like("rpg.free%"))).all() == [("rpg.free_regenerations", 5)]
+    engine.dispose()
+
+
+def test_0019_adds_two_nullable_declaration_columns_to_users_and_keeps_every_row(tmp_path):
+    """adult-only-signup：users 新增 adult_declared_at 與 adult_declaration_version（皆可為空、不回填、不加索引）；既有帳號一列不少、
+    新欄位為空值；回復只移除這兩欄、不串聯刪除任何資料；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'adult_declaration.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0019_adult_declaration")
+    assert revision.down_revision == "0018_rpg_turn_revision" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0018_rpg_turn_revision")
+    with engine.begin() as conn:
+        users = Table("users", MetaData(), autoload_with=conn)
+        _insert_user(conn, users, 1)
+        _insert_user(conn, users, 2, role="admin")
+    before_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+    before_indexes = {i["name"] for i in inspect(engine).get_indexes("users")}
+
+    command.upgrade(cfg, "0019_adult_declaration")
+    inspector = inspect(engine)
+    added = {c["name"]: c for c in inspector.get_columns("users") if c["name"] not in before_columns}
+    assert set(added) == {"adult_declared_at", "adult_declaration_version"}
+    assert all(c["nullable"] for c in added.values())                                      # 可為空：舊版程式不認識它們也照常運作
+    assert {i["name"] for i in inspector.get_indexes("users")} == before_indexes            # 沒有新增索引
+    with engine.connect() as conn:
+        rows = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().all()
+    assert len(rows) == 2 and all(r["adult_declared_at"] is None and r["adult_declaration_version"] is None for r in rows)
+
+    command.downgrade(cfg, "0018_rpg_turn_revision")
+    assert {c["name"] for c in inspect(engine).get_columns("users")} == before_columns
+    with engine.connect() as conn:                                                          # 回復不串聯刪除既有的帳號
+        assert conn.execute(select(func.count()).select_from(Table("users", MetaData(), autoload_with=conn))).scalar_one() == 2
+
+    command.upgrade(cfg, "0019_adult_declaration")                                          # 再升級一次，不重複
+    assert {c["name"] for c in inspect(engine).get_columns("users")} == before_columns | {"adult_declared_at", "adult_declaration_version"}
     engine.dispose()
 
 

@@ -1,6 +1,6 @@
 """post-login-age-confirmation 與 account-lockout 規格（Service 層）：年齡確認頁送出時的三種結果。
 
-- 補填時未滿 13 歲的玩家：立即抹除帳號與全部個資（走單一抹除出口），不保存填寫的生日，留下只有內部編號的刪除紀錄；
+- 補填時未滿 18 歲的玩家（全站只限滿 18 歲者使用）：立即抹除帳號與全部個資（走單一抹除出口），不保存填寫的生日，留下只有內部編號的刪除紀錄；
   管理員只拒絕、不抹除。
 - 生日與區間不一致：通用說明、帳號保留、不留年齡資料，並計入帳號鎖定的計次（15 分鐘內 5 次鎖定）。
 - 其他欄位錯誤（缺少、格式不合法）是可就地修正的錯誤，不計次。
@@ -37,18 +37,20 @@ def refusal(session, user: User, clock=None, **age_input) -> ValidationError:
     return exc.value
 
 
-# ---- 未滿 13 歲：立即抹除 -----------------------------------------------------------------------------
+# ---- 未滿 18 歲：立即抹除 -----------------------------------------------------------------------------
 
 @pytest.mark.parametrize(
     "age_input",
     [
         age_fields(12, age_range="under_13"),                  # 一致的未滿 13 歲
-        age_fields(12, age_range="18_24"),                     # 生日未滿但區間填成年：以未滿 13 歲為準
-        age_fields(30, age_range="under_13"),                  # 生日是成年但區間選未滿 13 歲：同樣以未滿 13 歲為準
+        age_fields(15, age_range="13_17"),                     # 一致的 13 至 17 歲
+        age_fields(17, age_range="18_24"),                     # 生日未滿 18 歲但區間填成年：以未滿 18 歲為準
+        age_fields(30, age_range="under_13"),                  # 生日是成年但區間選未滿 13 歲：同樣以未滿 18 歲處理
+        age_fields(30, age_range="13_17"),                     # 生日是成年但區間選 13–17：同樣以未滿 18 歲處理
     ],
-    ids=["consistent", "range-claims-adult", "birthday-claims-adult"],
+    ids=["under-13", "13-17", "range-claims-adult", "birthday-claims-adult-under-13", "birthday-claims-adult-13-17"],
 )
-def test_a_player_under_13_is_erased_at_the_age_step_with_everything_attached(member_session, age_input):
+def test_a_player_under_18_is_erased_at_the_age_step_with_everything_attached(member_session, age_input):
     s = member_session
     user = add_user(s, 1, age=None, password=None)
     s.add(UserIdentity(user_id=user.id, provider="google", provider_subject="sub-under-13"))
@@ -67,22 +69,22 @@ def test_a_player_under_13_is_erased_at_the_age_step_with_everything_attached(me
 def test_the_erased_players_birthday_is_nowhere_in_the_database_or_the_log(member_session, log_lines):
     s = member_session
     user = add_user(s, 1, age=None, password=None)
-    birthday = birth_date_for_age(12).isoformat()
-    refusal(s, user, **age_fields(12))
+    birthday = birth_date_for_age(15).isoformat()
+    refusal(s, user, **age_fields(15))
     # 資料庫唯一留下的是刪除紀錄：只有內部編號、時間與原因
     s.expire_all()
     (tombstone,) = s.scalars(select(DeletionTombstone))
     assert birthday not in repr((tombstone.user_id, tombstone.reason, tombstone.deleted_at))
     raw = log_lines.raw()
-    assert birthday not in raw and "under_13" not in raw
+    assert birthday not in raw and "13_17" not in raw and "under_13" not in raw
     events = [line["event"] for line in log_lines() if "event" in line]
     assert "auth.age_rejected.underage" in events and "account.underage_erased" in events
 
 
-def test_an_admin_under_13_is_refused_but_never_erased(member_session):
+def test_an_admin_under_18_is_refused_but_never_erased(member_session):
     s = member_session
     admin = add_user(s, 1, age=None, role="admin")
-    error = refusal(s, admin, **age_fields(12))
+    error = refusal(s, admin, **age_fields(15))
     assert not isinstance(error, UnderageAccountErased) and error.code == "age_not_eligible"
     assert count(s, User) == 1 and count(s, DeletionTombstone) == 0
     stored = s.get(User, admin.id)
@@ -99,36 +101,38 @@ def test_a_player_who_already_confirmed_is_never_erased_by_a_later_submission(me
 
 # ---- 內容模式偏好依確認當下的年齡設定（content-tier-modes 規格）-----------------------------------------------
 
-@pytest.mark.parametrize(("age", "expected"), [(13, "safe"), (17, "safe"), (18, "standard"), (30, "standard")])
-def test_confirming_the_age_sets_the_content_preference_by_the_age_at_that_moment(member_session, age, expected):
+@pytest.mark.parametrize("age", [18, 25, 30, 60])
+def test_confirming_the_age_always_sets_the_safe_content_preference_and_records_no_adult_result(member_session, age):
+    """全站預設為安全模式（adult-only-signup）：不論年齡，確認成功後的偏好都是 `safe`，也不再記錄「確認當時是否已滿 18 歲」。"""
     s = member_session
     user = add_user(s, 1, age=None, password=None)
     assert s.get(User, user.id).content_tier_preference == "safe"          # 確認之前是最保守的預設
     assert submit(s, user, **age_fields(age)).age_confirmed is True
     stored = s.get(User, user.id)
-    assert stored.content_tier_preference == expected
+    assert stored.content_tier_preference == "safe" and stored.is_adult_at_confirmation is None
+    assert stored.birth_date == birth_date_for_age(age) and stored.age_policy_version == "2026-11-17-adults-only"
     assert (stored.adult_confirmed_at, stored.adult_rules_version, stored.adult_confirm_method) == (None, None, None)
 
 
-def test_a_player_who_confirmed_at_17_is_still_safe_after_turning_18(member_session):
+def test_a_player_confirmed_on_the_18th_birthday_is_safe_and_the_preference_never_rises_by_itself(member_session):
     s = member_session
     clock = FakeClock()
     user = add_user(s, 1, age=None, password=None)
-    submit(s, user, clock, **age_fields(17, birth_date=(birth_date_for_age(18) + timedelta(days=1)).isoformat()))
-    clock.advance(days=2)                                                   # 生日已過：年齡上限解除，但偏好不自動調高
+    submit(s, user, clock, **age_fields(18))
+    clock.advance(days=400)                                                 # 時間過去：偏好不會自己改變
     assert s.get(User, user.id).content_tier_preference == "safe"
 
 
 def test_a_failed_confirmation_leaves_no_preference_behind(member_session):
     s = member_session
     user = add_user(s, 1, age=None)
-    refusal(s, user, **age_fields(30, age_range="13_17"))                   # 不一致
+    refusal(s, user, **age_fields(30, age_range="18_24"))                   # 不一致
     refusal(s, user, **{"birth_date": "2026-02-30", "age_range": "25_34"})   # 格式不合法
     s.expire_all()
     stored = s.get(User, user.id)
     assert stored.birth_date is None and stored.content_tier_preference == "safe"
     admin = add_user(s, 2, age=None, role="admin")
-    refusal(s, admin, **age_fields(12))                                     # 管理員未滿 13 歲被拒絕
+    refusal(s, admin, **age_fields(15))                                     # 管理員未滿 18 歲被拒絕
     assert s.get(User, admin.id).content_tier_preference == "safe"
 
 
@@ -145,7 +149,7 @@ def test_a_repeated_submission_never_changes_the_preference(member_session):
 def test_a_mismatch_gets_the_generic_message_keeps_the_account_and_counts_once(member_session):
     s = member_session
     user = add_user(s, 1, age=None)
-    error = refusal(s, user, **age_fields(30, age_range="13_17"))
+    error = refusal(s, user, **age_fields(30, age_range="18_24"))
     assert error.code == "age_mismatch" and error.message == AGE_STEP_MISMATCH_MESSAGE and error.fields == {}
     stored = s.get(User, user.id)
     assert stored.birth_date is None and stored.age_range is None and stored.age_confirmed_at is None
@@ -157,7 +161,7 @@ def test_a_mismatch_gets_the_generic_message_keeps_the_account_and_counts_once(m
 def test_the_same_account_can_fill_it_in_correctly_right_after_a_mismatch(member_session):
     s = member_session
     user = add_user(s, 1, age=None)
-    refusal(s, user, **age_fields(30, age_range="13_17"))
+    refusal(s, user, **age_fields(30, age_range="18_24"))
     assert submit(s, user, **age_fields(30)).age_confirmed is True
 
 
@@ -178,10 +182,10 @@ def test_five_mismatches_within_fifteen_minutes_lock_the_account_and_leave_an_au
     user = add_user(s, 1, age=None)
     clock = FakeClock()
     for _ in range(4):
-        refusal(s, user, clock, **age_fields(30, age_range="13_17"))
+        refusal(s, user, clock, **age_fields(30, age_range="18_24"))
         clock.advance(minutes=1)
     assert s.get(User, user.id).locked_at is None
-    refusal(s, user, clock, **age_fields(30, age_range="13_17"))
+    refusal(s, user, clock, **age_fields(30, age_range="18_24"))
 
     s.expire_all()
     stored = s.get(User, user.id)
@@ -197,9 +201,9 @@ def test_mismatches_older_than_fifteen_minutes_do_not_add_up(member_session):
     user = add_user(s, 1, age=None)
     clock = FakeClock()
     for _ in range(4):
-        refusal(s, user, clock, **age_fields(30, age_range="13_17"))
+        refusal(s, user, clock, **age_fields(30, age_range="18_24"))
     clock.advance(minutes=16)                                       # 前四次已在視窗之外
-    refusal(s, user, clock, **age_fields(30, age_range="13_17"))
+    refusal(s, user, clock, **age_fields(30, age_range="18_24"))
     assert s.get(User, user.id).locked_at is None
 
 
@@ -207,12 +211,12 @@ def test_an_admin_is_never_counted_or_locked_for_mismatches(member_session):
     s = member_session
     admin = add_user(s, 1, age=None, role="admin")
     for _ in range(6):
-        assert refusal(s, admin, **age_fields(30, age_range="13_17")).code == "age_mismatch"
+        assert refusal(s, admin, **age_fields(30, age_range="18_24")).code == "age_mismatch"
     assert count(s, LockStrike) == 0 and s.get(User, admin.id).locked_at is None
 
 
 def test_a_locked_account_stops_collecting_strikes(member_session):
     s = member_session
     user = add_user(s, 1, age=None, locked_at=START, lock_reason="rate_limited")
-    refusal(s, user, **age_fields(30, age_range="13_17"))
+    refusal(s, user, **age_fields(30, age_range="18_24"))
     assert count(s, LockStrike) == 0

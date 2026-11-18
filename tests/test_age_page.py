@@ -95,7 +95,7 @@ def test_the_state_carries_the_age_rules_and_a_validated_next_and_nothing_person
     state = state_of(response)
     assert state["next"] == "/account?tab=1"
     rules = state["ageRules"]
-    assert rules["minRegisterAge"] == 13 and rules["adultAge"] == 18 and rules["ranges"]
+    assert rules["minRegisterAge"] == 18 and rules["adultAge"] == 18 and rules["ranges"]
     assert rules["birthDateMin"] == "1900-01-01" and rules["birthDateMax"] == "2026-10-27"          # 假時鐘的台北日期
     assert "user" not in state                                                                       # 頁面狀態不含個人資料
     html = response.get_data(as_text=True)

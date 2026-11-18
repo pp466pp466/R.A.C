@@ -130,7 +130,7 @@ def test_an_account_without_age_data_sees_age_confirmed_false_in_me(app):
     assert user["age_confirmed"] is False and user["age_group"] is None
 
 
-@pytest.mark.parametrize(("age", "group"), [(15, "minor"), (30, "adult")])
+@pytest.mark.parametrize(("age", "group"), [(18, "adult"), (30, "adult")])        # 全站只限滿 18 歲，已完成確認者一律是 adult
 def test_verify_age_records_everything_and_returns_the_fresh_profile_without_the_birthday(app, age, group):
     client = unverified_member_client(app)
     response = client.post("/api/auth/verify-age", json=age_fields(age))
@@ -151,7 +151,7 @@ def test_verify_age_records_everything_and_returns_the_fresh_profile_without_the
         ({}, "validation_error", {"birth_date", "age_range", "nickname"}),
         ({"birth_date": "2026-02-30", "age_range": "25_34", "nickname": "測試玩家"}, "validation_error", {"birth_date"}),
         (age_fields(30, age_range=None), "validation_error", {"age_range"}),
-        (age_fields(30, age_range="13_17"), "age_mismatch", None),
+        (age_fields(30, age_range="18_24"), "age_mismatch", None),
     ],
 )
 def test_verify_age_with_invalid_input_is_a_400_and_writes_nothing(app, body, code, fields):
@@ -166,7 +166,7 @@ def test_verify_age_with_invalid_input_is_a_400_and_writes_nothing(app, body, co
 
 def test_a_mismatch_at_the_age_step_gets_the_generic_message_and_the_strike_survives_the_400(app):
     client = unverified_member_client(app)
-    response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="13_17"))
+    response = client.post("/api/auth/verify-age", json=age_fields(30, age_range="18_24"))
     assert response.status_code == 400
     error = response.get_json()["error"]
     assert error == {"code": "age_mismatch", "message": "資料有誤，請重新填寫。"}
@@ -177,7 +177,7 @@ def test_a_mismatch_at_the_age_step_gets_the_generic_message_and_the_strike_surv
 def test_five_mismatches_lock_the_account_and_the_next_request_is_account_locked(app):
     client = unverified_member_client(app)
     for _ in range(5):
-        assert client.post("/api/auth/verify-age", json=age_fields(30, age_range="13_17")).status_code == 400
+        assert client.post("/api/auth/verify-age", json=age_fields(30, age_range="18_24")).status_code == 400
     with db(app) as s:
         assert s.query(User).one().locked_at is not None
     again = client.get("/api/cs/conversations")
@@ -256,7 +256,7 @@ def test_no_auth_response_ever_contains_the_birthday_or_the_range(app):
         add_user(s, 5, age=None)
     other = login(app.test_client(), email="user5@example.com")
     texts.append(other.post("/api/auth/verify-age", json=age_fields(40)).get_data(as_text=True))
-    texts.append(other.post("/api/auth/verify-age", json=age_fields(40, age_range="13_17")).get_data(as_text=True))
+    texts.append(other.post("/api/auth/verify-age", json=age_fields(40, age_range="18_24")).get_data(as_text=True))
     joined = " ".join(texts)
     for secret in (birth_date_for_age(15).isoformat(), birth_date_for_age(40).isoformat(), "13_17", "35_44", *AGE_SECRETS):
         assert secret not in joined, secret

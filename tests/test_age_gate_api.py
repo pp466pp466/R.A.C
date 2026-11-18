@@ -31,6 +31,16 @@ def app():
     return make_app()
 
 
+# 預設規則的最低使用年齡是 18（adult-only-signup）。依年齡決定內容上限的程式碼在預設規則下無法到達，但仍保留到後續的
+# safe-mode-toggle 才移除；這些測試用「舊的 13 歲規則」注入的應用程式維持對它的涵蓋。
+LEGACY_13 = AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13")
+
+
+@pytest.fixture()
+def legacy_app():
+    return make_app(age_policy=LEGACY_13)
+
+
 def seed(app, n: int, **overrides):
     with Session(app.extensions["db_engine"]) as session:
         return add_user(session, n, **overrides).id
@@ -108,13 +118,21 @@ def test_verifying_one_member_does_not_open_the_gate_for_another(app):
 
 
 # =============================================================================
-# 13 至 17 歲可用但固定安全模式；成年者上限為一般模式（成人模式預設關閉）
+# 未滿 18 歲不可用（預設規則）；成年者上限為一般模式（成人模式預設關閉）
 # =============================================================================
 
 @pytest.mark.parametrize("age", [13, 15, 17])
-def test_a_teen_can_use_the_endpoint_but_only_in_safe_mode(app, age):
+def test_a_teen_is_refused_by_the_default_policy_with_age_restricted_and_the_work_never_runs(app, age):
     seed(app, 1, age=age)
     response = signed_in(app, 1).post(ENDPOINT, json={})
+    assert response.status_code == 403 and response.get_json()["error"]["code"] == "age_restricted"
+    assert app.work_done == []
+
+
+@pytest.mark.parametrize("age", [13, 15, 17])
+def test_under_a_legacy_13_policy_a_teen_can_use_the_endpoint_but_only_in_safe_mode(legacy_app, age):
+    seed(legacy_app, 1, age=age)
+    response = signed_in(legacy_app, 1).post(ENDPOINT, json={})
     assert response.status_code == 200
     assert response.get_json()["content"] == {"preference": "safe", "age_cap": "safe", "effective": "safe", "reason": "not_adult"}
 
@@ -127,15 +145,15 @@ def test_an_adult_reaches_the_standard_mode_and_never_the_adult_mode_by_default(
     }
 
 
-def test_an_admin_who_is_a_teen_is_still_in_safe_mode(app):
-    seed(app, 1, age=15, role=ROLE_ADMIN)
-    assert signed_in(app, 1).post(ENDPOINT, json={}).get_json()["content"]["effective"] == "safe"
+def test_under_a_legacy_13_policy_an_admin_who_is_a_teen_is_still_in_safe_mode(legacy_app):
+    seed(legacy_app, 1, age=15, role=ROLE_ADMIN)
+    assert signed_in(legacy_app, 1).post(ENDPOINT, json={}).get_json()["content"]["effective"] == "safe"
 
 
-def test_a_teen_who_turns_18_is_released_without_logging_in_again():
+def test_under_a_legacy_13_policy_a_teen_who_turns_18_is_released_without_logging_in_again():
     clock = FakeClock()
     config = load_config(environ={"APP_ENV": "testing"})
-    application = create_app(config, clock=clock)
+    application = create_app(config, clock=clock, age_policy=LEGACY_13)
     Base.metadata.create_all(application.extensions["db_engine"])
     add_ai_endpoint(application)
     with Session(application.extensions["db_engine"]) as session:
@@ -150,21 +168,30 @@ def test_a_teen_who_turns_18_is_released_without_logging_in_again():
 
 
 # =============================================================================
-# 年齡規則被提高：只改規則，其他不動
+# 年齡規則：預設的最低年齡是 18；另一份規則只改設定，其他不動
 # =============================================================================
 
-def test_raising_the_minimum_age_to_18_blocks_existing_teens_with_their_own_code_and_leaves_adults_alone():
-    strict = make_app(age_policy=AgePolicy(min_register_age=18, min_use_age=18, version="test-18-only"))
-    seed(strict, 1, age=15)
-    adult_id = seed(strict, 2, age=40)
-    teen = signed_in(strict, 1).post(ENDPOINT, json={})
+def test_the_default_minimum_age_blocks_existing_teens_with_their_own_code_and_leaves_adults_alone():
+    default = make_app()
+    seed(default, 1, age=15)
+    adult_id = seed(default, 2, age=40)
+    teen = signed_in(default, 1).post(ENDPOINT, json={})
     assert teen.status_code == 403 and teen.get_json()["error"]["code"] == "age_restricted"
     assert "帳號設定" not in teen.get_json()["error"]["message"]                  # 補填也沒有用，所以不引導
-    assert signed_in(strict, 2).post(ENDPOINT, json={}).status_code == 200
-    assert strict.work_done == [adult_id]                                        # 只有成年者的請求真的做了事
-    seed(strict, 3, age=None)                                                   # 新的玩家補填 15 歲：低於最低註冊年齡，帳號被抹除
-    refused = signed_in(strict, 3).post("/api/auth/verify-age", json=age_fields(15))
+    assert signed_in(default, 2).post(ENDPOINT, json={}).status_code == 200
+    assert default.work_done == [adult_id]                                       # 只有成年者的請求真的做了事
+    seed(default, 3, age=None)                                                  # 新的玩家補填 15 歲：低於最低註冊年齡，帳號被抹除
+    refused = signed_in(default, 3).post("/api/auth/verify-age", json=age_fields(15))
     assert refused.status_code == 400 and refused.get_json()["error"]["code"] == "age_not_eligible"
+
+
+def test_raising_the_minimum_age_again_only_changes_the_policy():
+    stricter = make_app(age_policy=AgePolicy(min_register_age=21, min_use_age=21, version="test-21-only"))
+    seed(stricter, 1, age=19)
+    adult_id = seed(stricter, 2, age=40)
+    assert signed_in(stricter, 1).post(ENDPOINT, json={}).get_json()["error"]["code"] == "age_restricted"
+    assert signed_in(stricter, 2).post(ENDPOINT, json={}).status_code == 200
+    assert stricter.work_done == [adult_id]
 
 
 # =============================================================================

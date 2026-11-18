@@ -134,12 +134,12 @@ def test_verifying_the_age_records_every_field_and_returns_the_fresh_snapshot(me
     current = service.resolve_session(user.id, 1)
     assert current.age_confirmed is False
 
-    updated = service.verify_age(current, **age_fields(15))
+    updated = service.verify_age(current, **age_fields(20))
 
     assert updated.age_confirmed is True and updated.id == user.id
     stored = reload(member_session, user)
-    assert stored.birth_date == birth_date_for_age(15) and stored.age_range == "13_17"
-    assert stored.is_adult_at_confirmation is False
+    assert stored.birth_date == birth_date_for_age(20) and stored.age_range == "18_24"
+    assert stored.is_adult_at_confirmation is None                                       # 不再記錄「確認當時是否已滿 18 歲」
     assert stored.age_confirmed_at == START and stored.age_policy_version == CURRENT_AGE_POLICY_VERSION
 
 
@@ -148,7 +148,7 @@ def test_verifying_the_age_records_every_field_and_returns_the_fresh_snapshot(me
     [
         ({"birth_date": None, "age_range": None}, "validation_error"),
         ({"birth_date": "2026-02-30", "age_range": "25_34"}, "validation_error"),
-        (age_fields(30, age_range="13_17"), "age_mismatch"),
+        (age_fields(30, age_range="18_24"), "age_mismatch"),
     ],
 )
 def test_every_kind_of_invalid_input_is_refused_and_writes_nothing(member_session, age_input, code):
@@ -167,7 +167,7 @@ def test_after_a_refusal_the_same_account_can_verify_immediately(member_session)
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     with pytest.raises(ValidationError):
-        service.verify_age(current, **age_fields(30, age_range="13_17"))
+        service.verify_age(current, **age_fields(30, age_range="18_24"))
     assert service.verify_age(current, **age_fields(30)).age_confirmed is True
 
 
@@ -192,7 +192,7 @@ def test_submitting_again_succeeds_and_keeps_every_original_value_even_if_the_co
     assert again.age_confirmed is True
     stored = reload(member_session, user)
     assert stored.birth_date == birth_date_for_age(30) and stored.age_range == "25_34"
-    assert stored.is_adult_at_confirmation is True and stored.age_confirmed_at == START
+    assert stored.is_adult_at_confirmation is None and stored.age_confirmed_at == START
 
 
 def test_even_garbage_after_completion_changes_nothing_and_is_not_an_error(member_session):
@@ -207,7 +207,7 @@ def test_the_event_is_logged_only_for_the_first_verification_and_never_carries_p
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     with pytest.raises(ValidationError):
-        service.verify_age(current, **age_fields(30, age_range="13_17"))
+        service.verify_age(current, **age_fields(30, age_range="18_24"))
     service.verify_age(current, **age_fields(30))
     service.verify_age(current, **age_fields(30))
 

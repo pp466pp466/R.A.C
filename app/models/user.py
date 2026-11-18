@@ -87,7 +87,7 @@ class User(Base, PublicIdMixin, TimestampMixin):
     # 年齡確認（age-confirmation 規格）：自行聲明的生日加年齡區間，經伺服器對照通過後才寫入，不收證件。
     # 「已完成」只看 `birth_date` 與 `age_range` 是否存在；管理員指令建立的帳號、勾選版時代（只有
     # `age_confirmed_at`）的帳號都視為尚未完成。是否成年一律由 `birth_date` 於當下計算，
-    # `is_adult_at_confirmation` 只是確認當時的紀錄，**不參與任何判斷**。政策版本由伺服器決定。
+    # `is_adult_at_confirmation` 自 adult-only-signup 起不再寫入（全站只限滿 18 歲，通過確認即成年；欄位保留，日後收縮），**不參與任何判斷**。政策版本由伺服器決定。
     # 這幾欄是個資：不進 API 回應、日誌與模型；帳號連續 12 個月未登入即連同刪除。
     age_confirmed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     age_policy_version: Mapped[str | None] = mapped_column(Unicode(40), nullable=True)
@@ -108,7 +108,7 @@ class User(Base, PublicIdMixin, TimestampMixin):
     locked_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True, index=True)
     lock_reason: Mapped[str | None] = mapped_column(Unicode(20), nullable=True)
     # 內容模式（rpg-data-and-script）：
-    # - `content_tier_preference`：玩家選擇的模式。年齡確認成功時依當下的年齡設定（成年 `standard`、未成年 `safe`），
+    # - `content_tier_preference`：玩家選擇的模式。年齡確認成功時一律設為 `safe`（adult-only-signup；先前成年者為 `standard`），
     #   之後**不因年齡增加而自動改變**（滿 18 歲要自行切換）。伺服器端預設與資料庫預設都是最保守的 `safe`，
     #   所以舊版程式的 INSERT 在新結構上仍然有效且保守。
     # - `adult_confirmed_at`、`adult_rules_version`、`adult_confirm_method`：切換為成人模式時的成年確認紀錄
@@ -128,6 +128,10 @@ class User(Base, PublicIdMixin, TimestampMixin):
     # 故事偏好（story-preference）：全讀者、男頻、女頻，**只影響劇本清單的排序**，不影響內容分級、敘事與權限。
     # 模型 `default` 加資料庫 `server_default`：舊版程式的 INSERT（不含此欄）在新結構上取得 `all`。系統從不自動改變它。
     story_preference: Mapped[str] = mapped_column(Unicode(10), default=AUDIENCE_ALL, server_default=AUDIENCE_ALL)
+    # 註冊時的年滿 18 歲聲明（adult-only-signup）：新使用者在登入頁勾選「我確認已滿 18 歲」的時間與當時的年齡政策版本（伺服器決定）。
+    # 只是稽核紀錄，**不是年齡判斷的依據**（年齡一律由 `birth_date` 於當下計算）；管理員與升級前的帳號沒有，維持空值，任何閘門都不讀它。
+    adult_declared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    adult_declaration_version: Mapped[str | None] = mapped_column(Unicode(40), nullable=True)
 
 
 class UserIdentity(Base):

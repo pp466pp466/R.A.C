@@ -170,7 +170,7 @@ def test_setup_for_another_players_draft_is_the_same_404_as_for_a_missing_versio
 
 
 def test_setup_for_a_script_above_the_players_mode_is_a_403(app):
-    client = signed_in(app, age=15)
+    client = signed_in(app, age=30, content_tier_preference="safe")                 # 選了安全模式的玩家（全站只限滿 18 歲，沒有未成年者）
     response = client.get(f"/api/sessions/setup/{builtin(app, title='一般', content_tier='standard')}")
     assert response.status_code == 403 and response.get_json()["error"]["code"] == "content_tier_restricted"
 
@@ -305,7 +305,7 @@ def test_another_players_draft_is_the_same_404_as_a_missing_version_and_costs_no
 
 
 def test_the_script_above_the_players_mode_is_a_403(app, provider):
-    client = signed_in(app, age=15)
+    client = signed_in(app, age=30, content_tier_preference="safe")                 # 選了安全模式的玩家
     response = client.post("/api/sessions", json=start_body(builtin(app, title="一般", content_tier="standard")))
     assert response.status_code == 403 and response.get_json()["error"]["code"] == "content_tier_restricted" and saves(app) == 0
 

@@ -79,14 +79,14 @@ def test_the_age_group_is_minor_below_the_adult_age_and_none_without_a_birthday(
 # ---- 單一來源與注入 -----------------------------------------------------------
 
 def test_the_default_policy_has_the_documented_numbers_and_version():
-    assert (POLICY.min_register_age, POLICY.min_use_age, POLICY.adult_age) == (13, 13, 18)
-    assert CURRENT_AGE_POLICY_VERSION == POLICY.version == "2026-10-28-birthdate-range"
+    assert (POLICY.min_register_age, POLICY.min_use_age, POLICY.adult_age) == (18, 18, 18)
+    assert CURRENT_AGE_POLICY_VERSION == POLICY.version == "2026-11-17-adults-only"
     assert [c["code"] for c in POLICY.range_choices()] == ["under_13", "13_17", "18_24", "25_34", "35_44", "45_54", "55_plus"]
     assert all(c["label"] for c in POLICY.range_choices())
 
 
 def test_create_app_uses_the_default_policy_and_accepts_an_injected_one():
-    custom = AgePolicy(min_register_age=18, min_use_age=18, version="test-18-only")
+    custom = AgePolicy(min_register_age=21, min_use_age=21, version="test-21-only")
     for injected, expected in ((None, DEFAULT_AGE_POLICY), (custom, custom)):
         app = create_app(load_config(environ={"APP_ENV": "testing"}), age_policy=injected)
         with app.app_context():
@@ -94,22 +94,24 @@ def test_create_app_uses_the_default_policy_and_accepts_an_injected_one():
 
 
 def test_a_custom_minimum_age_changes_who_is_eligible_without_touching_anything_else():
-    strict = AgePolicy(min_register_age=18, min_use_age=18)
+    strict = AgePolicy(min_register_age=21, min_use_age=21)
     with pytest.raises(ValidationError) as exc:
-        validate_age_input("2011-10-28", "13_17", TODAY, strict)           # 15 歲
-    assert exc.value.code == "age_not_eligible" and "18" in exc.value.message
-    assert validate_age_input("2008-10-28", "18_24", TODAY, strict).is_adult is True
+        validate_age_input("2006-10-28", "18_24", TODAY, strict)           # 20 歲：本來已能註冊，最低年齡提高後不行
+    assert exc.value.code == "age_not_eligible" and "21" in exc.value.message
+    assert validate_age_input("2005-10-28", "18_24", TODAY, strict).age == 21
+    # 預設規則下同一個 20 歲者可以註冊：只是設定不同，沒有任何其他程式需要修改
+    assert validate_age_input("2006-10-28", "18_24", TODAY, POLICY).age == 20
 
 
 # ---- 驗證：通過 ---------------------------------------------------------------
 
 def test_a_consistent_birthday_and_range_pass_and_report_the_result():
-    verified = validate_age_input("2011-10-28", "13_17", TODAY, POLICY)
-    assert verified == VerifiedAge(birth_date=date(2011, 10, 28), age_range="13_17", age=15, is_adult=False)
+    verified = validate_age_input("2008-10-28", "18_24", TODAY, POLICY)
+    assert verified == VerifiedAge(birth_date=date(2008, 10, 28), age_range="18_24", age=18, is_adult=True)
     assert validate_age_input(" 1996-01-05 ", "25_34", TODAY, POLICY).is_adult is True       # 前後空白會被去除
 
 
-@pytest.mark.parametrize(("birth", "chosen"), [("2013-10-28", "13_17"), ("2008-10-29", "13_17"), ("2008-10-28", "18_24")])
+@pytest.mark.parametrize(("birth", "chosen"), [("2008-10-28", "18_24"), ("2002-10-28", "18_24"), ("2001-10-28", "25_34"), ("2001-10-29", "18_24")])
 def test_the_boundary_days_pass_with_the_matching_range(birth, chosen):
     assert validate_age_input(birth, chosen, TODAY, POLICY).age_range == chosen
 
@@ -153,23 +155,38 @@ def test_an_invalid_or_out_of_range_birthday_is_a_birthday_field_error(bad):
 def test_the_earliest_allowed_birthday_is_the_first_day_of_1900_and_today_is_allowed():
     assert validate_age_input("1900-01-01", "55_plus", TODAY, POLICY).age == 126
     with pytest.raises(ValidationError) as exc:
-        validate_age_input("2026-10-28", "under_13", TODAY, POLICY)          # 今天出生：合法的日期，但未滿 13 歲
+        validate_age_input("2026-10-28", "under_13", TODAY, POLICY)          # 今天出生：合法的日期，但未滿 18 歲
     assert exc.value.code == "age_not_eligible"
 
 
-# ---- 驗證：未滿 13 歲 ---------------------------------------------------------
+# ---- 驗證：未滿 18 歲 ---------------------------------------------------------
 
 @pytest.mark.parametrize("chosen", ["under_13", "13_17", "18_24", "55_plus"])
-def test_a_birthday_under_13_is_not_eligible_whatever_range_was_chosen(chosen):
+def test_a_birthday_under_18_is_not_eligible_whatever_range_was_chosen(chosen):
     with pytest.raises(ValidationError) as exc:
-        validate_age_input("2014-10-29", chosen, TODAY, POLICY)              # 差一天才滿 13 歲
+        validate_age_input("2008-10-29", chosen, TODAY, POLICY)              # 差一天才滿 18 歲
     assert exc.value.code == "age_not_eligible"
-    assert exc.value.fields == {"birth_date": "本服務僅供 13 歲以上使用，無法註冊。"}
+    assert exc.value.fields == {"birth_date": "本服務僅供 18 歲以上使用，無法註冊。"}
 
 
-def test_choosing_the_under_13_range_is_not_eligible_even_with_an_adult_birthday():
+@pytest.mark.parametrize(("birth", "chosen"), [("2011-10-28", "13_17"), ("2014-10-28", "13_17"), ("2020-01-01", "under_13"), ("2013-10-28", "13_17")])
+def test_the_two_under_18_ranges_are_not_eligible_for_every_underage_birthday(birth, chosen):
     with pytest.raises(ValidationError) as exc:
-        validate_age_input("1990-01-01", "under_13", TODAY, POLICY)
+        validate_age_input(birth, chosen, TODAY, POLICY)
+    assert exc.value.code == "age_not_eligible"
+
+
+@pytest.mark.parametrize("chosen", ["under_13", "13_17"])
+def test_choosing_an_under_18_range_is_not_eligible_even_with_an_adult_birthday(chosen):
+    with pytest.raises(ValidationError) as exc:
+        validate_age_input("1990-01-01", chosen, TODAY, POLICY)
+    assert exc.value.code == "age_not_eligible"                               # 以未滿 18 歲處理，不是一般的區間不一致
+
+
+def test_the_eighteenth_birthday_today_passes_and_the_day_before_does_not():
+    assert validate_age_input("2008-10-28", "18_24", TODAY, POLICY).age == 18
+    with pytest.raises(ValidationError) as exc:
+        validate_age_input("2008-10-29", "13_17", TODAY, POLICY)
     assert exc.value.code == "age_not_eligible"
 
 
@@ -177,7 +194,7 @@ def test_choosing_the_under_13_range_is_not_eligible_even_with_an_adult_birthday
 
 @pytest.mark.parametrize(
     ("birth", "chosen"),
-    [("1996-01-05", "13_17"), ("2011-10-28", "18_24"), ("2008-10-29", "18_24"), ("2008-10-28", "13_17"), ("1960-01-01", "45_54")],
+    [("1996-01-05", "18_24"), ("2008-10-28", "25_34"), ("1996-01-05", "55_plus"), ("1960-01-01", "18_24"), ("1960-01-01", "45_54")],
 )
 def test_a_birthday_that_does_not_fall_in_the_chosen_range_is_a_mismatch_with_a_fixed_message_and_no_field(birth, chosen):
     with pytest.raises(ValidationError) as exc:
@@ -210,4 +227,5 @@ def test_the_test_support_today_matches_the_default_fake_clock_in_asia_taipei():
     assert TODAY_UTC == START and taipei_today(START) == SUPPORT_TODAY
     for age in (13, 17, 18, 30):
         assert age_on(birth_date_for_age(age), SUPPORT_TODAY) == age
-        assert validate_age_input(age_fields(age)["birth_date"], age_fields(age)["age_range"], SUPPORT_TODAY, DEFAULT_AGE_POLICY).age == age
+        if age >= DEFAULT_AGE_POLICY.min_register_age:          # 未滿 18 歲的輔助值只用來製造「被拒絕」的情境
+            assert validate_age_input(age_fields(age)["birth_date"], age_fields(age)["age_range"], SUPPORT_TODAY, DEFAULT_AGE_POLICY).age == age
