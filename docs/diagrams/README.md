@@ -11,6 +11,7 @@
 | `docs/內容安全與審查架構圖解.png` | `build_diagrams_system.py` 的 `safety_diagram()` | `python -X utf8 docs/diagrams/build_diagrams_system.py safety` |
 | `docs/部署與營運架構圖解.png` | `build_diagrams_system.py` 的 `deploy_diagram()` | `python -X utf8 docs/diagrams/build_diagrams_system.py deploy` |
 | `docs/2.0簡報.pdf` | `docs/2.0簡報.md` | `python -X utf8 docs/diagrams/build_deck.py --libs <資料夾>` |
+| `docs/2.1簡報.pptx` | `docs/2.0簡報.md`（與 PDF 同一份內容） | `python -X utf8 docs/diagrams/build_pptx.py --libs <資料夾> --pptx-libs <資料夾>` |
 
 `build_diagrams.py` 與 `build_diagrams_system.py` 不帶參數（或帶 `all`）時產生各自負責的全部圖。上一版簡報（`1.0簡報.md` 與 PDF）保留為歷史版本，要重新產生用 `--source docs/1.0簡報.md --output docs/1.0簡報.pdf`。
 
@@ -21,7 +22,7 @@
 ## 需要什麼
 
 - Python 3（只用標準函式庫）與 Chrome 或 Edge（以無頭模式轉成 PNG 與 PDF；找不到時以環境變數 `CHROME_PATH` 指定）。
-- 只有簡報的 PDF 需要 `mermaid` 與 `marked`（在瀏覽器裡渲染 Mermaid 與 Markdown）。它們是產生文件用的工具，**不放進版本庫**：
+- 只有簡報的 PDF 與 pptx 需要 `mermaid` 與 `marked`（在瀏覽器裡渲染 Mermaid 與 Markdown）。它們是產生文件用的工具，**不放進版本庫**：
 
 ```powershell
 npm install --prefix $env:TEMP\deck-libs mermaid@11.4.1 marked@12.0.2
@@ -29,6 +30,15 @@ python -X utf8 docs/diagrams/build_deck.py --libs $env:TEMP\deck-libs\node_modul
 ```
 
 `--check` 只檢查渲染結果（每張 Mermaid 圖的語法、圖片是否載入），不產生 PDF；有任何錯誤就以非 0 結束。
+
+**PowerPoint（`2.1簡報.pptx`）** 另外需要 `python-pptx`（同樣只在產生文件時用到，不放進版本庫與 `requirements*.txt`）：
+
+```powershell
+pip install python-pptx --target $env:TEMP\pptx-libs
+python -X utf8 docs/diagrams/build_pptx.py --libs $env:TEMP\deck-libs\node_modules --pptx-libs $env:TEMP\pptx-libs
+```
+
+pptx 與 PDF 是**同一份** `docs/2.0簡報.md`：分頁與版面指令沿用 `build_deck.py` 的解析；6 張 4K 圖解用原本的 PNG（含 `crop`），Mermaid 圖是與 PDF 相同的渲染結果（由 Chrome 把每張圖的 SVG 截成 PNG）；標題、段落、項目符號與表格是 PowerPoint 的原生元素，可以編輯。封面的版本字樣是 `--label`（預設 2.1），內文裡的「2.0」是歷史事實，不改。字型用 Microsoft JhengHei（Noto Sans TC 是網頁用的自託管切片，無法內嵌）。版面以字數估算後排進 1280 x 720，放不下時會逐步縮小字級（最小 0.62 倍），仍放不下的頁面會列在輸出裡、結束代碼為 3：**有版面問題時不要自己改版面，先回報**。產生後建議用 PowerPoint 實際開啟檢查（PowerShell 的 `$ppt.Presentations.Open(...)` 加 `Export(資料夾, "PNG", 1280, 720)` 可以匯出每一頁的圖片）。
 
 ## 檔案
 
@@ -39,6 +49,7 @@ python -X utf8 docs/diagrams/build_deck.py --libs $env:TEMP\deck-libs\node_modul
 | `diagram_common.py` | 兩個圖檔共用的版面元件：標題列、「功能對應」表、色帶、頁面外殼與 4K PNG 輸出 |
 | `svg_kit.py` | 手寫 SVG 的小工具（卡片、膠囊標籤、箭頭、步驟徽章、自動換行） |
 | `build_deck.py` | 把 `docs/2.0簡報.md` 依 `---` 分頁，渲染成 16:9 的 PDF（版面指令見檔案開頭的說明） |
+| `build_pptx.py` | 把同一份簡報轉成 16:9 的 PowerPoint（`docs/2.1簡報.pptx`）：沿用 `build_deck.py` 的解析與 Mermaid 渲染，文字與表格是原生元素 |
 | `render_tools.py` | 共用：找 Chrome、HTML 轉 PNG 或 PDF、色彩規範 |
 | `icons/` | 圖解用到的 19 個 Azure 圖示（SVG，未經修改） |
 

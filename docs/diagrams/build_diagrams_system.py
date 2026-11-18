@@ -290,7 +290,7 @@ def columns_layout(n: int = 6, gap: int = 34) -> tuple[float, list[float]]:
 def rpg_diagram() -> Svg:
     svg = Svg(W, 100)
     header(svg, tag="[ RPG_TURN_ENGINE ]", title="RPG 回合引擎架構圖解",
-           subtitle="一輪＝一則玩家訊息＋一則完整的 AI 回應（含狀態呼叫與記事簿抓取），消耗 30 遊戲幣；沒有成功生成（失敗、中斷、被擋）不扣，重送與自動重生不再次扣")
+           subtitle="一輪＝一則玩家訊息＋一則完整的 AI 回應（含狀態呼叫與記事簿抓取），消耗 30 遊戲幣（管理員帳號不消耗，預扣金額 0）；沒有成功生成（失敗、中斷、被擋）不扣，重送與自動重生不再次扣")
 
     by = 138
     svg.rect(30, by, W - 60, 70, fill=P["panel"], stroke=P["line"], rx=10)
@@ -314,7 +314,7 @@ def rpg_diagram() -> Svg:
         dict(icon="bot-services", azure="Bot Services", title="GameService（請求階段）", badges=(3,), body=[
             "begin_turn：閘門（AccessPolicy）→ client_msg_id 與行動驗證 → 擁有者（非擁有者 404）", "已完成的重送（TurnReplay）；完結與第 0 幕閘門",
             "行動的規則層：只擋確定違規，422 input_blocked，預扣之前就拒絕", "全站每日 token 預算（503 system_busy）",
-            "SAVEPOINT：start_turn＋wallet.hold 30 幣（餘額不足 409 insufficient_coins，整段復原）", "凍結 TurnPlan：記事簿＋最近 10 輪＋世界狀態（含在場角色的角色卡切片）"]),
+            "SAVEPOINT：start_turn＋wallet.hold 30 幣（管理員為 0；餘額不足 409 insufficient_coins，整段復原）", "凍結 TurnPlan：記事簿＋最近 10 輪＋世界狀態（含在場角色的角色卡切片）"]),
         dict(icon="function-apps", azure="Function Apps", title="TurnRunner（串流與審查）", badges=(4,), body=[
             "StreamRun＋OutputGuard：逐句審查，保留一句緩衝，通過才釋放", "ping 心跳每 15 秒；客戶端斷線 → 停止生成並關閉上游",
             "被擋：transition，同一筆預扣自動重生一次；仍被擋 → blocked 並退回預扣", "標記字串洩漏視為驗證失敗；模型拒答視為生成失敗，不繞過",
@@ -372,13 +372,13 @@ def rpg_diagram() -> Svg:
     pw = (W - 60 - 3 * 20) / 4
     side = [
         dict(icon="function-apps", azure="Function Apps", title="修訂：重新生成與編輯最後一輪", body=[
-            "GameService.begin_revision＋RevisionRunner；回合保持 complete，用認領欄位表示修訂中", "每回合前 2 次免費（兩者合計），第 3 次起 30 幣", "重新生成須選分類並填 5 至 50 字理由：只進 turn_regenerations，不進模型、日誌與暫存",
+            "GameService.begin_revision＋RevisionRunner；回合保持 complete，用認領欄位表示修訂中", "每回合前 2 次免費（兩者合計），第 3 次起 30 幣", "管理員帳號的預扣金額為 0（不消耗遊戲幣）", "重新生成須選分類並填 5 至 50 字理由：只進 turn_regenerations，不進模型、日誌與暫存",
             "通過審查與狀態驗證才原子替換；失敗保留舊內容並退回預扣"]),
         dict(icon="bot-services", azure="Bot Services", title="第 0 幕（開場）", body=[
             "OpeningRunner：依主角角色卡與錨定事實產生，沿用串流與審查", "不是一輪：不計輪數、不扣幣，token 計入全站每日用量", "選定後存於存檔，重新整理或換裝置不重抽",
             "失敗或兩次被擋 → 退回劇本的初始對話；斷線 → 退回 pending"]),
         dict(icon="key-vaults", azure="Key Vaults", title="遊戲幣（錢包與帳本）", body=[
-            "一輪 30 幣；先扣免費幣、再扣付費幣；餘額不足 409 insufficient_coins", "回合開始原子預扣、完成結算、失敗退回；卡住逾時由系統退回",
+            "一輪 30 幣（管理員 0）；先扣免費幣、再扣付費幣；餘額不足 409 insufficient_coins", "回合開始原子預扣、完成結算、失敗退回；卡住逾時由系統退回",
             "首次登入贈 200、每日簽到 200（台灣時間 0 點刷新）；免費幣上限 1000", "金額、上限存資料庫設定表，每次現讀，flask 指令修改並寫稽核"]),
         dict(icon="cognitive-search", azure="Cognitive Search", title="記事簿（長期記憶）", badges=(8,), body=[
             "每個存檔一本，不使用摘要；容量 free 2000、plus 5000、vip 10000 字，另有 25% 預備空間（只供 AI 寫入）", "每完成 10 輪，回應關閉之後由 NotebookCapturer 抓重點、只在末尾追加（總預算 60 秒）",
@@ -560,11 +560,11 @@ def deploy_diagram() -> Svg:
         dict(icon="users", azure="Users", title="開發者", body_size=14, body=[
             "本機 development：Flask 開發伺服器（正式環境不得使用 app.run）", "SQLite 或本機 SQL Server；.env 不進版本庫，.env.example 只列變數名稱"]),
         dict(icon="function-apps", azure="Function Apps", title="自動測試", body_size=14, body=[
-            "pytest 11,448 案例（含連 project_test 的 SQL Server 整合測試）", "Node 1,100 案例", "tests/architecture：分層、無 Raw SQL、前端規則", "test_design_docs：文件與程式一致"]),
+            "pytest 11,541 案例（含連 project_test 的 SQL Server 整合測試）", "Node 1,121 案例", "tests/architecture：分層、無 Raw SQL、前端規則", "test_design_docs：文件與程式一致"]),
         dict(icon="app-services", azure="App Services", title="容器驗收", body_size=14, body=[
             "scripts/verify_container.py（WSL Docker）", "非 root、映像沒有 .env、各環境啟動、缺機密只列變數名稱", "會員與客服流程、保存期限指令（160／160）"]),
         dict(icon="app-registrations", azure="App Registrations", title="OpenSpec 規格流程", body_size=14, body=[
-            "propose → apply → archive；87 份主規格、25 個 change 已封存", "每批做完才 commit，驗收後才封存"]),
+            "propose → apply → archive；87 份主規格、26 個 change 已封存", "每批做完才 commit，驗收後才封存"]),
     ])
     a_bottom = bottom_of(a)
 
