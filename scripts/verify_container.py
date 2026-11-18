@@ -40,7 +40,7 @@ ADMIN_EMAIL = "container.admin@example.com"
 ADMIN_PASSWORD = "container-admin-password-1"
 
 results: list[tuple[str, bool, str]] = []
-EXPECTED_FLOW_RESULTS = 53          # 流程腳本至少要回報這麼多項（調整腳本時同步更新）
+EXPECTED_FLOW_RESULTS = 55         # 流程腳本至少要回報這麼多項（調整腳本時同步更新）
 
 
 def check(name: str, ok: bool, detail: str = "") -> None:
@@ -245,14 +245,19 @@ status, body, _ = call("POST", "/api/cs/conversations", {"client_id": "00000000-
 report("chat: an admin without age data cannot create a conversation (403 age_confirmation_required)", status == 403 and body["error"]["code"] == "age_confirmation_required", str(status))
 status, body, _ = call("POST", "/api/cs/conversations/00000000-0000-4000-8000-0000000000aa/messages", {"client_msg_id": "00000000-0000-4000-8000-000000000002", "content": "hi"})
 report("chat: sending a message without age data is 403 before anything else, so no model call is possible", status == 403 and body["error"]["code"] == "age_confirmation_required", str(status))
-status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "13_17"})
+status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "35_44"})     # an adult range that does not match the birthday (a range under 18 would be age_not_eligible)
 report("verify-age refuses a mismatch", status == 400 and body["error"]["code"] == "age_mismatch", str(status))
 status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(12), "age_range": "under_13"})
 report("verify-age refuses someone under 13", status == 400 and body["error"]["code"] == "age_not_eligible", str(status))
+# adults only (adult-only-signup): 15 years old is refused too (an admin is only refused, never erased, so the account stays usable for the next call)
 status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(15), "age_range": "13_17"})
-report("verify-age records the data and reports a minor", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "minor" and not (AGE_SECRETS & set(body["user"])), str(status))
+report("verify-age refuses a 15 year old as well (adults only) and does not erase the admin", status == 400 and body["error"]["code"] == "age_not_eligible", str(status))
 status, body, _ = call("GET", "/api/auth/me")
-report("the result persists for the logged-in session", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "minor", str(status))
+report("the refused admin account still exists and has no age data", status == 200 and body["user"]["age_confirmed"] is False, str(status))
+status, body, _ = call("POST", "/api/auth/verify-age", {"birth_date": born(30), "age_range": "25_34"})
+report("verify-age records the data and reports an adult", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "adult" and not (AGE_SECRETS & set(body["user"])), str(status))
+status, body, _ = call("GET", "/api/auth/me")
+report("the result persists for the logged-in session", status == 200 and body["user"]["age_confirmed"] is True and body["user"]["age_group"] == "adult", str(status))
 
 CID = "00000000-0000-4000-8000-000000000003"
 status, body, headers = call("POST", "/api/cs/conversations", {"client_id": CID})
@@ -489,7 +494,7 @@ def verify_member_flow(image: str) -> None:
         check("[會員流程] 日誌有登出的安全事件，且沒有註冊、密碼登入與信箱驗證的事件",
               "auth.logout" in set(events) and not {e for e in events if e.startswith(("auth.register", "auth.verification", "auth.email_verified"))},
               ", ".join(sorted(set(events))))
-        check("[會員流程] 日誌有補填年齡，以及不一致與未滿 13 歲被拒絕的安全事件",
+        check("[會員流程] 日誌有補填年齡，以及不一致與未滿 18 歲被拒絕的安全事件",
               {"auth.age_confirmed.later", "auth.age_rejected.mismatch", "auth.age_rejected.underage"} <= set(events),
               ", ".join(sorted(set(events))))
         # gunicorn 自己的啟動行（"[2026-10-28 09:00:00 +0000] ..."）本來就有日期，所以只掃結構化 JSON 日誌，並先去掉 time 欄位
@@ -749,7 +754,7 @@ def verify_retention_commands(name: str) -> None:
     code, stats = docker(*flask, "age-stats", timeout=120)
     lines = {line.strip() for line in stats.splitlines()}
     check("[保存期限] age-stats 只列出各區間人數與尚未完成的人數",
-          code == 0 and {"25 至 34 歲：1", "13 至 17 歲：1", "尚未完成年齡確認：1", "合計：3"} <= lines
+          code == 0 and {"25 至 34 歲：2", "13 至 17 歲：0", "尚未完成年齡確認：1", "合計：3"} <= lines
           and not any(secret in stats for secret in (MEMBER_EMAIL, ADMIN_EMAIL, "stale.container")), stats.strip()[-200:].replace("\n", " | "))
 
     code, preview = docker(*flask, "purge-inactive-accounts", "--dry-run", timeout=120)

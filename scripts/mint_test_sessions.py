@@ -6,7 +6,9 @@
 
 - **映像不新增任何能簽發登入狀態的指令或端點**：這個檔案在 `scripts/`（不進映像），被執行的只是一段由這裡產生的文字。
 - **拒絕在 production 執行**（程式一開始就結束，沒有建立任何帳號）。
-- 測試玩家：信箱屬於保留的 `loadtest.invalid` 網域、狀態 `active`、已完成年齡確認的成年人、條款已同意、沒有密碼。
+- 測試玩家：信箱屬於保留的 `loadtest.invalid` 網域、狀態 `active`、已完成年齡確認的成年人、條款已同意、已聲明年滿 18 歲
+  （記錄聲明的時間與年齡政策版本，與真實註冊相同）、沒有密碼。欄位與真實的「Google 註冊加年齡確認」一致：不寫 `is_adult_at_confirmation`，
+  內容模式偏好取模型預設的 `safe`。
 - 輸出檔（預設 `test-sessions.json`，UTF-8，已列入 .gitignore）內是**有效的登入憑證**，只屬於這些測試帳號；不要貼到對話或日誌裡。
 
 注意：`--local` 以**執行這個腳本的 shell** 的環境變數（以及非 production 的 `.env`）載入應用程式；簽出的 cookie 只有在**目標伺服器使用相同的
@@ -76,8 +78,8 @@ with app.extensions["db_session_factory"]() as session:
         user = User(
             email=normalize_email(email), email_canonical=canonical_email(email), display_name=f"%(player)s{number}", password_hash=None,
             email_verified_at=now, status=STATUS_ACTIVE, terms_version=CURRENT_TERMS_VERSION, terms_accepted_at=now,
-            birth_date=born, age_range=chosen.code, is_adult_at_confirmation=True, age_confirmed_at=now,
-            age_policy_version=DEFAULT_AGE_POLICY.version,
+            adult_declared_at=now, adult_declaration_version=DEFAULT_AGE_POLICY.version,
+            birth_date=born, age_range=chosen.code, age_confirmed_at=now, age_policy_version=DEFAULT_AGE_POLICY.version,
         )
         users.add_user(user)
         sessions.append({"email": email, "value": serializer.dumps({"uid": user.id, "tv": user.token_version})})

@@ -87,6 +87,30 @@ def test_the_minted_cookies_are_accepted_by_the_environment_that_signed_them_and
         assert len(rows) == 3 and all(u.password_hash is None and u.terms_version and u.birth_date for u in rows)
 
 
+def test_the_minted_players_carry_the_same_adult_declaration_and_age_fields_as_a_real_registration(tmp_path):
+    """adult-only-signup 任務 6.2：測試玩家的欄位與「Google 註冊加年齡確認」一致——有年滿 18 歲聲明的時間與版本，
+    年齡政策版本同一份，不寫 `is_adult_at_confirmation`，內容模式偏好為 `safe`，沒有逾時清除的期限。"""
+    from app.services.age_policy import DEFAULT_AGE_POLICY
+    from app.services.legal import CURRENT_TERMS_VERSION
+
+    database = tmp_path / "target.sqlite3"
+    app = create_app(load_config(environ={"APP_ENV": "testing", "DATABASE_URL": f"sqlite+pysqlite:///{database}"}))
+    Base.metadata.create_all(app.extensions["db_engine"])
+    result = run_snippet(mint.render_snippet(2, "loadtest-ef56"), environment(database))
+    assert result.returncode == 0, result.stderr[-400:]
+    with Session(app.extensions["db_engine"]) as db:
+        rows = db.query(User).all()
+        assert len(rows) == 2
+        for user in rows:
+            assert user.adult_declared_at is not None and user.terms_accepted_at is not None
+            assert user.adult_declaration_version == DEFAULT_AGE_POLICY.version == user.age_policy_version
+            assert user.terms_version == CURRENT_TERMS_VERSION
+            assert user.is_adult_at_confirmation is None
+            assert user.content_tier_preference == "safe"
+            assert user.age_deadline_at is None and user.age_confirmed_at is not None and user.age_range
+            assert user.role == "user" and user.status == "active"
+
+
 def test_every_player_gets_a_different_cookie(tmp_path):
     database = tmp_path / "target.sqlite3"
     app = create_app(load_config(environ={"APP_ENV": "testing", "DATABASE_URL": f"sqlite+pysqlite:///{database}"}))

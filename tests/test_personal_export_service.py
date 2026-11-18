@@ -118,6 +118,40 @@ def test_json_account_section_has_the_documented_fields_including_the_birthday_a
     assert account["email_verified_at"] == "2026-10-27T12:00:00Z"
 
 
+def test_json_account_section_includes_the_adult_declaration_time_and_version(member_session):
+    """personal-data-export「匯出納入年滿 18 歲聲明」：註冊時聲明過的帳號，匯出聲明的時間與當時的年齡政策版本。"""
+    user = add_user(
+        member_session, 1, adult_declared_at=START, adult_declaration_version="2026-11-17-adults-only",
+        email="declared@example.com", email_canonical="declared@example.com",
+    )
+    account = read_json(service_for(member_session).build(me(member_session, user), "json"))["account"]
+    assert account["adult_declared_at"] == "2026-10-27T12:00:00Z"
+    assert account["adult_declaration_version"] == "2026-11-17-adults-only"
+
+
+def test_an_account_without_a_declaration_exports_empty_values_and_does_not_fail(member_session):
+    """管理員帳號與升級前的帳號沒有聲明紀錄：兩個欄位為空值，匯出照常完成（JSON 為 null、CSV 為空字串）。"""
+    admin = add_user(member_session, 1, role="admin", email="admin@example.com", email_canonical="admin@example.com")
+    assert admin.adult_declared_at is None and admin.adult_declaration_version is None
+    data = read_json(service_for(member_session).build(me(member_session, admin), "json"))
+    assert data["account"]["adult_declared_at"] is None and data["account"]["adult_declaration_version"] is None
+    assert list(data["account"]) == list(ACCOUNT_COLUMNS)
+
+    files = read_zip(service_for(member_session).build(me(member_session, admin), "csv"))
+    header, row = csv_rows(files["account.csv"])
+    cells = dict(zip(header, row))
+    assert cells["adult_declared_at"] == "" and cells["adult_declaration_version"] == ""
+
+
+def test_csv_account_file_includes_the_adult_declaration(member_session):
+    user = add_user(member_session, 1, adult_declared_at=START, adult_declaration_version="2026-11-17-adults-only")
+    files = read_zip(service_for(member_session).build(me(member_session, user), "csv"))
+    header, row = csv_rows(files["account.csv"])
+    cells = dict(zip(header, row))
+    assert header == list(ACCOUNT_COLUMNS)
+    assert cells["adult_declared_at"] == "2026-10-27T12:00:00Z" and cells["adult_declaration_version"] == "2026-11-17-adults-only"
+
+
 @pytest.mark.parametrize("fmt", ["json", "csv"])
 def test_the_export_never_contains_credentials_internal_ids_or_model_internals(member_session, fmt):
     user = rich_user(member_session)

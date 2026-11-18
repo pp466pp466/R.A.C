@@ -36,10 +36,11 @@
 - `player-nickname`：未滿 13 歲被抹除的情境改為 18。
 - `service-observability`：年齡確認事件改為未滿 18 歲，新增「未勾選年滿 18 歲聲明而被拒絕建立帳號」事件。
 - `personal-data-export`：匯出納入年滿 18 歲聲明的時間與版本。
+- `cs-nlp-contract`：客服提示詞的平台資料改為如實描述兩個勾選框、生日只用於年齡確認與去識別的統計，並刪除「未成年者可使用但只能使用安全模式」的區間（第 3 批之後由使用者決定併入，見 tasks 6.4）。
 
 ## Impact
 
-- **程式**：`app/services/age_policy.py`（最低年齡與版本）、`app/services/google_sign_in_service.py`、`app/controllers/auth_api_controller.py` 與頁面控制器（聲明旗標、錯誤碼）、`app/services/auth_service.py` 與 `app/repositories/user_repository.py`（預設偏好與停寫成年紀錄）、`app/models/user.py`、`app/services/legal.py`（條款版本）、`app/services/personal_export_service.py`、`app/observability/` 事件、`scripts/mint_test_sessions.py`。
+- **程式**：`app/services/age_policy.py`（最低年齡與版本）、`app/services/google_sign_in_service.py`、`app/controllers/auth_api_controller.py` 與頁面控制器（聲明旗標、錯誤碼）、`app/services/auth_service.py` 與 `app/repositories/user_repository.py`（預設偏好與停寫成年紀錄）、`app/models/user.py`、`app/services/legal.py`（條款版本）、`app/services/personal_export_service.py`、`app/services/cs_prompt.py`（客服提示詞的平台資料）、`app/observability/` 事件、`scripts/mint_test_sessions.py`。
 - **前端與樣板**：`app/templates/auth/login.html`、`age.html`、`account.html`、`legal/terms.html`、`legal/privacy.html`；`app/static/js/auth/auth-flows.js`、`account.js`。
 - **資料庫**：遷移 `0019` 新增 `users.adult_declared_at`、`users.adult_declaration_version`（可為空；遷移使用 ORM 與 Alembic op，沒有原生 SQL）。展示環境的遷移要依 `aws_demo.py` 的流程（先快照）。後續的 `rpg-ops-loadtest` 若有遷移，編號順延為 `0020`。
 - **文件**：`docs/project資料結構文件.md`（逐欄字典與第 14 節異動紀錄）、`docs/資料模型-data-model.md`、`docs/帳號與安全-auth-security.md`、`docs/前端結構-frontend.md`、`docs/路線圖-roadmap.md`、`README.md`。

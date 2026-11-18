@@ -340,6 +340,7 @@ def fresh_player(app, coins: int = 0) -> tuple[str, dict[str, str | None]]:
     from app.models.user import STATUS_ACTIVE, User
     from app.repositories.script_repository import ScriptRepository
     from app.repositories.user_repository import UserRepository
+    from app.services.age_policy import DEFAULT_AGE_POLICY
     from app.services.legal import CURRENT_TERMS_VERSION
     from app.services.normalization import canonical_email, normalize_email
     from app.services.registry import build_wallet_service
@@ -351,6 +352,7 @@ def fresh_player(app, coins: int = 0) -> tuple[str, dict[str, str | None]]:
         user = User(
             email=normalize_email(email), email_canonical=canonical_email(email), display_name="驗收-rpg", password_hash=None,
             email_verified_at=now, status=STATUS_ACTIVE, terms_version=CURRENT_TERMS_VERSION, terms_accepted_at=now,
+            adult_declared_at=now, adult_declaration_version=DEFAULT_AGE_POLICY.version,     # 與真實的 Google 註冊相同（adult-only-signup）
             age_deadline_at=now + timedelta(days=30),
         )
         UserRepository(session).add_user(user)

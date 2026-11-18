@@ -57,7 +57,8 @@ SPOOL_LIMIT_BYTES = 8 * 1024 * 1024
 
 ACCOUNT_COLUMNS = (
     "email", "display_name", "nickname", "nickname_code", "member_tier", "email_verified_at", "created_at", "last_login_at", "terms_version",
-    "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "google_linked", "story_preference",
+    "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "adult_declared_at",
+    "adult_declaration_version", "google_linked", "story_preference",
 )
 MESSAGE_COLUMNS = ("conversation_id", "conversation_title", "seq", "role", "content", "created_at")
 APPEAL_COLUMNS = ("appeal_id", "content", "created_at", "status")
@@ -172,6 +173,8 @@ class PersonalExportService:
             "age_range": user.age_range,
             "age_confirmed_at": when(user.age_confirmed_at),
             "age_policy_version": user.age_policy_version,
+            "adult_declared_at": when(user.adult_declared_at),                  # 註冊時「我確認已滿 18 歲」的聲明；管理員與升級前的帳號沒有，為空值
+            "adult_declaration_version": user.adult_declaration_version,
             "google_linked": self._identities.get_for_user(user.id, PROVIDER_GOOGLE) is not None,
             "story_preference": normalize_audience(user.story_preference),
         }

@@ -159,13 +159,39 @@ def test_the_platform_facts_follow_the_real_constants(monkeypatch):
     assert f"須在 {hours} 小時內填寫生日" in INSTRUCTION and f"申請後有 {days} 天可以撤銷" in INSTRUCTION
     policy = DEFAULT_AGE_POLICY
     assert f"未滿 {policy.min_register_age} 歲者不得使用本服務" in INSTRUCTION
-    assert f"{policy.min_use_age} 至 {policy.adult_age - 1} 歲可以使用，但只能使用安全模式" in INSTRUCTION
+    assert f"本服務只限滿 {policy.min_register_age} 歲者使用" in INSTRUCTION
+    assert f"「我確認已滿 {policy.min_register_age} 歲」" in INSTRUCTION
     # 常數改變，提示詞跟著改，不需要另外修改文字
     monkeypatch.setattr(cs_prompt, "AGE_CONFIRMATION_DEADLINE", timedelta(hours=48))
-    monkeypatch.setattr(cs_prompt, "DEFAULT_AGE_POLICY", AgePolicy(min_register_age=16, min_use_age=16, adult_age=20))
+    monkeypatch.setattr(cs_prompt, "DEFAULT_AGE_POLICY", AgePolicy(min_register_age=21, min_use_age=21, adult_age=21))
     changed = build_system_instruction(MARKER)
-    assert "須在 48 小時內填寫生日" in changed and "未滿 16 歲者不得使用本服務" in changed
-    assert "16 至 19 歲可以使用，但只能使用安全模式；滿 20 歲之後會自動解除" in changed
+    assert "須在 48 小時內填寫生日" in changed and "未滿 21 歲者不得使用本服務" in changed
+    assert "本服務只限滿 21 歲者使用" in changed and "「我確認已滿 21 歲」" in changed
+    assert "我確認已滿 18 歲" not in changed and "未滿 18 歲" not in changed             # 沒有殘留預設值
+
+
+def test_the_platform_facts_describe_two_checkboxes_and_no_minor_range():
+    """adult-only-signup 任務 6.4：兩個勾選框；生日不用於內容分級；沒有「未成年可使用但只能用安全模式」的區間。"""
+    assert "兩個勾選框" in INSTRUCTION
+    assert "「同意服務條款與隱私權政策」與「我確認已滿" in INSTRUCTION
+    assert "第一次登入兩個都必須勾選，回訪的使用者不必勾選" in INSTRUCTION
+    assert "僅供年齡確認與去識別的統計" in INSTRUCTION
+    for removed in ("內容分級", "可以使用，但只能使用安全模式", "自動解除", "一個「同意服務條款與隱私權政策」的勾選框"):
+        assert removed not in INSTRUCTION, removed
+    assert not re.search(r"\d+ 至 \d+ 歲", INSTRUCTION)
+
+
+@pytest.mark.parametrize("min_register_age, min_use_age, adult_age", [(18, 18, 18), (16, 16, 20), (21, 21, 21), (13, 15, 18)])
+def test_the_platform_facts_never_produce_an_age_range_whatever_the_policy(monkeypatch, min_register_age, min_use_age, adult_age):
+    """舊公式 `min_use_age 至 adult_age - 1 歲` 在預設值下會變成「18 至 17 歲」；現在不論政策值為何都不產生區間。"""
+    from app.services import cs_prompt
+    from app.services.age_policy import AgePolicy
+
+    monkeypatch.setattr(cs_prompt, "DEFAULT_AGE_POLICY", AgePolicy(min_register_age=min_register_age, min_use_age=min_use_age, adult_age=adult_age))
+    text = build_system_instruction(MARKER)
+    assert not re.search(r"\d+ 至 \d+ 歲", text)
+    assert "只能使用安全模式" not in text and "內容分級" not in text
+    assert f"未滿 {min_register_age} 歲者不得使用本服務" in text
 
 
 def test_the_initial_quotas_match_agents_md_section_7():

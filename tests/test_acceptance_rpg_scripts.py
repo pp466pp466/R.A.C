@@ -360,6 +360,10 @@ def test_a_fresh_player_gets_paid_coins_only_when_asked_and_the_signup_grant_sti
     assert plain is None                                        # 不要求補幣：還沒有錢包，行為與先前完全相同
     assert (rich.free_balance, rich.paid_balance) == (0, 700)  # 首登的 200 免費幣在年齡確認通過時才發放
     assert cookie.startswith(player_app.config["SESSION_COOKIE_NAME"] + "=")
+    with player_app.extensions["db_session_factory"]() as session:
+        for user in session.scalars(select(User)):               # 與真實的 Google 註冊相同：已聲明年滿 18 歲、尚未年齡確認（adult-only-signup）
+            assert user.adult_declared_at is not None and user.adult_declaration_version
+            assert user.birth_date is None and user.age_deadline_at is not None
 
 
 # ---- 結束回應的時序（eof 案例，rpg-notebook 任務 5.2）、容器驗收腳本與真實模型腳本（任務 5.2、5.3）-----------------------------
