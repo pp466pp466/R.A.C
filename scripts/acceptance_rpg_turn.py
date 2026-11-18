@@ -349,7 +349,9 @@ class Acceptance:
         turn = self.play(save, "m-1", self.action("正常"))
         elapsed = time.monotonic() - started
         r.check("回合：事件序列 meta → token… → state → done", self.sequence_ok(turn, ["meta", "token", "state", "done"]), str(turn.names))
-        r.check("回合：done 為 complete、turn_number 1、coins 為剩餘餘額", turn.done == {"status": "complete", "turn_number": 1, "coins": before - TURN_COST}, str(turn.done))
+        done = turn.done or {}                                      # done 自 rpg-turn-revision 起另帶 revision 與 free_left（由 acceptance_rpg_revision 驗證），這裡只比本項關心的三個鍵
+        r.check("回合：done 為 complete、turn_number 1、coins 為剩餘餘額",
+                (done.get("status"), done.get("turn_number"), done.get("coins")) == ("complete", 1, before - TURN_COST), str(turn.done))
         r.check("回合：劇情文字完整、沒有 JSON 原文", turn.text == STORY and "{" not in turn.text, turn.text)
         first, done_at = turn.first_at("token"), turn.first_at("done")
         r.check("回合：串流是逐步送達的（首字明顯早於結束）", first is not None and done_at is not None and done_at - first > 0.3, f"首字 {first} 結束 {done_at}")
