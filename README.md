@@ -2045,7 +2045,7 @@ app.mount('#app');
 - **design.md 的風險寫「玩家仍可用現有的個人頁開關調整」與實際不符**：`PUT /api/account/content-mode` 存在且有測試，但搜尋 `app/static` 與 `app/templates` **沒有任何前端呼叫它**，帳號頁沒有切換內容模式的畫面，遊戲入口頁的說明連到帳號頁也沒有。所以在展示環境，新玩家**無法從介面離開安全模式**（只能直接呼叫 API）；完整的「關閉安全模式」流程屬 `safe-mode-toggle`（尚未實作）。
 - 展示環境本來就沒有開成人模式：部署計畫與 `aws-demo.vars` 都沒有設定 `ADULT_MODE_ENABLED`（預設關閉；我沒有讀主機上的 `plain.env`）。所以 2026-11-24、11-25 的展示若要含露骨內容，現況做不到；一般模式也要等切換介面或手動呼叫 API。
 
-### 驗收紀錄（admin-unlimited-coins，2026-11-18，任務 1.1 至 4.2 與 4.4 已記入；4.3 瀏覽器實測由使用者親自做、4.5 簡報與圖解尚未做）
+### 驗收紀錄（admin-unlimited-coins，2026-11-18，全部 14 項任務已記入，4.5 的簡報提交見下）
 
 日期 2026-11-18；對應的提交：規範修訂 `9232f18`、規劃 `bde7f06`、批 ①（後端）`338da6f`、批 ②（前端）`fe603a4`；批 ③（文件、驗收腳本）尚未提交。規則：管理員帳號（角色 admin 且帳號啟用中）不消耗遊戲幣，預扣仍寫入帳本但金額為 0；沒有 migration、資料表或設定鍵異動。**沒有實際執行的項目一律標為未驗證，不以預期結果代替。**
 
@@ -2061,6 +2061,9 @@ app.mount('#app');
 | 驗收腳本（4.2，開發伺服器加日誌，驗收環境 `newprojet-acceptance`：SQLite、假 RPG 模型） | `scripts/acceptance_rpg_admin_coins.py` **49 項通過、0 失敗、0 未驗證**（16.1 秒）：①`journey` 餘額 0 的管理員一輪加兩次免費與三次超過免費次數的修訂都成功，`done.coins` 一律 0、餘額始終 0、`last_turn` 的重新生成與編輯費用在免費次數用完後仍是 0、`/api/wallet` 回 `coin_exempt: true` 且 `turn_cost.standard` 為 0、記錄頁 4 筆 `turn_hold` 全是金額 0 且沒有仍在預扣中的項目（免費的修訂沒有帳本列）、假模型確實收到每次呼叫；②`interrupt` 上游中途斷線後餘額仍 0，同一編號重送 `attempt` 為 2、仍是 0 幣；③`ordinary` 一般玩家 6 輪後餘額 20，`coin_exempt` 為假、`turn_cost` 為 30，再送一輪得到 409 `insufficient_coins`、沒有回合列、餘額不變；應用程式日誌（42042 字元）沒有行動、劇情與被擋的句子 |
 | 既有驗收腳本的回歸（同一環境、同一份程式） | `acceptance_rpg_turn.py` **68／68**（16.0 秒）、`acceptance_rpg_revision.py` **181／181**（78.4 秒）：一般玩家的扣幣、退回、免費次數與餘額不足行為沒有因批 ① 改變 |
 | 腳本的單元測試 | `tests/test_acceptance_rpg_scripts.py` 新增 18 個案例（含參數化；拒絕非本機位址與未知案例、`?admin=1` 只有 `1` 為真、`fresh_player(admin=True)` 建立啟用中的管理員且沒有錢包、其 cookie 登入後 `/api/wallet` 回 `coin_exempt: true`、腳本與應用程式的幣價、贈幣、免費次數與帳本種類一致），該檔 115 通過 |
+| 瀏覽器實測（4.3，使用者親自做，驗收環境 `newprojet-acceptance`：開發伺服器、SQLite、假 RPG 模型；2026-11-18） | 使用者回報 **A（管理員，餘額 0）與 B（一般玩家，餘額 10 幣）兩組都測試完成**，沒有回報任何異常；**沒有逐項列舉細節與截圖**，所以這一列只是「使用者回報完成」，不是逐項證據（文字與按鈕狀態的逐項證據是 Node 的 Vue 真實掛載測試與 HTTP 驗收腳本）。驗收環境事前由我準備：管理員補完年齡確認、一般玩家餘額由 160 調成 10 幣（服務路徑，沒有碰 `project`）。使用者**同時提出**：`/game`（RPG 入口頁）沒有餘額顯示，希望有——這不屬於本 change（本 change 的畫面範圍是遊戲進行頁的錢包與修訂文字），它就是先前探索過、尚未立案的 `wallet-balance-header`（各頁頂列顯示餘額，`/game` 在範圍內），已記入 HANDOFF |
+| 簡報與圖解（4.5，使用者已確認清單與兩項決定） | `docs/2.0簡報.md` 與 PDF：管理員不扣幣（第 109、626、779、781 行）、adult-only-signup 已封存（第 20、33、41、49、57、67、697、915、927、928、972 行；路線圖 Mermaid 把它移進「已封存」、進行中的節點換成 admin-unlimited-coins）、數字（pytest 11,541〔通過 11,539、略過 2〕、Node 1,121、提交 196、26 個 change 已封存；第 32、34、59、60、891、892 行）；`build_diagrams_system.py` 第 293、317、375、381、563、567 行，重產 RPG 回合引擎與部署與營運兩張 PNG（尺寸不變，簡報的 `crop` 仍適用；修訂卡片的管理員說明獨立成一行，避免「0）」孤字折行）。`build_deck.py --check`：39 頁、Mermaid 19 張、錯誤 0；PDF 目視摘要、1.0 到 2.0、路線圖三頁；`tests/test_design_docs.py`、`test_readme.py`、`test_agents_skill_sync.py` 266 通過 |
+| `docs/2.1簡報.pptx`（4.5 追加） | 新增 `docs/diagrams/build_pptx.py`（沿用 `build_deck.py` 的解析與 Mermaid 渲染；6 張 4K 圖解用原 PNG、Mermaid 圖是與 PDF 相同的渲染結果、文字與表格是原生元素；封面版本字樣 2.1；`python-pptx` 只裝在暫存資料夾，不進 `requirements`）。39 頁、重新開啟後 39 頁、18 張 Mermaid 圖加 6 張圖解 PNG；**以 PowerPoint 實際開啟並逐頁匯出圖片目視**，所有頁面維持原字級、沒有溢出。調整過程發現並修正三個轉換問題（高度估算多算圖片後的間距造成第 10、24 頁誤縮字級；stack 版面的表格被排成半寬造成第 37 頁第一欄直排；表格欄寬沒有最小值）。**殘留的小瑕疵（未處理，待使用者決定）**：第 2 頁最後一個項目與第 25 頁第一個項目各有一個句尾標點（「。」與「）」）被 PowerPoint 折到下一行單獨成行（斷行邊界，PDF 沒有） |
 | 設計文件測試 | `tests/test_design_docs.py` 與 `tests/test_readme.py` 通過（與腳本測試合跑 184 通過） |
 | 全套測試（4.4，批 ③ 程式與文件的最終狀態） | 全套 `pytest` **11539 通過、2 略過、0 失敗**（1167 秒；略過＝`test_aws_demo_script` 的 Windows ACL 與 `test_container_files` 的 `grp` 模組，都是平台限制），包含 `tests/architecture`、`tests/test_design_docs.py`、`tests/test_agents_skill_sync.py`、`tests/test_readme.py` 與連真實 SQL Server `project_test` 的整合測試（`tests/test_rpg_admin_flow.py` 的 `sqlserver` 標記案例）；Node `node --test "tests/js/**/*.test.js"` **1121 通過、0 失敗**（與批 ② 相同）。上一版 adult-only-signup 的 pytest 是 11446 通過、Node 1100 |
 
@@ -2068,7 +2071,7 @@ app.mount('#app');
 
 **4.4 的過程**：Node 第一次執行有 5 個檔案（`game-sync`、`game-template`、`game-wallet`、`game`、`milestone-preview`）因 `Zone Allocation failed - process out of memory` 崩潰（執行當時可用記憶體約 290 MB／8 GB，不是斷言失敗，只跑完 964 筆）；使用者重置記憶體後以 `--test-concurrency=2` 單獨重跑，1121 全數通過；pytest 第一次跑到約 9% 時依使用者要求停止，之後單獨重跑完整一次（沒有與 Node 同時執行）。
 
-**未驗證**：①**瀏覽器實測（4.3）**：頂列沒有「餘額不足」提示、修訂用完 2 次免費後按鈕旁顯示「不消耗遊戲幣」、兩個 Modal 的文字、換一般玩家確認行為沒變，都要使用者親自做（Node 測試以 Vue 的真實掛載驗證過文字與按鈕狀態，但沒有人眼看過畫面）。②簡報與圖解（4.5）尚未做。③腳本只對開發伺服器與 SQLite 執行，沒有對 gunicorn、容器或 SQL Server 跑；SQL Server 上的行為由 `tests/test_rpg_admin_flow.py`（標記 `sqlserver`）檢查。④客服額度、全站 token 上限與 `llm_call_logs` 不經 HTTP 驗收腳本，由 `tests/test_rpg_admin_flow.py` 與批 ① 的測試檢查。⑤**展示環境（AWS）沒有部署這個 change**，管理員在展示環境仍會被扣幣，直到下一次部署。
+**未驗證**：①瀏覽器實測（4.3）只有使用者的口頭回報（見上表），沒有逐項細節與截圖，也沒有 360 px 手機寬度的目視。②`2.1簡報.pptx` 只在 Windows 的 PowerPoint 檢查過，沒有在 Keynote、LibreOffice 或 Google 簡報開過；字型用 Microsoft JhengHei，沒有安裝的電腦會被替代字型取代、斷行可能不同。③腳本只對開發伺服器與 SQLite 執行，沒有對 gunicorn、容器或 SQL Server 跑；SQL Server 上的行為由 `tests/test_rpg_admin_flow.py`（標記 `sqlserver`）檢查。④客服額度、全站 token 上限與 `llm_call_logs` 不經 HTTP 驗收腳本，由 `tests/test_rpg_admin_flow.py` 與批 ① 的測試檢查。⑤**展示環境（AWS）沒有部署這個 change**，管理員在展示環境仍會被扣幣，直到下一次部署。
 
 ## 容器建置與驗收
 
