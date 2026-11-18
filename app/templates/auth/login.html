@@ -10,9 +10,14 @@
 
   <template v-if="googleEnabled">
     <p class="auth-lead">使用 Google 帳號登入。第一次使用會自動建立帳號；登入後再填寫生日與年齡區間。</p>
+    <p id="adults-only-note" class="auth-hint">本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用。</p>
     <label class="auth-check" for="accept-terms">
       <input id="accept-terms" type="checkbox" v-model="google.values.acceptTerms" :disabled="google.state.submitting">
       <span>我同意<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>（第一次使用時必須勾選，已有帳號的話不必）</span>
+    </label>
+    <label class="auth-check" for="declare-adult">
+      <input id="declare-adult" type="checkbox" v-model="google.values.declareAdult" :disabled="google.state.submitting" aria-describedby="adults-only-note">
+      <span>我確認已滿 {{ ageRules.minRegisterAge }} 歲（第一次使用時必須勾選，已有帳號的話不必）</span>
     </label>
     <p v-if="google.state.formError" class="auth-form-error" role="alert">{{ google.state.formError }}</p>
     <div class="auth-actions">

@@ -48,6 +48,18 @@ def test_a_player_waiting_for_the_age_step_can_open_the_page(app):
     assert 'lang="zh-Hant-TW"' in html and "年齡確認" in html
 
 
+def test_the_age_page_says_the_service_is_for_adults_with_the_number_from_the_age_rules(app):
+    """adult-only-signup：年齡確認頁提示「本服務僅限滿 18 歲者使用」。數字由 Vue 以年齡規則插值，範本不寫死；
+    暱稱會公開、請勿使用真實姓名的提示照舊；舊的「僅供 N 歲以上使用」說法已不存在。"""
+    response = client_with(app, age=None).get("/age")
+    html = response.get_data(as_text=True)
+    note = html.split('id="adults-only-note"', 1)[1].split("</p>", 1)[0]
+    assert "本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用" in note
+    assert state_of(response)["ageRules"]["minRegisterAge"] == 18
+    assert "暱稱會公開顯示於您創作的劇本，請勿使用真實姓名" in html
+    assert "僅供 {{ ageRules.minRegisterAge }} 歲以上使用" not in html
+
+
 def test_a_player_who_already_confirmed_is_sent_to_the_default_page(app):
     response = client_with(app, age=30).get("/age")
     assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN

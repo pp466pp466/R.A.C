@@ -23,14 +23,25 @@ test('only same-site paths are ever used as a destination', () => {
 
 // ---- 登入頁 --------------------------------------------------------------------------------------
 
-test('the Google start request carries only the terms flag and a safe next', () => {
-  assert.deepEqual(Flows.googleStartBody(true, '/account'), { accept_terms: true, next: '/account' });
-  assert.deepEqual(Flows.googleStartBody(false, undefined), { accept_terms: false, next: '/cs' });
+test('the Google start request carries only the two flags and a safe next', () => {
+  assert.deepEqual(Flows.googleStartBody(true, true, '/account'), { accept_terms: true, declare_adult: true, next: '/account' });
+  assert.deepEqual(Flows.googleStartBody(false, false, undefined), { accept_terms: false, declare_adult: false, next: '/cs' });
   for (const notTrue of [false, 0, '', null, undefined, 'true', 1]) {
-    assert.equal(Flows.googleStartBody(notTrue, '/cs').accept_terms, false, String(notTrue));   // 只有明確的 true 才算勾選
+    assert.equal(Flows.googleStartBody(notTrue, true, '/cs').accept_terms, false, String(notTrue));    // 只有明確的 true 才算勾選
+    assert.equal(Flows.googleStartBody(true, notTrue, '/cs').declare_adult, false, String(notTrue));
   }
-  assert.deepEqual(Flows.googleStartBody(true, 'https://evil.example/'), { accept_terms: true, next: '/cs' });
-  assert.deepEqual(Object.keys(Flows.googleStartBody(true, '/cs')).sort(), ['accept_terms', 'next']);   // 沒有生日、區間或任何個資
+  assert.deepEqual(Flows.googleStartBody(true, true, 'https://evil.example/'), { accept_terms: true, declare_adult: true, next: '/cs' });
+  // 沒有生日、區間、時間、版本或任何個資：時間與版本由伺服器決定
+  assert.deepEqual(Object.keys(Flows.googleStartBody(true, true, '/cs')).sort(), ['accept_terms', 'declare_adult', 'next']);
+});
+
+test('every combination of the two checkboxes is sent as it is, so the server alone decides who may register', () => {
+  // 兩個勾選框的四種組合：回訪者都不勾也照送（按鈕不因未勾選而禁用），新使用者缺哪一項由伺服器擋下並提示
+  const combos = [[false, false], [true, false], [false, true], [true, true]];
+  for (const [terms, adult] of combos) {
+    const body = Flows.googleStartBody(terms, adult, '/game');
+    assert.deepEqual(body, { accept_terms: terms, declare_adult: adult, next: '/game' }, `${terms}/${adult}`);
+  }
 });
 
 test('only https authorization URLs are followed', () => {
@@ -93,8 +104,9 @@ test('a nickname error from the server is shown beside the field and nothing is 
 });
 
 test('age_not_eligible ends the flow with the server message and a link back to the login page', () => {
-  const outcome = Flows.ageOutcome(server(400, 'age_not_eligible', '本服務僅供 13 歲以上使用，您的帳號與相關資料已刪除。'));
-  assert.deepEqual(outcome, { action: 'final', message: '本服務僅供 13 歲以上使用，您的帳號與相關資料已刪除。', to: '/login' });
+  const outcome = Flows.ageOutcome(server(400, 'age_not_eligible', '本服務僅供 18 歲以上使用，您的帳號與相關資料已刪除。'));
+  assert.deepEqual(outcome, { action: 'final', message: '本服務僅供 18 歲以上使用，您的帳號與相關資料已刪除。', to: '/login' });
+  assert.equal(outcome.clear, undefined);                      // 流程已結束，不提供重填（不暗示可以改填其他值）
   assert.equal(Flows.ageOutcome({ code: 'age_not_eligible', status: 400 }).message, Flows.TEXT.ageErased);     // 沒有訊息時的後備
 });
 

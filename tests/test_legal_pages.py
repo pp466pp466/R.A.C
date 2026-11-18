@@ -103,8 +103,10 @@ def test_the_privacy_page_numbers_for_age_still_come_from_the_policy_not_the_tex
 
 def test_the_terms_version_names_the_new_draft_and_the_registration_records_it():
     # rpg-turn-revision 補了重新生成理由與遊戲幣帳本的告知（draft-6），之後又把編輯改為與重新生成共用免費次數（draft-7）；
+    # adult-only-signup 加入僅限滿 18 歲、註冊時的年滿 18 歲聲明與謊報責任（draft-8，2026-11-18）；
     # 版本隨內容提高（只影響之後新註冊者記錄的版本）
-    assert CURRENT_TERMS_VERSION == "2026-11-16-draft-7" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION == "2026-11-18-draft-8" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION != "2026-11-16-draft-7"            # 提高過：不是先前的版本
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------

@@ -46,11 +46,16 @@
     return target;
   }
 
-  // ---- 登入頁（只有 Google 與條款勾選框）-----------------------------------------------------------
+  // ---- 登入頁（只有 Google 與兩個勾選框：條款、年滿最低年齡的聲明）----------------------------------
 
-  /* 按鈕在條款沒勾選時仍可按：回訪的使用者不必勾選，由伺服器依帳號是否存在決定。送出的內容只有條款旗標與登入後要去的位置。 */
-  function googleStartBody(acceptTerms, next) {
-    return { accept_terms: acceptTerms === true, next: safeDestination(next, DEFAULT_PAGE) };
+  /* 按鈕在兩個勾選框都沒勾選時仍可按：回訪的使用者不必勾選，由伺服器依帳號是否存在決定。
+     送出的內容只有兩個布林旗標與登入後要去的位置；時間與版本由伺服器決定，這裡不送。只有明確的 true 才算勾選。 */
+  function googleStartBody(acceptTerms, declareAdult, next) {
+    return {
+      accept_terms: acceptTerms === true,
+      declare_adult: declareAdult === true,
+      next: safeDestination(next, DEFAULT_PAGE)
+    };
   }
 
   /* 授權網址必須是 https；其他協定一律不導向。`base` 是目前頁面的網址（相對路徑要有它才解得開；沒有就視為不安全）。 */

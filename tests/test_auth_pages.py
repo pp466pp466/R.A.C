@@ -220,6 +220,7 @@ def test_a_custom_policy_changes_the_state_the_options_and_the_wording_without_t
     assert rules["minRegisterAge"] == 21
     terms = other.test_client().get("/terms").get_data(as_text=True)
     assert "21 歲以上" in terms and "13 歲" not in terms
+    assert "勾選「我確認已滿 21 歲」" in terms and "18 歲" not in terms.split("<h2>2.", 1)[1].split("<h2>3.", 1)[0]     # 聲明的數字也跟著政策走
 
 
 def test_no_template_or_script_hardcodes_an_age_number():
@@ -243,29 +244,49 @@ def test_the_register_page_and_script_no_longer_exist():
     assert not (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "register.js").exists()
 
 
-def test_the_login_page_has_only_the_google_button_and_the_terms_checkbox(full_app):
+def test_the_login_page_has_only_the_google_button_and_the_two_checkboxes(full_app):
     html = full_app.test_client().get("/login").get_data(as_text=True)
     # 登入與註冊合一：沒有電子郵件、密碼、顯示名稱、生日與年齡區間，也沒有註冊與忘記密碼的連結
     for forbidden in ('type="email"', 'type="password"', 'type="date"', "<select", 'id="birth', 'id="age_range"', 'for="email"',
                       'for="password"', 'href="/register"', 'href="/forgot-password"', "confirm_adult"):
         assert forbidden not in html, forbidden
-    assert 'id="accept-terms"' in html and 'type="checkbox"' in html
+    assert html.count('type="checkbox"') == 2                                          # 條款與年滿 18 歲聲明，恰好兩個勾選框
+    assert 'id="accept-terms"' in html and 'id="declare-adult"' in html
     assert 'href="/terms"' in html and 'href="/privacy"' in html                       # 勾選框旁有條款與隱私權政策的連結
-    assert "使用 Google 登入" in html and "第一次使用時必須勾選" in html
+    assert "使用 Google 登入" in html and html.count("第一次使用時必須勾選") == 2
 
 
-def test_the_google_button_stays_clickable_when_the_terms_are_not_ticked_and_only_the_flag_and_next_are_sent(full_app):
+def test_the_login_page_says_the_service_is_for_adults_with_the_number_from_the_age_rules(full_app):
+    """年滿 18 歲聲明的勾選框與說明：數字由 Vue 以年齡規則插值（`ageRules.minRegisterAge`），範本與腳本不寫死；
+    狀態裡的規則是 18，所以使用者看到的是「我確認已滿 18 歲」與「本服務僅限滿 18 歲者使用」。"""
+    response = full_app.test_client().get("/login")
+    html = response.get_data(as_text=True)
+    assert state_of(response)["ageRules"]["minRegisterAge"] == 18
+    label = html.split('for="declare-adult"', 1)[1].split("</label>", 1)[0]
+    assert "我確認已滿 {{ ageRules.minRegisterAge }} 歲" in label and 'v-model="google.values.declareAdult"' in label
+    note = html.split('id="adults-only-note"', 1)[1].split("</p>", 1)[0]
+    assert "本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用" in note
+    assert 'aria-describedby="adults-only-note"' in label                            # 勾選框關聯到說明
+    from app.config import PROJECT_ROOT
+
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "login.js").read_text(encoding="utf-8")
+    assert "ageRules: state.ageRules" in script                                       # 樣板用到的名稱都由 setup() 回傳
+
+
+def test_the_google_button_stays_clickable_when_nothing_is_ticked_and_only_the_flags_and_next_are_sent(full_app):
     from app.config import PROJECT_ROOT
 
     html = full_app.test_client().get("/login").get_data(as_text=True)
     button = html.split('@click="signInWithGoogle"', 1)[0].rsplit("<button", 1)[1]
     assert ":disabled=\"google.state.submitting\"" in button and "acceptTerms" not in button       # 只在送出中禁用，與勾選與否無關
+    assert "declareAdult" not in button
     script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "login.js").read_text(encoding="utf-8")
-    assert "Auth.googleStartBody(google.values.acceptTerms, state.next)" in script
+    assert "Auth.googleStartBody(google.values.acceptTerms, google.values.declareAdult, state.next)" in script
     assert "birth" not in script and "age_range" not in script and "password" not in script and "email" not in script
     flows = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "auth-flows.js").read_text(encoding="utf-8")
-    body = flows.split("function googleStartBody", 1)[1].split("}", 1)[0]
-    assert "accept_terms" in body and "next" in body and "birth" not in body
+    body = flows.split("function googleStartBody", 1)[1].split("\n  }", 1)[0]
+    assert "accept_terms" in body and "declare_adult" in body and "next" in body
+    assert "birth" not in body and "version" not in body and "_at" not in body         # 時間與版本由伺服器決定，不從前端送
 
 
 def test_the_account_page_shows_the_age_row_and_the_form_for_an_admin_without_age_data(full_app):
@@ -279,45 +300,31 @@ def test_the_account_page_shows_the_age_row_and_the_form_for_an_admin_without_ag
     assert user["age_confirmed"] is False and user["age_group"] is None
 
 
-@pytest.mark.parametrize(("age", "group"), [(15, "minor"), (30, "adult")])
-def test_the_account_state_and_page_never_hold_the_birthday_or_the_range(full_app, age, group):
+@pytest.mark.parametrize("age", [18, 30])
+def test_the_account_state_and_page_never_hold_the_birthday_or_the_range(full_app, age):
     client = logged_in(full_app, age=age)
     page = client.get("/account")
     user = state_of(page)["user"]
-    assert user["age_confirmed"] is True and user["age_group"] == group
+    assert user["age_confirmed"] is True and user["age_group"] == "adult"             # age_group 欄位保留（design D6），已完成確認者必為 adult
     assert not {"birth_date", "age_range", "age_confirmed_at", "age_policy_version", "is_adult_at_confirmation"} & set(user)
     assert birth_date_for_age(age).isoformat() not in page.get_data(as_text=True)
 
 
-def test_a_minor_sees_the_safe_mode_notice_block_driven_by_the_age_group(full_app):
-    html = logged_in(full_app, age=15).get("/account").get_data(as_text=True)
-    assert 'v-if="ageGroup === \'minor\'"' in html and "目前為安全模式" in html
-    assert "{{ ageRules.adultAge }}" in html                                           # 數字來自年齡規則
+@pytest.mark.parametrize("age", [15, 18, 30])
+def test_the_account_page_has_no_safe_mode_notice_for_a_minor_whatever_the_age(full_app, age):
+    """adult-only-signup：全站只限滿 18 歲，帳號頁不再有「目前為安全模式」的未成年提示。
+    15 歲的帳號資料庫裡不存在（只在測試裡製造），用來證明畫面不再依 `age_group` 顯示任何提示。"""
+    html = logged_in(full_app, age=age).get("/account").get_data(as_text=True)
+    assert "ageGroup" not in html and "safe-mode-title" not in html
+    assert "目前為安全模式" not in html and "年齡限制" not in html and "不會自動改變" not in html
 
 
-@pytest.mark.parametrize("age", [13, 15, 17])
-def test_a_teen_gets_the_safe_mode_notice_with_the_reason_and_the_state_says_minor(full_app, age):
-    page = logged_in(full_app, age=age).get("/account")
-    html = page.get_data(as_text=True)
-    assert state_of(page)["user"]["age_group"] == "minor"
-    assert "目前為安全模式" in html and "年齡限制" in html and "不會自動改變" in html          # 原因，以及滿 18 歲後模式不自動調高
+def test_the_account_script_no_longer_keeps_an_age_group_state():
+    from app.config import PROJECT_ROOT
 
-
-@pytest.mark.parametrize("age", [18, 30, 70])
-def test_an_adult_does_not_get_the_safe_mode_notice_because_the_state_is_not_minor(full_app, age):
-    page = logged_in(full_app, age=age).get("/account")
-    assert state_of(page)["user"]["age_group"] != "minor"          # 區塊是 v-if="ageGroup === 'minor'"，成年者不會顯示
-
-
-def test_the_notice_follows_the_birthday_not_the_stored_content_preference(full_app):
-    """依生日於當下計算：儲存的偏好是什麼都不影響（偏好與生日矛盾的資料也一樣）。"""
-    teen_with_adult_preference = logged_in(full_app, age=15, content_tier_preference="adult").get("/account")
-    assert state_of(teen_with_adult_preference)["user"]["age_group"] == "minor"
-    with Session(full_app.extensions["db_engine"]) as s:
-        add_user(s, 2, age=30, content_tier_preference="safe")
-    adult_who_chose_safe = full_app.test_client()
-    login(adult_who_chose_safe, "user2@example.com")
-    assert state_of(adult_who_chose_safe.get("/account"))["user"]["age_group"] != "minor"
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "account.js").read_text(encoding="utf-8")
+    assert "ageGroup" not in script and "age_group" not in script
+    assert "ageConfirmed" in script                                                    # 年齡確認的狀態仍在，補填成功後表單消失
 
 
 def test_the_account_state_does_not_expose_the_content_preference_or_the_adult_confirmation(full_app):
@@ -368,7 +375,7 @@ def test_the_account_script_skips_the_request_when_a_field_is_missing_and_update
     assert body.index("if (!ageForm.values.birth_date)") < body.index("axios.post('/api/auth/verify-age'")
     assert body.index("if (!ageForm.values.age_range)") < body.index("axios.post('/api/auth/verify-age'")
     assert "return Promise.resolve(false)" in body                                    # 沒填：不送出請求
-    assert "UI.toast(" in body and "ageConfirmed.value = true" in body and "ageGroup.value" in body
+    assert "UI.toast(" in body and "ageConfirmed.value = true" in body and "ageGroup" not in body        # 全站只限成年人，沒有未成年提示的狀態
     assert "age_mismatch" in body and "age_not_eligible" in body                       # 對不起來：清空欄位，可立刻重填
     assert "confirm-adult" not in script and "confirm_adult" not in script
 
@@ -551,11 +558,16 @@ def test_the_terms_describe_the_service_as_ai_only(app):
     assert "沒有真人客服" in html and "一組電子郵件只能對應一個帳號" in html
 
 
-def test_the_terms_set_the_minimum_age_and_the_teen_safe_mode_and_say_how_age_is_declared(app):
+def test_the_terms_set_the_minimum_age_the_declaration_and_say_how_age_is_declared(app):
     html = app.test_client().get("/terms").get_data(as_text=True)
-    assert "18 歲以上" in html and "未滿 18 歲者不得使用" in html                   # 全站只限滿 18 歲者使用
-    assert "13 至 17 歲" not in html and "滿 18 歲之後會自動解除" not in html
+    assert "18 歲以上" in html and "本服務僅限滿 18 歲者使用" in html and "未滿 18 歲者不得使用" in html     # 全站只限滿 18 歲者使用
+    assert "13 歲" not in html and "13 至 17 歲" not in html and "僅能使用安全模式" not in html and "只能使用安全模式" not in html
+    assert "滿 18 歲之後會自動解除" not in html and "固定使用安全模式" not in html          # 沒有未成年者的安全模式說明
+    # 註冊時的聲明：須聲明已滿 18 歲、須據實、謊報者自行承擔責任，並記錄聲明的時間與年齡政策版本
+    assert "勾選「我確認已滿 18 歲」" in html and "聲明必須據實" in html and "謊報年齡者須自行承擔因此產生的一切責任" in html
+    assert "記錄聲明的時間與當時的年齡政策版本" in html
     assert "年齡區間" in html and "互相對照" in html and "自行聲明" in html and "年齡確認" in html
+    assert "發現您未滿 18 歲時，帳號與全部資料會<strong>立即刪除</strong>" in html      # 未滿 18 歲者的帳號與資料立即刪除
     assert "另外勾選確認" not in html and "僅供年滿 18 歲者使用" not in html            # 舊的勾選版說法已不存在
     assert "草稿" in html and CURRENT_TERMS_VERSION in html                          # 仍是草稿，版本照舊顯示
     headings = re.findall(r"<h2>(\d+)\. ", html)
@@ -567,8 +579,10 @@ def test_the_privacy_policy_discloses_the_birthday_its_purposes_and_its_retentio
     assert "生日與年齡區間" in html and "不蒐集證件" in html
     assert "發現未滿 18 歲者" in html and "立即刪除" in html and "不會保存" in html
     assert "不蒐集生日、年齡或證件" not in html and "年齡確認紀錄" not in html           # 舊的說法已不存在
-    for purpose in ("年齡確認", "內容分級", "去識別的統計方式了解用戶群"):
+    for purpose in ("年齡確認", "去識別的統計方式了解用戶群"):
         assert purpose in html, purpose
+    assert "內容分級" not in html and "固定使用安全模式" not in html                       # 生日不再用於內容分級（全站只限滿 18 歲）
+    assert "只用於：①年齡確認；②以去識別的統計方式了解用戶群" in html
     assert "不會顯示給其他使用者或管理員" in html and "不會傳送至 Google 的 Gemini 服務" in html
     assert "日後若新增生日祝賀等其他用途，我們會先更新本政策" in html
     retention = html.split("<table>", 1)[1].split("</table>", 1)[0]

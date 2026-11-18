@@ -25,7 +25,6 @@
         return nickname.value ? nickname.value + '#' + nicknameCode.value : '尚未設定';
       });
       var ageConfirmed = Vue.ref(!!user.age_confirmed);
-      var ageGroup = Vue.ref(user.age_group || null);
       var logoutAllOpen = Vue.ref(false);
       var changePasswordOpen = Vue.ref(false);
       var deleteOpen = Vue.ref(false);
@@ -65,7 +64,7 @@
         }, { onError: onError });
       }
 
-      // 補填生日與年齡區間：沒填就不送出請求；成功後以 Toast 回報並更新狀態（補填區塊隨之消失，未成年者看到安全模式的提示）
+      // 補填生日與年齡區間：沒填就不送出請求；成功後以 Toast 回報並更新狀態（補填區塊隨之消失）
       function verifyAge() {
         ageForm.clearErrors();
         if (!ageForm.values.birth_date) { ageForm.fieldErrors.birth_date = '請輸入生日。'; }
@@ -79,7 +78,6 @@
             age_range: ageForm.values.age_range
           }).then(function (response) {
             ageConfirmed.value = true;
-            ageGroup.value = response.data.user.age_group || null;
             ageForm.values.birth_date = '';
             ageForm.values.age_range = '';
             UI.toast('年齡確認完成。');
@@ -248,7 +246,6 @@
         nicknameText: nicknameText,
         ageConfirmed: ageConfirmed,
         isAdmin: user.role === 'admin',          // 年齡補填區塊只留給管理員：玩家沒完成年齡確認之前連這一頁都進不來（被導向 /age）
-        ageGroup: ageGroup,
         ageRules: state.ageRules,
         logoutAllOpen: logoutAllOpen,
         changePasswordOpen: changePasswordOpen,

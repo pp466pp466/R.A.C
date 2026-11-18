@@ -11,7 +11,8 @@
   </div>
 
   <form v-else @submit.prevent="submit" novalidate>
-    <p class="auth-lead">請填寫生日、選擇年齡區間並取一個暱稱，完成之後才能使用其他功能。生日與年齡區間由您自行聲明，我們不會要求證件；本服務僅供 {{ ageRules.minRegisterAge }} 歲以上使用。</p>
+    <p class="auth-lead">請填寫生日、選擇年齡區間並取一個暱稱，完成之後才能使用其他功能。生日與年齡區間由您自行聲明，我們不會要求證件。</p>
+    <p id="adults-only-note" class="auth-hint">本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用。</p>
     <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
 
     <div class="auth-field">
