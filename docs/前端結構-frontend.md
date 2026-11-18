@@ -1,6 +1,6 @@
 # 前端架構
 
-> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-18 ｜ 對應 change：admin-unlimited-coins、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-18 ｜ 對應 change：歡迎頁（未立案的小修正，首頁取代 C-1 占位頁）、admin-unlimited-coins、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 > 注意（2026-11-18）：本文件已納入 change `adult-only-signup` 的前端變化（登入頁第二個勾選框「我確認已滿 18 歲」、請求多一個 `declare_adult`、年齡確認頁的僅限滿 18 歲提示、帳號頁移除未成年的安全模式提示），以及 change `admin-unlimited-coins` 的前端變化（錢包回應的 `coin_exempt`：`game-wallet.js` 暴露 `exempt`、`game-labels.js` 與 `game-revision.js` 的「不消耗遊戲幣」文字，見第 3e 節）。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 
@@ -16,6 +16,7 @@ flowchart TD
     Base --> Ui["共用：typewriter.js → toast-store.js → restriction.js → ui-components.js"]
     Ui --> Page{"頁面"}
     Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → auth-flows.js → 各頁腳本<br/>（login、age、appeal、login-password、account…；account 另先載入 account-lifecycle.js）"]
+    Page -->|"/（未登入）"| Home["沒有腳本：home.html 純伺服器端渲染（另載入 home.css）"]
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
     Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
@@ -26,6 +27,7 @@ flowchart TD
 
 - 第三方資產（Vue、Bootstrap CSS、axios、字型）全部在 `static/vendor`、`static/fonts`，**不使用 CDN**；字型為 Noto Sans TC（108 個 `unicode-range` 切片的 woff2）。
 - 範本一律用 `url_for('static', …)` 引用；不使用 `.vue`、打包工具、`v-html`、外部彈窗套件，也不使用 Bootstrap 的 JavaScript 與 `data-bs-*`（唯一例外是 `data-bs-theme="dark"`）。`tests/architecture/test_frontend_rules.py` 掃描範本、自有 CSS/JS 與實際渲染出來的頁面。
+- **首頁 `/`（未登入者的歡迎頁，`home.html`＋`home.css`）**：純伺服器端渲染，沒有表單、沒有 Vue 掛載與 API 請求；標題與簡介、通往 `/login` 的「登入或註冊」連結（勾選條款與 Google 登入都在 `/login`）、兩張功能簡介卡片與條款、隱私權政策連結。最低年齡由控制器從 `AgePolicy` 帶入（`min_age`），範本不寫死；已登入者在控制器就被導向預設頁面，看不到這一頁。360 至 1280 px 都沒有橫向溢出。取代 C-1 的占位頁。
 - 色彩只在 `theme.css` 定義一次（主背景 `#0F1012`、文字 `#E2E4E9`、次要 `#8A8F99`、焦點 `#FF6B35`、分隔線 `#2A2D34`），嚴禁純白。
 
 ## 2. 共用元件

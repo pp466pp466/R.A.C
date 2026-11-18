@@ -1,8 +1,41 @@
 {% extends "base.html" %}
-{% block title %}系統運作中{% endblock %}
+{# 首頁（未登入者看到的歡迎頁）：純伺服器端渲染，沒有 Vue 掛載、沒有 API 請求；登入與勾選條款都在 /login，這裡只是入口。
+   已登入者在控制器就被導向登入後的預設頁面（見 page_controller.home）。年齡數字由控制器從 AgePolicy 帶入，範本不寫死。 #}
+{% block title %}雙核心平台{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/home.css') }}">
+{% endblock %}
 {% block content %}
-<main class="container py-5">
-  <h1>系統運作中</h1>
-  <p>這是專案地基的驗證頁面，後續功能完成後會由實際頁面取代。</p>
+<main class="welcome-shell">
+  <section class="welcome-hero" aria-labelledby="welcome-title">
+    <p class="welcome-code" aria-hidden="true">[ SYSTEM_ONLINE ]</p>
+    <h1 id="welcome-title" class="welcome-title">雙核心平台</h1>
+    <p class="welcome-sub">開放世界文字 RPG × 會員制智能客服</p>
+    <p class="welcome-lead">一個帳號，兩種體驗：在 AI 即時生成的世界裡自創主角、寫下自己的故事；或向智能客服詢問帳號、會員等級與額度。</p>
+    <div class="welcome-actions">
+      <a class="ui-btn ui-btn--primary welcome-cta" href="/login">登入或註冊</a>
+    </div>
+    <p class="welcome-note">以 Google 帳號登入，第一次使用會自動建立帳號。本服務僅限滿 {{ min_age }} 歲者使用。</p>
+  </section>
+
+  <section class="row g-3 welcome-cards" aria-label="功能簡介">
+    <div class="col-12 col-md-6">
+      <article class="welcome-card ui-surface">
+        <h2 class="welcome-card-title">開放世界文字 RPG</h2>
+        <p>挑選劇本、自創主角，由 AI 即時串流劇情；記事簿會記住已確立的設定，也可以自己創作劇本。</p>
+      </article>
+    </div>
+    <div class="col-12 col-md-6">
+      <article class="welcome-card ui-surface">
+        <h2 class="welcome-card-title">會員制智能客服</h2>
+        <p>詢問登入與帳號、會員等級與額度；問不到的問題，可以留下意見回饋交給管理員。</p>
+      </article>
+    </div>
+  </section>
+
+  <nav class="welcome-links" aria-label="政策">
+    <a href="/terms">服務條款</a>
+    <a href="/privacy">隱私權政策</a>
+  </nav>
 </main>
 {% endblock %}

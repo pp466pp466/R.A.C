@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy.orm import Session
 
@@ -85,9 +87,33 @@ def test_an_admin_without_age_data_is_not_sent_to_the_age_step(member_session):
 
 # ---- 首頁與登入頁 ------------------------------------------------------------------------------------
 
-def test_an_anonymous_visitor_still_sees_the_home_page(app):
+def test_an_anonymous_visitor_sees_the_welcome_page_with_the_way_to_log_in(app):
+    """未登入者看到歡迎頁（取代 C-1 的占位頁）：標題與簡介、前往 /login 的入口、條款與隱私權政策；沒有占位頁的文字。"""
     response = app.test_client().get("/")
-    assert response.status_code == 200 and "系統運作中" in response.get_data(as_text=True)
+    page = response.get_data(as_text=True)
+    assert response.status_code == 200
+    assert "雙核心平台" in page and "開放世界文字 RPG" in page and "會員制智能客服" in page
+    for link in ('href="/login"', 'href="/terms"', 'href="/privacy"'):
+        assert link in page, link
+    assert "css/home.css" in page and "專案地基" not in page and "系統運作中" not in page
+
+
+def test_the_welcome_page_takes_the_minimum_age_from_the_age_policy_and_the_template_has_no_age_number(app):
+    """頁面與範本都不內嵌年齡數字（與登入頁、條款頁相同的規則）：數字來自 AgePolicy。"""
+    import re
+
+    from app.services.age_policy import DEFAULT_AGE_POLICY
+
+    page = app.test_client().get("/").get_data(as_text=True)
+    assert f"僅限滿 {DEFAULT_AGE_POLICY.min_register_age} 歲者使用" in page
+    source = (Path(__file__).resolve().parent.parent / "app" / "templates" / "home.html").read_text(encoding="utf-8")
+    assert "{{ min_age }}" in source and not re.search(r"滿\s*\d+\s*歲", source)
+
+
+def test_the_welcome_page_is_a_plain_server_rendered_page_without_forms_or_inline_scripts(app):
+    """登入與勾選條款都在 /login：歡迎頁沒有表單、沒有行內腳本，也沒有會把使用者帶去 Google 的連結。"""
+    page = app.test_client().get("/").get_data(as_text=True)
+    assert "<form" not in page and "<script>" not in page and "accounts.google.com" not in page and "/api/auth/google" not in page
 
 
 def test_a_signed_in_member_opening_the_home_page_or_the_login_page_goes_to_the_default_page(app):
