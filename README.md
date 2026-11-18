@@ -1735,7 +1735,7 @@ python scripts/aws_demo_probe_stream.py https://<展示網域> --allow-model-cal
 | RDS 手動快照 | `rac-demo-staging-db-pre-48f5ab2`（20 GB），available；自動快照 2 個 | **是**（手動快照不隨 RDS 消失、持續計費；拆除時預設刪除部署前快照） |
 | CloudWatch 告警、SNS 主題、傳檔用 S3 儲存貯體、SSM 參數（8 個 SecureString）、Budgets | 告警 `rac-demo-staging-ec2-status-check`（OK）；主題 `rac-demo-staging-alerts`（1 個已確認的電子郵件訂閱）；儲存貯體 `rac-demo-staging-179601693865-transfer`；預算季度 US$75、60% 與 90% 兩個門檻 | 預期微量或不另計，**沒有在帳單確認** |
 
-**每日費用觀察**：抵用金（Free plan）讀數 **US$139.13**，到期 2027-05-11，一整天沒有變動（顯示有延遲）。Cost Explorer 排除抵用金後，只有 **2026-11-16** 一天有毛額 **US$0.148**（資源當天才建、不是整日：EC2 運算 0.053、RDS 0.064、VPC 0.015、EC2 其他〔EBS 等〕0.005、Cost Explorer 0.01〔我查詢本身的費用，每次 API 呼叫約 US$0.01〕），全數被抵用金抵掉；2026-11-17 尚無資料（約延遲一天）。**資料不足，規劃的約 US$1.6／日（到 2026-12-31 約 US$75）沒有被證實**，要隔天再查；展示期到 2026-12-31，費用逼近預算 60%（US$45）或抵用金撐不到期限時要主動提醒。
+**每日費用觀察（2026-11-18 證實，取代 2026-11-17 當時的「未證實」）**：抵用金（Free plan）讀數 **US$137.30**（起點實為 US$140：140 − 1.157 − 1.541 ＝ 137.302，對得上），到期 2027-05-11。Cost Explorer 要**排除抵用金**才看得到毛額（篩選 `RECORD_TYPE` 不是 Credit 與 Refund；不排除時被抵用金抵到趨近 0，上面「11 月至今約 0」就是這個原因）：**2026-11-16 US$1.157**（資源當天才建、不是整日；2026-11-17 查詢時只有 US$0.148，是當時資料還沒入帳完整，之後被更新）、**2026-11-17 US$1.541**（RDS 1.083、EC2 運算 0.316、VPC 0.065、EC2 其他〔EBS 等〕0.027、Cost Explorer 0.05〔我查詢本身的費用，每次 API 呼叫約 US$0.01〕）；2026-11-18 當天尚未入帳。**與規劃的約 US$1.6／日一致**（11-17 為 1.54，扣掉查詢費用約 1.49）。照每日 US$1.6 估：毛額累計約 **2026-12-14 到 US$45、約 12-28 到 US$67.5、12-31 約 US$73**；抵用金到 12-31 約剩 US$67，撐得到展示期結束。預算 `rac-demo-staging-budget` 的 60% 與 90% 門檻依上表「不含抵用金」的描述應以毛額計（會各收到一封信），**我沒有重查預算設定本身**；2026-11-18 起另有 adult-only-signup 部署前的手動快照 `rac-demo-staging-db-pre-87ebcd8`（持續計費，**費用未量**）。展示期到 2026-12-31，費用逼近門檻或抵用金撐不到期限時要主動提醒。
 
 **`GET /readyz` 不回傳內部細節**：公開網域的就緒回應是 200，本文只有 `{"status":"ok"}`（16 位元組），`Cache-Control: no-store`、`Content-Type: application/json`，沒有資料庫、版本或主機資訊（8.1 與 6.2 都量過）。**限度**：只量了就緒時的回應，不就緒（例如資料庫不通）時的本文沒有在雲端驗證。
 
@@ -2021,6 +2021,28 @@ app.mount('#app');
 | 遷移後的舊版程式相容性 | 以「玩家沒有密碼、狀態為 active 的帳號本來就有處理」推論，未用舊版映像實測 |
 
 已知取捨與限制（本 change 新增）：①**既有的密碼玩家必須改用 Google 登入**：以註冊用的信箱對應的 Google 帳號登入即回到原帳號；若註冊用的信箱與其 Google 帳號的信箱不同，會變成新帳號，舊帳號等 12 個月閒置後由排程刪除（目前只有測試帳號）。②**遷移不可逆**：被清除的密碼雜湊無法還原，回復靠遷移前的備份；舊版程式在遷移後仍可運作。③**測試 cookie 是有效的登入憑證**：只屬於 `loadtest.invalid` 的測試帳號，輸出檔 `test-sessions.json` 已列入 .gitignore，簽出步驟拒絕在 production 執行。④staging／production **不強制** Google 設定（另案決定）：沒有設定 Google 時玩家無法登入，已由上線前關卡涵蓋。
+
+### 驗收紀錄（adult-only-signup，2026-11-18，任務 1.1 至 7.3 已記入；8.2 設計文件在第 7 批）
+
+日期 2026-11-18；對應的提交：第 1 批 `1e830e0`、第 2 批 `d671ab6`、第 3 批 `a30541c` 與 `5ba3190`、第 4 批 `0819bd5` 與 `091ca26`、第 5 批 `b3940f5`；文件校正 `925c52a`（2.0 簡報）與 `87ebcd8`；第 6 批（部署與驗收）的 `tasks.md` 與本節尚未提交。展示環境部署的映像標籤是 `87ebcd8`。**沒有實際執行的項目一律標為未驗證，不以預期結果代替。**
+
+| 已驗證 | 結果 |
+|---|---|
+| 自動化測試（第 5 批，8.1） | 全套 `pytest` **11446 通過、2 略過、0 失敗**（1775 秒；略過＝`test_aws_demo_script` 的 Windows ACL 與 `test_container_files` 的 `grp` 模組，都是平台限制）；`node --test tests/js/*.test.js` **1100 通過、0 失敗**；1 個既有警告（`test_assets_manifest` 的子行程讀取執行緒以 UTF-8 解碼 cp950 輸出），與本 change 無關 |
+| 範圍對照（8.1） | 以提案提交 `2c21b95` 對 HEAD 做 `git diff --stat`：72 個檔案、+1002／−358；`AGENTS.md` 與 `app/services/access_policy.py` 無差異；`app/` 沒有遊戲、RPG、回合、存檔、記事簿、遊戲幣、劇本、主角、審查相關檔案被改；`CONTENT_TIER_*` 常數未動 |
+| 容器驗收（第 4 批，WSL Docker、SQLite） | `scripts/verify_container.py` **160／160 項通過**（會員流程：管理員補填 15 歲被拒絕且不抹除、再以 30 歲補填；保存期限各項） |
+| 資料遷移 `0019_adult_declaration` | 測試涵蓋升級、降級、再升級（`test_0019_*`）；**展示環境 RDS 於 2026-11-18 10:42（+08:00）由 `0018_rpg_turn_revision` 升到 `0019`**（兩個可為空的 `users` 欄位，expand-only），`check-migration-head` 輸出 `1`；`seed-scripts` 建立 0、更新 0、沒有變動 1 |
+| 展示環境部署（7.1，使用者在自己的終端機分三段執行，我以 SSM 唯讀輸出獨立複驗） | ①快照 `rac-demo-staging-db-pre-87ebcd8`（手動、加密）available、映像 `rac-app:87ebcd8` 建成，`check-image` 輸出 `10001 clean`；②遷移如上；③換版：`release.env` ＝ `RAC_IMAGE_TAG=87ebcd8`、`release.previous.env` ＝ `RAC_IMAGE_TAG=48f5ab2`（回復點仍在；`switch-release` 出現兩筆、相隔 23 秒，程式對同一標籤不覆蓋前一版，檔案證實）、`check-pools` 輸出 `rac-app:87ebcd8 rac-app:87ebcd8`、兩個池 `uid=10001` 且各用自己的 gunicorn 設定、只綁 `127.0.0.1:8081`／`8082`；`rac-cs`、`rac-rpg` 皆 `active`、`NRestarts=0`、容器 `restartcount=0`、`systemctl --failed` 為 0、最近 15 分鐘日誌的 ERROR／CRITICAL 為 0 筆（只計數）；公開 `/healthz`、`/readyz`、`/login` 皆 200 |
+| Google 登入人工驗收（7.2，使用者本人，`https://rac001.duckdns.org/login`） | 五個情境使用者回報**全部通過**：①只勾條款不勾聲明→不建立帳號並顯示提示；②兩項都勾→進年齡確認頁；③填 15 歲生日→帳號被抹除並回登入頁；④同一信箱重新註冊、填 25 歲→通過、預設安全模式、贈 200 幣；⑤回訪者不勾任何項目一鍵登入。日誌核對（以 SSM 取最近 6 小時日誌，**只用固定字串計算事件名稱的次數**，不讀內容）：`auth.google_rejected.adult` 1、`auth.age_rejected.underage` 1、`account.underage_erased` 1、`auth.age_confirmed.later` 1、`wallet.signup_granted` 1、`auth.google_login` 1，`auth.google_rejected.terms` 0；全在客服池、RPG 池 0。**與任務原文的差異**：`age_not_eligible` 是 API 錯誤代碼、不是日誌事件（日誌是 `auth.age_rejected.underage` 加 `account.underage_erased`）；`auth.age_confirmed` 實際叫 `auth.age_confirmed.later` |
+| 驗收帳號抹除（7.2，使用者要求「直接抹除」） | 專案沒有立即抹除單一已確認帳號的 flask 指令，所以以**一次性腳本（不進版本庫）**在主機的一次性容器執行，只呼叫既有的 `request_deletion` 與 `erase_pending_due`（兩段都排除管理員），並要求「非管理員帳號恰好 1 個、編號相符、`active`、已聲明並確認、當天建立」才動手；先在本機 SQLite 以假帳號實測（錯誤編號、時間不符、兩個玩家都被拒絕），再於主機預覽（玩家 id 13）與執行：`erased=True`，事後 `admins=1 non_admin_players=0`。輸出只有編號、狀態、時間與旗標。**展示環境現在只有管理員，沒有玩家帳號** |
+
+**未驗證**：①「舊版程式在新結構上可運作」只依 expand-only 設計推定，遷移到換版之間（約 2 分鐘）沒有另外探測舊版池，那段日誌也沒查；`rollback` 沒演練。②容器驗收只用 SQLite，沒有連 SQL Server。③登入頁在 360 px 手機寬度的版面沒有看過（使用者用桌面瀏覽器目視通過）。④客服提示詞改過之後，沒有用真實 Gemini 問過「怎麼註冊」。⑤情境②沒有專屬日誌事件，只靠使用者目視；「預設安全模式」與「贈 200 幣」是使用者回報加 `wallet.signup_granted` 事件，我沒有另外讀資料庫。⑥驗收帳號的刪除紀錄（`deletion_tombstones`）與 `account.deleted_by_request` 事件沒有獨立查證（一次性容器的日誌隨容器消失；`erase_pending_due` 回傳真代表刪除紀錄已寫入並提交）。⑦每日費用見上方「每日費用觀察」。
+
+**展示差異：新玩家預設為安全模式（7.3，design 風險；已向使用者說明）**：
+- 之前成年玩家首次確認年齡後預設為一般模式（`standard`），現在一律 `safe`（design D5：`confirm_age` 固定寫 `safe`）。
+- 安全模式的玩家在遊戲入口看不到宣告為一般或成人模式的劇本（入口頁顯示「部分劇本不會顯示」）；內建劇本 `xianxia-qingyun` 的欄位預設值為 `safe`（程式預設 `CONTENT_TIER_SAFE`，**我沒有查展示資料庫裡那一列的實際值**），玩家創作且宣告更高模式的劇本才會被藏起來。
+- **design.md 的風險寫「玩家仍可用現有的個人頁開關調整」與實際不符**：`PUT /api/account/content-mode` 存在且有測試，但搜尋 `app/static` 與 `app/templates` **沒有任何前端呼叫它**，帳號頁沒有切換內容模式的畫面，遊戲入口頁的說明連到帳號頁也沒有。所以在展示環境，新玩家**無法從介面離開安全模式**（只能直接呼叫 API）；完整的「關閉安全模式」流程屬 `safe-mode-toggle`（尚未實作）。
+- 展示環境本來就沒有開成人模式：部署計畫與 `aws-demo.vars` 都沒有設定 `ADULT_MODE_ENABLED`（預設關閉；我沒有讀主機上的 `plain.env`）。所以 2026-11-24、11-25 的展示若要含露骨內容，現況做不到；一般模式也要等切換介面或手動呼叫 API。
 
 ## 容器建置與驗收
 
