@@ -1,6 +1,6 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：adult-only-signup（第 3 節：遷移 `0019`；第 8 節缺口表第八項的更正）、aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作與驗收皆已完成並於 2026-11-17 封存，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：adult-only-signup（第 3 節：遷移 `0019`；第 8 節：缺口表第八項的更正與展示環境的部署及驗收紀錄）、aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作與驗收皆已完成並於 2026-11-17 封存，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的營運變化（新排程指令 `purge-unconfirmed-accounts`、告警改名為「帳號鎖定激增」、期限清除納入鎖定計次）與 change ② `remove-player-password-auth`：`EMAIL_VERIFICATION_REQUIRED` 已淘汰（留著只會警告一次，部署計畫檔含有它會被拒絕）；寄信設定只供營運告警信與管理員的重設密碼信使用，玩家不收任何信；部署多一個資料遷移 `0011`；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie（`scripts/mint_test_sessions.py`）。
 > 注意（2026-11-03）：本文件已納入 change `rpg-data-and-script`：成人模式的環境變數改為 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`（舊的 `SEXUAL_CONTENT_LEVEL3_*` 已淘汰：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕；staging 與 production 不再一律禁止，須明確設定才生效）、新的人工類指令 `seed-scripts`（部署之後執行）、`purge-expired-data` 新增 RPG 存檔與回合部分內容兩類，以及遷移 `0012`。
 
@@ -115,7 +115,7 @@ sequenceDiagram
     Op->>Db: 之後的 change 才回填資料並加上約束（contract）
 ```
 
-- `0019_adult_declaration`（adult-only-signup）只新增兩個 `users` 欄位（`adult_declared_at`、`adult_declaration_version`：皆可為空、不回填、不建索引；downgrade 以 `recreate="never"` 直接移除），是 expand-only：舊版程式在新結構上照常運作（不讀這兩欄）。部署順序不變：備份（展示環境為手動快照）→ migration → 新版程式；`is_adult_at_confirmation` 不再寫入（欄位保留，日後的 contract 遷移再移除）。**狀態**：程式碼在 0019；本機 `project` 在 0017、展示環境 RDS 在 0018，0019 尚未套用（部署與驗收紀錄於 adult-only-signup 的任務 7.x 完成後補入）；`rpg-ops-loadtest` 若需要遷移，編號順延為 `0020`。
+- `0019_adult_declaration`（adult-only-signup）只新增兩個 `users` 欄位（`adult_declared_at`、`adult_declaration_version`：皆可為空、不回填、不建索引；downgrade 以 `recreate="never"` 直接移除），是 expand-only：舊版程式在新結構上照常運作（不讀這兩欄）。部署順序不變：備份（展示環境為手動快照）→ migration → 新版程式；`is_adult_at_confirmation` 不再寫入（欄位保留，日後的 contract 遷移再移除）。**狀態**：程式碼在 0019；**展示環境 RDS 已於 2026-11-18 由 0018 升到 0019**（映像 `87ebcd8`，部署與驗收紀錄見第 8 節「adult-only-signup 的部署與驗收」）；本機 `project` 仍在 0017；`rpg-ops-loadtest` 若需要遷移，編號順延為 `0020`。
 - `0013_rpg_script_authoring` 的 `runtime_limits` 的初始值由遷移以 ORM 資料表寫入（`0013` 七個，`0014` 再補三個每日主角生成次數，只插入資料庫還沒有的鍵）；之後調整只用 `flask set-script-limit`（不必重新部署，程式每次使用時現讀）。資料缺值或不合法時（例如某一列被誤刪）讀取端用保守的保底預設並記一筆警告（只記鍵名）；表本身仍須先由遷移建立，所以順序不能反過來。
 
 ### 部署與回復（C-5a）
@@ -441,7 +441,7 @@ flowchart BT
 
 ## 8. AWS 展示環境（aws-demo-environment，RC-4 前半）
 
-> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`deploy_plan` 的 `ingress`、`routing` 組已於 2026-11-17 對真實主機執行並驗證（task 6.2、6.3：Caddy 啟動並簽發憑證、HTTP/2、導向、安全標頭、暫停客服池驗證分流，見「啟動入口與排程」「驗證分流」兩節）；串流探測（task 6.4，不是計畫步驟）已對真實入口與真實模型執行：入口沒有緩衝串流、心跳未驗證，見「串流探測」一節；`deploy_plan` 的 `schedule` 組與告警、寄信也已對真實的主機與 AWS 驗證（task 7.1 至 7.3：五個計時器、EC2 狀態告警演練、營運告警信寄達但進垃圾郵件匣，見「啟動入口與排程」「告警與寄信」兩節）；冒煙驗收與真實模型連通性（task 8.1、8.3）見「冒煙驗收與真實模型連通性」一節；Google 登入人工驗收（task 8.2，四項通過，並發現 5.5 的管理員第一次沒有建成、已重建）見「Google 登入人工驗收」與「建立首位管理員」兩節；未達 production 的缺口見最後一節「展示環境未達 production 的缺口」；`rollback_plan`、`teardown_plan` 尚未對真實 AWS 執行；DuckDNS 的更新由使用者在自己的終端機執行過（結果以 DNS 與對外連線驗證，沒有看到執行器的輸出）**；雲端驗收（task 8.1 至 8.4）已全部完成，仍未驗證的項目列在 README「驗收紀錄（aws-demo-environment）」的驗收摘要與本節最後一節。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
+> **狀態：計畫模組、執行器與資料庫初始化／探測腳本已完成並有測試。`build_plan` 的各組與 `host-init` 已於 2026-11-16 至 11-17 在 AWS 雪梨的測試帳號上實際執行並逐項驗證（task 4.2 至 4.5，資源仍在計費）；`deploy_plan` 的 `build`、`db-init`、`snapshot`、`migrate` 組與 `refresh-parameter-DATABASE_URL` 已於 2026-11-17 對真實主機與 RDS 執行並驗證（task 5.1、5.3、5.4：衍生映像層方案成立，連線只有 `Encrypt=yes`、憑證由映像的系統憑證庫驗證，見下方「資料庫憑證方案」；快照、遷移到 `0018` 與種子見「資料庫初始化與連線探測」一節末）；`deploy_plan` 的 `restart`、`verify` 組已於 2026-11-17 對真實主機執行並驗證（task 6.1：客服池與 RPG 池啟動，見「啟動兩個池」一節）；`deploy_plan` 的 `ingress`、`routing` 組已於 2026-11-17 對真實主機執行並驗證（task 6.2、6.3：Caddy 啟動並簽發憑證、HTTP/2、導向、安全標頭、暫停客服池驗證分流，見「啟動入口與排程」「驗證分流」兩節）；串流探測（task 6.4，不是計畫步驟）已對真實入口與真實模型執行：入口沒有緩衝串流、心跳未驗證，見「串流探測」一節；`deploy_plan` 的 `schedule` 組與告警、寄信也已對真實的主機與 AWS 驗證（task 7.1 至 7.3：五個計時器、EC2 狀態告警演練、營運告警信寄達但進垃圾郵件匣，見「啟動入口與排程」「告警與寄信」兩節）；冒煙驗收與真實模型連通性（task 8.1、8.3）見「冒煙驗收與真實模型連通性」一節；Google 登入人工驗收（task 8.2，四項通過，並發現 5.5 的管理員第一次沒有建成、已重建）見「Google 登入人工驗收」與「建立首位管理員」兩節；adult-only-signup 的部署（映像 `87ebcd8`、遷移到 `0019`）與 Google 登入五個情境的人工驗收（2026-11-18，全部通過）見「adult-only-signup 的部署與驗收」一節；未達 production 的缺口見最後一節「展示環境未達 production 的缺口」；`rollback_plan`、`teardown_plan` 尚未對真實 AWS 執行；DuckDNS 的更新由使用者在自己的終端機執行過（結果以 DNS 與對外連線驗證，沒有看到執行器的輸出）**；雲端驗收（task 8.1 至 8.4）已全部完成，仍未驗證的項目列在 README「驗收紀錄（aws-demo-environment）」的驗收摘要與本節最後一節。本節描述計畫模組 `scripts/aws_demo_plan.py` 產生的內容、執行器 `scripts/aws_demo.py` 的用法，以及在主映像內執行的 `scripts/aws_demo_bootstrap_db.py` 與 `scripts/aws_demo_probe_db.py`；實際執行時發現的差異會先回寫計畫與測試。
 
 展示環境是 `APP_ENV=staging` 的單機部署：Google Cloud 的部署（第 2、3 節、`cloud-staging-run`）因為沒有可計費的專案而擱置，展示改用 AWS 雪梨（`ap-southeast-2`，Free plan 抵用金 US$100，展示期到 2026-12-31）。它的目的是讓兩個 worker 池第一次真正分流、讓 `rpg-ops-loadtest` 有量測的基礎。
 
@@ -812,6 +812,27 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 **驗證後的清除（使用者決定：管理員保留、玩家抹除）**：第二個 Google 帳號的玩家（使用者 11）經正式的帳號抹除出口刪除（先核對「共 2 位、編號 11 角色是 user、遮蔽信箱相符、管理員 10 在」才動手），剩下管理員（使用者 10，已綁定 Google 身分）。
 
 **限度與未驗證**：只驗證了**測試使用者**（發佈狀態為測試中）；Google 將同意畫面改為「正式版」之後、一般使用者登入，以及 `duckdns.org`（在公用尾碼清單上）能否當作授權網域，都沒有驗證；兩次 Google 授權都是在使用者的瀏覽器完成，我只看到後端事件；沒有驗證管理員重設密碼信（「忘記密碼」）的實際寄出。**觀察（與規範的差異，沒有修改）**：AGENTS.md 第 10 節仍寫「登入後的預設頁面目前為 /cs」，程式的 `DEFAULT_AFTER_LOGIN` 已是 `/game`（RPG 入口），規範文字已過時，是否更正由使用者決定。
+
+### adult-only-signup 的部署與驗收（2026-11-18，映像 `87ebcd8`）
+
+**部署**：使用者在自己的 PowerShell 分三段執行 `aws_demo.py deploy --account-id <帳號> … --tag 87ebcd8 --execute`（`--tag` 一定要明確帶新標籤：主機上原本的標籤是 `48f5ab2`；每步都要互動確認，所以不由助理代跑），每段完成後以 SSM 與 RDS 的唯讀查詢獨立複驗。這是展示環境的**第一次換版**（先前都是第一次部署的分組執行；這次沒有 `db-init`、`create-admin`）。
+
+| 段 | 組 | 結果 |
+|---|---|---|
+| ① | `snapshot`、`build` | 快照 `rac-demo-staging-db-pre-87ebcd8`（手動、加密）available；映像 `rac-app:87ebcd8` 建成（SSM 的建置命令只花約 20 秒，推測是 Docker 的分層快取，沒有驗證）；`check-image` 輸出 `10001 clean` |
+| ② | `migrate` | `alembic` 日誌 `Running upgrade 0018_rpg_turn_revision -> 0019_adult_declaration`（2026-11-18 10:42 +08:00）；`check-migration-head` 輸出 `1`；`seed-scripts` 建立 0、更新 0、沒有變動 1 |
+| ③ | `restart`、`verify` | `release.env` ＝ `RAC_IMAGE_TAG=87ebcd8`、`release.previous.env` ＝ `RAC_IMAGE_TAG=48f5ab2`（**回復點仍在**）；`check-pools` 輸出 `rac-app:87ebcd8 rac-app:87ebcd8`；`check-pool-hardening`：兩個池 `uid=10001`、各用自己的 gunicorn 設定、只綁 `127.0.0.1:8081`／`8082`；`NRestarts=0`、`restartcount=0`、`systemctl --failed` 為 0、最近 15 分鐘日誌的 ERROR／CRITICAL 為 0 筆；公開 `/healthz`、`/readyz`、`/login` 皆 200 |
+
+- `switch-release` 在 SSM 出現兩筆（相隔 23 秒）：第二筆的原因沒有追查。`_switch_release_lines` 對同一個標籤**不覆蓋** `release.previous.env`，主機上的檔案也證實前一版仍是 `48f5ab2`。
+- **回復**只換回前一版標籤（`rollback`），不降級資料庫（0019 是 expand-only，舊版不讀新欄位）。**沒有演練**；遷移到換版之間（約 2 分鐘）舊版池在新結構上的實際運作也沒有另外探測，只依設計推定。
+
+**Google 登入人工驗收**（使用者本人，`https://rac001.duckdns.org/login`）：五個情境全部通過：①只勾條款、不勾「我確認已滿 18 歲」→ 不建立帳號並顯示提示；②兩項都勾 → 進年齡確認頁；③填 15 歲生日 → 帳號被抹除並回登入頁；④同一信箱重新註冊、填 25 歲 → 通過、預設安全模式、贈 200 幣；⑤回訪者不勾任何項目、一鍵登入。日誌核對只計**事件名稱**的次數（不讀內容）：`auth.google_rejected.adult` 1、`auth.age_rejected.underage` 1、`account.underage_erased` 1、`auth.age_confirmed.later` 1、`wallet.signup_granted` 1、`auth.google_login` 1，`auth.google_rejected.terms` 0；全在客服池。**與任務原文的差異**：`age_not_eligible` 是 API 錯誤代碼、不是日誌事件（日誌是 `auth.age_rejected.underage` 加 `account.underage_erased`）；`auth.age_confirmed` 實際叫 `auth.age_confirmed.later`。
+
+**驗收帳號的清除**：專案沒有「立即抹除單一已確認帳號」的 flask 指令（既有的清除都有條件：寬限期滿、閒置、逾時未確認、未滿 18 歲），所以用一支**不進版本庫的一次性腳本**在主機的一次性容器執行，只呼叫既有的 `UserRepository.request_deletion` 與 `AccountErasureService.erase_pending_due`（兩段都排除管理員、都寫刪除紀錄），並要求「非管理員帳號恰好 1 個、編號相符、`active`、已聲明並確認、當天建立」才動手；先在本機 SQLite 以假帳號實測（錯誤編號、時間不符、兩個玩家都被拒絕），再於主機預覽與執行，事後只剩管理員。**沒有獨立查證**刪除紀錄（`deletion_tombstones`）與 `account.deleted_by_request` 事件。是否補成正式的維運指令（須經 OpenSpec、測試與稽核）尚未決定，排在後面。
+
+**對展示的影響**（2026-11-24、11-25 的展示前要知道）：①展示環境現在**沒有玩家帳號**，要自己用 Google 登入新註冊；②新玩家一律預設**安全模式**（先前成年玩家預設一般模式），安全模式看不到宣告為一般或成人模式的劇本；③目前**沒有任何前端畫面能切換內容模式**（`PUT /api/account/content-mode` 沒有前端呼叫，帳號頁沒有切換），新玩家無法從介面離開安全模式；④展示環境沒有開成人模式（部署計畫與 `aws-demo.vars` 都沒設 `ADULT_MODE_ENABLED`，預設關閉）。②至④要靠 `safe-mode-toggle` 才能改善，是否為展示提前做最小的切換由使用者決定。
+
+**未驗證**：登入頁在 360 px 手機寬度的版面；客服提示詞改過之後用真實 Gemini 問「怎麼註冊」；容器驗收只用 SQLite、沒有連 SQL Server（SQL Server 由本節的真實部署涵蓋）；情境②沒有專屬日誌事件，只靠使用者目視；刪除紀錄的獨立查證如上。費用的證實數字見 README「驗收紀錄（aws-demo-environment）」的每日費用觀察。
 
 ### 展示環境未達 production 的缺口（task 7.4）
 
