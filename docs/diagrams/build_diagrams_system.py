@@ -674,7 +674,7 @@ def deploy_diagram() -> Svg:
         ("1", "預檢與找主機", "deploy_plan 的 prepare 組：deploy-find-host（build_plan 另有 check-identity）", "確認帳號與主機；不符即停止，不放寬"),
         ("2", "遷移前手動快照", "snapshot-db、wait-snapshot-db", "每個提交短碼一個 RDS 快照；2026-11-17 已對真實 RDS 執行並驗證"),
         ("3", "建置映像", "archive-source、upload-source、build-image、check-image（derived_dockerfile）", "主機上分兩段建置；檢查非 root（uid 10001）、沒有 .env 與 .git、憑證庫張數；已驗證"),
-        ("4", "遷移與種子", "migrate-db、check-migration-head、seed-scripts（alembic upgrade head；展示環境的 RDS 在 0018，0019 隨 adult-only-signup 的部署升級）", "遷移是部署的獨立步驟，不在應用程式啟動時執行；舊版程式必須在新結構上可運作（expand／contract）"),
+        ("4", "遷移與種子", "migrate-db、check-migration-head、seed-scripts（alembic upgrade head；展示環境的 RDS 已於 2026-11-18 由 0018 升到 0019，adult-only-signup，已驗證）", "遷移是部署的獨立步驟，不在應用程式啟動時執行；舊版程式必須在新結構上可運作（expand／contract）"),
         ("5", "換版與重啟", "switch-release、wait-switch-release（release.env、release.previous.env）", "只重啟兩個池；標籤不存在就失敗；已驗證"),
         ("6", "驗證", "check-pools、check-pool-hardening（容器內 /readyz、行程 UID、gunicorn 設定、埠只在回送位址）", "已對真實主機驗證；公開 /healthz 與 /readyz 回 200，本文只有 {\"status\":\"ok\"}"),
         ("7", "一次性群組與營運", "db-init、create-admin、ingress、routing、schedule；告警與寄信（task 7.x）", "Caddy 憑證簽發、路徑分流、五個計時器、EC2 狀態告警演練與營運告警信已驗證；寄信進垃圾郵件匣"),
