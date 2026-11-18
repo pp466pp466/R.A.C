@@ -11,7 +11,7 @@
  *
  * 規則：
  * - **餘額以伺服器為準**：載入時讀 `GET /api/wallet` 的 `total`；每一輪結束用 `done.coins` 直接覆寫（不另外請求）；讀取失敗顯示「—」，不阻擋閱讀與輸入。
- *   餘額、每輪幣價、管理員旗標與下次簽到時間都是狀態庫的衍生值（`balance`、`turnCost`、`exempt`、`nextResetAt` 是唯讀的 computed），寫入一律經狀態庫（`apply`、`setTotal`），
+ *   餘額、每輪幣價與管理員旗標都是狀態庫的衍生值（`balance`、`turnCost`、`exempt` 是唯讀的 computed；下次簽到時間由簽到狀態機直接讀狀態庫），寫入一律經狀態庫（`apply`、`setTotal`），
  *   所以頂列標籤與輸入區的「餘額不足」提示永遠依同一份數字。對外的欄位與方法沒有改變。
  * - **送出前的餘額不足只是提示，不阻止送出**（`lowBalance`／`lowBalanceText`）：快取的餘額可能過期，真正的拒絕永遠在伺服器（409 `insufficient_coins`）。
  * - **管理員不消耗遊戲幣**（admin-unlimited-coins）：錢包回應的 `coin_exempt` 只認布林（缺值或型別不對視為 `false`），暴露為 `exempt`；為真時 `lowBalance` 為假、`lowBalanceText` 為空字串。
@@ -20,13 +20,15 @@
  *   **簽到成功不會自動重送**被擋的行動。
  * - 簽到：`claimCheckin` 呼叫 `POST /api/wallet/checkin`。409 `checkin_overflow` 回預覽（會入帳多少、會作廢多少）：「取消」不再呼叫（不消耗當日簽到）、
  *   「領取」才以 `confirm_overflow: true` 再呼叫一次。409 `already_checked_in` 顯示今日已簽到與下次可簽到的時間（台灣時間）。簽到進行中再按只會有一個請求，`finally` 恢復。
+ *   **這套狀態機在 `ui/wallet-checkin.js`（`UI.createCheckin`，錢包頁共用同一份）**；這裡只決定簽到 Modal 的開關與文字，經 hooks 接上：失敗的訊息仍由 `Game.describeCheckinFailure`
+ *   整理（注入給 `createCheckin`，沒有搬走：它依賴 game-state.js 內部的失敗分類與 game-labels.js 的文字），所以進行頁與錢包頁的簽到流程一致、只有呈現不同。
  * - 這裡沒有儲值、訂閱與記錄（錢包頁 `/wallet` 提供記錄與示意的儲值畫面）。這裡不記錄、不輸出任何內容。
  */
 (function (root, factory) {
   'use strict';
   var isNode = typeof module === 'object' && module.exports;
   var Game = isNode ? require('./game-state.js') : root.Game;
-  var UI = isNode ? require('../ui/wallet-store.js') : root.UI;
+  var UI = isNode ? Object.assign({}, require('../ui/wallet-store.js'), require('../ui/wallet-checkin.js')) : root.UI;
   var api = factory(Game, UI);
   if (typeof module === 'object' && module.exports) {
     module.exports = api;
@@ -60,18 +62,32 @@
     var balance = computed(function () { return store.state.total; });               // 合計餘額（免費＋付費）；null = 還不知道（顯示「—」）
     var turnCost = computed(function () { return store.state.turnCost; });           // 每輪幣價（`turn_cost.standard`）；缺值或不合理時為 null（不顯示幣價）
     var exempt = computed(function () { return store.state.exempt === true; });     // 這個帳號不消耗遊戲幣（`coin_exempt`，管理員）；缺值、型別不對或載入失敗時為 false
-    var nextResetAt = computed(function () { return store.state.checkin.nextResetAt; });   // 下次可簽到的時間（UTC 的 ISO 字串）；只用來說明「今天已簽到」
     var coinModalOpen = ref(false);
     var coinModalText = ref('');
-    var checkinBusy = ref(false);
-    var checkinPreview = ref(null);        // { wouldGain, wouldLose }｜null：超過免費幣上限時等待玩家選「取消」或「領取」
-    var checkinMessage = ref('');
-    var checkinFinished = ref(false);      // 今天已經簽到（成功或伺服器說已簽到）：Modal 不再提供簽到按鈕
-    var claimedToday = false;              // 這個頁面已經看到「今天簽過了」（簽到成功或伺服器說已簽到）；為真時蓋過錢包的 `claimable`
     var openedFor = 'none';                // 'insufficient'｜'checkin'｜'none'：Modal 為何而開（取消預覽時決定要不要一併關掉）
 
-    /* 錢包說今天還能不能簽到（`checkin.claimable`）；不知道時為 null */
-    function claimable() { return claimedToday ? false : store.state.checkin.claimable; }
+    /* 簽到狀態機（ui/wallet-checkin.js，與錢包頁共用）。`busy`、`preview`、`message`、`finished` 與三個動作原樣對外；Modal 的開關與文字經 hooks 在這裡決定。 */
+    var checkin = UI.createCheckin({
+      Vue: { ref: ref }, api: api, store: store,
+      describeFailure: function (info, options) { return Game.describeCheckinFailure(info, options); },
+      hooks: {
+        onFailure: function (info) { noteFailure(info); },
+        onLogin: function () { goLogin(); },
+        onOverflow: function () { openForCheckin(); },                   // 取不到預覽（欄位缺漏）時預覽為 null：只顯示說明，玩家重新簽到即可
+        onAlready: function () { openForCheckin(); },
+        onError: function () { openForCheckin(); },
+        onSuccess: function (current) {
+          toast('簽到成功。' + current);
+          return '簽到成功。' + current + '你可以關閉這個視窗後再次送出行動；系統不會自動送出。';
+        },
+        onCanceled: function (text) {
+          if (openedFor !== 'checkin') { return false; }                 // 從「餘額不足」的 Modal 來的：Modal 留著，說明顯示在裡面
+          coinModalOpen.value = false;                                    // 從輸入區的提示來的：沒有別的內容，直接關掉並以 Toast 說明
+          toast(text);
+          return true;
+        }
+      }
+    });
 
     var balanceText = computed(function () { return balance.value === null ? DASH : String(balance.value); });
     var lowBalance = computed(function () { return !exempt.value && balance.value !== null && turnCost.value !== null && balance.value < turnCost.value; });
@@ -82,7 +98,7 @@
 
     // 玩家用 Esc 或點遮罩關掉 Modal（由 v-model 寫回 false）時，一併清掉等待中的預覽，下次打開不會殘留舊的選項
     watch(coinModalOpen, function (open) {
-      if (!open) { checkinPreview.value = null; openedFor = 'none'; }
+      if (!open) { checkin.dropPreview(); openedFor = 'none'; }
     }, { flush: 'sync' });
 
     function setBalance(value) { return store.setTotal(value); }
@@ -99,9 +115,7 @@
 
     // ---- 餘額不足 -----------------------------------------------------------------------------------
     function reset(reason) {
-      checkinPreview.value = null;
-      checkinMessage.value = '';
-      checkinFinished.value = claimable() === false;                  // 錢包已說今天簽過了就不再提供簽到按鈕
+      checkin.reset();                                                // 清掉預覽與說明；錢包已說今天簽過了就不再提供簽到按鈕
       openedFor = reason;
     }
 
@@ -121,10 +135,11 @@
 
     function closeCoinModal() {
       coinModalOpen.value = false;
-      checkinPreview.value = null;
+      checkin.dropPreview();
     }
 
-    // ---- 簽到 -------------------------------------------------------------------------------------------
+    // ---- 簽到（狀態機在 ui/wallet-checkin.js；這裡只有 Modal 的開啟）-----------------------------------------------
+    /* 簽到的結果要給玩家看（預覽、已簽到、失敗）時打開 Modal；已經開著（從「餘額不足」來的）就沿用，不重設。 */
     function openForCheckin() {
       if (coinModalOpen.value) { return; }
       coinModalText.value = balance.value !== null ? '目前餘額 ' + balance.value + ' 幣。每日簽到可以領取免費遊戲幣。' : '每日簽到可以領取免費遊戲幣。';
@@ -132,75 +147,12 @@
       coinModalOpen.value = true;
     }
 
-    function succeeded(data) {
-      var applied = isObject(data) ? store.apply(data.wallet) : false;
-      checkinPreview.value = null;
-      checkinFinished.value = true;
-      claimedToday = true;
-      var current = balance.value !== null ? '目前餘額 ' + balance.value + ' 幣。' : '';
-      checkinMessage.value = '簽到成功。' + current + '你可以關閉這個視窗後再次送出行動；系統不會自動送出。';
-      toast('簽到成功。' + current);
-      if (!applied) { return load({ force: true }); }                // 回應沒帶錢包：重讀一次，餘額以伺服器為準
-      return Promise.resolve(true);
-    }
-
-    function failed(info) {
-      noteFailure(info);
-      var failure = Game.describeCheckinFailure(info, { nextResetAt: nextResetAt.value });
-      if (failure.kind === 'canceled') { return false; }
-      if (failure.kind === 'login') { goLogin(); return false; }
-      if (failure.kind === 'overflow') {
-        openForCheckin();
-        checkinPreview.value = failure.checkin;                      // 取不到預覽（欄位缺漏）時為 null：只顯示說明，玩家重新簽到即可
-        checkinMessage.value = failure.message;
-        return false;
-      }
-      openForCheckin();
-      checkinPreview.value = null;
-      checkinMessage.value = failure.message;
-      if (failure.kind === 'already') { checkinFinished.value = true; claimedToday = true; }
-      return false;
-    }
-
-    function submit(confirmOverflow) {
-      if (checkinBusy.value) { return Promise.resolve(false); }      // 重複點擊：進行中只會有一個請求
-      checkinBusy.value = true;
-      return new Promise(function (resolve) { resolve(api.checkin(confirmOverflow === true)); }).then(succeeded, failed).finally(function () {
-        checkinBusy.value = false;
-      });
-    }
-
-    /* 「每日簽到」按鈕（輸入區的提示與 Modal 共用）。等待預覽選擇時不會重送。 */
-    function claimCheckin() {
-      if (checkinBusy.value || checkinPreview.value) { return Promise.resolve(false); }
-      return submit(false);
-    }
-
-    /* 預覽的「領取」：這時才帶 `confirm_overflow: true`。沒有預覽時什麼都不做（不會未經確認就以確認的方式簽到）。 */
-    function confirmOverflow() {
-      if (checkinBusy.value || !checkinPreview.value) { return Promise.resolve(false); }
-      return submit(true);
-    }
-
-    /* 預覽的「取消」：不呼叫任何請求，也不消耗當日簽到。 */
-    function cancelOverflow() {
-      if (checkinBusy.value || !checkinPreview.value) { return false; }
-      checkinPreview.value = null;
-      if (openedFor === 'checkin') {
-        coinModalOpen.value = false;
-        toast('已取消，今天的簽到還沒有使用。');
-      } else {
-        checkinMessage.value = '已取消，今天的簽到還沒有使用。';
-      }
-      return true;
-    }
-
     return {
       balance: balance, turnCost: turnCost, exempt: exempt, balanceText: balanceText, lowBalance: lowBalance, lowBalanceText: lowBalanceText,
-      coinModalOpen: coinModalOpen, coinModalText: coinModalText, checkinBusy: checkinBusy, checkinPreview: checkinPreview,
-      checkinMessage: checkinMessage, checkinFinished: checkinFinished,
+      coinModalOpen: coinModalOpen, coinModalText: coinModalText, checkinBusy: checkin.busy, checkinPreview: checkin.preview,
+      checkinMessage: checkin.message, checkinFinished: checkin.finished,
       load: load, setBalance: setBalance, openInsufficient: openInsufficient, closeCoinModal: closeCoinModal,
-      claimCheckin: claimCheckin, confirmOverflow: confirmOverflow, cancelOverflow: cancelOverflow
+      claimCheckin: checkin.claim, confirmOverflow: checkin.confirmOverflow, cancelOverflow: checkin.cancelOverflow
     };
   }
 

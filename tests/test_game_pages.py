@@ -498,7 +498,7 @@ def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_t
     html = client.get(f"/game/{save_id}").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
     expected = ["auth-common.js", "game-labels.js", "sse-parser.js", "turn-stream.js", "game-state.js", "game-store.js", "game-sync.js",
-                "game-api.js", "game-wallet.js", "game-notebook.js", "game-revision.js", "game-session.js", "game.js"]
+                "game-api.js", "wallet-checkin.js", "game-wallet.js", "game-notebook.js", "game-revision.js", "game-session.js", "game.js"]
     for needed in ("vue.global.prod.js", "axios.min.js", "typewriter.js", "ui-components.js", "restriction.js", *expected):
         assert needed in names, needed
     assert names[-1] == "game.js"                                                # 掛載腳本必須是最後一個（它用到前面所有模組）

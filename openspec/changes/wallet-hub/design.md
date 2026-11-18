@@ -56,7 +56,7 @@
 
 ### D4：簽到狀態機抽成共用模組，失敗訊息沿用 `Game.describeCheckinFailure`
 
-新增 `ui/wallet-checkin.js`：`createCheckin({ Vue, api, store, describeFailure, hooks })`，持有 `busy`、`preview`、`message`、`finished`，提供 `claim()`、`confirmOverflow()`、`cancelOverflow()`，行為與 `game-wallet.js` 現行的一致（重複點擊只一個請求、`finally` 恢復、取消不送請求、領取才帶 `confirm_overflow`）。與介面相關的部分用 `hooks`（`onOverflow`、`onAlready`、`onSuccess`、`onCanceled`）交給呼叫端：進行頁把它們接到既有的簽到 Modal，錢包頁接到頁內的簽到卡。
+新增 `ui/wallet-checkin.js`：`createCheckin({ Vue, api, store, describeFailure, hooks })`，持有 `busy`、`preview`、`message`、`finished`，提供 `claim()`、`confirmOverflow()`、`cancelOverflow()`，行為與 `game-wallet.js` 現行的一致（重複點擊只一個請求、`finally` 恢復、取消不送請求、領取才帶 `confirm_overflow`）。與介面相關的部分用 `hooks`（`onOverflow`、`onAlready`、`onError`、`onSuccess`、`onCanceled`，另有 `onFailure`、`onLogin`）交給呼叫端：進行頁把它們接到既有的簽到 Modal，錢包頁接到頁內的簽到卡。實作（批 ②）時的細節：`onOverflow`／`onAlready`／`onError` 在預覽與說明寫入**之前**呼叫（進行頁在這裡打開 Modal，且 Modal 已開著時沿用）；`onSuccess(current)` 與 `onCanceled(text)` 的回傳值讓頁面取代預設說明（字串）或表示已自行呈現（`true`）；`onFailure(info)` 收分類前的原始失敗（遊戲頁用來辨識「被鎖定」）；模組另提供 `reset()`（重新打開簽到畫面時依錢包重判 `finished`）與 `dropPreview()`（呼叫端的視窗被 Esc 或遮罩關掉時清預覽）。模組只由需要簽到的頁面載入（進行頁、錢包頁），不放進 `base.html`。
 
 - **為什麼不把 `describeCheckinFailure` 一起搬走**：它依賴 `game-state.js` 內部的 `fromInfo`、`transportFailure`、`gateFailure` 與 `game-labels.js` 的文字；搬動會牽動整個失敗分類，風險與範圍遠大於這個 change。改為由呼叫端注入 `describeFailure`，錢包頁載入 `game-labels.js` 與 `game-state.js`（兩者都是不碰 DOM 的純模組）只為了取得 `Game.describeCheckinFailure` 與台灣時間的格式化函式。這個耦合寫進程式註解與測試，日後若要拆除，是另一個重構 change。
 - **備選：錢包頁直接用 `Game.createWallet`**。→ 要連 `game-api.js`（整套遊戲 API）一起載入，也把 Modal 狀態拖進一個沒有 Modal 的頁面，並且會動到「寫入呼叫恰好四個」的守門。否決。
