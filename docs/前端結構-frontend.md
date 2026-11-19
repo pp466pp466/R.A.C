@@ -1,7 +1,8 @@
 # 前端架構
 
-> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-18 ｜ 對應 change：wallet-hub（批 ①：共用的餘額標籤與錢包狀態庫；批 ②：簽到狀態機抽成 `ui/wallet-checkin.js`）、歡迎頁（未立案的小修正，首頁取代 C-1 占位頁）、admin-unlimited-coins、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-19 ｜ 對應 change：wallet-hub（批 ①：共用的餘額標籤與錢包狀態庫；批 ②：簽到狀態機抽成 `ui/wallet-checkin.js`；批 ③：錢包頁 `/wallet` 的骨架與免費分頁；批 ④：儲值示意、紀錄與使用說明，見第 3f 節）、歡迎頁（未立案的小修正，首頁取代 C-1 占位頁）、admin-unlimited-coins、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 > 注意（2026-11-18）：本文件已納入 change `adult-only-signup` 的前端變化（登入頁第二個勾選框「我確認已滿 18 歲」、請求多一個 `declare_adult`、年齡確認頁的僅限滿 18 歲提示、帳號頁移除未成年的安全模式提示），以及 change `admin-unlimited-coins` 的前端變化（錢包回應的 `coin_exempt`：`game-wallet.js` 暴露 `exempt`、`game-labels.js` 與 `game-revision.js` 的「不消耗遊戲幣」文字，見第 3e 節）。
+> 注意（2026-11-19）：本文件已納入 change `wallet-hub` 的前端變化（全站共用的餘額標籤與錢包狀態庫、簽到狀態機抽成 `ui/wallet-checkin.js`、新頁面 `/wallet` 的免費簽到、儲值示意與紀錄；**沒有後端 API、資料表與 migration 異動**），見第 2 節的 `wallet-*.js` 列、第 1 節的載入順序與第 3f 節。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
@@ -22,6 +23,7 @@ flowchart TD
     Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
     Page -->|"/game"| Gm["auth-common.js → game-labels.js → game-api.js → entry.js（另載入 game.css）"]
     Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js"]
+    Page -->|"/wallet"| Wlt["auth-common.js → game-labels.js → game-state.js → wallet-checkin.js → wallet-demo-packages.js → wallet-hub-state.js → wallet-hub.js（另載入 wallet.css）"]
     Page -->|"/game/存檔"| Gsv["auth-common.js → game-labels.js → sse-parser.js → turn-stream.js → game-state.js → game-store.js → game-sync.js → game-api.js → wallet-checkin.js → game-wallet.js → game-notebook.js → game-revision.js → game-session.js → game.js（另載入 game.css）"]
 ```
 
@@ -38,7 +40,7 @@ flowchart TD
 | `js/ui/toast-store.js` | Toast 的狀態庫（與框架無關） | `tests/js/toast-store.test.js` |
 | `js/ui/wallet-api.js` | 全站共用的遊戲幣 API 呼叫（`UI.walletApi`：`wallet()`、`checkin(confirmOverflow)`、`entries(before, limit)`，離線的 axios，axios 與 `Auth` 在呼叫時才取用）；失敗以 `Auth.describeError` 整理並補上簽到預覽與餘額的固定形狀整數欄位，型別不對的值不放進來；不記錄、不快取、不碰瀏覽器儲存。`game-api.js` 一個字不改（進行頁的簽到仍走它，「寫入呼叫恰好四個」的守門不動），所以失敗整理有兩份，由對照測試保證形狀一致 | `tests/js/wallet-api.test.js` |
 | `js/ui/wallet-store.js` | 錢包狀態庫（`UI.createWalletStore`，風格同 `toast-store.js`，Node 可測）與標籤文字的純函式 `UI.walletLabelOf`：狀態 `status`、`total`、`free`、`paid`、`exempt`、`freeCap`、`turnCost`、`checkin`；`load()` 並行合併、已讀到就不重複請求（`{ force: true }` 才重讀）、永不拋出；`apply()` 只收非負整數與布林；`setTotal()`（`done.coins`）；`onFailure()` 讓遊戲頁辨識登入過期與受限狀態。只存在頁面記憶體，換頁重讀，不寫瀏覽器儲存、不輸出主控台 | `tests/js/wallet-store.test.js` |
-| `js/ui/wallet-checkin.js` | 每日簽到的狀態機（`UI.createCheckin({ Vue, api, store, describeFailure, hooks })`，Node 可測，不碰 `window`、`document`、儲存與主控台）：`busy`、`preview`（`{ wouldGain, wouldLose }`｜null）、`message`、`finished` 與 `claim()`、`confirmOverflow()`、`cancelOverflow()`、`reset()`、`dropPreview()`。簽到進行中再按只有一個請求、`finally` 一定恢復；取消預覽不送請求、只有「領取」才帶 `confirm_overflow: true`；成功一律經狀態庫 `apply`，回應沒帶錢包才 `load({ force: true })`；看過「今天簽過了」之後蓋過錢包的 `claimable`。**失敗訊息不在這裡**：`describeFailure` 由呼叫端注入（都是 `Game.describeCheckinFailure`，依賴 `game-state.js` 內部的失敗分類與 `game-labels.js` 的文字，搬動會牽動整個失敗分類，所以不搬；這個耦合日後要拆是另一個重構 change）。介面的差異經 `hooks`（`onFailure`、`onLogin`、`onOverflow`、`onAlready`、`onError`、`onSuccess`、`onCanceled`）交給呼叫端：進行頁（`game-wallet.js`）接到簽到 Modal，錢包頁（`wallet-hub` 批 ③）接到頁內的簽到卡。只有需要簽到的頁面載入它（目前是 `/game/<存檔>`），不放進 `base.html` | `tests/js/wallet-checkin.test.js`（含「進行頁與共用狀態機行為一致」的對照）、`tests/js/game-wallet.test.js` |
+| `js/ui/wallet-checkin.js` | 每日簽到的狀態機（`UI.createCheckin({ Vue, api, store, describeFailure, hooks })`，Node 可測，不碰 `window`、`document`、儲存與主控台）：`busy`、`preview`（`{ wouldGain, wouldLose }`｜null）、`message`、`finished` 與 `claim()`、`confirmOverflow()`、`cancelOverflow()`、`reset()`、`dropPreview()`。簽到進行中再按只有一個請求、`finally` 一定恢復；取消預覽不送請求、只有「領取」才帶 `confirm_overflow: true`；成功一律經狀態庫 `apply`，回應沒帶錢包才 `load({ force: true })`；看過「今天簽過了」之後蓋過錢包的 `claimable`。**失敗訊息不在這裡**：`describeFailure` 由呼叫端注入（都是 `Game.describeCheckinFailure`，依賴 `game-state.js` 內部的失敗分類與 `game-labels.js` 的文字，搬動會牽動整個失敗分類，所以不搬；這個耦合日後要拆是另一個重構 change）。介面的差異經 `hooks`（`onFailure`、`onLogin`、`onOverflow`、`onAlready`、`onError`、`onSuccess`、`onCanceled`）交給呼叫端：進行頁（`game-wallet.js`）接到簽到 Modal，錢包頁（`wallet-hub`，見 3f）接到頁內的簽到卡。`reset({ authoritative: true })` 專供錢包頁的倒數歸零：剛從伺服器重讀的快照比「這個頁面看過今天簽過了」新，所以先忘掉那個記憶，否則簽到卡會永遠停在已簽到；不帶參數的行為不變（進行頁不受影響）。只有需要簽到的頁面載入它（`/game/<存檔>` 與 `/wallet`），不放進 `base.html` | `tests/js/wallet-checkin.test.js`（含「進行頁與共用狀態機行為一致」的對照）、`tests/js/game-wallet.test.js` |
 | `js/ui/restriction.js` | 申訴捷徑的判定與文字（純函式，`UI.restrictionOf`、`UI.restrictionNoticeOf`、`UI.APPEAL_PATH`）：API 回應 403 且代碼為 `account_locked` 或 `publish_suspended`，或 `/api/auth/me` 的 `restriction === 'locked'`／`publish_suspended === true`，才回傳 `locked` 或 `suspended`；其他一律 `null`。不記住任何狀態，所以解除後重新整理即消失 | `tests/js/restriction.test.js`、`tests/test_appeal_shortcut.py` |
 | `js/ui/typewriter.js` | 打字機緩衝區：以字素為單位、積壓越多越快、`finish()` 後加速補完、可 `flush()` 與 `cancel()` | `tests/js/typewriter.test.js` |
 | `js/auth/auth-common.js` | CSRF 標頭、初始狀態讀取、錯誤整理（`describeError`）、登入導向 | `tests/js/auth-common.test.js` |
@@ -262,6 +264,29 @@ flowchart TD
 
 - **本機暫存的已知限制**：①IndexedDB 在裝置上，帳號刪除與登出無法由伺服器清除（與客服的快取同一個限制，README 記載）；快取只含劇情與行動，不含記事簿、角色卡與個資，內容與後端分歧時一律以後端覆寫。②重新整理後的在途回合只在 IndexedDB 可用時保存；退回記憶體後不保證。③`since_seq` 只往後讀：同序號的內容在後端被取代（重新生成與編輯輸入，rpg-turn-revision）時，增量補齊不會自己發現，所以 `catchUp` 另有 `fromSeq` 選項，修訂結束後從最後一個完成回合的前一個序號重讀並覆寫快取；`sameTurn` 的比較納入 `revision`，其他裝置修訂過的回合也會被覆寫。④沒有離線佇列：離線時不能送出，在途回合要連線後由玩家明確重送。
 - **隱私**：這些模組除了 `game-store.js`（IndexedDB 的唯一出口，`tests/test_game_pages.py` 掃描整個 `game/` 目錄，其餘檔案不得出現 `indexedDB`，所有檔案都不得出現 `localStorage`、`sessionStorage` 與 cookie）之外不寫任何瀏覽器儲存、不直接碰全域的 `fetch`（`turn-stream.js` 的請求一律經由呼叫端注入的 `fetch`，同一個測試掃描）、不輸出主控台；`game-state.js` 與 `game-sync.js` 的測試掃描原始碼確認沒有儲存、網路與主控台。
+
+## 3f. 錢包頁（`/wallet`，wallet-hub）
+
+```mermaid
+flowchart LR
+    Html["templates/wallet/hub.html<br/>外殼 + initial-state JSON（只有 member_tier）"] --> Hub
+    Hub["wallet-hub.js<br/>Vue 應用 只接線：分頁 檢視 倒數計時器 紀錄清單 使用說明"]
+    Hub --> State["wallet-hub-state.js<br/>純函式 Wallet.*"]
+    Hub --> Demo["wallet-demo-packages.js<br/>示意幣包資料 唯一位置"]
+    Hub --> Chk["ui/wallet-checkin.js<br/>簽到狀態機 createCheckin"]
+    Hub --> Store["UI.wallet<br/>全站的錢包狀態庫"]
+    Hub --> Api["UI.walletApi<br/>GET /api/wallet 與 /api/wallet/entries 加 POST /api/wallet/checkin"]
+    Chk --> Api
+    Store --> Api
+    Hub --> Ui["ui-components.js<br/>Modal（使用說明）與 Toast"]
+```
+
+- **頁面外殼**（`wallet/hub.html`，`wallet.css`，類別前綴 `wh-`，只用 `theme.css` 變數）：頂列是標題「錢包」、會員等級膠囊與「冒險／客服／創作／帳號／使用說明」連結與按鈕——**頁面自己顯示餘額，沒有 `<ui-wallet-balance>`**，掛載時呼叫 `UI.wallet.load()`；頁面不載入 `game-api.js`（進行頁「寫入呼叫恰好四個」的守門不動），所以錢包頁唯一的寫入是 `UI.walletApi.checkin`。取用 `game-labels.js` 與 `game-state.js` 的 `Game.*`（簽到失敗訊息與台灣時間格式）。
+- **分頁與檢視**：兩個分頁「免費」（預設）與「儲值」（`role="tablist"`／`tab`／`tabpanel`，方向鍵左右循環與 Home／End），以及頁內的「紀錄」檢視（進入時隱藏分頁列並顯示「返回」，沒有獨立網址、紀錄檢視中不能切換分頁）；全部是 Vue 狀態，不是路由，也不用 `data-bs-*`。
+- **`wallet/wallet-hub-state.js`**（全域 `Wallet`，與框架無關，Node 可測，沒有請求、儲存、DOM 與主控台；唯一的副作用是 `createTicker` 呼叫注入的計時函式）：分頁與檢視（`selectTab`／`openRecords`／`closeRecords`／`tabFromKey`）、頂部餘額 `balanceView`（餘額只認非負整數）、簽到卡 `checkinCardOf`（`loading`／`failed`／`preview`／`done`／`claimable`）、`signupGiftText`、`freeCapNote`、倒數 `remainingMs`（目前時間與 `next_reset_at` 相減，背景分頁被節流後恢復仍正確）／`formatCountdown`（`時:分:秒`，向上取整）／`countdownText`、`shouldReloadAtZero`（歸零才重讀、進行中不重複、**兩次讀取至少相隔 60 秒**）、`createTicker`（每秒呼叫 `onTick`，重複啟動只有一個計時器）、儲值 `topupViewOf`（只有 `IS_DEMO === true` 才有卡片，資料不合格的卡片略過、至多 12 張）、紀錄 `entryViewOf`／`entriesPageOf`（形狀不對整頁拒絕）／`mergeEntries`（接在後面並去除重複序號）／`entriesFailureText`／`recordsViewOf`、使用說明 `guideOf`、`groupDigits` 與 `signedDelta`（正數「+」、負數用真正的負號「−」）。文字一律純文字，以 `{{ }}` 插值，嚴禁 `v-html`。
+- **`wallet/wallet-demo-packages.js`**（全域 `WalletDemo`：`IS_DEMO`、`CURRENCY`、`PACKAGES`）：**示意幣包數字的唯一位置**；上線給真實玩家前須換掉或拿掉。`tests/js/wallet-demo-packages.test.js` 掃描整個 `app/` 與 `migrations/`，其他檔案找不到「示意數字加幣」「幣別記號加數字」的長相（含自我測試：種一個洩漏就會被抓到）；樣板的儲值面板另有靜態守門（每顆按鈕靜態 `disabled`、沒有 `@click`、連結與表單，卡片內沒有數字）。
+- **`wallet/wallet-hub.js`**（Vue 掛載，只接線）：`UI.wallet` 載入與重試、`UI.createCheckin` 簽到（沒有 Modal：預覽與說明在簽到卡內，成功時 Toast）、倒數計時器只在「主檢視的免費分頁、今天已簽到、下次可簽到的時間可用」時啟動（離開、進入紀錄或未簽到就停），`pagehide` 與卸載時清除；紀錄的載入／載入更多／重試與**簽到成功後作廢已載入的清單**（世代計數：作廢後途中的舊請求不論成功或失敗回來都丟棄；載入更多失敗保留清單，重試用同一個游標）；登入過期導向登入頁、被鎖定顯示申訴捷徑（`UI.restrictionOf`）。清單只存在頁面記憶體，不寫瀏覽器儲存、不輸出主控台（`tests/test_wallet_page.py` 掃描 `js/wallet/`）。
+- **測試**：`tests/js/wallet-hub-state.test.js`、`wallet-hub-template.test.js`（以離線 Vue 編譯樣板並對照名稱約定，時鐘與計時器由 `tests/js/support/wallet-hub-sandbox.js` 控制）、`wallet-demo-packages.test.js`；`tests/test_wallet_page.py`（路由、受限狀態導向、初始狀態沒有餘額、`no-store`、只載入本機資源與載入順序、樣式只用 theme 變數）；`tests/test_wallet_badge_pages.py`（六個頁面有標籤、其餘頁面沒有）。360 至 1280 px 的水平溢出量測見 README「驗收紀錄（wallet-hub）」。
 
 ## 4. 暫存、待送與同步
 

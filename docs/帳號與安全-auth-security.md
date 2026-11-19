@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-19 ｜ 對應 change：wallet-hub（錢包頁 `/wallet` 的存取規則，第 7f 節）、admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -212,7 +212,7 @@ flowchart TD
 | `/api/game/sessions/<id>/notebook` | GET | 是 | 記事簿全文與用量；非擁有者與不存在同為 404；已完結仍可讀；禁止快取；管理員沒有任何讀取記事簿的功能 |
 | `/api/game/sessions/<id>/notebook` | PUT | 是 | 玩家儲存編輯後的記事簿：CSRF 與 Origin、版本比對（409）、容量（422）、規則層（422，只回類別）；不呼叫模型；已完結 409 |
 
-頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/scripts`（劇本創作，第 7d 節）、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
+頁面：`/login`（登入與註冊合一，只有 Google 按鈕與條款勾選框）、`/login/password`（管理員密碼驗證，需中間狀態）、`/age`（年齡確認）、`/appeal`（申訴）、`/account`、`/scripts`（劇本創作，第 7d 節）、`/wallet`（錢包頁，第 7f 節）、`/terms`、`/privacy`、`/auth/google/callback`；`/register` 一律導向 `/login`；`/reset-password` 只服務管理員的重設連結（需要寄信設定，否則 404）；`/forgot-password` 與 `/verify-email` 已移除（404）。
 
 ## 7. 管理員後台的存取（C-4b）
 
@@ -409,6 +409,7 @@ flowchart TD
 
 - **誰能用**：`/api/wallet/*` 用 `require_login()`（預設拒絕受限登入狀態）：待確認年齡 403 `age_confirmation_required`、鎖定 403 `account_locked`，所以尚未確認年齡的帳號也不會領到任何幣。這不是 AI 功能，不另做 `require_chat_access`；管理員與各會員等級在「誰能用」上一視同仁（等級只影響額度，幣價不因等級而異）。**唯一的例外是扣款**：管理員帳號（`is_active_admin`）不消耗遊戲幣（`admin-unlimited-coins`）——預扣仍寫入帳本但金額為 0、不因餘額不足被拒；判斷只依伺服器端的角色與狀態，不因會員等級而異，不由前端或請求內容決定（`GET /api/wallet` 的 `coin_exempt` 只是告知畫面）。客服的額度與全站每日 token 上限對管理員照舊，模型呼叫照常記入 `llm_call_logs`。
 - **玩家無法經 HTTP 花費或增加餘額**（簽到除外）：預扣、結算與退回只由伺服器端的回合流程（RC-2）呼叫 `WalletService`。
+- **錢包頁 `/wallet`**（wallet-hub，MVC 頁面）：以 `login_required_page` 保護，權限判斷全在裝飾器與 `AccessPolicy`、Controller 不寫——未登入導向登入頁、被鎖定導向 `/appeal`、待確認年齡導向 `/age`、等待刪除導向 `/account`（`tests/test_restricted_session.py` 的全路由掃描涵蓋）；回應 `Cache-Control: no-store`。頁面外殼的初始狀態只有 `member_tier`，**沒有餘額、帳本、email、生日與年齡**，渲染它不會建立錢包或補發贈幣（那是頁面載入後呼叫 `GET /api/wallet` 的事，仍受上一條的 API 規則約束）。頁面上的「儲值」只是示意卡片，按鈕停用、不發任何增加餘額的請求，所以「玩家無法經 HTTP 增加餘額（簽到除外）」仍然成立；真實的付費幣取得方式屬後續的 `wallet-topup`，須先探索金流。頂列的餘額標籤（`<ui-wallet-balance>`）只在六個已登入頁面，等待刪除的 `/account` 畫面與 `/login`、`/age`、`/appeal` 都沒有。
 - **贈幣時機**：首次註冊的 200 免費幣在年齡確認通過時由 `AuthService` 呼叫錢包回呼發放（帳號 24 小時內未確認會被刪除，不會送出又收不回）；回呼失敗不影響年齡確認，記 `wallet.grant_deferred`，由下一次存取錢包補發，冪等鍵相同；既有玩家同樣在第一次存取時補發。
 - **管理員調整**：高風險，與停權、調整等級同一套重新輸入密碼（失敗寫 `reauth.failed`）；稽核 `wallet.adjust` 的細節只有餘額種類、增減量與調整後的餘額，原因放在理由欄；目標只能是一般使用者；後台檢視餘額不觸發逾時預扣的清理。
 - **個資**：錢包與帳本視為個資，隨帳號抹除（`CASCADE`）、納入個人資料匯出，不在管理員預設可讀的範圍（只有 `wallet.adjust` 的結果會顯示在使用者檢視）；日誌只記內部編號與整數。

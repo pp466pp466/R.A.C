@@ -2073,6 +2073,34 @@ app.mount('#app');
 
 **未驗證**：①瀏覽器實測（4.3）只有使用者的口頭回報（見上表），沒有逐項細節與截圖，也沒有 360 px 手機寬度的目視。②`2.1簡報.pptx` 只在 Windows 的 PowerPoint 檢查過，沒有在 Keynote、LibreOffice 或 Google 簡報開過；字型用 Microsoft JhengHei，沒有安裝的電腦會被替代字型取代、斷行可能不同。③腳本只對開發伺服器與 SQLite 執行，沒有對 gunicorn、容器或 SQL Server 跑；SQL Server 上的行為由 `tests/test_rpg_admin_flow.py`（標記 `sqlserver`）檢查。④客服額度、全站 token 上限與 `llm_call_logs` 不經 HTTP 驗收腳本，由 `tests/test_rpg_admin_flow.py` 與批 ① 的測試檢查。⑤**展示環境（AWS）沒有部署這個 change**，管理員在展示環境仍會被扣幣，直到下一次部署。
 
+### 驗收紀錄（wallet-hub，2026-11-19，全部 16 項任務已記入；4.2 瀏覽器實測由使用者回報「全部沒問題」，尚未封存）
+
+日期 2026-11-19；對應的提交：規劃 `4c19d93`、批 ① `ed23437`、批 ② `77a27a8`、批 ③ `bf2799d`、批 ④ `e3bc8d6`；批 ⑤（設計文件與本紀錄）尚未提交。範圍：W1 錢包的**畫面層**——六個頁面頂列的共用餘額標籤、新頁面 `/wallet`（免費簽到與倒數、儲值示意、紀錄、使用說明）；**沒有 migration、資料表、設定鍵與 API 異動**，唯一的後端異動是頁面路由 `GET /wallet`（`app/controllers/wallet_page_controller.py`）。使用者決定整個 change 做完才一次 push。**沒有實際執行的項目一律標「未驗證」。**
+
+| 檔案 | 內容 |
+|---|---|
+| `app/controllers/wallet_page_controller.py`、`app/templates/wallet/hub.html`、`app/static/css/wallet.css` | 批 ③：`/wallet` 外殼（初始狀態只有 `member_tier`）、樣板與樣式 |
+| `app/static/js/ui/wallet-api.js`、`wallet-store.js`、`wallet-checkin.js`、`ui-components.js` | 批 ①②：全站共用的錢包 API 封裝、狀態庫、簽到狀態機與 `<ui-wallet-balance>` |
+| `app/static/js/wallet/wallet-hub-state.js`、`wallet-hub.js`、`wallet-demo-packages.js` | 批 ③④：錢包頁的純函式、Vue 掛載與**示意幣包資料的唯一位置** |
+| `app/static/js/game/game-wallet.js`、六個頁面的頂列樣板 | 批 ①：進行頁改從共用狀態庫衍生，六個頁面頂列放標籤 |
+| `docs/系統架構-architecture.md`、`前端結構-frontend.md`、`RPG.md` 7.7.2、`帳號與安全-auth-security.md`、`路線圖-roadmap.md` | 批 ⑤：設計文件 |
+
+| 已驗證 | 結果 |
+|---|---|
+| 版面量測，六個頁面（4.1，Playwright 加本機 Chrome，測試設定加檔案型 SQLite、自己的 5016 埠；玩家與管理員各一） | 玩家與管理員 × 360／390／768／1280 px × `/game`、`/game/start/<版本>`、`/game/<存檔>`、`/cs`、`/scripts`、`/account` 共 **48 項：水平溢出 0**（`scrollWidth` 等於 `clientWidth`）、純白文字 0、主控台與網路錯誤 0；每頁恰好一個標籤、連結 `/wallet`；360 px 標籤顯示「幣 N」（管理員「幣 0｜不消耗」）、1280 px 顯示「遊戲 幣 N」。進行頁在測試設定下第 0 幕串流回 503（沒有 RPG 模型，是量測環境，非頁面缺陷），共 16 次、只有這一個請求，腳本另行標示 |
+| 版面量測，`/wallet`（4.1） | 玩家與管理員 × 四個寬度 × 狀態（免費、儲值、紀錄第一頁、載入更多、使用說明 Modal）共 **44 項：水平溢出 0**、純白文字 0、錯誤 0；儲值四張卡片都標「示意，非正式價格」、按鈕全部停用，強制點擊停用按鈕 **0 個請求**；卡片欄數 360 與 390 px 為 1 欄、768 px 為 3 欄（第四張換到下一行）、1280 px 為 4 欄；紀錄第一頁 20 筆、載入更多後 31 筆並顯示「已經是最舊的紀錄。」；整段過程沒有任何非 GET 請求（量測沒有按簽到）；使用說明 Modal 在 360 px 的左右邊界為 16 至 344 |
+| 目視（360 與 1280 px 截圖，玩家與管理員） | 版面正常：卡片單欄、分頁與紀錄檢視、示意標示清楚、使用說明 Modal 有遮罩模糊與 1px 邊框。**觀察（皆不溢出）**：①360 與 390 px 時頂列放不下，「使用說明」換到第二行靠左（桌面在「帳號」右邊）②管理員在 `/cs` 的 360 px 頂列，標題被擠成「智能…」（先前提過，使用者尚未決定是否在手機寬度隱藏會員等級膠囊）。**量測假象（已排除）**：第一次的使用說明 Modal 截圖看起來背景透出、沒有模糊，是 Modal 的淡入動畫沒結束就截圖，等 0.9 秒後重截正常 |
+| 架構守門 | `tests/architecture` **95 項通過**（分層、無 Raw SQL、前端規則、`wallet_writes` 等） |
+| 設計文件與 README 測試 | `tests/test_design_docs.py` 與 `tests/test_readme.py` **69 項通過** |
+| Node 全套 | `node --test --test-concurrency=2 "tests/js/**/*.test.js"` **1326 項通過、0 失敗**（批 ① 前為 1121；新增的包含 `wallet-api`、`wallet-store`、`wallet-balance`、`wallet-checkin`、`wallet-hub-state`、`wallet-hub-template`、`wallet-demo-packages`） |
+| 瀏覽器實測（4.2，**使用者親自做**；驗收環境 `newprojet-acceptance`：開發伺服器、SQLite、假 RPG 模型；2026-11-19） | 使用者回報「**全部沒問題**」；**沒有逐項列舉細節與截圖**，所以這一列只是「使用者回報完成」，不是逐項證據，選做的手機寬度與等待刪除是否做過也不明。過程中有證據的：①使用者貼圖確認簽到成功的 Toast「簽到成功。目前餘額 N 幣。」、簽到卡「今天已經簽到過了」加逐秒倒數、簽到後的說明文字、「付費｜贈送」拆分。②使用者把 900 幣調到「付費」而不是「免費」，簽到前免費餘額 550、簽到後 750 沒超過上限，所以沒有預覽，這是正確行為（上限 1000 只看免費餘額，`checkin_amounts` 只用 `free_balance`，付費幣與合計都不受限）。③**驗收資料庫沿用舊檔，`locked` 身分的鎖定早被先前驗收清除**，所以第一次以它開 `/wallet` 沒被導向（用它的 cookie 重現：`/wallet`、`/game`、`/api/wallet` 全回 200，不是 `/wallet` 的缺陷）；我以 ORM 腳本只把 `accept-locked` 的 `locked_at` 與 `lock_reason` 恢復成種子資料的狀態後，以該身分的 cookie 驗證 `/wallet`、`/game`、`/cs`、`/account`、`/scripts` 都 302 到 `/appeal`、`/api/wallet` 403。`suspended` 身分的暫停發佈標記也被清空，與本 change 無關，沒有恢復 |
+| 全套 pytest（4.3，背景執行、輸出存檔；含連真實 SQL Server `project_test` 的測試） | 全套 `pytest` **11608 通過、2 略過、0 失敗**（1231 秒），包含 `tests/architecture`、`tests/test_design_docs.py`、`tests/test_agents_skill_sync.py`、`tests/test_readme.py`；另有 1 則警告，是先前就有的 `tests/test_assets_manifest.py` 子行程輸出解碼的讀取執行緒（與本 change 無關）。2 項略過的原因這次沒有列出，數量與先前全套相同（先前紀錄為 Windows ACL 與 `grp` 模組的平台限制）。**這次執行期間我還在修改 README、路線圖與 `tasks.md`，所以結束後另外重跑了 `test_design_docs.py` 與 `test_readme.py`**，結果見上一列 |
+| 每批的變異測試與冒煙 | 批 ②：把簽到狀態機與進行頁的 7 處關鍵邏輯逐一破壞；批 ③：30 處；批 ④：35 處；三批的第一輪各有一處沒被抓到，補案例後抓到（批 ③ 另有一個等效變異，保留為縱深防禦）；每批另在本機 Chrome 做過 360 與 1280 px 的冒煙（不是使用者驗收） |
+
+**與 tasks.md 的出入**（細節見 `tasks.md` 各任務的「實作結果」）：①簽到狀態機的 `reset()` 加選用參數 `{ authoritative: true }`（倒數歸零重讀時要忘掉「看過今天簽過了」）；②計時器用非同步的 `watch`；③使用說明放在頂列「使用說明」按鈕、用共用 `ui-modal`（不是常駐區塊）；④簽到成功後作廢已載入的紀錄清單；⑤示意幣包 4 張，額外幣文案寫「另贈 N 幣」。①至⑤ 皆於批 ④ 開工前由使用者確認。
+
+**未驗證**：①**4.2 只有使用者的口頭回報「全部沒問題」**（見上表），逐項細節與截圖沒有，所以下列只是「請使用者做的項目」，不能當成逐項證據：一般玩家（六個頁面標籤與前往 `/wallet`、簽到含超過上限的預覽與取消／領取、今日已簽到與倒數、儲值按鈕無法點擊且餘額不變、紀錄與載入更多）、管理員（標籤「不消耗」、註冊贈幣說明、零增減量的列）、受限帳號（被鎖定、待確認年齡、等待刪除進 `/wallet` 被導向；`/account` 等待刪除時沒有標籤）；驗收環境（5010）**尚未部署到展示環境**。②Windows 的 Chrome 以外的瀏覽器。③超過免費幣上限預覽的實機畫面：有證據的只有 Node 沙盒測試（後端 409 預覽的資料形狀沿用既有），使用者的實測有沒有走到這一步不明（實測中曾因把幣加在「付費」而沒觸發預覽）；倒數歸零的實機行為（只由沙盒與純函式測試，實機只看到逐秒遞減）。④量測腳本與截圖放在暫存資料夾，沒有進專案，之後要重測需重寫。⑤儲值價格與幣包只是示意：**上線給真實玩家前須換掉或拿掉**（後續的 `wallet-topup`，須先探索金流、價格、退款與付款紀錄保存期限）。
+
 ## 容器建置與驗收
 
 正式環境以 Docker 映像部署（見 AGENTS.md 第 9 節）。映像以 `python:3.14-slim-bookworm` 為基底（Python 版本與 `.python-version` 一致；明確指定 Debian 12，因為 Microsoft ODBC Driver 18 官方支援它），內含 `unixodbc` 與 `msodbcsql18`、前端資產與 108 個字型切片，約 277 MB。
