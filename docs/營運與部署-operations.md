@@ -805,7 +805,7 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 
 | 項目 | 結果 |
 |---|---|
-| 模型設定（取自 `aws-demo.vars`，沒有改任何設定） | RPG：`OPENROUTER_MODEL=nvidia/nemotron-3.5-lightning:free`，沒有設 `OPENROUTER_FALLBACK_MODEL`（備援就是主要模型本身）與 `OPENROUTER_ZDR`；客服：`GEMINI_MODEL=gemini-3.5-flash-lite`；`ADULT_MODE_ENABLED` 沒有設定（成人模式關閉） |
+| 模型設定（2026-11-18 當時取自 `aws-demo.vars`，沒有改任何設定；**之後已兩度更換，現況見「展示環境換模型」**） | RPG：`OPENROUTER_MODEL=nvidia/nemotron-3.5-lightning:free`，沒有設 `OPENROUTER_FALLBACK_MODEL`（備援就是主要模型本身）與 `OPENROUTER_ZDR`；客服：`GEMINI_MODEL=gemini-3.5-flash-lite`；`ADULT_MODE_ENABLED` 沒有設定（成人模式關閉） |
 | 遊戲幣 | 第一次讀錢包就有 200 免費幣；每日簽到成功（200→400，上限 1000）；第 0 幕不扣幣；一個回合後 370（扣 30，符合規範） |
 | 開存檔 | `POST /api/sessions` 回 201，耗時 4.2 秒（開存檔的模型層審查通過，沒有再遇到 6.4 的塞車） |
 | 第 0 幕（串流） | 200、`text/event-stream`；標頭與第一個事件 0.75 秒、第一個 token 1.79 秒、`done` 8.73 秒；28 個事件（`meta` 1、`token` 26、`done` 1、沒有 `error`）、813 字、最大事件間隔 1.04 秒 |
@@ -877,6 +877,16 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 - 發現（已寫回上一節的步驟）：①重放會更新 17 個檔案的修改時間，systemd 因此警告需要 `daemon-reload`，內容沒有改（`aws_demo_plan.py` 自 11/17 沒變、`plain.env` 雜湊一致）；②`--notify-email` 是必填參數；③單步預覽沒有「取得全部 N 個機密」那一行，改查主機上取機密腳本的名稱數；④`--yes` 只能和 `--only` 一起用。
 
 **未驗證**：玩家層的結果（`/account` 開關禁用、`GET /api/account/content-mode` 回 `forced: true`、目錄不再詢問、遊戲內提示不出現）沒有走一遍，演練只驗證到應用程式層；Google Cloud 的步驟沒有跑；`switch-release` 以同標籤重啟沒有實際執行（文件依既有紀錄說明，沒有演練）。
+
+### 展示環境換模型（2026-11-19）
+
+**現況**：RPG 主力 `nvidia/nemotron-3-ultra-550b-a55b:free`（`OPENROUTER_MODEL`），備援 `nvidia/nemotron-3.5-super-vl:free`（`OPENROUTER_FALLBACK_MODEL`）；`OPENROUTER_JSON_SCHEMA` 與 `OPENROUTER_REASONING` 沒有設定（維持關閉）。原本是 `dots-studio/dots-3-note-preview:free` 主力、`inclusionai/ling-3.2-flash:free` 備援（日誌的 `model` 欄位證實）。客服仍是 Gemini，不受影響。
+
+**為什麼換**（使用者驗收時回報 AI 偏保守；對照結果與限制見 `docs/RPG.md` 7.18「驗收中發現並調整的三件事」之後的對照紀錄）：同一個不道德行動（搶劫），dots 2／4、ling 0／3、ultra 3／4、super-vl 3／4 照玩家的決定寫；成人模式的親密情節各 10 次，ultra 與 super-vl 都沒有拒絕、沒被審查層擋下；兩者的結構化輸出（狀態呼叫）各 10／10 解析通過。**ultra 的敘事最完整**（571 至 831 字、都在 350 至 1000 字內），**super-vl 快（約 4 秒）但敘事偏短**，所以前者當主力、後者當備援。樣本都很小，只能當方向。
+
+**怎麼換的**（沒有重新部署映像，只換設定；步驟與緊急煞車的啟用相同，見第 7 節）：①`aws-demo.vars` 的兩行 `OPENROUTER_MODEL`、`OPENROUTER_FALLBACK_MODEL` 改成新值（先備份）→ ②`provision … --only host-init-files --execute --yes`（三個 `--with-secret` 都帶）重放主機檔案 → ③主機 `systemctl restart rac-cs rac-rpg`（約 7 秒）。驗證：主機 `plain.env` 的雜湊改變、其餘變數名稱不變、沒有 `SAFE_MODE_FORCED`、取機密的腳本仍是 6 個；兩個容器的環境變數是新值；容器內 `load_config()` 讀到 `primary=…ultra…`、`fallback=…super-vl…`、`json_schema=False`、`reasoning=False`；本機與公開網址的 `/healthz`、`/readyz` 回 200；重啟後日誌沒有 ERROR。**回復**：把 `aws-demo.vars` 的兩行改回舊值，重做同一組步驟。
+
+**未驗證**：ultra 與 super-vl 在展示環境的**實際玩家回合**（真實登入、串流、記事簿與狀態呼叫在多輪之下的表現）；多輪一致性；免費端點被限流（429）時備援切換的實際行為。
 
 ### 展示環境未達 production 的缺口（task 7.4）
 

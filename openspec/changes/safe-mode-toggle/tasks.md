@@ -46,7 +46,7 @@
 
 - [x] 6.1 全套 pytest 與 Node 全套通過（背景執行、輸出存檔；記錄數字）；`openspec validate safe-mode-toggle --strict` 通過；變異測試（至少：生效模式的三項取最保守、緊急煞車、同意版本失效、提示每存檔一次、返回位置驗證）逐一破壞並確認測試會失敗（變異腳本設逾時，結束後比對還原）
 - [x] 6.2 展示環境部署（先備份與資料庫快照，使用者授權後才執行）：`aws_demo.py deploy`（`--tag` 明確帶）→ 遷移 0020 → `flask seed-scripts` → 重啟 → 驗證 `/healthz`、`/readyz`、日誌無 ERROR；主機環境檔確認沒有 `SAFE_MODE_FORCED`、也沒有 `ADULT_MODE_*`；寫下並演練「啟用／解除緊急煞車」的操作（營運文件）
-- [ ] 6.3 使用者驗收（真實瀏覽器，含手機）：新玩家預設安全開、目錄看得到全部劇本、點內建劇本出現詢問、前往設定關閉安全模式並同意後返回、遊玩出現的尺度與提示、綁定劇本恆為安全、緊急煞車啟用後全站回安全且 `/account` 開關禁用；結果記入 README 驗收紀錄（只記實際回報的項目，未驗證處照實標註）
+- [x] 6.3 使用者驗收（真實瀏覽器，含手機）：新玩家預設安全開、目錄看得到全部劇本、點內建劇本出現詢問、前往設定關閉安全模式並同意後返回、遊玩出現的尺度與提示、綁定劇本恆為安全、緊急煞車啟用後全站回安全且 `/account` 開關禁用；結果記入 README 驗收紀錄（只記實際回報的項目，未驗證處照實標註）。**實際結果（2026-11-19）：第 1 至 7 項除三個發現（「杰」被轉成「傑」、夾雜英文、不道德行動被改寫）外沒有問題；緊急煞車啟用後的玩家層（`/account` 開關禁用等）經使用者決定略過（展示用不到），未驗證**
 - [x] 6.4 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`：`系統架構-architecture.md`、`資料模型-data-model.md`、`前端結構-frontend.md`、`帳號與安全-auth-security.md`、`營運與部署-operations.md`〔緊急煞車與 `launch-gates` 關卡改列〕、`RPG.md`、`路線圖-roadmap.md`），並讓 `tests/test_design_docs.py`、`tests/test_readme.py`、`tests/test_agents_skill_sync.py` 通過
 
 ## Workflow follow-up
