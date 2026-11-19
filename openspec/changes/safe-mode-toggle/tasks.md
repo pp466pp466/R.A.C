@@ -9,7 +9,7 @@
 - [x] 1.3 `AccessPolicy`：新增 `effective_mode(user, script_binding=None)`（偏好缺少目前版本同意視為 safe、取偏好、劇本綁定、緊急煞車最保守者）；建構時接收 `safe_mode_forced`；**過渡相容：舊的 `effective_tier(save_tier=…)`、`content_access`、`is_adult`、`author_content_cap` 暫時保留（由 2.1–2.3 移除）**；以表格驅動測試涵蓋各組合（含管理員不豁免、煞車、舊值）並通過
 - [x] 1.4 `ContentModeService` 與 `/api/account/content-mode`：`mode` 只收 `safe`／`adult`（`standard` 回 400）、關閉只需 `confirm_rules`（已同意目前版本則不需要）、緊急煞車時要求 `adult` 回 403 `safe_mode_forced`，回應形狀 `{preference, effective, confirmed, forced}`；移除 `ContentModeRestricted`、`AdultModeUnavailable`、`confirm_adult`；改寫 `tests/test_content_mode_api.py` 並通過（含 CSRF、401、年齡確認前 403、事件日誌不含內容）
 - [x] 1.5 遷移 `0020`：`sessions.safe_hint_at`（可為空、不建索引、`recreate="never"` 的 downgrade），ORM 模型同步；`docs/project資料結構文件.md` 同步並於第 14 節追加異動紀錄；驗證 `tests/test_project_db_schema_doc.py`、遷移升降級測試與 `alembic heads` 單一頭通過
-- [ ] 1.6 本批收尾：相關 pytest 全過（`test_content_tier*`、`test_content_mode_api`、`test_config*`、`test_env_example`、`test_launch_plan`、`test_access_policy*`、`test_project_db_schema_doc`、`tests/architecture`；另跑 rpg 與劇本相關測試確認過渡相容層沒有造成回歸）；更新 `docs/帳號與安全-auth-security.md` 與 `docs/資料模型-data-model.md` 中受影響段落並讓 `tests/test_design_docs.py` 通過；更新 HANDOFF.md；列出簡報衝突
+- [x] 1.6 本批收尾：相關 pytest 全過（`test_content_tier*`、`test_content_mode_api`、`test_config*`、`test_env_example`、`test_launch_plan`、`test_access_policy*`、`test_project_db_schema_doc`、`tests/architecture`；另跑 rpg 與劇本相關測試確認過渡相容層沒有造成回歸）；更新 `docs/帳號與安全-auth-security.md` 與 `docs/資料模型-data-model.md` 中受影響段落並讓 `tests/test_design_docs.py` 通過；更新 HANDOFF.md；列出簡報衝突
 
 ## 2. 目錄、開存檔與審查尺度
 

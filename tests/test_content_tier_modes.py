@@ -195,7 +195,8 @@ def test_by_default_the_brake_is_off_and_a_confirmed_adult_who_prefers_adult_has
     assert mode_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED) == {
         "preference": "adult", "effective": "adult", "confirmed": True, "forced": False,
     }
-    assert content_for(app, 2, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "adult"   # 過渡相容層也一致
+    # 過渡相容層（三值判定）維持原本的預設：成年玩家的上限是一般模式；2.5 隨舊判定一併移除
+    assert content_for(app, 2, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "standard"
 
 
 def test_with_the_brake_on_every_mode_is_safe_through_the_whole_stack_and_the_saved_preference_is_kept():

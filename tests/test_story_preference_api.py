@@ -278,7 +278,7 @@ def test_under_a_legacy_13_policy_a_minor_stays_in_the_safe_mode_whatever_the_pr
     for value in ("male", "female", "all"):
         put(client, value)
         state = content_mode_of(client)["content_mode"]
-        assert state["effective"] == "safe" and state["selectable"] == {"safe": True, "standard": False, "adult": False}
+        assert state["effective"] == "safe" and state["forced"] is False
         assert startable_ids(app, user, catalogue) == {catalogue[0]}
 
 
@@ -286,8 +286,8 @@ def test_switching_the_content_mode_does_not_change_the_preference(app):
     user = seed(app, age=30)
     client = logged_in_client(app, user)
     put(client, "female")
-    for mode in ("safe", "standard"):
-        assert client.put(CONTENT_MODE_URL, json={"mode": mode}).status_code == 200
+    for mode in ("safe", "adult"):
+        assert client.put(CONTENT_MODE_URL, json={"mode": mode, "confirm_rules": True}).status_code == 200
         assert stored(app, user.id) == "female"
 
 

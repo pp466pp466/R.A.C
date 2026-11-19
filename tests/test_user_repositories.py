@@ -225,13 +225,13 @@ def test_setting_the_preference_writes_only_that_column_for_that_user(session, u
 
 def test_an_account_without_a_completed_age_check_cannot_get_any_preference_or_confirmation(session, users):
     user = users.add_user(make_user(1))
-    assert users.set_content_preference(user, "standard") is False
+    assert users.set_content_preference(user, "adult") is False
     assert users.record_adult_confirmation(user, confirmed_at=utcnow(), rules_version="r1", method="self_declared") is False
     assert user.content_tier_preference == "safe"
     assert (user.adult_confirmed_at, user.adult_rules_version, user.adult_confirm_method) == (None, None, None)
 
 
-@pytest.mark.parametrize("tier", ["mature", "", None, "SAFE", 1])
+@pytest.mark.parametrize("tier", ["mature", "", None, "SAFE", 1, "standard"])      # 舊值 standard 只在讀取時讀作 adult，系統不再寫入它
 def test_an_unknown_tier_is_a_programming_error_and_writes_nothing(session, users, tier):
     user = users.add_user(make_user(1))
     users.complete_age_verification_if_unset(user, **age_args())
@@ -246,7 +246,7 @@ def test_the_adult_confirmation_is_recorded_replaced_and_kept_when_the_preferenc
     first, second = utcnow(), utcnow() + timedelta(days=30)
     assert users.record_adult_confirmation(user, confirmed_at=first, rules_version="r1", method="self_declared") is True
     users.set_content_preference(user, "adult")
-    users.set_content_preference(user, "standard")                      # 離開成人模式不清除確認紀錄
+    users.set_content_preference(user, "safe")                          # 離開成人模式不清除確認紀錄
     assert (user.adult_confirmed_at, user.adult_rules_version, user.adult_confirm_method) == (first, "r1", "self_declared")
     users.record_adult_confirmation(user, confirmed_at=second, rules_version="r2", method="self_declared")
     assert (user.adult_confirmed_at, user.adult_rules_version) == (second, "r2")      # 只保存目前這一次
