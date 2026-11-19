@@ -1,6 +1,6 @@
 # 模型呼叫層
 
-> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（第 12 節：驗收中發現的兩項調整——簡轉繁保留人名常用的「杰」、提示詞要求不夾雜英文，以及展示環境換為 nemotron-3-ultra 主力與 nemotron-3.5-super-vl 備援的對照紀錄見 `docs/RPG.md` 7.18）、RPG 輸出的簡轉繁（未立案的小修正，第 12 節）、rpg-turn-revision、rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（第 12 節：驗收中發現的兩項調整——簡轉繁保留人名常用的「杰」、提示詞要求不夾雜英文，以及展示環境換為 nemotron-3-ultra 主力與 nemotron-3.5-super-vl 備援的對照紀錄見 `docs/RPG.md` 7.18）、add-traditional-chinese-output-spec（把 RPG 輸出的簡轉繁寫成規格 `rpg-output-traditional-chinese` 並補測試，不改程式與行為，第 12 節）、rpg-turn-revision、rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
 > 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**已由 change `rpg-script-authoring`（RC-7）實作**（呼叫類別 `script_review`，見第 6a 節），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
 > 注意（2026-11-04）：AGENTS.md 第 5 節的 RPG 用途再新增「玩家主角的生成與審查」；**已由 change `rpg-character-creation`（RC-9）實作**（呼叫類別 `protagonist_gen`、`protagonist_review`，見第 6b 節）。兩者都是非串流的結構化輸出，沿用同一解析函式與重試規則，不使用 Gemini。
 
@@ -345,9 +345,10 @@ RPG 的提示詞已要求繁體中文（`rpg_prompt.LANGUAGE_INSTRUCTIONS`，並
 - 套件：`opencc-python-reimplemented`（OpenCC 的純 Python 版，`requirements.txt` 精確版本，離線）；設定 `s2twp`（簡體轉台灣繁體，含慣用詞：軟件→軟體）。
 - **只在句子裡真的有簡體字時才轉換**：轉換器會把繁體異體字「祕」改成「秘」、把「咸陽」改成「鹹陽」。偵測用 `s2t`（只換字）：有字被換掉就算有簡體字，但「里、咸、台、余、后、于…」這類在繁體裡也是正確用字的字（`_BOTH_FORMS`）單獨出現不算證據。取捨：整句只有這類字的簡體句（例如「他在后山」）不會被轉，句子裡有其他簡體字就整句轉換。
 - **台灣仍在用的異體字不轉**（`_KEPT_VARIANTS`，目前只有「杰」）：「杰」是「傑」的異體字、台灣人名常用，OpenCC 卻把它當簡體字改成「傑」，玩家替角色取名「李杰」，AI 的回覆就變成「李傑」（2026-11-19 展示環境驗收發現）。所以它不算簡體的證據，句子因其他簡體字而轉換時，也以它切開、只轉換其餘的片段，「杰」原樣保留。取捨：模型若輸出簡體的「杰出」會留成「杰出」（異體字、仍可讀），寧可如此也不改掉玩家取的名字；已經寫進存檔的「傑」不會自動改回。要保留更多字時只加在 `_KEPT_VARIANTS`。
-- **英文沒有伺服器端轉換**：簡體轉繁體是逐字對照，英文要翻譯就得多一次模型呼叫（每句多一次延遲與 token），所以只靠提示詞約束；偶爾仍夾雜時要看實際頻率再決定是否偵測英文句並自動重生。
+- **英文沒有伺服器端轉換**：簡體轉繁體是逐字對照，英文要翻譯就得多一次模型呼叫（每句多一次延遲與 token），所以只靠提示詞約束；偶爾仍夾雜時要看實際頻率再決定是否偵測英文句並自動重生。規格把「伺服器端不翻譯、不改寫、不擋下，含英文的繁體句原樣送達」列為明文需求，並以測試鎖住轉換本身、劇情串流（各種片段切法）與三種結構化輸出。
 - 只改 CJK 字元，ASCII、標點與 JSON 結構不變，轉換後的 JSON 仍可解析；每句約 0.1 至 0.3 毫秒。
 - 額外的好處：規則層的詞表以繁體為主，先轉繁體再審查，簡體寫法的內容不會因字形不同而漏擋（`tests/test_zh_text.py`）。
+- **規格與測試的對照**（change `add-traditional-chinese-output-spec`；封存後是主規格 `rpg-output-traditional-chinese`）：這一節是實作說明，規格只寫可觀察的行為（哪些輸出會轉、什麼情況才轉、保留哪些字、什麼不被破壞、英文不翻譯），不寫套件、`s2twp`、`_BOTH_FORMS` 這類實作名稱。5 條需求、18 個情境都有對應的測試（`tests/test_zh_text.py`，含用 `RunnerKit` 驗證「存進資料庫的是繁體」與主角審查輸出不轉）；對照表在該 change 的 `tasks.md`。之後要增加或移除保留的字（`_KEPT_VARIANTS`）、改變套用的位置，或改變「只在有簡體字時才轉」的判斷，**不能只改程式**：須走 change，並對規格的對應需求寫 MODIFIED 的 delta。客服（Gemini）的繁體中文保證是另一條路徑（Gemini 的系統指令與結構化輸出），不在這份規格內。
 
 ---
 

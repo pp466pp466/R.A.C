@@ -6,17 +6,22 @@ import json
 
 import pytest
 
-from app.models.llm_call_log import KIND_CHAT, KIND_PROTAGONIST_GEN, KIND_RPG_NOTEBOOK, KIND_RPG_STATE, KIND_SCRIPT_REVIEW
+from app.models.llm_call_log import (
+    KIND_CHAT, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW, KIND_RPG_NOTEBOOK, KIND_RPG_STATE, KIND_SCRIPT_REVIEW,
+)
 from app.services import rpg_prompt
 from app.services.rpg_output_guard import OutputGuard
 from app.services.zh_text import to_traditional
-from tests.support.llm import FakeLLMProvider
+from tests.support.game import RunnerKit, story_script
+from tests.support.llm import FakeLLMProvider, Step
 from tests.support.rpg_pure import MARKER
 from tests.test_llm_service import build, run
 
-SIMPLIFIED = "清晨的海风吹过山门。守门的弟子向你点了点头。你踏进了雾气之中。"
+SIMPLIFIED_SENTENCES = ("清晨的海风吹过山门。", "守门的弟子向你点了点头。", "你踏进了雾气之中。")
+SIMPLIFIED = "".join(SIMPLIFIED_SENTENCES)
 TRADITIONAL = "清晨的海風吹過山門。守門的弟子向你點了點頭。你踏進了霧氣之中。"
 CHUNKS = (None, 1, 2, 5, 13)
+ENGLISH_STORY = "我感覺你需要 help。他說了聲 okay 就走了。"                   # 繁體句夾雜英文單字：伺服器端不翻譯、不改寫、不擋下
 
 
 # ---- 轉換本身 ------------------------------------------------------------------------------------------------------
@@ -86,6 +91,16 @@ def test_json_structure_and_ascii_survive_so_converted_model_json_still_parses()
     assert json.loads(converted) == {"reply": "他踏進了霧氣之中", "stage": "surface", "n": 3, "ok": True}
 
 
+@pytest.mark.parametrize("sentence", ["我感覺你需要 help。", "他說了聲 okay 就走了。", "「Hello,」她說，「你好。」", ENGLISH_STORY])
+def test_english_words_in_a_traditional_sentence_are_neither_translated_nor_changed(sentence):
+    """英文夾雜只靠提示詞約束；伺服器端不翻譯、不改寫、不刪除（規格 rpg-output-traditional-chinese）。"""
+    assert to_traditional(sentence) == sentence
+
+
+def test_english_words_next_to_simplified_characters_survive_while_the_chinese_is_converted():
+    assert to_traditional("我感觉你需要 help，他说了声 okay 就走了。") == "我感覺你需要 help，他說了聲 okay 就走了。"
+
+
 # ---- 劇情串流的審查狀態機 --------------------------------------------------------------------------------------------
 
 def release_all(text, chunk, tier="standard"):
@@ -129,6 +144,30 @@ def test_the_guard_keeps_the_name_jie_whatever_way_the_chunks_are_cut(chunk):
     assert released == "李杰笑了笑。他說：「我們走吧，杰。」" and hit == ()
 
 
+@pytest.mark.parametrize("chunk", CHUNKS)
+def test_the_guard_releases_english_words_as_they_are_whatever_way_the_chunks_are_cut(chunk):
+    released, hit, _ = release_all(ENGLISH_STORY, chunk)
+    assert released == ENGLISH_STORY and hit == ()                       # 沒有被翻譯、改寫或擋下
+
+
+def test_a_simplified_story_is_streamed_and_stored_as_traditional(member_session):
+    """規格：釋放給玩家與寫入資料庫的都是繁體。回合、第 0 幕、重新生成與編輯共用同一個 `RunnerBase._attempt`，這裡驗最常用的回合，
+    並確認玩家重新整理後重播看到的也是繁體。"""
+    kit = RunnerKit(member_session)
+    user = kit.player()
+    save = kit.open_save(user)
+    plan = kit.start(user, save)
+    state = json.dumps({"elapsed_months": 1, "status_summary": "你抵達了山莊。"}, ensure_ascii=False)
+    kit.provider.script_stream(*story_script(*SIMPLIFIED_SENTENCES)).script(Step(state))
+    events = kit.run(plan, user)
+    assert events[-1].name == "done" and events[-1].data["status"] == "complete"
+    assert "".join(event.data["text"] for event in events if event.name == "token") == TRADITIONAL        # 送達玩家的
+    (turn,) = [turn for turn in kit.turns(save) if turn.client_msg_id == "m-1"]
+    assert turn.llm_raw_response == TRADITIONAL                                                          # 寫入資料庫的
+    replay = kit.game.begin_turn(user, save.public_id, client_msg_id="m-1", action="我走進山門。").replay
+    assert replay.story == TRADITIONAL
+
+
 # ---- RPG 用途的結構化輸出 ---------------------------------------------------------------------------------------------
 
 SIMPLIFIED_JSON = json.dumps({"reply": "他踏进了雾气之中。"}, ensure_ascii=False)
@@ -150,7 +189,15 @@ def test_structured_output_keeps_the_name_jie_while_converting_the_rest(member_s
     assert outcome.ok and outcome.value == {"reply": "李杰踏進了霧氣之中，杰說：「我們走。」"}
 
 
-@pytest.mark.parametrize("kind", [KIND_CHAT, KIND_SCRIPT_REVIEW])
+@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN])
+def test_structured_output_keeps_english_words_as_they_are(member_session, kind):
+    provider = FakeLLMProvider()
+    provider.script(json.dumps({"reply": ENGLISH_STORY}, ensure_ascii=False))
+    outcome = run(build(member_session, provider), kind=kind)
+    assert outcome.ok and outcome.value == {"reply": ENGLISH_STORY}
+
+
+@pytest.mark.parametrize("kind", [KIND_CHAT, KIND_SCRIPT_REVIEW, KIND_PROTAGONIST_REVIEW])
 def test_customer_service_and_review_outputs_are_not_touched(member_session, kind):
     provider = FakeLLMProvider()
     provider.script(SIMPLIFIED_JSON)
