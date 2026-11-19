@@ -8,7 +8,7 @@
 
    與 game.js 的約定（game.js 的 setup() 合併 game-session.js、game-wallet.js、game-notebook.js 的回傳並加上側欄與 Modal，必須回傳的就是下面這份清單）：
    - 載入與狀態：phase（'loading'｜'ready'｜'gone'｜'failed'）、loadFailure（{ message, link, retry }｜null）、restriction（'locked'｜'suspended'｜null）、
-     title、playerName、tierLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、
+     title、playerName、modeLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、
      openingNotice（{ tone, text, retry }｜null）。
    - 時間軸：items（最近 60 項：opening｜turn｜note｜inflight）、hasEarlier、jumpVisible、scroller（捲動區的元素參照）。
    - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
@@ -42,7 +42,7 @@
     <div class="gm-topbar__main">
       <h1 class="gm-topbar__title">{{ title }}</h1>
       <p class="gm-topbar__meta">
-        <span class="ge-chip">{{ tierLabel }}</span>
+        <span class="ge-chip">{{ modeLabel }}</span>
         <span v-if="ended" class="ge-chip ge-chip--ended">已完結</span>
         <span v-else-if="offline" class="ge-chip">離線</span>
         <button v-if="notebookFull" type="button" class="gm-chipbtn" @click="openNotebook">記事簿已滿</button>

@@ -5,6 +5,8 @@
  * 無論成功或失敗，一律在 finally 恢復「載入更多」與重試；失敗時已載入的內容不消失。本頁只讀不寫：不碰遊戲幣、不寫任何瀏覽器儲存。
  * 預設分頁：掛載時並行載入兩個清單的第一頁；有存檔（清單非空）而玩家還沒手動切換時，自動切到「我的存檔」，否則維持「選劇本」。
  * 「開始」只導向 `/game/start/<版本識別碼>`；帳號閘門非空時禁用（後端的閘門仍是唯一的把關者）。
+ * 安全模式開的玩家點選未綁定安全模式的劇本時，先以自製 Modal 詢問是否修改安全模式（前往設定、維持安全模式繼續；Esc 與遮罩視同取消，留在目錄）；
+ * 這只是詢問，不會改變任何模式，也不會自動調高。
  */
 (function () {
   'use strict';
@@ -27,7 +29,9 @@
       var userPickedTab = false;                     // 非響應式：玩家手動切換過分頁
       var leaving = false;                           // 非響應式：已經導向登入頁
       var restriction = Vue.ref(null);
-      var contentMode = Vue.ref(null);
+      var contentMode = Vue.ref(null);               // 目錄回應的 `content_mode`：{ effective, forced }（玩家目前的安全模式與緊急煞車）
+      var askCard = Vue.ref(null);                   // 點選了未綁定安全模式的劇本、正在等玩家回答「要不要修改安全模式」的卡片
+      var modePrompt = Game.modePromptCopy();
       var catalog = Vue.reactive(blankList('scripts'));
       var saves = Vue.reactive(blankList('sessions'));
 
@@ -101,12 +105,46 @@
         return Promise.all([catalogLoading, savesLoading]);
       }
 
-      /* 「開始」：閘門非空時不導向（按鈕本身也是禁用的）。回傳是否導向，供測試使用。 */
+      /* 安全模式開（生效模式為 safe）、緊急煞車未啟用的玩家點選**未綁定**安全模式的劇本（卡片 `content_tier` 為 adult）時，先詢問要不要修改安全模式。
+         綁定的劇本、已關閉安全模式、緊急煞車、或沒有拿到模式資料時都不詢問（真正的生效模式永遠由伺服器現算，這裡只決定要不要先問一句）。 */
+      function needsModeAsk(card) {
+        var mode = contentMode.value;
+        return !!mode && mode.effective === 'safe' && mode.forced !== true && card.content_tier === 'adult';
+      }
+
+      /* 「開始」：閘門非空時不導向（按鈕本身也是禁用的）；需要詢問時只開啟詢問 Modal、不導向。回傳是否導向，供測試使用。 */
       function start(card) {
         if (gate.value || !card || typeof card.id !== 'string') { return false; }
+        if (needsModeAsk(card)) { askCard.value = card; return false; }
         window.location.assign(Game.startPath(card.id));
         return true;
       }
+
+      /* 詢問 Modal 的顯示完全由 Vue 狀態接管（`askCard` 有值就是開啟）；Esc 與點遮罩由 ui-modal 設為 false，視同取消：留在目錄、沒有導向。 */
+      var askOpen = Vue.computed({
+        get: function () { return askCard.value !== null; },
+        set: function (open) { if (!open) { askCard.value = null; } }
+      });
+
+      /* 「前往設定」：到帳號設定頁，改完回到這個劇本的精靈頁（返回位置是 /game/start/<版本識別碼>）。 */
+      function goToSettings() {
+        var card = askCard.value;
+        if (!card) { return false; }
+        askCard.value = null;
+        window.location.assign(Game.accountLink(Game.startPath(card.id)));
+        return true;
+      }
+
+      /* 「維持安全模式繼續」：安全模式設定不變，以安全模式進入精靈頁。 */
+      function keepSafe() {
+        var card = askCard.value;
+        if (!card) { return false; }
+        askCard.value = null;
+        window.location.assign(Game.startPath(card.id));
+        return true;
+      }
+
+      function cancelAsk() { askCard.value = null; }
 
       Vue.onMounted(mountPage);
 
@@ -114,7 +152,8 @@
         user: user, gate: gate, tab: tab, restriction: restriction, contentMode: contentMode, catalog: catalog, saves: saves,
         gateNotice: gateNotice, modeNotice: modeNotice, canStart: canStart, memberText: memberText, preferenceText: preferenceText,
         loadCatalog: loadCatalog, loadSaves: loadSaves, selectTab: selectTab, start: start,
-        sessionPath: Game.sessionPath, tierLabel: Game.tierLabel, audienceLabel: Game.audienceLabel, statusLabel: Game.statusLabel,
+        askCard: askCard, askOpen: askOpen, modePrompt: modePrompt, goToSettings: goToSettings, keepSafe: keepSafe, cancelAsk: cancelAsk,
+        sessionPath: Game.sessionPath, tierLabel: Game.tierLabel, modeLabel: Game.modeLabel, audienceLabel: Game.audienceLabel, statusLabel: Game.statusLabel,
         formatTime: Game.formatTaipeiTime
       };
     }

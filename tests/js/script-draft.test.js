@@ -17,7 +17,7 @@ const SERVER_CONTENT = {
 test('a server content round-trips through the draft without losing or inventing anything', () => {
   const content = Draft.toContent(Draft.toDraft(SERVER_CONTENT));
   assert.equal(content.title, '青雲問道');
-  assert.equal(content.content_tier, 'standard');
+  assert.equal(content.content_tier, 'adult');                  // 伺服器內容的舊值 standard 讀作 adult（未綁定），儲存時送 adult
   assert.deepEqual(content.tags, ['仙俠', '成長']);
   assert.deepEqual(content.calendar, { name: '乾歷朝', start_year: 1200 });
   assert.deepEqual([content.ending_mode, content.ending_text, content.ending_age], ['custom', '飛升而去。', 90]);
@@ -35,7 +35,7 @@ test('a blank draft sends empty optional fields as null and no list items', () =
   assert.equal(content.calendar, null);
   assert.deepEqual([content.tags, content.characters, content.locations, content.milestones], [[], [], [], []]);
   assert.deepEqual([content.ending_mode, content.ending_text, content.ending_age], ['none', null, null]);
-  assert.equal(content.content_tier, 'safe');
+  assert.equal(content.content_tier, 'adult');                  // 新草稿預設未綁定安全模式
 });
 
 test('whitespace is trimmed but the text itself is never rewritten', () => {
@@ -100,12 +100,37 @@ test('malformed server content never throws and produces an empty editable draft
   for (const bad of [null, undefined, 42, 'x', [], { characters: 'oops', locations: 7, milestones: null, tags: 'x' }]) {
     const draft = Draft.toDraft(bad);
     assert.deepEqual([draft.characters.length, draft.locations.length, draft.milestones.length], [0, 0, 0]);
-    assert.equal(draft.content_tier, 'safe');
+    assert.equal(draft.content_tier, 'adult');                  // 缺值（新草稿）＝未綁定
   }
 });
 
-test('an unknown tier falls back to the safest mode', () => {
+test('an unknown tier falls back to the safer reading (bound), the legacy value reads as unbound', () => {
   assert.equal(Draft.toDraft({ content_tier: 'wild' }).content_tier, 'safe');
+  assert.equal(Draft.toDraft({ content_tier: 'standard' }).content_tier, 'adult');
+  assert.equal(Draft.toDraft({ content_tier: 'adult' }).content_tier, 'adult');
+  assert.equal(Draft.toDraft({ content_tier: 'safe' }).content_tier, 'safe');
+});
+
+test('the bind-to-safe-mode checkbox maps to exactly two sent values, and there is no cap by the author age any more', () => {
+  assert.equal(Draft.tierFor(true), 'safe');
+  assert.equal(Draft.tierFor(false), 'adult');
+  for (const junk of [undefined, null, 'true', 1, 'safe']) { assert.equal(Draft.tierFor(junk), 'adult', String(junk)); }      // 只有明確的 true 才是綁定
+  assert.equal(Draft.isBound('safe'), true);
+  for (const unbound of ['adult', 'standard', undefined, null]) { assert.equal(Draft.isBound(unbound), false, String(unbound)); }
+  assert.equal(Draft.isBound('wild'), true);                                                        // 不認得的值取較保守的
+  assert.equal('allowedTiers' in Draft, false);
+});
+
+test('an old standard draft shows as unticked, is not phantom-dirty, and is sent as adult when saved', () => {
+  const draft = Draft.toDraft(SERVER_CONTENT);
+  assert.equal(Draft.isBound(draft.content_tier), false);
+  assert.equal(Draft.snapshot(draft), Draft.snapshot(Draft.toDraft(SERVER_CONTENT)));          // 讀取兩次結果相同：沒有因轉換而變髒
+  assert.equal(Draft.toContent(draft).content_tier, 'adult');
+  assert.equal(Draft.toContent({ ...draft, content_tier: 'standard' }).content_tier, 'adult');   // 即使表單物件被塞進舊值，送出的也是 adult
+  draft.content_tier = Draft.tierFor(true);
+  assert.equal(Draft.toContent(draft).content_tier, 'safe');
+  draft.content_tier = Draft.tierFor(false);
+  assert.equal(Draft.toContent(draft).content_tier, 'adult');
 });
 
 test('the dirty check compares what would be sent, not the form object', () => {
@@ -134,12 +159,8 @@ test('the total counts every text field once and ignores numbers', () => {
   assert.equal(Draft.totalChars(draft), 2 + 4 + 3 + 2 + (1 + 1 + 2) + 2);
 });
 
-test('the declared tier choices stop at the authors cap', () => {
-  assert.deepEqual(Draft.allowedTiers('safe'), ['safe']);
-  assert.deepEqual(Draft.allowedTiers('standard'), ['safe', 'standard']);
-  assert.deepEqual(Draft.allowedTiers('adult'), ['safe', 'standard', 'adult']);
-  assert.deepEqual(Draft.allowedTiers('nonsense'), ['safe']);
-  assert.deepEqual(Draft.allowedTiers(undefined), ['safe']);
+test('there is no tier choice list any more: the checkbox is the only control', () => {
+  assert.equal(typeof Draft.allowedTiers, 'undefined');
 });
 
 test('server error paths get Chinese field names', () => {
@@ -170,7 +191,9 @@ test('a rejection names only the fixed categories and never anything from the co
 
 test('status and tier labels cover every value the server can send', () => {
   for (const status of ['draft', 'pending_review', 'published', 'rejected', 'superseded']) { assert.ok(Draft.STATUS_LABELS[status], status); }
-  for (const tier of ['safe', 'standard', 'adult']) { assert.ok(Draft.TIER_LABELS[tier], tier); }
+  assert.deepEqual(Object.keys(Draft.TIER_LABELS), ['safe']);                    // 只有綁定有標籤；adult 與舊值 standard 是未綁定、沒有標籤
+  assert.equal(Draft.TIER_LABELS.safe, '綁定安全模式');
+  for (const old of ['一般模式', '成人模式']) { assert.ok(!JSON.stringify(Draft.TIER_LABELS).includes(old), old); }
 });
 
 // ---- 讀者頻道（story-preference 規格：script-authoring 的「創作頁面的行為」）------------------------------------

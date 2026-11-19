@@ -169,7 +169,7 @@
 
       return {
         phase: session.phase, loadFailure: session.loadFailure, restriction: session.restriction, title: session.title, playerName: session.playerName,
-        tierLabel: session.tierLabel, modeNote: session.modeNote, gateNotice: session.gateNotice, ended: session.ended, offline: session.offline,
+        modeLabel: session.modeLabel, modeNote: session.modeNote, gateNotice: session.gateNotice, ended: session.ended, offline: session.offline,
         notice: session.notice, openingNotice: session.openingNotice,
         items: session.items, hasEarlier: session.hasEarlier, jumpVisible: session.jumpVisible, scroller: scroller,
         input: input, draft: session.draft, actionError: session.actionError, draftCount: session.draftCount, draftOver: session.draftOver,

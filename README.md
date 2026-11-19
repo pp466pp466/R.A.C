@@ -2122,6 +2122,26 @@ app.mount('#app');
 
 **未驗證**：真實手機與其他瀏覽器、使用者親自驗收（屬 6.3）、`/terms` 與 `/privacy` 的法務覆核（仍標示草稿）、展示環境部署（屬 6.2）。
 
+### 驗收紀錄（safe-mode-toggle C 批第 4 組，2026-11-19，已實作、尚未提交、尚未使用者驗收）
+
+第 4 組（tasks 4.1 至 4.5）：目錄通知與卡片標示、精靈頁與遊戲頁、創作頁綁定勾選。
+
+| 檔案 | 內容 |
+|---|---|
+| `app/static/js/game/game-labels.js`、`entry.js`、`app/templates/game/index.html`、`app/static/css/game.css` | 卡片綁定標籤（`tierLabel`）、存檔的生效模式（`modeLabel`）、兩種模式與緊急煞車的說明、詢問 Modal（`askCard`、`goToSettings`、`keepSafe`、`cancelAsk`）與 `accountLink` |
+| `app/static/js/game/game-session.js`、`game.js`、`game-state.js`、`wizard-state.js`、`app/templates/game/session.html` | 遊戲頁顯示現算模式與只有緊急煞車或劇本綁定的說明；移除 `MINOR_NOTE`、`content_tier_restricted` 與 `content_mode_restricted` |
+| `app/static/js/scripts/script-draft.js`、`script-workshop.js`、`app/templates/scripts/workshop.html`、`app/static/css/scripts.css`、`app/services/script_authoring_service.py` | 「綁定安全模式」勾選框取代三選一下拉；`tierOf`／`isBound`／`tierFor`；`/api/scripts/limits` 不再回 `max_content_tier` |
+| `tests/js/entry.test.js`、`game-labels.test.js`、`game-session.test.js`、`game-state.test.js`、`script-draft.test.js`、`wizard*.test.js`、`tests/js/support/game-contract.js`、`tests/test_game_pages.py`、`tests/test_script_page.py`、`tests/test_script_authoring_api.py` | 改寫與新增的測試 |
+
+| 已驗證 | 結果 |
+|---|---|
+| Node 全套（`node --test --test-concurrency=2 "tests/js/**/*.test.js"`） | 第 4 組完成後 **1388 項通過、0 失敗**（第 3 組後為 1368；新增含詢問流程 11 項、標籤與文案、綁定勾選與舊值處理） |
+| 相關 pytest（4.5；**不是全套**，全套留到 6.1） | `tests/architecture`、`test_game_*`、`test_script_*`、`test_session_api`、`test_account*`、`test_legal*`、`test_auth_pages`、`test_safe_next`、`test_content_*`、`test_wallet_*`、設計文件、README、`test_agents_skill_sync` **3247 通過、2 略過（沿用 A 批的守門測試允許清單）、0 失敗**（312 秒） |
+| 瀏覽器冒煙（4.4；Playwright 加本機 Chrome，拋棄式 SQLite、自己的 5015 至 5017 埠；內建劇本「青雲問道」為未綁定，另在拋棄式資料庫加一份綁定劇本） | 目錄 **52 項通過、0 失敗**：360／390／768／1280 px 水平溢出 0、純白文字 0、主控台錯誤 0；安全模式開時提示可到帳號設定；綁定的卡片有「綁定安全模式」標籤、未綁定的沒有任何模式標籤；頁面沒有年齡或舊三種模式字樣；詢問 Modal 三個回答與說明；綁定劇本直接進精靈頁；Esc、點遮罩、取消都留在目錄且沒有寫入請求；維持安全模式進入精靈頁（顯示序章、沒有「內容模式高於」）且設定不變；前往設定帶返回位置到帳號頁，同意並關閉後自動回到該劇本的精靈頁；關閉安全模式後目錄顯示「安全模式關」、點未綁定劇本不再詢問。緊急煞車 **5 項通過**（說明、無詢問、版面）。創作頁 **23 項通過**：四個寬度沒有下拉、有預設未勾的勾選框與限制說明；帶入範例後為未勾；勾選儲存後伺服器內容為 `safe`、版本清單出現「綁定安全模式」標籤 |
+| 目視 | 360 px 詢問 Modal 第一版三個按鈕擠在同一列、文字折行，改為窄螢幕直向堆疊（前往設定在最上面）後重拍，版面正常；1280 px 目錄、創作頁 360 px 編輯畫面正常 |
+
+**未驗證**：真實手機、使用者親自驗收（屬 6.3）、創作頁唯讀版本（待審、已發佈）的勾選框禁用只有樣板與單元測試檢查、沒有在瀏覽器逐一開啟；「已發佈版本修改綁定須產生新版本並重新送審」沿用既有的版本規則（後端測試涵蓋），瀏覽器沒有走一遍送審流程。
+
 ## 容器建置與驗收
 
 正式環境以 Docker 映像部署（見 AGENTS.md 第 9 節）。映像以 `python:3.14-slim-bookworm` 為基底（Python 版本與 `.python-version` 一致；明確指定 Debian 12，因為 Microsoft ODBC Driver 18 官方支援它），內含 `unixodbc` 與 `msodbcsql18`、前端資產與 108 個字型切片，約 277 MB。

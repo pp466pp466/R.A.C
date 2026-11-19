@@ -318,7 +318,6 @@
   }
 
   var GATE_FAILURES = {
-    content_tier_restricted: { message: '這個劇本的內容模式高於您目前的模式，所以無法開始。', link: ACCOUNT_LINK },
     age_confirmation_required: { message: '請先到帳號設定完成年齡確認，才能開始冒險。', link: ACCOUNT_LINK },
     age_restricted: { message: '您的年齡目前不符合使用這項功能的規定，所以無法開始冒險。', link: null },
     account_locked: { message: '您的帳號目前被鎖定，只能到申訴頁留言給管理員。', link: APPEAL_LINK },

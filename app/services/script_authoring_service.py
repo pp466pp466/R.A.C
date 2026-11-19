@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.models.script import REVIEW_REJECT, VERSION_DRAFT, Script, ScriptVersion
-from app.models.user import CONTENT_TIER_ADULT, User
+from app.models.user import User
 from app.observability import script_events
 from app.repositories.errors import (
     AuthorNameLockedError, DraftChangedError, InvalidVersionTransitionError, OpenVersionExistsError, VersionNotDraftError,
@@ -116,7 +116,6 @@ class ScriptAuthoringService:
             },
             "publish_suspended": user.publish_suspended_at is not None,
             "has_nickname": user.nickname is not None,
-            "max_content_tier": CONTENT_TIER_ADULT,           # 過渡：舊的創作頁下拉選單用（全站只限滿 18 歲，沒有上限）；safe-mode-toggle 4.3 隨勾選框一併移除
             "spec": spec_limits(),
         }
 

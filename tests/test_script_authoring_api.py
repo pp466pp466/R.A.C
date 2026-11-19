@@ -448,7 +448,7 @@ def test_the_limits_report_only_the_callers_own_numbers(app):
     spec = limits.pop("spec")
     assert limits == {
         "scripts": {"used": 3, "limit": 3}, "submissions_today": {"used": 0, "limit": 3},
-        "publish_suspended": False, "has_nickname": True, "max_content_tier": "adult",
+        "publish_suspended": False, "has_nickname": True,      # safe-mode-toggle 4.3：不再有 max_content_tier（沒有依作者年齡的內容上限）
     }
     assert spec["title"] == 30 and spec["total"] == 8000 and spec["character_count"] == 10 and spec["milestone_count"] == 8
     assert other.get("/api/scripts/limits").get_json()["limits"]["scripts"]["used"] == 1

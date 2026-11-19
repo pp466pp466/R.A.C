@@ -43,7 +43,7 @@
           <li v-for="version in script.versions" :key="version.id" class="sw-version">
             <span class="sw-version__no">第 {{ version.version_no }} 版</span>
             <span class="sw-chip" :class="'sw-chip--' + version.status">{{ statusLabels[version.status] || version.status }}</span>
-            <span class="sw-chip">{{ tierLabels[version.content_tier] || version.content_tier }}</span>
+            <span v-if="tierLabels[version.content_tier]" class="sw-chip">{{ tierLabels[version.content_tier] }}</span>
             <span class="sw-version__muted">{{ version.total_chars }} 字</span>
             <span class="sw-version__actions">
               <button type="button" class="ui-btn sw-btn-sm" :disabled="busy" @click="openVersion(version.id)">{{ version.status === 'draft' ? '編輯' : '檢視' }}</button>
@@ -107,11 +107,8 @@
               <p v-if="err('world_name')" class="sw-error" role="alert">{{ err('world_name') }}</p>
             </div>
             <div class="col-12 col-md-5 sw-field">
-              <label for="sw-tier">內容模式</label>
-              <select id="sw-tier" class="sw-input" v-model="editor.draft.content_tier" :disabled="!canEdit">
-                <option v-for="tier in tiers" :key="tier" :value="tier">{{ tierLabels[tier] }}</option>
-              </select>
-              <p class="sw-hint">宣告這份劇本的內容程度；未成年的作者只能宣告安全模式。玩家只能遊玩不高於自己目前模式的劇本。</p>
+              <label class="sw-check" for="sw-bound"><input id="sw-bound" type="checkbox" v-model="bound" :disabled="!canEdit"> 綁定安全模式</label>
+              <p class="sw-hint">綁定後，不論玩家的設定，這份劇本一律以安全模式遊玩，所以內容須符合安全模式的界線，不適合露骨或性暗示的情節。未勾選時跟隨玩家的設定；無論有沒有勾選，涉及未成年的性內容、性暴力、非自願的性情節與以真人名義的性內容，一律會被擋下。</p>
               <p v-if="err('content_tier')" class="sw-error" role="alert">{{ err('content_tier') }}</p>
             </div>
           </div>

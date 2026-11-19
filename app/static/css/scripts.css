@@ -142,6 +142,9 @@ textarea.sw-input { resize: vertical; }
 .sw-fieldset { margin: 0 0 0.9rem; padding: 0; border: 0; }
 .sw-radio { display: block; margin-bottom: 0.3rem; cursor: pointer; }
 .sw-radio input { margin-right: 0.4rem; accent-color: var(--color-accent); }
+/* 「綁定安全模式」勾選框（safe-mode-toggle）：與單選一樣用主題的強調色 */
+.sw-check { display: block; margin-bottom: 0.3rem; cursor: pointer; }
+.sw-check input { margin-right: 0.4rem; accent-color: var(--color-accent); }
 
 .sw-preview { margin-top: 1rem; padding: 0.7rem 0.9rem; border: var(--border-hairline); border-left: 2px solid var(--color-accent); }
 .sw-preview__title { margin: 0 0 0.4rem; font-size: 0.95rem; font-weight: 500; }

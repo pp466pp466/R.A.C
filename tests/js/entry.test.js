@@ -1,7 +1,8 @@
 'use strict';
 /* rpg-entry-pages 規格的入口頁（entry.js）：以真的 Vue、真的 Auth、真的 game-labels.js 與 game-api.js 在 `vm` 沙盒執行 `setup()`，
  * 只把 axios、location 與 mount 換成替身。驗證預設分頁、載入更多只送一次且 finally 恢復、has_more 為假時沒有下一頁、失敗保留已載入的卡片與重試、
- * 閘門非空時「開始」禁用、未成年顯示原因、401 導向登入；最後檢查樣板使用的每個名稱都由 setup() 回傳。
+ * 閘門非空時「開始」禁用、兩種安全模式與緊急煞車的說明、點選未綁定劇本時的詢問流程（前往設定、維持安全模式、Esc 視同取消）、401 導向登入；
+ * 最後檢查樣板使用的每個名稱都由 setup() 回傳。
  * 沒有瀏覽器可以掛載；樣板的文字與結構由 tests/test_game_pages.py 檢查。 */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -30,7 +31,7 @@ const card = (id, title = `劇本${id.slice(0, 2)}`) => ({
 const save = (id, title = `存檔${id.slice(0, 2)}`) => ({
   id, title, content_tier: 'safe', status: 'active', player_name: '林初', completed_turns: 3, last_active_at: '2026-10-27T12:00:00Z',
 });
-const catalogPage = (scripts, extra = {}) => ({ data: { ok: true, scripts, has_more: false, content_mode: { effective: 'standard', is_adult: true }, ...extra } });
+const catalogPage = (scripts, extra = {}) => ({ data: { ok: true, scripts, has_more: false, content_mode: { effective: 'adult', forced: false }, ...extra } });
 const savesPage = (sessions, extra = {}) => ({ data: { ok: true, sessions, has_more: false, ...extra } });
 
 const CATALOG_URL = '/api/sessions/catalog';
@@ -106,11 +107,11 @@ t('with no saves the default tab is the script catalog; mounting loads the first
   assert.equal(page.tab.value, 'scripts');                          // 沒有存檔：維持「選劇本」
 });
 
-t('the first page also carries the content mode summary used to explain missing scripts', async () => {
-  const { page, mount } = setupEntry({ respond: () => Promise.resolve(catalogPage([card(ID_A)], { content_mode: { effective: 'safe', is_adult: false } })) });
+t('the first page also carries the content mode summary shown as the safe mode state', async () => {
+  const { page, mount } = setupEntry({ respond: () => Promise.resolve(catalogPage([card(ID_A)], { content_mode: { effective: 'safe', forced: false } })) });
   await mount();
-  assert.deepEqual(JSON.parse(JSON.stringify(page.contentMode.value)), { effective: 'safe', is_adult: false });
-  assert.ok(page.modeNotice.value.text.includes('18'));
+  assert.deepEqual(JSON.parse(JSON.stringify(page.contentMode.value)), { effective: 'safe', forced: false });
+  assert.ok(page.modeNotice.value.text.includes('安全模式開') && page.modeNotice.value.link === '/account');
 });
 
 t('the initial state supplies the member tier text and the story preference text', () => {
@@ -388,7 +389,7 @@ t('start goes to the wizard path of that version', async () => {
 t('with a non-empty gate start is disabled and goes nowhere, while the list can still be browsed', async () => {
   const { page, navigations, mount } = setupEntry({
     state: { user: { member_tier: 'free', story_preference: 'all' }, gate: 'age_confirmation_required' },
-    respond: () => Promise.resolve(catalogPage([card(ID_A)], { content_mode: { effective: 'safe', is_adult: true } })),
+    respond: () => Promise.resolve(catalogPage([card(ID_A)], { content_mode: { effective: 'safe', forced: false } })),
   });
   await mount();
   assert.deepEqual(ids(page.catalog), [ID_A]);                      // 清單仍可瀏覽
@@ -404,13 +405,136 @@ t('start ignores anything that is not a card with a string id', async () => {
   assert.deepEqual(navigations, []);
 });
 
-t('a minor is told why some scripts are missing and nothing on the page can raise the mode', async () => {
-  const { page, mount } = setupEntry({ respond: () => Promise.resolve(catalogPage([card(ID_A)], { content_mode: { effective: 'safe', is_adult: false } })) });
+t('the three mode states are explained, every script stays visible, and nothing on the page can raise the mode by itself', async () => {
+  const states = [
+    [{ effective: 'safe', forced: false }, '安全模式開', '/account'],
+    [{ effective: 'adult', forced: false }, '安全模式關', null],
+    [{ effective: 'safe', forced: true }, '目前系統暫時只提供安全模式', null],
+  ];
+  for (const [mode, expected, link] of states) {
+    const { page, mount } = setupEntry({ respond: () => Promise.resolve(catalogPage([card(ID_A), card(ID_B)], { content_mode: mode })) });
+    await mount();
+    assert.ok(page.modeNotice.value.text.includes(expected), expected);
+    assert.equal(page.modeNotice.value.link, link, expected);
+    assert.deepEqual(ids(page.catalog), [ID_A, ID_B]);                      // 所有劇本都看得到，沒有因模式被隱藏
+    for (const name of ['setMode', 'changeMode', 'raiseMode', 'saveMode']) { assert.ok(!(name in page), name); }
+  }
+});
+
+t('no age-based explanation and no old mode names reach the page text', async () => {
+  const { page, mount } = setupEntry({ respond: () => Promise.resolve(catalogPage([card(ID_A)], { content_mode: { effective: 'safe', forced: false } })) });
   await mount();
-  const notice = page.modeNotice.value;
-  assert.ok(notice.text.includes('安全模式') && notice.link === null);
-  const forbidden = ['setMode', 'changeMode', 'raiseMode', 'saveMode'];
-  for (const name of forbidden) { assert.ok(!(name in page), name); }
+  const text = JSON.stringify([page.modeNotice.value, page.modePrompt]);
+  for (const forbidden of ['未滿 18', '部分劇本不會顯示', '一般模式', '成人模式']) { assert.ok(!text.includes(forbidden), forbidden); }
+  assert.equal(page.tierLabel('adult'), '');                                 // 未綁定的卡片沒有任何標籤
+  assert.equal(page.tierLabel('safe'), '綁定安全模式');
+  assert.equal(page.modeLabel('adult'), '安全模式關');
+});
+
+// ---- 點選未綁定劇本時的詢問 -----------------------------------------------------------------------------
+
+const unbound = (id) => ({ ...card(id), content_tier: 'adult' });
+const safeOn = { effective: 'safe', forced: false };
+
+async function mountWith(cards, mode) {
+  const setup = setupEntry({ respond: () => Promise.resolve(catalogPage(cards, mode === undefined ? {} : { content_mode: mode })), saves: emptySaves });
+  await setup.mount();
+  return setup;
+}
+
+t('safe mode on and an unbound script: start asks first and goes nowhere yet', async () => {
+  const { page, navigations } = await mountWith([unbound(ID_A)], safeOn);
+  assert.equal(page.start(page.catalog.items[0]), false);
+  assert.deepEqual(navigations, []);
+  assert.equal(page.askOpen.value, true);
+  assert.equal(page.askCard.value.id, ID_A);
+});
+
+t('go to settings leads to the account page and returns to this script wizard', async () => {
+  const { page, navigations } = await mountWith([unbound(ID_A)], safeOn);
+  page.start(page.catalog.items[0]);
+  assert.equal(page.goToSettings(), true);
+  assert.deepEqual(navigations, [`/account?return=${encodeURIComponent('/game/start/' + ID_A)}`]);
+  assert.equal(page.askOpen.value, false);
+});
+
+t('keeping the safe mode continues into the wizard and changes nothing else', async () => {
+  const { page, navigations, requests } = await mountWith([unbound(ID_A)], safeOn);
+  const before = requests.length;
+  page.start(page.catalog.items[0]);
+  assert.equal(page.keepSafe(), true);
+  assert.deepEqual(navigations, [`/game/start/${ID_A}`]);
+  assert.equal(page.askOpen.value, false);
+  assert.equal(requests.length, before);                                      // 沒有送出任何請求（模式設定不變）
+});
+
+t('cancel, Esc and the overlay (the modal sets its model to false) stay on the catalog without going anywhere', async () => {
+  const { page, navigations } = await mountWith([unbound(ID_A)], safeOn);
+  page.start(page.catalog.items[0]);
+  page.cancelAsk();
+  assert.equal(page.askOpen.value, false);
+  page.start(page.catalog.items[0]);
+  page.askOpen.value = false;                                                 // ui-modal 在 Esc 與點遮罩時送出 update:modelValue(false)
+  assert.equal(page.askCard.value, null);
+  assert.deepEqual(navigations, []);
+  assert.equal(page.goToSettings(), false);                                   // 沒有等待中的詢問：不導向
+  assert.equal(page.keepSafe(), false);
+  assert.deepEqual(navigations, []);
+});
+
+t('a script bound to the safe mode starts at once, with no question', async () => {
+  const { page, navigations } = await mountWith([card(ID_A)], safeOn);
+  assert.equal(page.start(page.catalog.items[0]), true);
+  assert.deepEqual(navigations, [`/game/start/${ID_A}`]);
+  assert.equal(page.askOpen.value, false);
+});
+
+t('a player who already turned the safe mode off starts at once, and so does everyone while the emergency brake is on', async () => {
+  for (const mode of [{ effective: 'adult', forced: false }, { effective: 'safe', forced: true }, { effective: 'adult', forced: true }]) {
+    const { page, navigations } = await mountWith([unbound(ID_A)], mode);
+    assert.equal(page.start(page.catalog.items[0]), true, JSON.stringify(mode));
+    assert.deepEqual(navigations, [`/game/start/${ID_A}`]);
+    assert.equal(page.askOpen.value, false);
+  }
+});
+
+t('without a mode summary or with an odd card value nothing is asked (the server decides the real mode)', async () => {
+  const missing = await mountWith([unbound(ID_A)], null);
+  assert.equal(missing.page.start(missing.page.catalog.items[0]), true);
+  for (const tier of ['standard', 'mystery', undefined, 7]) {
+    const odd = await mountWith([{ ...card(ID_A), content_tier: tier }], safeOn);
+    assert.equal(odd.page.start(odd.page.catalog.items[0]), true, String(tier));
+    assert.equal(odd.page.askOpen.value, false);
+  }
+});
+
+t('with a non-empty gate the question never opens either', async () => {
+  const { page, navigations, mount } = setupEntry({
+    state: { user: { member_tier: 'free', story_preference: 'all' }, gate: 'age_confirmation_required' },
+    respond: () => Promise.resolve(catalogPage([unbound(ID_A)], { content_mode: safeOn })), saves: emptySaves,
+  });
+  await mount();
+  assert.equal(page.start(page.catalog.items[0]), false);
+  assert.equal(page.askOpen.value, false);
+  assert.deepEqual(navigations, []);
+});
+
+t('a second start while the question is open replaces the card instead of stacking questions', async () => {
+  const { page } = await mountWith([unbound(ID_A), unbound(ID_B)], safeOn);
+  page.start(page.catalog.items[0]);
+  page.start(page.catalog.items[1]);
+  assert.equal(page.askCard.value.id, ID_B);
+});
+
+t('the ask modal is driven by Vue state only: no Bootstrap script, no v-html, three answers in the actions slot', () => {
+  const html = read('app/templates/game/index.html');
+  const modal = html.slice(html.indexOf('<ui-modal v-model="askOpen"'), html.indexOf('</ui-modal>'));
+  assert.ok(modal.length > 200, '找不到詢問 Modal');
+  for (const needle of ['@click="cancelAsk"', '@click="keepSafe"', '@click="goToSettings"', 'modePrompt.goSettings', 'modePrompt.keepSafe', 'modePrompt.cancel', ':status-code="modePrompt.code"']) {
+    assert.ok(modal.includes(needle), needle);
+  }
+  assert.ok(!/data-bs-|v-html/.test(html));
+  assert.match(html, /<span v-if="tierLabel\(card\.content_tier\)" class="ge-chip">/);        // 沒有綁定的卡片不顯示標籤
 });
 
 // ---- 我的存檔 -------------------------------------------------------------------------------------
@@ -489,7 +613,7 @@ t('save links are site-internal paths with the identifier encoded', () => {
 // ---- 樣板與腳本的對應 -----------------------------------------------------------------------------
 
 const JS_WORDS = new Set(['true', 'false', 'null', 'undefined', 'in', 'of', 'typeof']);
-const LOOP_VARS = new Set(['card', 'save', 'tag', 'index']);
+const LOOP_VARS = new Set(['card', 'save', 'tag', 'index', 'line']);
 
 /* 取出 Vue 樣板裡所有運算式（插值與 v-*、:、@ 屬性），回傳其中最外層的識別字（不含屬性存取與字串內容）。 */
 function templateNames(html) {

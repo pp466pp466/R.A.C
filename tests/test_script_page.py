@@ -161,7 +161,7 @@ def test_the_editor_explains_the_rules_field_in_plain_words_and_gives_an_example
     html = read(TEMPLATE)
     assert "世界規則（狀態轉移規則，選填）" in html
     assert "「狀態轉移」就是從一個狀態變成另一個狀態" in html and "寫給 AI 的「行事準則」" in html
-    fields = [tag for tag in re.findall(r"<(?:input|textarea)\b[^>]*>", html) if 'type="radio"' not in tag]
+    fields = [tag for tag in re.findall(r"<(?:input|textarea)\b[^>]*>", html) if 'type="radio"' not in tag and 'type="checkbox"' not in tag]
     assert len(fields) >= 20, "沒有掃到預期數量的欄位，比對可能是空洞的"
     missing = [tag[:80] for tag in fields if not re.search(r'\s:?placeholder=', tag)]
     assert missing == [], missing
@@ -228,6 +228,51 @@ def test_the_audience_section_says_it_only_orders_the_list_and_never_restricts_w
     assert "只影響劇本在清單中的排序" in section and "不限制誰能玩" in section
     assert "err('audience')" in section and 'class="sw-error" role="alert"' in section                # 伺服器的欄位錯誤顯示在欄位旁
     assert "v-html" not in section and "data-bs-" not in section
+
+
+# ---- 綁定安全模式（safe-mode-toggle 4.3；script-safe-binding 的「創作頁的勾選與限制提示」）---------------------------------------------
+
+def test_the_three_way_tier_select_is_gone_and_a_single_bind_checkbox_replaces_it():
+    html = read(TEMPLATE)
+    assert 'id="sw-tier"' not in html and "<option" not in html.split("sw-world", 1)[1].split("sw-tags", 1)[0]
+    checkboxes = re.findall(r'<input\b[^>]*type="checkbox"[^>]*>', html)
+    assert len(checkboxes) == 1
+    assert 'id="sw-bound"' in checkboxes[0] and 'v-model="bound"' in checkboxes[0] and ':disabled="!canEdit"' in checkboxes[0]      # 唯讀版本禁用
+    assert "綁定安全模式</label>" in html
+
+
+def test_the_bind_hint_explains_the_limit_and_that_the_absolute_bans_apply_either_way():
+    html = read(TEMPLATE)
+    hint = html[html.index('id="sw-bound"'):html.index("sw-tags")]
+    for needle in ("不論玩家的設定", "一律以安全模式遊玩", "須符合安全模式的界線", "不適合露骨或性暗示的情節", "未勾選時跟隨玩家的設定",
+                   "涉及未成年的性內容、性暴力、非自願的性情節與以真人名義的性內容，一律會被擋下"):
+        assert needle in hint, needle
+    for stale in ("一般模式", "成人模式", "未成年的作者只能宣告", "不高於自己目前模式"):
+        assert stale not in html, stale
+    assert "err('content_tier')" in hint                                                      # 伺服器的欄位錯誤仍顯示在欄位旁
+
+
+def test_the_version_list_shows_a_label_only_for_a_bound_version():
+    html = read(TEMPLATE)
+    assert '<span v-if="tierLabels[version.content_tier]" class="sw-chip">{{ tierLabels[version.content_tier] }}</span>' in html
+    assert "|| version.content_tier" not in html                                              # 不把原始值（adult、standard）顯示給作者
+
+
+def test_the_workshop_script_binds_the_checkbox_through_a_computed_and_no_longer_reads_a_tier_cap():
+    source = read(JS_DIR / "script-workshop.js")
+    assert "Scripts.isBound(editor.draft.content_tier)" in source and "Scripts.tierFor(value)" in source
+    assert "max_content_tier" not in source and "allowedTiers" not in source and "tiers" not in source.replace("tiers.", "")
+    draft = read(JS_DIR / "script-draft.js")
+    assert "TIER_ORDER" not in draft and "allowedTiers" not in draft and "一般模式" not in draft and "成人模式" not in draft
+
+
+def test_the_limits_endpoint_no_longer_reports_a_content_tier_cap(app):
+    with Session(app.extensions["db_engine"]) as s:
+        user = add_user(s, 1, nickname="作者", nickname_code="AB12")
+        s.refresh(user)
+        s.expunge(user)
+    limits = logged_in_client(app, user).get("/api/scripts/limits").get_json()["limits"]
+    assert "max_content_tier" not in limits
 
 
 # ---- 導覽 ------------------------------------------------------------------------------------------------------

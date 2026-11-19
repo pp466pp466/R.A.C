@@ -18,7 +18,7 @@ const JUNK = [undefined, null, '', 0, 1, true, {}, [], ['safe'], 'SAFE', ' safe'
 
 const TABLES = [
   ['MEMBER_LABELS', ['free', 'plus', 'vip'], 'memberLabel'],
-  ['TIER_LABELS', ['safe', 'standard', 'adult'], 'tierLabel'],
+  ['MODE_LABELS', ['safe', 'adult'], 'modeLabel'],
   ['AUDIENCE_LABELS', ['all', 'male', 'female'], 'audienceLabel'],
   ['ORIGIN_LABELS', ['native', 'transmigrator'], 'originLabel'],
   ['STATUS_LABELS', ['active', 'ended'], 'statusLabel'],
@@ -51,7 +51,8 @@ for (const [table, values, fn] of TABLES) {
 }
 
 test('the fallback texts say "not marked" or the safest reading, never a stronger rating than the data', () => {
-  assert.equal(Game.tierLabel('mystery'), '未標示');            // 不把未知的分級當成安全或成人
+  assert.equal(Game.tierLabel('mystery'), '');                  // 卡片的綁定標示：未知值沒有標籤（不當成綁定，也不顯示原始值）
+  assert.equal(Game.modeLabel('mystery'), '安全模式開');         // 存檔的生效模式：不認得的值取較保守的（安全模式開）
   assert.equal(Game.audienceLabel('mystery'), '全讀者');         // 與後端一致：缺值與未知值視為全讀者
   assert.equal(Game.originLabel('mystery'), '本地人');           // 既有存檔缺值視為本地人
 });
@@ -89,24 +90,85 @@ test('a gate notice is a copy: changing it does not change the next one', () => 
 
 // ---- 內容模式的說明 -------------------------------------------------------------------------------
 
-test('a player below the adult threshold is told the mode is fixed and why, with no way to change it', () => {
-  const notice = Game.contentModeNotice({ effective: 'safe', is_adult: false });
-  assert.ok(notice.text.includes('安全模式') && notice.text.includes('18'));
-  assert.equal(notice.link, null);                                // 固定的限制：沒有任何調整的連結
+test('only a script bound to the safe mode gets a label on its card; unbound and legacy values get none', () => {
+  assert.deepEqual(Object.keys(Game.TIER_LABELS), ['safe']);
+  assert.equal(Game.tierLabel('safe'), '綁定安全模式');
+  for (const unbound of ['adult', 'standard', undefined, null, '', 'mystery']) {
+    assert.equal(Game.tierLabel(unbound), '', String(unbound));
+  }
 });
 
-test('an adult in safe mode is only reminded that the account settings can change it', () => {
-  const notice = Game.contentModeNotice({ effective: 'safe', is_adult: true });
-  assert.ok(notice.text.includes('帳號設定') && notice.link === '/account' && notice.linkText === '前往帳號設定');
+test('no label or notice anywhere uses the old three-mode names or an age-based explanation', () => {
+  const everything = JSON.stringify([
+    Game.TIER_LABELS, Game.MODE_LABELS, Game.contentModeNotice({ effective: 'safe', forced: false }), Game.contentModeNotice({ effective: 'adult', forced: false }),
+    Game.contentModeNotice({ effective: 'safe', forced: true }), Game.modePromptCopy(), Game.sessionModeNotice({ effective: 'adult' }, 'safe'),
+    Game.sessionModeNotice({ forced: true }, 'safe'),
+  ]);
+  for (const forbidden of ['一般模式', '成人模式', '未滿 18', '部分劇本不會顯示', '依年齡']) { assert.ok(!everything.includes(forbidden), forbidden); }
 });
 
-test('an adult in standard or adult mode needs no explanation', () => {
-  assert.equal(Game.contentModeNotice({ effective: 'standard', is_adult: true }), null);
-  assert.equal(Game.contentModeNotice({ effective: 'adult', is_adult: true }), null);
+test('safe mode on: the page says so and points to the account settings, nothing changes by itself', () => {
+  const notice = Game.contentModeNotice({ effective: 'safe', forced: false });
+  assert.ok(notice.text.includes('安全模式開') && notice.text.includes('帳號設定'));
+  assert.equal(notice.link, '/account');
+  assert.equal(notice.linkText, '前往帳號設定');
+});
+
+test('safe mode off: the page only states it (not a promise), with no extra action', () => {
+  const notice = Game.contentModeNotice({ effective: 'adult', forced: false });
+  assert.ok(notice.text.includes('安全模式關') && notice.text.includes('不保證') && notice.text.includes('綁定安全模式的劇本'));
+  assert.equal(notice.link, null);
+});
+
+test('the emergency brake says only safe mode is offered right now, with no link to adjust anything', () => {
+  for (const effective of ['safe', 'adult']) {
+    const notice = Game.contentModeNotice({ effective, forced: true });
+    assert.equal(notice.text, '目前系統暫時只提供安全模式。');
+    assert.equal(notice.link, null);
+    assert.equal(notice.linkText, '');
+  }
+  assert.equal(Game.contentModeNotice({ effective: 'safe', forced: 'true' }).text.includes('暫時只提供'), false);       // 只認真正的布林
+});
+
+test('the notices are copies, so a page cannot corrupt the shared text', () => {
+  const first = Game.contentModeNotice({ effective: 'safe', forced: false });
+  first.text = '被改掉了';
+  first.link = null;
+  assert.notEqual(Game.contentModeNotice({ effective: 'safe', forced: false }).text, '被改掉了');
+  assert.equal(Game.contentModeNotice({ effective: 'safe', forced: false }).link, '/account');
+});
+
+test('the game page explains the emergency brake and a bound script, and says nothing otherwise', () => {
+  assert.match(Game.sessionModeNotice({ effective: 'safe', forced: true }, 'safe'), /暫時只提供安全模式/);
+  assert.match(Game.sessionModeNotice({ effective: 'safe', forced: true }, 'adult'), /暫時只提供安全模式/);
+  assert.match(Game.sessionModeNotice({ effective: 'adult', forced: false }, 'safe'), /這個劇本綁定安全模式/);       // 玩家已關閉安全模式，存檔卻是安全：只可能是劇本綁定
+  assert.equal(Game.sessionModeNotice({ effective: 'adult', forced: false }, 'adult'), '');
+  assert.equal(Game.sessionModeNotice({ effective: 'safe', forced: false }, 'safe'), '');
+  for (const junk of [null, undefined, 0, 'safe', []]) { assert.equal(Game.sessionModeNotice(junk, 'safe'), '', JSON.stringify(junk)); }
+});
+
+test('the ask-before-start text is fixed Traditional Chinese with the three answers, no promise and no age wording', () => {
+  const prompt = Game.modePromptCopy();
+  assert.equal(prompt.goSettings, '前往設定');
+  assert.equal(prompt.keepSafe, '維持安全模式繼續');
+  assert.equal(prompt.cancel, '取消');
+  assert.ok(prompt.body.join('').includes('不保證') && prompt.body.join('').includes('沒有綁定安全模式'));
+  assert.ok(HAN.test(prompt.title) && !/[A-Za-z]/.test(prompt.title));
+  prompt.body.push('被改掉了');
+  assert.equal(Game.modePromptCopy().body.length, 2);                                     // 回傳的是複本
+});
+
+test('the account link carries the return position only for a safe in-game path', () => {
+  const id = '0b6f3a52-1c8e-4d57-9a41-7f2e6c1d8b90';
+  assert.equal(Game.accountLink(Game.startPath(id)), '/account?return=%2Fgame%2Fstart%2F' + id);
+  assert.equal(Game.accountLink(Game.sessionPath(id)), '/account?return=%2Fgame%2F' + id);
+  for (const bad of [undefined, null, '', '/account', 'https://evil.example/', '//evil.example/', '/game//x', '/gamex', 7]) {
+    assert.equal(Game.accountLink(bad), '/account', JSON.stringify(bad));
+  }
 });
 
 test('a missing or malformed mode summary gives no notice and never throws', () => {
-  for (const junk of [null, undefined, 0, 'safe', [], {}, { effective: 7 }, { is_adult: 'false' }]) {
+  for (const junk of [null, undefined, 0, 'safe', [], {}, { effective: 7 }, { effective: 'standard' }, { forced: 'true' }]) {
     assert.equal(Game.contentModeNotice(junk), null, JSON.stringify(junk));
   }
 });
@@ -477,7 +539,8 @@ test('in the browser the helpers join the shared Game namespace and keep what an
     if (order === 'api-first') { vm.runInContext('self.Game = { api: { marker: 1 } };', sandbox); }
     vm.runInContext(source, sandbox, { filename: 'game-labels.js' });
     assert.equal(typeof sandbox.Game.tierLabel, 'function', order);
-    assert.equal(sandbox.Game.tierLabel('safe'), '安全模式', order);
+    assert.equal(sandbox.Game.tierLabel('safe'), '綁定安全模式', order);
+    assert.equal(typeof sandbox.Game.modeLabel, 'function', order);
     if (order === 'api-first') { assert.equal(sandbox.Game.api.marker, 1); }
   }
 });

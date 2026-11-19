@@ -804,11 +804,19 @@ test('loading twice at once reads the snapshot once', async () => {
   assert.equal(h.calls.snapshot.length, 1);
 });
 
-test('the content-mode note appears only for a player below the adult threshold', async () => {
-  assert.match((await ready({ state: { content_mode: { effective: 'safe', is_adult: false } } })).session.modeNote.value, /未滿 18 歲固定使用安全模式/);
+test('the mode chip shows the live effective mode and the note explains only the emergency brake and a bound script', async () => {
+  // 沒有任何年齡相關的說明（全站只限滿 18 歲）；content_tier 是伺服器現算的生效模式（玩家設定、劇本綁定、緊急煞車）
+  assert.equal((await ready({ session: { content_tier: 'safe' } })).session.modeLabel.value, '安全模式開');
+  assert.equal((await ready({ session: { content_tier: 'adult' } })).session.modeLabel.value, '安全模式關');
+  assert.equal((await ready({ session: { content_tier: 'standard' } })).session.modeLabel.value, '安全模式開');       // 舊值不被當成關閉（取較保守的）
   assert.equal((await ready()).session.modeNote.value, '');
-  const tier = await ready({ session: { content_tier: 'standard' } });
-  assert.equal(tier.session.tierLabel.value, '一般模式');
+  const bound = await ready({ state: { content_mode: { effective: 'adult', forced: false } }, session: { content_tier: 'safe' } });
+  assert.match(bound.session.modeNote.value, /這個劇本綁定安全模式/);
+  const forced = await ready({ state: { content_mode: { effective: 'safe', forced: true } }, session: { content_tier: 'safe' } });
+  assert.match(forced.session.modeNote.value, /暫時只提供安全模式/);
+  const open = await ready({ state: { content_mode: { effective: 'adult', forced: false } }, session: { content_tier: 'adult' } });
+  assert.equal(open.session.modeNote.value, '');
+  for (const h of [bound, forced, open]) { assert.ok(!/未滿 18|一般模式|成人模式/.test(h.session.modeNote.value + h.session.modeLabel.value)); }
 });
 
 // ---- 捲動 ---------------------------------------------------------------------------------------------

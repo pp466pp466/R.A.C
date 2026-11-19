@@ -47,6 +47,12 @@
 }
 
 .ge-banner--quiet { border-left-color: var(--color-border); color: var(--color-text-muted); }
+/* 目錄詢問 Modal 的三個回答（safe-mode-toggle）：寬螢幕並排靠右；窄螢幕直向堆疊、主要動作（前往設定）在最上面，按鈕文字不折行 */
+.ge-ask-actions { display: flex; flex: 1; flex-wrap: wrap; justify-content: flex-end; gap: 0.75rem; }
+.ge-ask-actions .ui-btn { white-space: nowrap; }
+@media (max-width: 575.98px) {
+  .ge-ask-actions { flex-direction: column-reverse; align-items: stretch; }
+}
 
 .ge-chip {
   display: inline-block;

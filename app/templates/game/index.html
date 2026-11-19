@@ -47,7 +47,7 @@
           <h2 class="ge-card__title">{{ card.title }}</h2>
           <p v-if="card.summary" class="ge-card__summary">{{ card.summary }}</p>
           <p class="ge-card__meta">
-            <span class="ge-chip">{{ tierLabel(card.content_tier) }}</span>
+            <span v-if="tierLabel(card.content_tier)" class="ge-chip">{{ tierLabel(card.content_tier) }}</span>
             <span class="ge-chip">{{ audienceLabel(card.audience) }}</span>
             <span v-for="(tag, index) in card.tags" :key="index" class="ge-chip ge-chip--tag">{{ tag }}</span>
           </p>
@@ -81,7 +81,7 @@
           <h2 class="ge-card__title">{{ save.title || '未命名的劇本' }}</h2>
           <p class="ge-card__meta">
             <span class="ge-chip" :class="{ 'ge-chip--ended': save.status === 'ended' }">{{ statusLabel(save.status) }}</span>
-            <span class="ge-chip">{{ tierLabel(save.content_tier) }}</span>
+            <span class="ge-chip">{{ modeLabel(save.content_tier) }}</span>
             <span class="ge-chip">已完成 {{ save.completed_turns }} 輪</span>
           </p>
           <p class="ge-card__by">
@@ -101,6 +101,18 @@
       </p>
     </section>
   </main>
+
+  <!-- 點選未綁定安全模式的劇本時的詢問：顯示完全由 Vue 狀態（askCard）接管；Esc 與遮罩視同取消，留在目錄 -->
+  <ui-modal v-model="askOpen" :title="modePrompt.title" :status-code="modePrompt.code">
+    <p v-for="(line, index) in modePrompt.body" :key="index">{{ line }}</p>
+    <template #actions>
+      <div class="ge-ask-actions">
+        <button type="button" class="ui-btn" @click="cancelAsk">{{ modePrompt.cancel }}</button>
+        <button type="button" class="ui-btn" @click="keepSafe">{{ modePrompt.keepSafe }}</button>
+        <button type="button" class="ui-btn ui-btn--primary" @click="goToSettings">{{ modePrompt.goSettings }}</button>
+      </div>
+    </template>
+  </ui-modal>
 
   <ui-toast-region></ui-toast-region>
 {% endraw %}

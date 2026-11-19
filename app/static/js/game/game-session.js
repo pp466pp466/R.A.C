@@ -54,7 +54,6 @@
     opening: '故事的開場還沒有準備好，完成後才能輸入行動。',
     inflight: '有一個行動還沒有確認完成，請先在時間軸裡選擇「重送」或「放棄」。'
   };
-  var MINOR_NOTE = '未滿 18 歲固定使用安全模式，這個存檔的內容會依安全模式呈現；滿 18 歲後這項限制會自動解除。';
 
   function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
   function isCount(value) { return typeof value === 'number' && isFinite(value) && value >= 0 && Math.floor(value) === value; }
@@ -129,8 +128,9 @@
     var tailPromise = Promise.resolve();   // 上一輪 `done` 之後的補齊；下一輪等它做完才開始，所以輸入可以在 `done` 時就解鎖
 
     // ---- 計算 ---------------------------------------------------------------------------------------
-    var tierLabel = computed(function () { return Game.tierLabel(contentTier.value); });
-    var modeNote = computed(function () { return mode.is_adult === false ? MINOR_NOTE : ''; });
+    // 存檔目前的生效模式（現算：玩家設定、劇本綁定、緊急煞車）；補充說明只有緊急煞車與劇本綁定兩種（沒有年齡相關的說明）
+    var modeLabel = computed(function () { return Game.modeLabel(contentTier.value); });
+    var modeNote = computed(function () { return Game.sessionModeNotice(mode, contentTier.value); });
     var gateNotice = computed(function () { return Game.gateNotice(gate.value); });
     var locationLine = computed(function () { return world.value.location; });
     var openingReady = computed(function () { return openingScene.value.state === 'ready' || openingScene.value.state === 'fallback'; });
@@ -769,7 +769,7 @@
 
     return {
       revisionHost: revisionHost, lastTurn: lastTurn, revising: revising,
-      phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, tierLabel: tierLabel, modeNote: modeNote,
+      phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, modeLabel: modeLabel, modeNote: modeNote,
       gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, openingNotice: openingNotice,
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,
       draft: draft, actionError: actionError, draftCount: draftCount, draftOver: draftOver, actionMax: actionMax, sending: sending,

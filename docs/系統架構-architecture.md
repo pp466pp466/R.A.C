@@ -139,7 +139,7 @@ flowchart TD
 | `ScriptSeedService` | 內建劇本的種子（`flask seed-scripts`）：全部驗證通過才在單一交易內寫入，冪等 |
 
 - 開存檔時複製劇本內容，之後存檔不再讀取劇本；`sessions.source_version_id` 是無動作的外鍵，刪除版本與抹除帳號的流程先清為空值。
-- 組裝在 `registry.py`（`get_content_mode_service()`、`get_story_preference_service()`、`get_session_service()`、`build_script_seed_service()`）；`AccessPolicy` 的成人模式開關來自 `config.content.adult_mode_enabled`。
+- 組裝在 `registry.py`（`get_content_mode_service()`、`get_story_preference_service()`、`get_session_service()`、`build_script_seed_service()`）；`AccessPolicy` 的緊急煞車來自 `config.content.safe_mode_forced`（環境變數 `SAFE_MODE_FORCED`）。
 
 ### 劇本創作與審查（rpg-script-authoring）
 

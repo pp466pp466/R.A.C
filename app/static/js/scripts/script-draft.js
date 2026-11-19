@@ -6,6 +6,8 @@
  * - 字數與數量的上限來自 `GET /api/scripts/limits` 的 `spec`（單一來源是驗證器的常數），這裡不寫死任何數字。
  * - `labelFor(path)`、`errorList(fields)`：把伺服器回的欄位路徑（`characters[0].name`）轉成繁體中文的欄位名稱。
  * - `categoryText(categories)`：審查拒絕時的類別說明；只有固定列舉，不含也不需要內容的位置。
+ * - 「綁定安全模式」（safe-mode-toggle）：內容的 `content_tier` 只有兩個值，`safe` ＝ 綁定、`adult` ＝ 未綁定（新草稿的預設）；舊值 `standard` 一律讀作 `adult`
+ *   （`tierOf`）。創作頁以勾選框操作（`isBound`、`tierFor`），沒有三選一的下拉，也沒有依作者年齡的上限。
  * 所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。
  */
 (function (root, factory) {
@@ -20,8 +22,8 @@
 })(typeof self !== 'undefined' ? self : this, function () {
   'use strict';
 
-  var TIER_ORDER = ['safe', 'standard', 'adult'];
-  var TIER_LABELS = { safe: '安全模式', standard: '一般模式', adult: '成人模式' };
+  /* 版本清單的標示：只有綁定安全模式的版本有標籤；`adult` 與舊值 `standard` 是未綁定，沒有標籤。 */
+  var TIER_LABELS = { safe: '綁定安全模式' };
   var STATUS_LABELS = {
     draft: '草稿', pending_review: '待審', published: '已上架', rejected: '已被退回', superseded: '已被取代'
   };
@@ -59,10 +61,15 @@
 
   function charCount(value) { return Array.from(text(value)).length; }
 
-  function allowedTiers(cap) {
-    var index = TIER_ORDER.indexOf(cap);
-    return TIER_ORDER.slice(0, (index < 0 ? 0 : index) + 1);
+  /* 內容的 `content_tier` 讀成兩值：`safe`（綁定）、`adult`（未綁定）。舊值 `standard` 與缺值（新草稿）都是 `adult`；
+     不認得的值取較保守的 `safe`（與伺服器的 `parse_tier` 一致）。 */
+  function tierOf(value) {
+    if (value === 'safe') { return 'safe'; }
+    if (value === 'adult' || value === 'standard' || value === undefined || value === null) { return 'adult'; }
+    return 'safe';
   }
+  function isBound(tier) { return tierOf(tier) === 'safe'; }
+  function tierFor(bound) { return bound === true ? 'safe' : 'adult'; }
 
   function blankDraft() { return toDraft({}); }
 
@@ -71,7 +78,7 @@
     var calendar = c.calendar && typeof c.calendar === 'object' ? c.calendar : {};
     return {
       title: text(c.title), summary: text(c.summary), world_name: text(c.world_name),
-      content_tier: TIER_ORDER.indexOf(c.content_tier) >= 0 ? c.content_tier : 'safe',
+      content_tier: tierOf(c.content_tier),
       background: text(c.background), opening: text(c.opening), rules: text(c.rules),
       tagsText: Array.isArray(c.tags) ? c.tags.map(text).join('、') : '',
       calendar_name: text(calendar.name), calendar_start_year: numberText(calendar.start_year),
@@ -105,7 +112,7 @@
     var calendarYear = text(d.calendar_start_year).trim();
     var custom = d.ending_mode === 'custom';
     return {
-      title: text(d.title).trim(), summary: text(d.summary).trim(), world_name: text(d.world_name).trim(), content_tier: d.content_tier,
+      title: text(d.title).trim(), summary: text(d.summary).trim(), world_name: text(d.world_name).trim(), content_tier: tierOf(d.content_tier),
       background: text(d.background).trim(), opening: orNull(d.opening), rules: orNull(d.rules), tags: splitTags(d.tagsText),
       calendar: calendarName || calendarYear ? { name: calendarName, start_year: intOrRaw(calendarYear) } : null,
       ending_mode: custom ? 'custom' : 'none', ending_text: custom ? orNull(d.ending_text) : null, ending_age: custom ? intOrRaw(d.ending_age) : null,
@@ -172,7 +179,7 @@
 
   return {
     TIER_LABELS: TIER_LABELS, STATUS_LABELS: STATUS_LABELS, CATEGORY_LABELS: CATEGORY_LABELS, AUDIENCE_LABELS: AUDIENCE_LABELS,
-    charCount: charCount, allowedTiers: allowedTiers, blankDraft: blankDraft, toDraft: toDraft, toContent: toContent,
+    charCount: charCount, tierOf: tierOf, isBound: isBound, tierFor: tierFor, blankDraft: blankDraft, toDraft: toDraft, toContent: toContent,
     splitTags: splitTags, totalChars: totalChars, snapshot: snapshot, labelFor: labelFor, errorList: errorList,
     categoryText: categoryText, rejectionMessage: rejectionMessage
   };

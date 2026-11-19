@@ -713,8 +713,10 @@ def test_the_label_tables_cover_exactly_the_enums_the_backend_uses():
     """後端新增或改名列舉值時，這裡會失敗，提醒同步 `game-labels.js`（否則畫面會退回預設文字而不是正確的名稱）。"""
     source = read(JS_DIR / "game-labels.js")
     assert sorted(labels_in(source, "MEMBER_LABELS")) == sorted(MEMBER_TIERS)
-    # 前端的 TIER_LABELS 仍有三個標籤（含舊值 standard）；safe-mode-toggle 4.1 改為兩種（綁定標籤）後，這裡改成只比對 CONTENT_MODES
-    assert sorted(labels_in(source, "TIER_LABELS")) == sorted((*CONTENT_MODES, "standard"))
+    # safe-mode-toggle 4.1：卡片的 TIER_LABELS 只有綁定（safe）一個標籤（adult 與舊值 standard 是未綁定、沒有標籤）；
+    # 存檔的生效模式 MODE_LABELS 與後端的兩種內容模式完全一致
+    assert labels_in(source, "TIER_LABELS") == ["safe"] and "safe" in CONTENT_MODES
+    assert sorted(labels_in(source, "MODE_LABELS")) == sorted(CONTENT_MODES)
     assert sorted(labels_in(source, "AUDIENCE_LABELS")) == sorted(AUDIENCES)
     assert sorted(labels_in(source, "ORIGIN_LABELS")) == sorted(ORIGINS)
     assert sorted(labels_in(source, "STATUS_LABELS")) == ["active", "ended"]
@@ -836,3 +838,47 @@ def test_the_game_screen_links_back_to_the_adventure_home_support_and_the_accoun
         assert re.search(rf'<a class="gm-nav__link" href="{target}"[^>]*>{label}</a>', html), label
     # 精靈成功開存檔後導向 /game/<存檔>（不改）：路徑由 Game.sessionPath 組出，遊戲頁就在這個網址
     assert "/game/" in read(JS_DIR / "game-labels.js") and "window.location.assign(Game.sessionPath(saved))" in strip_js_comments(read(JS_DIR / "wizard.js"))
+
+
+# ---- 安全模式（safe-mode-toggle 第 4 組）：入口頁、精靈頁與遊戲頁不再有三種模式、年齡說明與被淘汰的錯誤碼 ---------------------------------------------
+
+def test_no_game_page_script_or_template_keeps_the_three_mode_wording_the_age_note_or_the_retired_refusals():
+    retired = ("一般模式", "成人模式", "未滿 18 歲固定", "MINOR_NOTE", "is_adult", "content_tier_restricted", "content_mode_restricted", "依年齡規定")
+    files = [*(JS_DIR.glob("*.js")), TEMPLATES / "index.html", TEMPLATES / "session.html", TEMPLATES / "start.html"]
+    for file in files:
+        if not file.exists():
+            continue
+        source = read(file)
+        for word in retired:
+            if file.name == "game-state.js" or file.name == "wizard-state.js":
+                continue                                                    # 兩個狀態檔只在註解與退回說明裡提到舊代碼的處理，下方另有逐項檢查
+            assert word not in source, (file.name, word)
+
+
+def test_the_state_files_only_mention_the_retired_refusals_in_comments_not_in_their_gate_tables():
+    for name in ("game-state.js", "wizard-state.js"):
+        source = read(JS_DIR / name)
+        table = re.search(r"var GATE_FAILURES = \{(.*?)\};", source, re.S)
+        assert table, name
+        assert "content_tier_restricted" not in table.group(1) and "content_mode_restricted" not in table.group(1), name
+
+
+def test_the_entry_template_shows_the_binding_label_only_when_there_is_one_and_the_saves_show_the_live_mode():
+    html = read(TEMPLATES / "index.html")
+    assert '<span v-if="tierLabel(card.content_tier)" class="ge-chip">{{ tierLabel(card.content_tier) }}</span>' in html
+    assert '<span class="ge-chip">{{ modeLabel(save.content_tier) }}</span>' in html
+    assert "未標示" not in html
+
+
+def test_the_ask_modal_in_the_entry_template_is_vue_driven_with_three_answers():
+    html = read(TEMPLATES / "index.html")
+    modal = html[html.index('<ui-modal v-model="askOpen"'):html.index("</ui-modal>")]
+    for needle in ('@click="cancelAsk"', '@click="keepSafe"', '@click="goToSettings"', "modePrompt.goSettings", "modePrompt.keepSafe", "modePrompt.cancel", "v-for=\"(line, index) in modePrompt.body\""):
+        assert needle in modal, needle
+    assert "data-bs-" not in html.replace('data-bs-theme="dark"', "") and "v-html" not in html
+
+
+def test_the_session_template_shows_the_live_mode_chip_and_the_note():
+    html = read(TEMPLATES / "session.html")
+    assert '<span class="ge-chip">{{ modeLabel }}</span>' in html and "{{ tierLabel }}" not in html
+    assert '<p v-if="modeNote" class="ge-banner ge-banner--quiet gm-banner" role="status">{{ modeNote }}</p>' in html

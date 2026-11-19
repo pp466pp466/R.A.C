@@ -385,7 +385,6 @@ test('a 503 distinguishes the review being unavailable from any other outage', (
 
 test('the 403 codes each get their own explanation and link, and an unknown one still blocks', () => {
   const cases = {
-    content_tier_restricted: ['高於您目前的模式', '/account'],
     age_confirmation_required: ['完成年齡確認', '/account'],
     age_restricted: ['年齡目前不符合', null],
     account_locked: ['被鎖定', '/appeal'],
@@ -471,13 +470,14 @@ test('suggestion timeouts and cancels keep the content and cancels are silent', 
 
 // ---- 載入失敗 ---------------------------------------------------------------------------------------
 
-test('loading failures: not found offers the way home, a tier mismatch offers the account page, outages offer a retry', () => {
+test('loading failures: not found offers the way home, a retired mode refusal falls back to the generic gate text, outages offer a retry', () => {
   const missing = W.describeSetupFailure(server(404, 'not_found'));
   assert.equal(missing.kind, 'not_found');
   assert.equal(missing.link.href, '/game');
   assert.equal(missing.retry, false);
-  const tier = W.describeSetupFailure(server(403, 'content_tier_restricted'));
+  const tier = W.describeSetupFailure(server(403, 'content_tier_restricted'));       // 已淘汰的代碼：不再有專屬說明，失敗時關閉
   assert.equal(tier.code, 'content_tier_restricted');
+  assert.ok(tier.message.includes('無法開始冒險') && !/內容模式|高於/.test(tier.message));
   assert.equal(tier.link.href, '/account');
   assert.equal(tier.retry, false);
   for (const info of [server(500, 'internal_error'), server(503, 'system_busy'), { kind: 'network', message: '', fields: {}, code: 'network', status: 0 }, { kind: 'timeout', message: '', fields: {}, code: 'timeout', status: 0 }]) {
@@ -492,7 +492,7 @@ test('no message or category text ever carries text from the failure, only fixed
     server(400, 'validation_error', { message: MARK, categories: [MARK] }),
     server(401, 'unauthorized', { message: MARK }),
     server(403, MARK, { message: MARK }),
-    server(403, 'content_tier_restricted', { message: MARK }),
+    server(403, 'age_confirmation_required', { message: MARK }),
     server(404, 'not_found', { message: MARK }),
     server(422, 'protagonist_rejected', { message: MARK, categories: [MARK, 'minor_sexual', 7, null, { x: MARK }] }),
     server(422, 'script_rejected', { message: MARK, categories: [MARK] }),
@@ -523,7 +523,7 @@ test('the only server text that is passed through is the per-field rule descript
 });
 
 test('every failure has the same shape, links stay on this site and no text mentions raw codes', () => {
-  const infos = [server(400, 'x'), server(401, 'x'), server(403, 'content_tier_restricted'), server(404, 'x'), server(422, 'script_rejected'), server(429, 'x'), server(503, 'x'), server(500, 'x')];
+  const infos = [server(400, 'x'), server(401, 'x'), server(403, 'age_confirmation_required'), server(404, 'x'), server(422, 'script_rejected'), server(429, 'x'), server(503, 'x'), server(500, 'x')];
   for (const describe of [W.describeStartFailure, W.describeSuggestFailure, W.describeSetupFailure]) {
     for (const info of infos) {
       const result = describe(info);

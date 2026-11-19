@@ -3,8 +3,12 @@
  * 後端只回列舉值（`safe`、`male`、`native`…），顯示用的繁體中文集中在這裡，沿用 `script-draft.js` 的做法。
  * - 所有 `*Label(value)` 對**未知值**一律退回固定的預設文字，不把原始值顯示給玩家（也避免把 `__proto__`、`constructor` 這類鍵當成對照）。
  * - `gateNotice(gate)`：帳號閘門（`AccessPolicy.chat_gate` 的結果）的提示文字與連結；未知的非空代碼一律當成「不可開始」（失敗時關閉），不放行。
- * - `contentModeNotice(mode)`：說明「為什麼沒看到某些劇本」。只有說明，沒有任何改變模式的動作：成年玩家的模式較保守時只提醒可到帳號設定調整，
- *   不自動調高；未滿成年門檻者固定為安全模式，只說明原因。
+ * - 內容模式只有兩種（safe-mode-toggle）：`tierLabel(value)` 是**劇本卡片**的綁定標示（只有 `safe` 才有「綁定安全模式」，`adult` 與舊值 `standard` 都是未綁定、
+ *   沒有標籤）；`modeLabel(value)` 是存檔目前**生效模式**的名稱（安全模式開／關，不認得的值當成開）。畫面上沒有舊的三種模式名稱。
+ * - `contentModeNotice(mode)`：入口頁顯示玩家目前的安全模式（`mode` 是 `{ effective, forced }`）：開時提示可到帳號設定調整，關時只是狀態，
+ *   緊急煞車時說明「目前系統暫時只提供安全模式」。只有說明，沒有任何自動改變模式的動作（不自動調高）。
+ * - `sessionModeNotice(mode, saveMode)`：遊戲頁的補充說明：緊急煞車、或劇本綁定安全模式（玩家已關閉安全模式、存檔卻仍是安全）；其他情況沒有說明。
+ * - `modePrompt`（`modePromptCopy()`）：目錄點選未綁定劇本時，詢問是否修改安全模式的固定文案；`accountLink(returnPath)`：帳號設定頁的連結（帶返回位置）。
  * - `startPath(id)`、`sessionPath(id)`：站內路徑，識別碼經 encodeURIComponent。
  * - `formatTaipeiTime(iso)`：伺服器的 UTC 時間（`2026-10-27T12:00:00Z`）轉成台灣時間 `YYYY-MM-DD HH:mm`；台灣沒有日光節約時間，固定加 8 小時，不依賴瀏覽器的時區。
  * 遊戲主畫面（rpg-game-ui）另加：回合與串流結束狀態的名稱、轉場與中斷說明、串流 `error` 事件的訊息、歷史裡未完成回合的那一行說明、
@@ -26,7 +30,10 @@
   'use strict';
 
   var MEMBER_LABELS = { free: '一般', plus: '進階', vip: '尊榮' };
-  var TIER_LABELS = { safe: '安全模式', standard: '一般模式', adult: '成人模式' };
+  /* 劇本卡片的綁定標示：只有綁定安全模式（`safe`）的劇本有標籤；`adult` 與舊值 `standard` 是未綁定，沒有任何標籤。 */
+  var TIER_LABELS = { safe: '綁定安全模式' };
+  /* 存檔目前的生效模式（現算）。 */
+  var MODE_LABELS = { safe: '安全模式開', adult: '安全模式關' };
   var AUDIENCE_LABELS = { all: '全讀者', male: '男頻', female: '女頻' };
   var ORIGIN_LABELS = { native: '本地人', transmigrator: '穿越者' };
   var STATUS_LABELS = { active: '進行中', ended: '已完結' };
@@ -38,12 +45,12 @@
     real_person_sexual: '以真人名義的性內容',
     minor_suspected: '疑似涉及未成年角色',
     real_person_suspected: '疑似涉及真人',
-    tier_mismatch: '內容與宣告的內容模式不符',
+    tier_mismatch: '內容不符合綁定的安全模式',
     other_concern: '其他疑慮'
   };
 
   var DEFAULTS = {
-    member: '一般', tier: '未標示', audience: '全讀者', origin: '本地人', status: '進行中', category: '其他疑慮'
+    member: '一般', tier: '', mode: '安全模式開', audience: '全讀者', origin: '本地人', status: '進行中', category: '其他疑慮'
   };
 
   var ACCOUNT_PATH = '/account';
@@ -54,6 +61,29 @@
     forbidden: { text: '您的帳號目前無法開始冒險，請到帳號設定確認帳號狀態。', link: ACCOUNT_PATH, linkText: ACCOUNT_LINK_TEXT }
   };
   var GATE_FALLBACK = { text: '目前無法開始冒險，請到帳號設定確認帳號狀態。', link: ACCOUNT_PATH, linkText: ACCOUNT_LINK_TEXT };
+
+  /* ---- 內容模式的固定說明（兩種模式；safe-mode-toggle）---- */
+  var MODE_NOTICES = {
+    safe: { text: '安全模式開（預設）：劇情不會出現性內容。想調整，可以到帳號設定。', link: ACCOUNT_PATH, linkText: ACCOUNT_LINK_TEXT },
+    adult: { text: '安全模式關：成年角色之間合意的露骨內容可能出現（不保證）；綁定安全模式的劇本仍以安全模式進行。', link: null, linkText: '' },
+    forced: { text: '目前系統暫時只提供安全模式。', link: null, linkText: '' }
+  };
+  var SESSION_MODE_NOTES = {
+    forced: '目前系統暫時只提供安全模式，這個存檔以安全模式進行。',
+    bound: '這個劇本綁定安全模式，所以不論您的設定，這個存檔都以安全模式進行。'
+  };
+  /* 目錄點選未綁定安全模式的劇本、玩家目前是安全模式時的詢問（自製 Modal；Esc 與遮罩視同取消）。 */
+  var MODE_PROMPT = {
+    code: 'SAFE_MODE',
+    title: '要調整安全模式嗎？',
+    body: [
+      '這個劇本沒有綁定安全模式，會跟隨您的設定。您目前是安全模式開，劇情不會出現性內容。',
+      '如果想體驗更深入的內容，可以先到帳號設定關閉安全模式，改完會回到這個劇本；關閉之後是否出現露骨內容取決於模型，不保證。'
+    ],
+    goSettings: '前往設定',
+    keepSafe: '維持安全模式繼續',
+    cancel: '取消'
+  };
 
   /* ---- 遊戲主畫面（rpg-game-ui）：串流結束狀態、轉場與中斷說明、記事簿與簽到的固定文字 ----
      這些文字只來自這裡，**不含任何玩家文字**（行動、劇情、記事簿內容、角色名都不會被帶進來）；數字只有字數、幣數這類整數。
@@ -172,7 +202,10 @@
   function copy(notice) { return { text: notice.text, link: notice.link, linkText: notice.linkText }; }
 
   function memberLabel(value) { return labelOf(MEMBER_LABELS, value, DEFAULTS.member); }
+  /* 劇本卡片的綁定標示：綁定時是「綁定安全模式」，其他（含舊值與未知值）沒有標示（空字串）。 */
   function tierLabel(value) { return labelOf(TIER_LABELS, value, DEFAULTS.tier); }
+  /* 存檔目前生效模式的名稱；不認得的值當成安全模式開（取較保守的）。 */
+  function modeLabel(value) { return labelOf(MODE_LABELS, value, DEFAULTS.mode); }
   function audienceLabel(value) { return labelOf(AUDIENCE_LABELS, value, DEFAULTS.audience); }
   function originLabel(value) { return labelOf(ORIGIN_LABELS, value, DEFAULTS.origin); }
   function statusLabel(value) { return labelOf(STATUS_LABELS, value, DEFAULTS.status); }
@@ -184,16 +217,33 @@
     return copy(has(GATE_NOTICES, gate) ? GATE_NOTICES[gate] : GATE_FALLBACK);
   }
 
-  /* `mode` 是目錄回應的 `content_mode`（{ effective, is_adult }）。沒有需要說明時回傳 null。 */
+  /* `mode` 是目錄回應的 `content_mode`（{ effective, forced }）。緊急煞車啟用時說明只提供安全模式（沒有前往調整的連結）；
+     否則依生效模式顯示開或關的說明。壞掉或沒有的資料回傳 null（不顯示任何說明）。只是說明，不會改變任何模式。 */
   function contentModeNotice(mode) {
     if (!mode || typeof mode !== 'object') { return null; }
-    if (mode.is_adult === false) {
-      return { text: '未滿 18 歲固定使用安全模式，所以部分劇本不會顯示；滿 18 歲後這項限制會自動解除。', link: null, linkText: '' };
-    }
-    if (mode.effective === 'safe') {
-      return { text: '您目前使用安全模式，所以部分劇本不會顯示。想調整內容模式，可以到帳號設定。', link: ACCOUNT_PATH, linkText: ACCOUNT_LINK_TEXT };
-    }
+    if (mode.forced === true) { return copy(MODE_NOTICES.forced); }
+    if (mode.effective === 'safe') { return copy(MODE_NOTICES.safe); }
+    if (mode.effective === 'adult') { return copy(MODE_NOTICES.adult); }
     return null;
+  }
+
+  /* 遊戲頁的補充說明（字串，沒有則為空字串）：`mode` 是頁面初始狀態的 `content_mode`（玩家設定與緊急煞車，不含劇本），
+     `saveMode` 是存檔的生效模式（含劇本的綁定）。玩家已關閉安全模式而存檔仍是安全模式時，只可能是劇本綁定。 */
+  function sessionModeNotice(mode, saveMode) {
+    if (!mode || typeof mode !== 'object') { return ''; }
+    if (mode.forced === true) { return SESSION_MODE_NOTES.forced; }
+    if (mode.effective === 'adult' && saveMode === 'safe') { return SESSION_MODE_NOTES.bound; }
+    return '';
+  }
+
+  function modePromptCopy() {
+    return { code: MODE_PROMPT.code, title: MODE_PROMPT.title, body: MODE_PROMPT.body.slice(), goSettings: MODE_PROMPT.goSettings, keepSafe: MODE_PROMPT.keepSafe, cancel: MODE_PROMPT.cancel };
+  }
+
+  /* 帳號設定頁的連結，帶「改完回到哪裡」：只接受站內 `/game/` 開頭的路徑（伺服器與帳號頁都會再驗證一次），其他一律不帶返回位置。 */
+  function accountLink(returnPath) {
+    if (typeof returnPath !== 'string' || returnPath.indexOf('/game/') !== 0 || returnPath.indexOf('//') >= 0) { return ACCOUNT_PATH; }
+    return ACCOUNT_PATH + '?return=' + encodeURIComponent(returnPath);
   }
 
   function startPath(versionId) { return '/game/start/' + encodeURIComponent(versionId); }
@@ -367,6 +417,11 @@
     CATEGORY_LABELS: CATEGORY_LABELS,
     memberLabel: memberLabel,
     tierLabel: tierLabel,
+    modeLabel: modeLabel,
+    sessionModeNotice: sessionModeNotice,
+    modePromptCopy: modePromptCopy,
+    accountLink: accountLink,
+    MODE_LABELS: MODE_LABELS,
     audienceLabel: audienceLabel,
     originLabel: originLabel,
     statusLabel: statusLabel,

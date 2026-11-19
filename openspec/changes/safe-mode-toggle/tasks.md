@@ -30,11 +30,11 @@
 
 ## 4. 目錄通知、卡片標示與創作頁綁定
 
-- [ ] 4.1 `entry.js` 與 `game/index.html`：點選未綁定劇本（`content_tier` 為 `adult`）且玩家 `effective === 'safe'`、`forced` 為假時，以自製 Modal 詢問（「前往設定」導向 `/account?return=/game/start/<id>`、「維持安全模式繼續」、Esc／遮罩視同取消）；綁定劇本、已關閉安全模式或煞車時直接前往；`game-labels.js` 改寫 `TIER_LABELS`（綁定標籤）、`contentModeNotice`（安全開／關／煞車三種說明，移除未成年與「部分劇本不顯示」）、移除 `GATE_FAILURES.content_mode_restricted`；Node 測試涵蓋全部分支並通過
-- [ ] 4.2 精靈頁（`wizard*.js`）與遊戲頁（`game-session.js`、`game-state.js`）：移除 `content_tier_restricted` 與 `MINOR_NOTE` 分支，遊戲頁顯示現算模式（含綁定與煞車說明）；改寫對應 Node 測試與 `tests/test_game_pages.py`、`test_game_template` 並通過
-- [ ] 4.3 創作頁：`script-draft.js`、`script-workshop.js`、`workshop.html` 以「綁定安全模式」勾選框取代三選一下拉與年齡上限提示（預設未勾、舊 `standard` 草稿顯示未勾並於儲存時為 `adult`、唯讀版本禁用、說明限制文字）；改寫 Node 與頁面測試並通過
-- [ ] 4.4 瀏覽器冒煙（360／390／768／1280 px）：目錄詢問流程（前往設定→開關→返回精靈頁、維持安全模式、取消）、卡片綁定標籤、創作頁勾選；無水平溢出與純白文字；記入 README 驗收紀錄
-- [ ] 4.5 本批收尾：Node 全套與相關 pytest 通過；更新 `docs/前端結構-frontend.md`、`docs/RPG.md`；更新 HANDOFF.md；列出簡報衝突
+- [x] 4.1 `entry.js` 與 `game/index.html`：點選未綁定劇本（`content_tier` 為 `adult`）且玩家 `effective === 'safe'`、`forced` 為假時，以自製 Modal 詢問（「前往設定」導向 `/account?return=/game/start/<id>`、「維持安全模式繼續」、Esc／遮罩視同取消）；綁定劇本、已關閉安全模式或煞車時直接前往；`game-labels.js` 改寫 `TIER_LABELS`（綁定標籤）、`contentModeNotice`（安全開／關／煞車三種說明，移除未成年與「部分劇本不顯示」）、移除 `GATE_FAILURES.content_mode_restricted`；Node 測試涵蓋全部分支並通過
+- [x] 4.2 精靈頁（`wizard*.js`）與遊戲頁（`game-session.js`、`game-state.js`）：移除 `content_tier_restricted` 與 `MINOR_NOTE` 分支，遊戲頁顯示現算模式（含綁定與煞車說明）；改寫對應 Node 測試與 `tests/test_game_pages.py`、`test_game_template` 並通過
+- [x] 4.3 創作頁：`script-draft.js`、`script-workshop.js`、`workshop.html` 以「綁定安全模式」勾選框取代三選一下拉與年齡上限提示（預設未勾、舊 `standard` 草稿顯示未勾並於儲存時為 `adult`、唯讀版本禁用、說明限制文字）；改寫 Node 與頁面測試並通過
+- [x] 4.4 瀏覽器冒煙（360／390／768／1280 px）：目錄詢問流程（前往設定→開關→返回精靈頁、維持安全模式、取消）、卡片綁定標籤、創作頁勾選；無水平溢出與純白文字；記入 README 驗收紀錄
+- [x] 4.5 本批收尾：Node 全套與相關 pytest 通過；更新 `docs/前端結構-frontend.md`、`docs/RPG.md`；更新 HANDOFF.md；列出簡報衝突
 
 ## 5. 遊戲內提示
 

@@ -99,10 +99,12 @@ t('a version that is not found shows the not-found text with a link home, and no
   assert.equal(page.loadFailure.value.retry, false);
 });
 
-t('a script above the player mode explains that and links to the account settings, without entering the creation', async () => {
+t('the old "script above your mode" refusal no longer exists: an unknown 403 code blocks with the generic gate text and never mentions a mode', async () => {
+  // safe-mode-toggle：劇本的內容模式不再造成載入失敗，伺服器也不再回 content_tier_restricted；萬一收到不認得的 403 代碼，失敗時關閉（不進入創角）
   const { page } = await ready({ setup: fail(serverError(403, 'content_tier_restricted', '內容模式高於目前模式。')) });
   assert.equal(page.phase.value, 'failed');
-  assert.match(page.loadFailure.value.message, /內容模式/);
+  assert.match(page.loadFailure.value.message, /無法開始冒險/);
+  assert.ok(!/內容模式|高於/.test(page.loadFailure.value.message));
   assert.equal(page.loadFailure.value.link.href, '/account');
   assert.equal(page.setup.value, null);
 });
@@ -617,7 +619,7 @@ t('a rejected script (422 script_rejected) names the script as the problem, not 
   fillCard(page);
   await page.start();
   assert.match(page.notice.value.text, /劇本/);
-  assert.match(page.notice.value.text, /內容模式不符/);
+  assert.match(page.notice.value.text, /不符合綁定的安全模式/);
 });
 
 t('a review that is temporarily unavailable (503) asks to try again later and enables the button', async () => {
@@ -631,7 +633,7 @@ t('a review that is temporarily unavailable (503) asks to try again later and en
 });
 
 t('the gate answers (403) each explain themselves with a link, and keep the draft', async () => {
-  for (const [code, pattern, href] of [['content_tier_restricted', /內容模式/, '/account'], ['age_confirmation_required', /年齡確認/, '/account'], ['account_deletion_pending', /刪除/, '/account']]) {
+  for (const [code, pattern, href] of [['age_confirmation_required', /年齡確認/, '/account'], ['account_deletion_pending', /刪除/, '/account']]) {
     const { page } = await ready({ start: fail(serverError(403, code, '被擋。')) });
     reachCreate(page);
     fillCard(page);

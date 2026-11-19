@@ -3,7 +3,7 @@
  * 樣板用到的每個名稱，也是 game.js 的 setup() 必須回傳的名稱；兩邊的測試用同一份清單，所以不會各改各的。 */
 const CONTRACT = {
   state: [
-    'phase', 'loadFailure', 'restriction', 'title', 'playerName', 'tierLabel', 'modeNote', 'gateNotice', 'ended', 'offline', 'notice', 'openingNotice',
+    'phase', 'loadFailure', 'restriction', 'title', 'playerName', 'modeLabel', 'modeNote', 'gateNotice', 'ended', 'offline', 'notice', 'openingNotice',
     'items', 'hasEarlier', 'jumpVisible', 'scroller', 'input', 'draft', 'actionError', 'draftCount', 'draftOver', 'actionMax', 'sending', 'sendDisabled',
     'inputDisabled', 'blockerText', 'world', 'locationLine', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'sideTab', 'modal', 'coinModalOpen',
     'coinModalText', 'checkinBusy', 'checkinPreview', 'checkinMessage', 'checkinFinished',

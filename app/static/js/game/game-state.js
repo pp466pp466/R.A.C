@@ -164,9 +164,7 @@
     account_locked: { message: '您的帳號目前被鎖定，只能到申訴頁留言給管理員。', link: APPEAL_LINK },
     account_deletion_pending: { message: '您的帳號正在等待刪除，目前無法繼續冒險。', link: ACCOUNT_LINK },
     age_confirmation_required: { message: '請先到帳號設定完成年齡確認，才能繼續冒險。', link: ACCOUNT_LINK },
-    age_restricted: { message: '您的年齡目前不符合使用這項功能的規定，所以無法繼續冒險。', link: null },
-    content_mode_restricted: { message: '依年齡規定，您目前只能使用安全模式，這個存檔的內容模式無法使用。', link: ACCOUNT_LINK },
-    content_tier_restricted: { message: '這個存檔的內容模式高於您目前的設定，無法繼續。', link: ACCOUNT_LINK }
+    age_restricted: { message: '您的年齡目前不符合使用這項功能的規定，所以無法繼續冒險。', link: null }
   };
   var GATE_FALLBACK = { message: '您的帳號目前無法繼續冒險，請到帳號設定確認帳號狀態。', link: ACCOUNT_LINK };
 

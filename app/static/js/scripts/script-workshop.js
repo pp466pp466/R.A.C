@@ -44,7 +44,11 @@
       var preview = Vue.computed(function () {
         return Scripts.previewMilestones(editor.draft.milestones, { start_year: editor.draft.calendar_start_year });
       });
-      var tiers = Vue.computed(function () { return Scripts.allowedTiers(limits.value ? limits.value.max_content_tier : 'safe'); });
+      // 「綁定安全模式」勾選框：勾選 ＝ `safe`（綁定），未勾選 ＝ `adult`（未綁定，新草稿的預設）；沒有依作者年齡的上限
+      var bound = Vue.computed({
+        get: function () { return Scripts.isBound(editor.draft.content_tier); },
+        set: function (value) { editor.draft.content_tier = Scripts.tierFor(value); }
+      });
       var total = Vue.computed(function () { return Scripts.totalChars(editor.draft); });
       var scriptsLeft = Vue.computed(function () { return limits.value ? limits.value.scripts.limit - limits.value.scripts.used : 0; });
       var submitsLeft = Vue.computed(function () { return limits.value ? limits.value.submissions_today.limit - limits.value.submissions_today.used : 0; });
@@ -159,7 +163,6 @@
         editor.working = true;
         return Scripts.api.example().then(function (data) {
           var draft = Scripts.toDraft(data.content);
-          if (tiers.value.indexOf(draft.content_tier) < 0) { draft.content_tier = tiers.value[tiers.value.length - 1]; }
           editor.draft = draft;
           clearFeedback();
           UI.toast('已帶入範例，可以自由修改。');
@@ -277,7 +280,7 @@
         user: user, spec: spec, limits: limits, scripts: scripts, ready: ready, listError: listError, view: view, gate: gate,
         restriction: restriction, editor: editor, open: open, modal: modal,
         dirty: dirty, readOnly: readOnly, locked: locked, suspended: suspended, busy: busy, canEdit: canEdit, canSubmit: canSubmit,
-        errorList: errorList, preview: preview, tiers: tiers, total: total, scriptsLeft: scriptsLeft, submitsLeft: submitsLeft, penName: penName,
+        errorList: errorList, preview: preview, bound: bound, total: total, scriptsLeft: scriptsLeft, submitsLeft: submitsLeft, penName: penName,
         tierLabels: Scripts.TIER_LABELS, statusLabels: Scripts.STATUS_LABELS, count: Scripts.charCount, err: err,
         startNew: startNew, openVersion: openVersion, backToList: backToList, confirmLeave: confirmLeave, reloadFromServer: reloadFromServer,
         askExample: askExample, loadExample: loadExample, save: save, askSubmit: askSubmit, confirmSubmit: confirmSubmit,

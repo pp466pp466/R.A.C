@@ -126,6 +126,17 @@ test('the failures that need the screen to react carry the matching flags', () =
   assert.equal(State.describeHttpFailure(401, body('unauthorized', '')).kind, 'login');
 });
 
+test('the retired mode refusals (content_mode_restricted, content_tier_restricted) have no text of their own any more: they fall back to the generic gate text', () => {
+  // safe-mode-toggle：存檔的模式現算、不再因劇本或年齡被拒絕；萬一收到舊代碼，失敗時關閉並不提年齡或模式
+  for (const code of ['content_mode_restricted', 'content_tier_restricted']) {
+    const failure = State.describeHttpFailure(403, body(code, '伺服器的原文'));
+    assert.equal(failure.kind, 'gate', code);
+    assert.ok(failure.message.includes('無法繼續冒險'), code);
+    assert.ok(!/未滿 18|年齡規定|內容模式|安全模式|伺服器的原文/.test(failure.message), code);
+    assert.equal(failure.link.href, '/account', code);
+  }
+});
+
 test('a known code never shows the server message; an unknown 409 shows it only when it is a short Chinese fixed text', () => {
   const known = State.describeHttpFailure(409, body('turn_in_progress', '另外一段伺服器文字'));
   assert.ok(!known.message.includes('另外一段伺服器文字'));
