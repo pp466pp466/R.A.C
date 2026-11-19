@@ -19,6 +19,12 @@
 
 事件內容只有白名單欄位：JSON 原文不會送給前端（模型的結構化輸出只經 `apply_proposal` 驗證後以 `state` 送出玩家可見的欄位）。
 日誌只經 `rpg_events`（內部編號、整數與列舉）。行動、劇情、世界狀態、被擋文字都不進日誌。
+
+遊戲內提示（safe-mode-upgrade-hint）：開始階段已判定 `plan.hint_eligible`（玩家設定為安全模式開、劇本未綁定、緊急煞車未啟用）與
+`plan.hint_input`（行動被規則層判為性內容）；輸出端的條件是**這個回合曾有嘗試因性內容被審查層擋下**（類別 `tier_mismatch`，安全模式的尺度）。
+成功完成的回合才嘗試：在收尾的同一個短交易內以 `sessions.safe_hint_at is null` 的條件式更新搶先記錄，更新 1 列才在 `state` 事件的
+`notices` 加入 `safe_mode_hint`（沒有文字），所以每個存檔最多一次；被擋、中斷、失敗與被取代的回合沒有紀錄；斷線後才補做的收尾不記錄
+（玩家看不到，留給下一次）。提示不改變回合的內容、玩家的設定、預扣的遊戲幣與模型的上下文，也不新增事件種類。
 """
 from __future__ import annotations
 
@@ -28,6 +34,7 @@ from typing import Any, Callable, Iterator
 from sqlalchemy.orm import Session
 
 from app.models.llm_call_log import KIND_RPG_STREAM
+from app.models.script import CATEGORY_TIER_MISMATCH
 from app.observability import rpg_events
 from app.repositories.errors import InvalidTurnTransitionError
 from app.repositories.session_repository import SessionRepository
@@ -40,7 +47,7 @@ from app.services.rpg_runner_base import (
     ATTEMPT_BLOCKED, ATTEMPT_OK, DONE_BLOCKED, DONE_COMPLETE, DONE_ENDED, ERROR_MESSAGES, EVENT_DONE, EVENT_META, EVENT_PING, EVENT_STATE,
     EVENT_TRANSITION, PING_SECONDS, AttemptResult, RunnerBase, RunnerDeps, SseEvent,
 )
-from app.services.rpg_state_phase import state_event, state_phase
+from app.services.rpg_state_phase import state_event, state_phase, with_safe_mode_hint
 from app.services.rpg_stream import FAILURE_BLOCKED, FAILURE_CONFIG, FAILURE_TIMEOUT, StreamRequest
 
 __all__ = ["TurnRunner", "RunnerDeps", "SseEvent", "ERROR_MESSAGES", "PING_SECONDS"]
@@ -66,6 +73,7 @@ class TurnRunner(RunnerBase):
         self._final: _Final | None = None
         self._ended_unfinished = False
         self._capture_due = False
+        self._sexual_output_blocked = False                                  # 這個回合曾有嘗試因性內容被審查層擋下（提示的輸出條件）
 
     # ---- 對外 ---------------------------------------------------------------------------------
 
@@ -108,6 +116,8 @@ class TurnRunner(RunnerBase):
                 break
             if result.kind == ATTEMPT_BLOCKED:
                 blocked_count += 1
+                if CATEGORY_TIER_MISMATCH in result.categories:
+                    self._sexual_output_blocked = True
                 last = blocked_count >= 2
                 self._record_blocked(result.categories, final=last)
                 yield self._send(EVENT_TRANSITION, {
@@ -122,7 +132,7 @@ class TurnRunner(RunnerBase):
             return
 
         yield self._send(EVENT_PING, {})                                      # 開始狀態呼叫之前
-        final = self._finalize()
+        final = self._finalize(allow_hint=True)
         if final.superseded:
             yield self._error("turn_superseded")
             return
@@ -206,7 +216,7 @@ class TurnRunner(RunnerBase):
             return
         try:
             if self._narration is not None:
-                self._finalize()
+                self._finalize(allow_hint=False)                              # 玩家已經看不到：不記錄提示，留給下一次
                 return
             plan = self._plan
             self._interrupt(partial=self._received)
@@ -228,8 +238,18 @@ class TurnRunner(RunnerBase):
 
     # ---- 收尾（不 yield）---------------------------------------------------------------------------
 
-    def _finalize(self) -> _Final:
-        """文字完整之後：狀態呼叫、驗證、一個短交易完成回合並結算。可重複呼叫（只做一次）。"""
+    def _hint_reason(self) -> str | None:
+        """這個回合要嘗試記錄提示的原因（`input` 優先於 `output`）；沒有資格或沒有觸發條件時 `None`。"""
+        plan = self._plan
+        if not plan.hint_eligible:
+            return None
+        if plan.hint_input:
+            return "input"
+        return "output" if self._sexual_output_blocked else None
+
+    def _finalize(self, *, allow_hint: bool = True) -> _Final:
+        """文字完整之後：狀態呼叫、驗證、一個短交易完成回合並結算。可重複呼叫（只做一次）。
+        `allow_hint` 只在玩家還連著線時為真：斷線後補做的收尾不記錄提示（記了也送不到）。"""
         if self._final is not None:
             return self._final
         assert self._narration is not None
@@ -237,6 +257,7 @@ class TurnRunner(RunnerBase):
         self._tx(lambda session: None)                                         # 串流的帳本先寫入（狀態呼叫的帳本由 `LlmService` 自己寫，順序才與實際一致）
         state = state_phase(plan, self._deps, self._marker, narration)
         structured = {"state": {"ok": state.ok, "dropped": state.dropped}}
+        hint_reason = self._hint_reason() if allow_hint else None
 
         def work(session: Session):
             finish = SessionRepository(session).finish_turn(
@@ -251,10 +272,12 @@ class TurnRunner(RunnerBase):
                 pass
             if finish is None:                                                # 不是自己的存檔：開始階段已驗證過，不會發生
                 raise RuntimeError("回合收尾找不到存檔")
-            return finish.turn.turn_number, finish.world_updated, finish.ended, wallet.balance(plan.user_id)       # 只帶純值出工作階段
+            # 提示：與回合收尾同一個交易，條件式更新搶先記錄；回合沒有完成（交易失敗）就不會留下紀錄
+            hinted = hint_reason is not None and SessionRepository(session).claim_safe_hint(plan.user_id, plan.session_public_id, now=self._deps.clock())
+            return finish.turn.turn_number, finish.world_updated, finish.ended, wallet.balance(plan.user_id), hinted       # 只帶純值出工作階段
 
         try:
-            turn_number, world_updated, ended, coins = self._tx(work)
+            turn_number, world_updated, ended, coins, hinted = self._tx(work)
         except InvalidTurnTransitionError:
             self._final = _Final(DONE_COMPLETE, None, 0, {"updated": False, "notices": []}, superseded=True)
             return self._final
@@ -274,8 +297,10 @@ class TurnRunner(RunnerBase):
                 user_id=plan.user_id, session_id=plan.session_id, turn_number=turn_number or plan.turn_number,
                 reason="age" if plan.ending_due else "proposed",
             )
-        self._final = _Final(
-            DONE_ENDED if ended else DONE_COMPLETE, turn_number, coins, state_event(state, world_updated),
-        )
+        event = state_event(state, world_updated)
+        if hinted and hint_reason is not None:
+            event = with_safe_mode_hint(event)
+            rpg_events.log_safe_mode_hint(user_id=plan.user_id, session_id=plan.session_id, reason=hint_reason)
+        self._final = _Final(DONE_ENDED if ended else DONE_COMPLETE, turn_number, coins, event)
         return self._final
 

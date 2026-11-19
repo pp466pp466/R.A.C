@@ -38,9 +38,9 @@
 
 ## 5. 遊戲內提示
 
-- [ ] 5.1 後端提示判定與記錄：`game_service`／回合完成路徑在「玩家偏好為安全開且存檔劇本未綁定、煞車未啟用」時，以 `mentions_sexual`（輸入）或審查層因性內容擋下／降為安全尺度（輸出）判定，成功完成的回合以 `sessions.safe_hint_at is null` 的條件式更新搶先記錄，更新 1 列才在 `state` 事件的 `notices` 加入 `safe_mode_hint`；`rpg_events` 新增只含編號與原因列舉的事件；測試涵蓋：每存檔一次、換裝置不重複、綁定／已關閉／煞車不提示、被擋或中斷回合不記錄、重生不重複、事件順序仍為 `meta…state、done`、日誌不含文字，並通過
-- [ ] 5.2 前端提示：`game-state.js` 的 `NOTICE_KINDS` 與 `noticeText` 擴充 `safe_mode_hint`（固定繁體中文、不保證結果的措辭、帶前往 `/account` 的返回連結與關閉鈕、純文字渲染），`game-session.js` 顯示；Node 測試涵蓋措辭禁字（無「保證」「一定」）、連結、關閉不改設定並通過
-- [ ] 5.3 本批收尾：相關 Node 與 pytest 通過；更新 `docs/RPG.md` 的遊戲內提示段落；更新 HANDOFF.md；列出簡報衝突
+- [x] 5.1 後端提示判定與記錄：`game_service`／回合完成路徑在「玩家偏好為安全開且存檔劇本未綁定、煞車未啟用」時，以 `mentions_sexual`（輸入）或審查層因性內容擋下／降為安全尺度（輸出）判定，成功完成的回合以 `sessions.safe_hint_at is null` 的條件式更新搶先記錄，更新 1 列才在 `state` 事件的 `notices` 加入 `safe_mode_hint`；`rpg_events` 新增只含編號與原因列舉的事件；測試涵蓋：每存檔一次、換裝置不重複、綁定／已關閉／煞車不提示、被擋或中斷回合不記錄、重生不重複、事件順序仍為 `meta…state、done`、日誌不含文字，並通過
+- [x] 5.2 前端提示：`game-state.js` 的 `NOTICE_KINDS` 與 `noticeText` 擴充 `safe_mode_hint`（固定繁體中文、不保證結果的措辭、帶前往 `/account` 的返回連結與關閉鈕、純文字渲染），`game-session.js` 顯示；Node 測試涵蓋措辭禁字（無「保證」「一定」）、連結、關閉不改設定並通過
+- [x] 5.3 本批收尾：相關 Node 與 pytest 通過；更新 `docs/RPG.md` 的遊戲內提示段落；更新 HANDOFF.md；列出簡報衝突
 
 ## 6. 全套驗證、部署與驗收
 

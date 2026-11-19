@@ -170,7 +170,7 @@
       return {
         phase: session.phase, loadFailure: session.loadFailure, restriction: session.restriction, title: session.title, playerName: session.playerName,
         modeLabel: session.modeLabel, modeNote: session.modeNote, gateNotice: session.gateNotice, ended: session.ended, offline: session.offline,
-        notice: session.notice, openingNotice: session.openingNotice,
+        notice: session.notice, safeHint: session.safeHint, openingNotice: session.openingNotice,
         items: session.items, hasEarlier: session.hasEarlier, jumpVisible: session.jumpVisible, scroller: scroller,
         input: input, draft: session.draft, actionError: session.actionError, draftCount: session.draftCount, draftOver: session.draftOver,
         actionMax: session.actionMax, sending: session.sending, sendDisabled: session.sendDisabled, inputDisabled: session.inputDisabled,
@@ -180,7 +180,7 @@
         coinModalOpen: wallet.coinModalOpen, coinModalText: wallet.coinModalText, checkinBusy: wallet.checkinBusy, checkinPreview: wallet.checkinPreview,
         checkinMessage: wallet.checkinMessage, checkinFinished: wallet.checkinFinished,
         retryLoad: session.retryLoad, retryOpening: session.retryOpening, showEarlier: session.showEarlier, jumpToLatest: session.jumpToLatest,
-        onScroll: session.onScroll, send: session.send, cancel: session.cancel, dismissNotice: session.dismissNotice,
+        onScroll: session.onScroll, send: session.send, cancel: session.cancel, dismissNotice: session.dismissNotice, dismissSafeHint: session.dismissSafeHint,
         resendInflight: session.resendInflight, askAbandon: askAbandon, confirmAbandon: confirmAbandon, leaveClick: leaveClick,
         confirmLeave: confirmLeave, toggleSidebar: toggleSidebar, closeSidebar: closeSidebar, claimCheckin: wallet.claimCheckin,
         confirmOverflow: wallet.confirmOverflow, cancelOverflow: wallet.cancelOverflow, closeCoinModal: wallet.closeCoinModal,

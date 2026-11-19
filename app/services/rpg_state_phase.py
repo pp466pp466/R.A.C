@@ -61,6 +61,15 @@ class StateOutcome:
     degraded: str | None = None
 
 
+NOTICE_SAFE_MODE_HINT = "safe_mode_hint"        # `state` 事件通知的固定列舉項：只有這個鍵，沒有任何文字（文字由前端固定提供，不來自模型）
+
+
+def with_safe_mode_hint(event: dict[str, Any]) -> dict[str, Any]:
+    """在 `state` 事件的通知欄位加一個提示項目（遊戲內「可以嘗試關閉安全模式」，見 safe-mode-upgrade-hint）。不新增事件種類，
+    也不論世界狀態有沒有更新都帶得出（`updated: false` 的事件一樣有 `notices`）；回傳新的字典，不改傳入的。"""
+    return {**event, "notices": [*event.get("notices", []), {"kind": NOTICE_SAFE_MODE_HINT}]}
+
+
 def state_event(state: StateOutcome, updated: bool) -> dict[str, Any]:
     """`state` 事件：驗證後的玩家可見欄位與通知。沒有寫入世界狀態時只有 `updated: false`。"""
     if not updated or state.world is None:

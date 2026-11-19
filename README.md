@@ -1394,7 +1394,7 @@ change `rpg-turn-revision`（RC-2c）。玩家只能對**最後一輪**重新生
 - **原子替換**：新回應須完整通過逐句輸出審查**與**狀態驗證才在單一短交易內替換（回合內容、`revision` 加 1、世界狀態、預扣結算、回饋列 `applied`，必要時完結存檔）；失敗、被擋（自動重生一次，仍被擋則放棄）、模型失敗、狀態階段失敗、玩家中斷、被接手時舊內容與世界狀態原樣保留、退回預扣、釋放認領。新文字完整且通過審查之後才斷線，收尾照常完成。**編輯不換新的 `client_msg_id`**：冪等靠 `expected_revision` 加認領。
 - **理由只供營運檢視**：重新生成必須選五個分類之一（`setting_mismatch`、`repetitive_or_dull`、`typo_or_quality`、`blocked_transition`、`other`，繁體中文名稱在前端；正式文案仍待使用者確認）並填 5 至 50 字的理由（NFC、去除控制字元、以 Unicode 字元計；常數在 `game_service.py`，前端從頁面初始狀態的 `revision_limits` 讀）。理由與分類**只存進 `turn_regenerations`**（失敗與被擋的也留），不進任何模型呼叫與 `system_instruction`、不進日誌、不進 IndexedDB 與主控台；被取代的行動與劇情不保存；隨存檔與帳號刪除、納入個人資料匯出（JSON 的 `regenerations`、CSV 的 `turn_regenerations.csv`）。**沒有任何管理員讀取路徑**（管理員的「重新生成回饋」檢視頁是後續小 change）。
 - **前端**（`game-revision.js`）：按鈕只在最後一輪的氣泡下方，「重新生成」與「編輯」旁都顯示「免費還剩 N 次」（用完改顯示幣價）；重新生成 Modal 要分類加理由，編輯 Modal 在免費次數內只說明免費、不要求餘額，需付費時才提醒消耗遊戲幣並顯示餘額、不足時停用送出鈕並指向每日簽到；新文字進最後一輪氣泡的覆蓋層，失敗一律拿掉覆蓋層還原舊內容並以 Toast 說明；`finally` 一律重讀最後一輪（`catchUp` 的 `fromSeq`）並恢復按鈕；**從不自動重送**；理由與分類只在 Modal 的記憶體狀態與請求本文。
-- **日誌**：`rpg.revision_started`、`rpg.revision_completed`、`rpg.revision_failed`（種類、嘗試序號、是否免費、幣數、字數、延遲、失敗原因列舉；沒有理由、行動與劇情）。
+- **日誌**：`rpg.revision_started`、`rpg.revision_completed`、`rpg.revision_failed`（種類、嘗試序號、是否免費、幣數、字數、延遲、失敗原因列舉；沒有理由、行動與劇情）；遊戲內提示事件 `rpg.safe_mode_hint`（safe-mode-toggle：使用者與存檔的內部編號、原因 `input` 或 `output`；沒有任何文字）。
 - **記事簿不受影響**：抓取視窗永遠不含最後一輪，所以修訂不讀寫記事簿，兩個修訂端點也不掛記事簿抓取。
 
 ### 部署順序
@@ -2141,6 +2141,26 @@ app.mount('#app');
 | 目視 | 360 px 詢問 Modal 第一版三個按鈕擠在同一列、文字折行，改為窄螢幕直向堆疊（前往設定在最上面）後重拍，版面正常；1280 px 目錄、創作頁 360 px 編輯畫面正常 |
 
 **未驗證**：真實手機、使用者親自驗收（屬 6.3）、創作頁唯讀版本（待審、已發佈）的勾選框禁用只有樣板與單元測試檢查、沒有在瀏覽器逐一開啟；「已發佈版本修改綁定須產生新版本並重新送審」沿用既有的版本規則（後端測試涵蓋），瀏覽器沒有走一遍送審流程。
+
+### 驗收紀錄（safe-mode-toggle E 批第 5 組，2026-11-19，已實作、尚未提交、尚未使用者驗收）
+
+第 5 組（tasks 5.1 至 5.3）：遊戲內「可以嘗試關閉安全模式」提示。
+
+| 檔案 | 內容 |
+|---|---|
+| `app/services/access_policy.py`、`game_service.py`、`app/repositories/session_repository.py` | `upgrade_hint_eligible`（前提）、`TurnPlan.hint_eligible`／`hint_input`（開始階段判定）、`claim_safe_hint`（`safe_hint_at` 為空才更新、更新 1 列才算搶到） |
+| `app/services/rpg_turn_runner.py`、`rpg_state_phase.py`、`app/observability/rpg_events.py` | 輸出端條件（曾有嘗試因 `tier_mismatch` 被擋）、收尾同一個交易內記錄、`state` 事件的 `notices` 加 `safe_mode_hint`、事件 `rpg.safe_mode_hint` |
+| `app/static/js/game/game-state.js`、`game-labels.js`、`game-session.js`、`game.js`、`app/templates/game/session.html`、`app/static/css/game.css` | `safe_hint` effect、固定文字與連結、可關閉的提示 |
+| `tests/test_safe_mode_hint.py`、`tests/js/game-state.test.js`、`game-labels.test.js`、`game-session.test.js`、`tests/test_game_pages.py`、`tests/test_rpg_events.py`、`tests/js/support/game-contract.js` | 新增與改寫的測試 |
+
+| 已驗證 | 結果 |
+|---|---|
+| 後端（5.1） | `tests/test_safe_mode_hint.py` **62 項通過**（SQLite 與 SQL Server 各 31）：前提八種組合（含舊值 `standard` 與同意失效、緊急煞車）、輸入端與輸出端觸發、兩者同時為 `input`、一般回合與其他類別被擋不觸發、綁定／已關閉／煞車不提示、每存檔一次（第二次不重複並保留第一次的時間、不同存檔各一次、條件式更新只有一個贏家且只有擁有者能記錄）、被擋兩次／中斷／斷線後補做的收尾／被取代的回合不記錄（斷線者留給下一次）、事件順序仍是 `meta`…`state`、`done` 且只有固定列舉鍵、`updated: false` 也帶得出、不改變設定與預扣與上下文、重新生成與編輯不重複也不新增、日誌只含編號與原因 |
+| Node（5.2） | 提示的 effect 只讀固定列舉鍵（伺服器文字、數字與連結一律不採用）、與年齡更正 Toast 分開、顯示的文字固定且沒有承諾字樣、連結帶這個存檔的返回位置、關閉只清畫面不送請求；Node 全套 **1400 項通過、0 失敗**（第 4 組後為 1388） |
+| 相關 pytest（5.3；**不是全套**，全套留到 6.1） | `tests/architecture`、`test_game_*`、`test_turn_*`、`test_rpg_*`、`test_safe_mode_hint`、`test_session_*`、`test_access_policy*`、`test_content_*`、`test_notebook*`、`test_wallet_*`、設計文件、README、`test_agents_skill_sync`、`test_project_db_schema_doc` **4049 通過、2 略過（A 批守門測試允許清單）、0 失敗**（293 秒） |
+| 瀏覽器冒煙（本機 Chrome、拋棄式 SQLite 與自己的 5018／5019 埠；回合串流由 Playwright 攔截並注入含提示的 `state` 事件，所以這一列只驗證**畫面**，後端判定由上一列的測試涵蓋） | **48 項通過、0 失敗**（360／390／768／1280 px 各 12）：一開始沒有提示；提示出現且文字固定、註明由模型決定、沒有承諾字樣；連結 `/account?return=/game/<存檔識別碼>`；不是 Toast；頁面仍顯示安全模式開；水平溢出 0、純白文字 0；按「關閉」提示消失且沒有任何寫入請求、伺服器端設定不變；沒有提示的回合不顯示；主控台錯誤 0。目視：360 px 第一版連結「前往帳號設定」被折成兩行，加上不折行樣式後版面正常 |
+
+**未驗證**：真實模型之下「玩家輸入性內容、模型輸出被降成安全尺度」的實際觸發（假供應商只驗證流程；詞表的涵蓋範圍沿用既有的 `mentions_sexual` 與輸出審查，沒有新的詞表）、真實手機、使用者親自驗收（屬 6.3）。**設計決定（tasks 沒有明寫）**：重新生成與編輯不嘗試也不重複提示；玩家在文字完成後才斷線時補做的收尾不記錄提示（留給下一次）；`state` 事件送出前的極窄斷線可能出現「已記錄但玩家沒看到」。
 
 ## 容器建置與驗收
 

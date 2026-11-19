@@ -37,6 +37,7 @@ EVENT_NOTEBOOK_SAVE_REJECTED = "rpg.notebook_save_rejected"
 EVENT_REVISION_STARTED = "rpg.revision_started"
 EVENT_REVISION_COMPLETED = "rpg.revision_completed"
 EVENT_REVISION_FAILED = "rpg.revision_failed"
+EVENT_SAFE_MODE_HINT = "rpg.safe_mode_hint"
 
 EVENT_NAMES = frozenset(
     value for name, value in dict(globals()).items() if name.startswith("EVENT_") and isinstance(value, str)
@@ -71,6 +72,10 @@ NOTEBOOK_REJECT_REASONS = ("too_long", "blocked", "conflict", "ended")          
 
 # 重新生成與編輯最後一輪（rpg-turn-revision 的 design D10）。**不記錄**理由、分類、行動、劇情與快照：函式沒有接收它們的參數
 REVISION_FAIL_REASONS = ("blocked", "timeout", "model_failed", "state_failed", "superseded", "disconnected", "internal")
+
+
+# 遊戲內「可以嘗試關閉安全模式」提示（safe-mode-upgrade-hint）的觸發原因：玩家輸入被規則層判為性內容、模型輸出被審查層因性內容擋下
+HINT_REASONS = ("input", "output")
 
 
 def _integer(name: str, value: object) -> int:
@@ -329,4 +334,16 @@ def log_revision_failed(*, user_id: int, session_id: int, kind: str, attempt: in
         EVENT_REVISION_FAILED, "RPG 修訂失敗", user_id=user_id, session_id=_integer("session_id", session_id),
         kind=_choice("種類", kind, REGEN_KINDS), attempt=_integer("attempt", attempt), reason=_choice("原因", reason, REVISION_FAIL_REASONS),
         outcome="failed",
+    )
+
+
+# ---- 遊戲內提示 ---------------------------------------------------------------------------------------------
+
+
+def log_safe_mode_hint(*, user_id: int, session_id: int, reason: str) -> None:
+    """「可以嘗試關閉安全模式」提示已記錄並隨 `state` 事件送出（每個存檔最多一次）：只有使用者與存檔的內部編號與原因列舉
+    （`input` 玩家輸入被規則層判為性內容、`output` 模型輸出被審查層因性內容擋下）。沒有玩家文字、劇情或詞表命中的字詞。"""
+    _info(
+        EVENT_SAFE_MODE_HINT, "RPG 安全模式提示", user_id=user_id, session_id=_integer("session_id", session_id),
+        reason=_choice("原因", reason, HINT_REASONS), outcome="shown",
     )

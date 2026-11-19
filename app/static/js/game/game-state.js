@@ -398,20 +398,26 @@
     return next;
   }
 
-  var NOTICE_KINDS = { age_corrected: true };
+  var NOTICE_KINDS = { age_corrected: true, safe_mode_hint: true };
+  var HINT_KIND = 'safe_mode_hint';
 
-  /* 通知的白名單欄位（目前只有年齡更正）；伺服器產生的 `text` 不採用，由 `noticeText` 以固定句型組出。 */
+  /* 通知的白名單欄位：年齡更正（名稱與前後年齡）與遊戲內提示（safe-mode-upgrade-hint，**只有固定的列舉鍵**，沒有任何文字或數字）；
+     伺服器產生的 `text` 一律不採用，由 `noticeText` 以固定句型組出。 */
   function pickNotices(raw) {
     var notices = [];
     list(raw).forEach(function (item) {
-      if (!isObject(item) || !has(NOTICE_KINDS, item.kind) || !isCount(item.before) || !isCount(item.after)) { return; }
+      if (!isObject(item) || !has(NOTICE_KINDS, item.kind)) { return; }
+      if (item.kind === HINT_KIND) { notices.push({ kind: HINT_KIND }); return; }
+      if (!isCount(item.before) || !isCount(item.after)) { return; }
       notices.push({ kind: item.kind, name: text(item.name).slice(0, 60), before: item.before, after: item.after });
     });
     return notices;
   }
 
-  /* 年齡更正通知的文字（含更正前的值）；不是年齡更正或數字不完整時回傳空字串。 */
+  /* 通知的文字：遊戲內提示是 `game-labels.js` 的固定文字（「可以嘗試」、不承諾結果）；年齡更正含更正前的值；
+     不認得的種類或數字不完整時回傳空字串。 */
   function noticeText(notice) {
+    if (isObject(notice) && notice.kind === HINT_KIND) { return labels.safeHintText(); }
     if (!isObject(notice) || notice.kind !== 'age_corrected' || !isCount(notice.before) || !isCount(notice.after)) { return ''; }
     var name = text(notice.name).replace(/^\s+|\s+$/g, '');
     return (name || '角色') + '的年齡由 ' + notice.before + ' 歲更正為 ' + notice.after + ' 歲。';
@@ -461,12 +467,14 @@
       var world = pickWorld(data);
       if (world) { effects.push({ type: 'world', world: world }); }
       var notices = pickNotices(data.notices);
-      if (notices.length > 0) {
+      var corrections = notices.filter(function (notice) { return notice.kind !== HINT_KIND; });
+      if (corrections.length > 0) {
         effects.push({
           type: 'notices',
-          notices: notices.map(function (notice) { return { kind: notice.kind, name: notice.name, before: notice.before, after: notice.after, text: noticeText(notice) }; })
+          notices: corrections.map(function (notice) { return { kind: notice.kind, name: notice.name, before: notice.before, after: notice.after, text: noticeText(notice) }; })
         });
       }
+      if (notices.length > corrections.length) { effects.push({ type: 'safe_hint', text: noticeText({ kind: HINT_KIND }) }); }       // 提示不是 Toast：由遊戲頁顯示成可關閉的提示
     } else if (event.event === 'done') {
       var status = has(labels.DONE_STATUS_LABELS, data.status) ? data.status : 'unknown';
       next.finished = true;

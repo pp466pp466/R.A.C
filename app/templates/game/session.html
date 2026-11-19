@@ -8,7 +8,7 @@
 
    與 game.js 的約定（game.js 的 setup() 合併 game-session.js、game-wallet.js、game-notebook.js 的回傳並加上側欄與 Modal，必須回傳的就是下面這份清單）：
    - 載入與狀態：phase（'loading'｜'ready'｜'gone'｜'failed'）、loadFailure（{ message, link, retry }｜null）、restriction（'locked'｜'suspended'｜null）、
-     title、playerName、modeLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、
+     title、playerName、modeLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、safeHint（{ text, link, linkText, closeText, closeLabel }｜null；遊戲內「可以嘗試關閉安全模式」提示）、
      openingNotice（{ tone, text, retry }｜null）。
    - 時間軸：items（最近 60 項：opening｜turn｜note｜inflight）、hasEarlier、jumpVisible、scroller（捲動區的元素參照）。
    - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
@@ -25,7 +25,7 @@
      （{ value, label } 的分類清單）、regenerateCategory、regenerateReason、regenerateRule（字數規則）、regenerateCount、regenerateError、regenerateCanSubmit、
      regenerateCostLine；編輯 Modal：editOpen、editDraft、editCount、editHint、editError、editCanSubmit、editInsufficient（需付費且餘額不足）、editCostLine（免費次數內說明免費；需付費時提醒消耗遊戲幣與原本那輪的幣不退，並顯示費用與餘額）。
      理由字數範圍與分類來自初始狀態的 revision_limits，樣板不寫死任何數字；理由與分類只存在 Modal 的記憶體狀態，樣板以雙大括號顯示、不進任何儲存。
-   - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、resendInflight、askAbandon、confirmAbandon、
+   - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、dismissSafeHint、resendInflight、askAbandon、confirmAbandon、
      leaveClick、confirmLeave、toggleSidebar、closeSidebar、selectSideTab、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal、
      openNotebook（頂列「記事簿已滿」入口）、reloadNotebook、startNotebookEdit、saveNotebook、cancelNotebookEdit、confirmNotebookDiscard、
      openRegenerate、openEdit、closeRegenerate、closeEdit、selectRegenerateCategory、submitRegenerate、submitEdit、cancelRevision。 #}
@@ -138,6 +138,11 @@
       <button v-if="jumpVisible" type="button" class="gm-jump" @click="jumpToLatest">回到最新</button>
 
       <section class="gm-composer" aria-label="輸入行動">
+        <p v-if="safeHint" class="gm-notice gm-notice--info gm-notice--hint" role="status">
+          {{ safeHint.text }}
+          <a :href="safeHint.link">{{ safeHint.linkText }}</a>
+          <button type="button" class="gm-linkbtn" :aria-label="safeHint.closeLabel" @click="dismissSafeHint">{{ safeHint.closeText }}</button>
+        </p>
         <p v-if="notice" class="gm-notice" :class="'gm-notice--' + notice.tone" role="alert">
           {{ notice.text }}
           <a v-if="notice.link" :href="notice.link.href">{{ notice.link.text }}</a>

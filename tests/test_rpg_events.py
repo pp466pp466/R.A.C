@@ -28,9 +28,9 @@ STATE = json.dumps({"elapsed_months": 2, "current_location": "祕密山谷", "np
 
 # ---- 事件模組本身 -----------------------------------------------------------------------------
 
-def test_there_are_twenty_one_unique_events():
+def test_there_are_twenty_two_unique_events():
     names = [value for key, value in vars(rpg_events).items() if key.startswith("EVENT_") and isinstance(value, str)]
-    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 21          # 12 個回合與第 0 幕事件 + 6 個記事簿事件 + 3 個修訂事件
+    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 22          # 12 個回合與第 0 幕事件 + 6 個記事簿事件 + 3 個修訂事件 + 1 個遊戲內提示事件
 
 
 def test_no_logging_function_takes_a_free_text_parameter():
@@ -78,6 +78,7 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         rpg_events.log_revision_started(user_id=1, session_id=2, kind="regenerate", attempt=2, is_free=False, cost=30)
         rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=3, chars=480, latency_ms=4200, world_updated=True, ended=False)
         rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=2, reason="blocked")
+        rpg_events.log_safe_mode_hint(user_id=1, session_id=2, reason="input")
     records = [r for r in caplog.records if r.name == "app.rpg"]
     assert {r.event for r in records} == set(rpg_events.EVENT_NAMES)
     extra_keys = {"event", "user_id", "session_id", "turn_number", "attempt", "outcome", "reason", "model", "chars", "latency_ms",
@@ -98,6 +99,11 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
     lambda: rpg_events.log_turn_failed(user_id=1, session_id=2, attempt=1, reason="錯誤原文", model=None),
     lambda: rpg_events.log_state_failed(user_id=1, session_id=2, turn_number=1, reason="x"),
     lambda: rpg_events.log_session_ended(user_id=1, session_id=2, turn_number=1, reason="x"),
+    # 遊戲內提示：原因只能是 input 或 output；編號必須是整數（不是布林或文字）
+    lambda: rpg_events.log_safe_mode_hint(user_id=1, session_id=2, reason="她說了什麼"),
+    lambda: rpg_events.log_safe_mode_hint(user_id=1, session_id=2, reason="shown"),
+    lambda: rpg_events.log_safe_mode_hint(user_id=1, session_id=True, reason="input"),
+    lambda: rpg_events.log_safe_mode_hint(user_id=1, session_id="2", reason="output"),
     lambda: rpg_events.log_turn_completed(
         user_id=1, session_id=2, turn_number=1, attempt=1, chars="很多", latency_ms=1, first_chunk_ms=None, model=None, finish_reason=None,
         dropped=0, state_ok=True, world_updated=True, ended=False,

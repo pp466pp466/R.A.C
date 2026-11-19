@@ -9,6 +9,8 @@
  *   緊急煞車時說明「目前系統暫時只提供安全模式」。只有說明，沒有任何自動改變模式的動作（不自動調高）。
  * - `sessionModeNotice(mode, saveMode)`：遊戲頁的補充說明：緊急煞車、或劇本綁定安全模式（玩家已關閉安全模式、存檔卻仍是安全）；其他情況沒有說明。
  * - `modePrompt`（`modePromptCopy()`）：目錄點選未綁定劇本時，詢問是否修改安全模式的固定文案；`accountLink(returnPath)`：帳號設定頁的連結（帶返回位置）。
+ * - 遊戲內提示（safe-mode-upgrade-hint）：`safeHintText()`、`safeHintCopy(returnPath)`——「可以嘗試關閉安全模式」的固定文字（「可以嘗試」的語氣，
+ *   註明實際內容由模型決定、模型也可能拒絕或調整，沒有任何承諾字樣）與前往帳號設定的連結（返回位置是目前存檔的頁面）；文字不來自伺服器或模型。
  * - `startPath(id)`、`sessionPath(id)`：站內路徑，識別碼經 encodeURIComponent。
  * - `formatTaipeiTime(iso)`：伺服器的 UTC 時間（`2026-10-27T12:00:00Z`）轉成台灣時間 `YYYY-MM-DD HH:mm`；台灣沒有日光節約時間，固定加 8 小時，不依賴瀏覽器的時區。
  * 遊戲主畫面（rpg-game-ui）另加：回合與串流結束狀態的名稱、轉場與中斷說明、串流 `error` 事件的訊息、歷史裡未完成回合的那一行說明、
@@ -71,6 +73,13 @@
   var SESSION_MODE_NOTES = {
     forced: '目前系統暫時只提供安全模式，這個存檔以安全模式進行。',
     bound: '這個劇本綁定安全模式，所以不論您的設定，這個存檔都以安全模式進行。'
+  };
+  /* 遊戲內提示：玩家在安全模式下輸入性內容、或輸出被降成安全尺度之後，告知「可以嘗試」關閉安全模式。語氣是「可以嘗試」，不承諾結果。 */
+  var SAFE_HINT = {
+    text: '如果想要更深入的體驗，可以到帳號設定嘗試關閉安全模式。實際是否出現更深入的內容仍由模型決定，模型也可能拒絕或調整內容。',
+    linkText: '前往帳號設定',
+    closeText: '關閉',
+    closeLabel: '關閉提示'
   };
   /* 目錄點選未綁定安全模式的劇本、玩家目前是安全模式時的詢問（自製 Modal；Esc 與遮罩視同取消）。 */
   var MODE_PROMPT = {
@@ -234,6 +243,13 @@
     if (mode.forced === true) { return SESSION_MODE_NOTES.forced; }
     if (mode.effective === 'adult' && saveMode === 'safe') { return SESSION_MODE_NOTES.bound; }
     return '';
+  }
+
+  function safeHintText() { return SAFE_HINT.text; }
+
+  /* 遊戲內提示的完整內容：固定文字、前往帳號設定的連結（`returnPath` 是目前存檔的頁面，`/game/<存檔識別碼>`）與關閉鈕的文字。 */
+  function safeHintCopy(returnPath) {
+    return { text: SAFE_HINT.text, link: accountLink(returnPath), linkText: SAFE_HINT.linkText, closeText: SAFE_HINT.closeText, closeLabel: SAFE_HINT.closeLabel };
   }
 
   function modePromptCopy() {
@@ -420,6 +436,8 @@
     modeLabel: modeLabel,
     sessionModeNotice: sessionModeNotice,
     modePromptCopy: modePromptCopy,
+    safeHintText: safeHintText,
+    safeHintCopy: safeHintCopy,
     accountLink: accountLink,
     MODE_LABELS: MODE_LABELS,
     audienceLabel: audienceLabel,

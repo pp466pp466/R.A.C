@@ -158,6 +158,25 @@ test('the ask-before-start text is fixed Traditional Chinese with the three answ
   assert.equal(Game.modePromptCopy().body.length, 2);                                     // 回傳的是複本
 });
 
+test('the in-game hint text invites to try, says the model still decides, and carries no promise or age wording', () => {
+  const text = Game.safeHintText();
+  assert.ok(HAN.test(text) && text.includes('可以到帳號設定嘗試關閉安全模式'));
+  assert.ok(text.includes('仍由模型決定') && text.includes('可能拒絕或調整'));                 // 註明不保證結果
+  for (const forbidden of ['保證', '一定', '必定', '絕對', '馬上', '立刻', '未滿 18', '一般模式', '成人模式']) { assert.ok(!text.includes(forbidden), forbidden); }
+  assert.ok(!/[<>{}]/.test(text));                                                              // 純文字
+});
+
+test('the hint copy links to the account settings with this save page as the return position, and returns copies', () => {
+  const id = '6c3f1a2e-0000-4000-8000-000000000001';
+  const copy = Game.safeHintCopy(Game.sessionPath(id));
+  assert.equal(copy.link, '/account?return=' + encodeURIComponent('/game/' + id));
+  assert.deepEqual([copy.linkText, copy.closeText, copy.closeLabel], ['前往帳號設定', '關閉', '關閉提示']);
+  assert.equal(copy.text, Game.safeHintText());
+  copy.text = '被改掉了';
+  assert.equal(Game.safeHintCopy(Game.sessionPath(id)).text, Game.safeHintText());
+  assert.equal(Game.safeHintCopy('//evil.example/').link, '/account');                          // 不是 /game/ 開頭就不帶返回位置
+});
+
 test('the account link carries the return position only for a safe in-game path', () => {
   const id = '0b6f3a52-1c8e-4d57-9a41-7f2e6c1d8b90';
   assert.equal(Game.accountLink(Game.startPath(id)), '/account?return=%2Fgame%2Fstart%2F' + id);

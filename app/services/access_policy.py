@@ -129,6 +129,16 @@ class AccessPolicy:
         binding = script_snapshot.get("content_tier") if isinstance(script_snapshot, dict) else None
         return self.effective_mode(user, binding if binding is not None else "")
 
+    def upgrade_hint_eligible(self, user: CurrentUser, script_snapshot: object) -> bool:
+        """遊戲內「可以嘗試關閉安全模式」提示的前提（safe-mode-upgrade-hint）：玩家目前自己的設定是安全模式開（缺少目前版本的同意視為開，
+        與個人頁的開關一致）、存檔的劇本**未綁定**安全模式（取自複製進存檔的快照；缺少或無法判定視為綁定，與 `save_mode` 一致）、
+        緊急煞車未啟用。三者缺一不可：綁定的劇本關閉安全模式也不會改變它，緊急煞車時玩家無法關閉，已關閉的玩家不需要提示。
+        只回答「有沒有資格被提示」，不看玩家輸入或模型輸出（觸發條件由規則層與審查層判定）。"""
+        state = self.mode_state(user)
+        binding = script_snapshot.get("content_tier") if isinstance(script_snapshot, dict) else None
+        bound = binding is None or parse_tier(binding) == CONTENT_TIER_SAFE
+        return state.effective == CONTENT_TIER_SAFE and not state.forced and not bound
+
     def mode_state(self, user: CurrentUser) -> ModeState:
         """個人頁與內容模式 API 用的狀態（不含劇本）。"""
         return ModeState(

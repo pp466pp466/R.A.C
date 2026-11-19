@@ -48,7 +48,7 @@ from app.services.errors import (
 )
 from app.services.input_cleaning import clean_message, clean_single_line
 from app.services.runtime_limits import RuntimeLimits
-from app.services.script_rules import check_text_rules
+from app.services.script_rules import check_text_rules, mentions_sexual
 from app.services.wallet_service import DEFAULT_MODEL_KEY, WalletService
 
 CLIENT_MSG_ID_MAX = 64            # 與 memory_logs.client_msg_id 的欄位長度一致
@@ -99,6 +99,9 @@ class TurnPlan:
     contents: tuple[Any, ...]
     revision: int                           # 回合目前的修訂序號（新回合為 1）；`done` 事件帶出
     free_left: int                          # 這個回合還剩幾次免費修訂（重新生成與編輯共用；新回合為設定的免費次數）；`done` 事件帶出
+    # 遊戲內「可以嘗試關閉安全模式」提示（safe-mode-upgrade-hint）：開始階段判定的兩個旗標，之後的收尾只據此決定要不要嘗試記錄與送出
+    hint_eligible: bool = False             # 玩家設定為安全模式開、存檔的劇本未綁定、緊急煞車未啟用（`AccessPolicy.upgrade_hint_eligible`）
+    hint_input: bool = False                # 且玩家這一輪送出的行動被規則層判為性內容（`mentions_sexual`）
 
 
 @dataclass(frozen=True)
@@ -387,10 +390,12 @@ class GameService:
         except TurnInProgressError as exc:
             raise Conflict(TURN_IN_PROGRESS_MESSAGE, code="turn_in_progress") from exc
 
+        # 提示的前提在開始階段一次算好（純規則層，不呼叫模型）：不影響這個回合的任何內容、預扣或上下文
+        hint_eligible = self._policy.upgrade_hint_eligible(current, save.script_snapshot_json)
         plan = self._plan(
             current, save, tier=tier, adult_age=adult_age, max_months=max_months, action=text, client_msg_id=msg_id, attempt=attempt, seq=seq,
             start=rpg_events.START_NEW if started.outcome == TURN_CREATED else rpg_events.START_RESTARTED, key=key, cost=held.cost,
-            revision=turn.revision,
+            revision=turn.revision, hint_eligible=hint_eligible, hint_input=hint_eligible and mentions_sexual(text),
         )
         rpg_events.log_turn_started(
             user_id=current.id, session_id=save.id, turn_number=plan.turn_number, attempt=attempt, start=plan.start, tier=tier, model=self._model,
@@ -652,7 +657,7 @@ class GameService:
 
     def _plan(
         self, current: CurrentUser, save: RpgSession, *, tier: str, adult_age: int, max_months: int, action: str, client_msg_id: str,
-        attempt: int, seq: int, start: str, key: str, cost: int, revision: int,
+        attempt: int, seq: int, start: str, key: str, cost: int, revision: int, hint_eligible: bool = False, hint_input: bool = False,
     ) -> TurnPlan:
         recent = self._sessions.recent_complete_turns(current.id, save.public_id) or []
         history = history_of(recent)
@@ -673,4 +678,5 @@ class GameService:
             adult_age=adult_age, max_months=max_months, ending_due=ending_due, script=script, protagonist=protagonist, world=world,
             characters=tuple(rpg_world.known_characters(world, script, protagonist)), history=history, system_instruction=system,
             contents=tuple(contents), revision=revision, free_left=free_left_of(self._limits.rpg_free_regenerations(), 0),
+            hint_eligible=hint_eligible, hint_input=hint_input,
         )

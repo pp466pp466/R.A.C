@@ -212,6 +212,15 @@ class SessionRepository(BaseRepository[RpgSession]):
         self._session.expire(save)
         return result.rowcount
 
+    def claim_safe_hint(self, user_id: int, public_id: str, *, now: datetime) -> bool:
+        """遊戲內「可以嘗試關閉安全模式」提示的記錄（safe-mode-upgrade-hint）：只在 `safe_hint_at` 為空時才寫入時間，**更新 1 列才回傳真**。
+        條件式 UPDATE 讓多個 worker 與重送都搶不到第二次，所以每個存檔最多提示一次；只存時間，不存任何觸發的文字。
+        不是自己的存檔（或已記錄過）回傳假。與回合收尾在同一個交易內呼叫：回合沒有完成就不會留下紀錄。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return False
+        return self._update_owned(save, RpgSession.safe_hint_at.is_(None), safe_hint_at=now) == 1
+
     # ---- 世界狀態（以版本號偵測衝突）--------------------------------------------------------
 
     def update_world_state(self, user_id: int, public_id: str, *, expected_version: int, **changes: Any) -> RpgSession | None:

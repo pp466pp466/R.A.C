@@ -882,3 +882,34 @@ def test_the_session_template_shows_the_live_mode_chip_and_the_note():
     html = read(TEMPLATES / "session.html")
     assert '<span class="ge-chip">{{ modeLabel }}</span>' in html and "{{ tierLabel }}" not in html
     assert '<p v-if="modeNote" class="ge-banner ge-banner--quiet gm-banner" role="status">{{ modeNote }}</p>' in html
+
+
+# ---- 遊戲內提示（safe-mode-toggle 第 5 組）：樣板、前端與後端的列舉鍵一致 ---------------------------------------------------
+
+def test_the_session_template_shows_the_hint_as_a_closable_plain_text_notice_with_a_link_to_the_account_settings():
+    html = read(TEMPLATES / "session.html")
+    start = html.index('<p v-if="safeHint"')
+    block = html[start:html.index("</p>", start)]
+    assert 'role="status"' in block and "{{ safeHint.text }}" in block
+    assert ':href="safeHint.link"' in block and "{{ safeHint.linkText }}" in block
+    assert '@click="dismissSafeHint"' in block and ':aria-label="safeHint.closeLabel"' in block and "{{ safeHint.closeText }}" in block
+    assert "v-html" not in html and "data-bs-" not in html.replace('data-bs-theme="dark"', "")
+    assert html.index('<p v-if="safeHint"') < html.index('<p v-if="notice"')          # 與錯誤與資訊提示是兩個獨立的欄位
+
+
+def test_the_frontend_and_the_backend_agree_on_the_one_hint_notice_key_and_the_frontend_never_reads_server_text_for_it():
+    from app.services.rpg_state_phase import NOTICE_SAFE_MODE_HINT, with_safe_mode_hint
+
+    state_js = read(JS_DIR / "game-state.js")
+    assert f"var HINT_KIND = '{NOTICE_SAFE_MODE_HINT}';" in state_js and f"{NOTICE_SAFE_MODE_HINT}: true" in state_js
+    assert with_safe_mode_hint({"updated": False, "notices": []}) == {"updated": False, "notices": [{"kind": NOTICE_SAFE_MODE_HINT}]}
+    pick = state_js[state_js.index("function pickNotices"):state_js.index("function noticeText")]
+    assert "item.text" not in pick                                                      # 提示的文字不採用伺服器送來的任何字
+
+
+def test_the_hint_wording_in_the_labels_has_no_promise_and_no_age_wording():
+    source = read(JS_DIR / "game-labels.js")
+    text = re.search(r"var SAFE_HINT = \{\s*text: '([^']+)'", source).group(1)
+    assert "可以到帳號設定嘗試關閉安全模式" in text and "仍由模型決定" in text and "可能拒絕或調整" in text
+    for forbidden in ("保證", "一定", "必定", "絕對", "未滿 18", "一般模式", "成人模式"):
+        assert forbidden not in text, forbidden

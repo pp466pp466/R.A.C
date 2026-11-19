@@ -339,6 +339,8 @@ textarea.gw-input { resize: vertical; }
 .gm-composer__spacer { flex: 1 1 auto; }
 .gm-notice { margin: 0 auto 0.5rem; padding: 0.45rem 0.8rem; background: var(--color-surface); border: var(--border-hairline); border-left: 2px solid var(--color-accent); font-size: 0.9rem; line-height: 1.7; overflow-wrap: anywhere; }
 .gm-notice--info { border-left-color: var(--color-border); color: var(--color-text-muted); }
+/* 遊戲內提示（safe-mode-toggle）：連結與關閉鈕不折行，窄螢幕時整個動作換到下一行 */
+.gm-notice--hint a, .gm-notice--hint .gm-linkbtn { white-space: nowrap; }
 .gm-sr { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 
 /* ---- 側欄（分頁：世界、記事簿）--------------------------------------------- */

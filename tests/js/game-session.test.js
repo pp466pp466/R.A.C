@@ -537,6 +537,54 @@ test('a state event updates the world panel from the whitelist and an age correc
   assert.deepEqual(Object.keys(plain(h.session.world.value)).sort(), ['elapsed_months', 'goals', 'location', 'places', 'protagonist_age', 'summary']);
 });
 
+// ---- 遊戲內「可以嘗試關閉安全模式」提示（safe-mode-upgrade-hint）--------------------------------------------------
+
+function hintTurn(seq, id, notices) {
+  const plan = normalTurn({ seq, clientMsgId: id, story: '劇情' });
+  plan.events[2] = event('state', { updated: false, notices });
+  return plan;
+}
+
+test('the hint shows as a closable notice with the fixed text and a link back to this save, not as a toast', async () => {
+  const h = await ready();
+  assert.equal(h.session.safeHint.value, null);
+  await sendAction(h, '行動', hintTurn(1, 'msg-1', [{ kind: 'safe_mode_hint' }]));
+  const hint = plain(h.session.safeHint.value);
+  assert.equal(hint.text, Labels.safeHintText());
+  assert.equal(hint.link, '/account?return=' + encodeURIComponent('/game/' + SESSION_ID));
+  assert.equal(hint.linkText, '前往帳號設定');
+  assert.deepEqual(h.toasts, []);                                      // 提示不是 Toast
+});
+
+test('closing the hint only hides it: no request, no setting change, and the notice slot is untouched', async () => {
+  const h = await ready();
+  await sendAction(h, '行動', hintTurn(1, 'msg-1', [{ kind: 'safe_mode_hint' }]));
+  h.session.notice.value = { tone: 'error', text: '另一個提示', link: null };
+  const requestsBefore = JSON.stringify(h.calls);
+  h.session.dismissSafeHint();
+  assert.equal(h.session.safeHint.value, null);
+  assert.deepEqual(plain(h.session.notice.value), { tone: 'error', text: '另一個提示', link: null });
+  assert.equal(JSON.stringify(h.calls), requestsBefore);
+});
+
+test('a turn without the hint shows none, and server-sent text on a hint is never displayed', async () => {
+  const quiet = await ready();
+  await sendAction(quiet, '行動', hintTurn(1, 'msg-1', []));
+  assert.equal(quiet.session.safeHint.value, null);
+  const h = await ready();
+  await sendAction(h, '行動', hintTurn(1, 'msg-1', [{ kind: 'safe_mode_hint', text: '伺服器寫：保證一定可以', link: 'https://evil.example/' }]));
+  const shown = JSON.stringify(plain(h.session.safeHint.value));
+  assert.ok(!shown.includes('保證') && !shown.includes('evil.example'));
+});
+
+test('the hint does not change the turn: it still completes, the input unlocks and the safe-mode label is untouched', async () => {
+  const h = await ready({ session: { content_tier: 'safe' } });
+  await sendAction(h, '行動', hintTurn(1, 'msg-1', [{ kind: 'safe_mode_hint' }]));
+  assert.equal(h.session.sending.value, false);
+  assert.equal(h.session.sendDisabled.value, false);
+  assert.equal(h.session.modeLabel.value, '安全模式開');                  // 不自動調高
+});
+
 test('the input unlocks at done, before the catch-up finishes, and the next turn waits for that catch-up', async () => {
   const h = await ready();
   let release = null;

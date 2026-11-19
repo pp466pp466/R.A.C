@@ -539,6 +539,61 @@ test('a state event that says nothing was updated has no world effect, but its n
   assert.deepEqual(types(onlyNotice.effects), ['notices']);
 });
 
+// ---- 遊戲內「可以嘗試關閉安全模式」提示（safe-mode-upgrade-hint）--------------------------------------------------
+
+const HINT = { kind: 'safe_mode_hint' };
+
+test('the hint in a state event becomes one safe_hint effect with the fixed text, and never a toast notice', () => {
+  const { effects } = feed(State.newStreamTurn('c1', 'a'), [ev('state', { updated: true, elapsed_months: 1, location: '山門', notices: [HINT] })]);
+  assert.deepEqual(types(effects), ['world', 'safe_hint']);
+  assert.equal(effects.find((e) => e.type === 'safe_hint').text, Labels.safeHintText());
+  assert.ok(!effects.some((e) => e.type === 'notices'));
+});
+
+test('the hint also arrives in a state event that updated nothing, next to an age correction that stays a toast', () => {
+  const only = feed(State.newStreamTurn('c1', 'a'), [ev('state', { updated: false, notices: [HINT] })]);
+  assert.deepEqual(types(only.effects), ['safe_hint']);
+  const both = feed(State.newStreamTurn('c1', 'a'), [ev('state', { updated: true, location: '後山', notices: [{ kind: 'age_corrected', name: '林婉', before: 19, after: 22 }, HINT] })]);
+  assert.deepEqual(types(both.effects), ['world', 'notices', 'safe_hint']);
+  assert.equal(both.effects.find((e) => e.type === 'notices').notices.length, 1);
+});
+
+test('only the fixed enumeration key is read: server text, numbers and extra fields on the hint are ignored', () => {
+  const { effects } = feed(State.newStreamTurn('c1', 'a'), [ev('state', {
+    updated: false, notices: [{ kind: 'safe_mode_hint', text: `${MARKER}保證一定`, name: MARKER, before: 1, after: 2, link: 'https://evil.example/' }],
+  })]);
+  const hint = effects.find((e) => e.type === 'safe_hint');
+  assert.deepEqual(Object.keys(hint).sort(), ['text', 'type']);
+  assert.equal(hint.text, Labels.safeHintText());
+  assert.ok(!JSON.stringify(effects).includes(MARKER) && !JSON.stringify(effects).includes('evil.example'));
+});
+
+test('a hint sent twice in one event shows once; look-alike kinds are not hints', () => {
+  const twice = feed(State.newStreamTurn('c1', 'a'), [ev('state', { updated: false, notices: [HINT, HINT] })]);
+  assert.equal(types(twice.effects).filter((type) => type === 'safe_hint').length, 1);
+  for (const kind of ['safe_mode_hint ', 'SAFE_MODE_HINT', 'hint', 7, null]) {
+    const odd = feed(State.newStreamTurn('c1', 'a'), [ev('state', { updated: false, notices: [{ kind }] })]);
+    assert.deepEqual(odd.effects, [], String(kind));
+  }
+});
+
+test('noticeText gives the fixed hint wording and nothing for an unknown kind', () => {
+  assert.equal(State.noticeText(HINT), Labels.safeHintText());
+  assert.equal(State.noticeText({ kind: 'safe_mode_hint', before: 1 }), Labels.safeHintText());       // 這個種類不看數字
+  assert.equal(State.noticeText({ kind: 'safe_mode_hint_x' }), '');
+});
+
+test('the hint state event is the same single state event: the turn still finishes normally at done', () => {
+  const { turn, effects } = feed(State.newStreamTurn('c1', 'a'), [
+    ev('meta', { turn_id: 1, attempt: 1, replayed: false }), ev('token', { text: '劇情' }), ev('state', { updated: false, notices: [HINT] }),
+    ev('done', { status: 'complete', turn_number: 1, coins: 170 }),
+  ]);
+  assert.ok(types(effects).indexOf('safe_hint') > types(effects).indexOf('push'));
+  assert.ok(types(effects).indexOf('safe_hint') < types(effects).indexOf('finish'));
+  assert.equal(turn.finished, true);
+  assert.equal(turn.status, 'complete');
+});
+
 test('an error event discards the bubble and shows its fixed message; it does not finish the turn by itself', () => {
   const { turn, effects } = feed(State.newStreamTurn('c1', 'a'), [ev('token', { text: '一半' }), ev('error', { code: 'generation_failed', message: `${MARKER}` })]);
   assert.deepEqual(types(effects), ['push', 'discard', 'failure']);

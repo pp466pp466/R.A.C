@@ -96,6 +96,7 @@
     var gate = ref(typeof initial.gate === 'string' && initial.gate ? initial.gate : null);
     var offline = ref(false);
     var notice = ref(null);                // { tone: 'error'｜'info', text, link }｜null
+    var safeHint = ref(null);              // 遊戲內「可以嘗試關閉安全模式」提示（safe-mode-upgrade-hint）：{ text, link, linkText, closeText, closeLabel }｜null；只影響畫面
     var openingNotice = ref(null);         // { tone, text, retry }｜null
     var openingScene = ref({ state: null, text: '' });
     var history = ref([]);                 // 後端的回合（顯示用；進行中的回合沒有文字）
@@ -229,6 +230,8 @@
     function jumpToLatest() { atBottom = true; unread.value = false; scrollTick.value += 1; }
     function showEarlier() { visibleCount.value += RENDER_WINDOW; }
     function dismissNotice() { notice.value = null; }
+    /* 關閉提示只影響畫面：不送任何請求、不改變安全模式的設定，也不改變伺服器端「已提示」的紀錄（重新整理或換裝置都不會再出現）。 */
+    function dismissSafeHint() { safeHint.value = null; }
 
     function makeTypewriter(onText, onDone) {
       return new deps.TypewriterBuffer({ onUpdate: function (value) { onText(value); notifyContent(false); }, onDone: onDone });
@@ -621,6 +624,9 @@
         else if (effect.type === 'transition') { adapter.transition(effect.text, effect.willRetry); }
         else if (effect.type === 'world') { world.value = Game.mergeWorld(world.value, effect.world); }
         else if (effect.type === 'notices') { effect.notices.forEach(function (item) { if (item.text) { toast(item.text); } }); }
+        else if (effect.type === 'safe_hint') {
+          if (effect.text) { safeHint.value = Game.safeHintCopy(Game.sessionPath(sessionId)); }       // 文字固定（不採用伺服器或模型的任何文字）；返回位置是目前存檔的頁面
+        }
         else if (effect.type === 'finish') { adapter.finish(); }
         else if (effect.type === 'hint') { adapter.hint(effect.text); }
         else if (effect.type === 'coins') { wallet.setBalance(effect.balance); }
@@ -770,13 +776,13 @@
     return {
       revisionHost: revisionHost, lastTurn: lastTurn, revising: revising,
       phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, modeLabel: modeLabel, modeNote: modeNote,
-      gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, openingNotice: openingNotice,
+      gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, safeHint: safeHint, openingNotice: openingNotice,
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,
       draft: draft, actionError: actionError, draftCount: draftCount, draftOver: draftOver, actionMax: actionMax, sending: sending,
       sendDisabled: sendDisabled, inputDisabled: inputDisabled, blockerText: blockerText,
       world: world, locationLine: locationLine, inflight: inflight, notebookSummary: notebookSummary,
       load: load, retryLoad: retryLoad, retryOpening: retryOpening, showEarlier: showEarlier, jumpToLatest: jumpToLatest, onScroll: onScroll,
-      send: send, cancel: cancel, dismissNotice: dismissNotice, resendInflight: resendInflight, abandonInflight: abandonInflight,
+      send: send, cancel: cancel, dismissNotice: dismissNotice, dismissSafeHint: dismissSafeHint, resendInflight: resendInflight, abandonInflight: abandonInflight,
       setOnline: setOnline, dispose: dispose
     };
   }
