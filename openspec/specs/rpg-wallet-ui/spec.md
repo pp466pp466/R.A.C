@@ -7,11 +7,11 @@
 ## Requirements
 
 ### Requirement: 頂列顯示餘額並隨回合更新
-遊戲頁頂列 SHALL 顯示遊戲幣合計；載入時呼叫 `GET /api/wallet`，每次 `done` 後 SHALL 以 `done.coins` 更新而不另外請求。餘額 SHALL 以純文字渲染，載入失敗時 SHALL 顯示「—」而不阻擋閱讀。送出前若餘額已知且低於每輪幣價，SHALL 在輸入區說明本輪需要的幣數並提供簽到入口，但 SHALL NOT 阻止玩家嘗試送出（餘額以伺服器為準）。**錢包回應的 `coin_exempt` 為 `true`（管理員）時，SHALL NOT 顯示上述餘額不足的提示。**
+遊戲頁頂列 SHALL 以共用的餘額標籤（見 `shared-wallet-balance`）顯示遊戲幣合計；載入時由共用的錢包狀態庫呼叫 `GET /api/wallet`（頁面自己的錢包邏輯 SHALL NOT 重複請求），每次 `done` 後 SHALL 以 `done.coins` 寫入狀態庫而不另外請求。餘額 SHALL 以純文字渲染，載入失敗時 SHALL 顯示「—」而不阻擋閱讀。送出前若餘額已知且低於每輪幣價，SHALL 在輸入區說明本輪需要的幣數並提供簽到入口，但 SHALL NOT 阻止玩家嘗試送出（餘額以伺服器為準）。錢包回應的 `coin_exempt` 為 `true`（管理員）時，SHALL NOT 顯示上述餘額不足的提示。
 
 #### Scenario: 載入時顯示
 - **WHEN** 玩家開啟遊戲頁
-- **THEN** 頂列顯示目前的合計餘額
+- **THEN** 頂列的餘額標籤顯示目前的合計餘額，整頁只有一個錢包請求
 
 #### Scenario: 一輪結束
 - **WHEN** 一輪以 `done.coins=170` 結束
@@ -23,7 +23,11 @@
 
 #### Scenario: 餘額為 0 的管理員
 - **WHEN** `coin_exempt` 為 `true` 且餘額為 0 的管理員開啟遊戲頁
-- **THEN** 頂列顯示餘額 0，輸入區沒有餘額不足的提示，送出行動不受影響
+- **THEN** 頂列顯示餘額 0 與「不消耗」標示，輸入區沒有餘額不足的提示，送出行動不受影響
+
+#### Scenario: 標籤與輸入區提示一致
+- **WHEN** 一輪結束後餘額低於每輪幣價
+- **THEN** 頂列標籤與輸入區的餘額不足提示依同一份狀態同時更新
 
 ### Requirement: 餘額不足時有路可走
 串流回 409 `insufficient_coins` 時，遊戲頁 SHALL 開啟自製 Modal，說明目前餘額與每輪需要的幣數、沒有扣款，並提供「每日簽到」與「關閉」。玩家的行動文字 SHALL 保留。簽到成功後 SHALL 更新餘額並關閉或改為提示可再次送出；SHALL NOT 自動重送。
@@ -37,7 +41,7 @@
 - **THEN** 餘額更新、顯示可再次送出的提示，行動沒有被自動送出
 
 ### Requirement: 最小簽到入口與超過上限的確認
-簽到 SHALL 呼叫 `POST /api/wallet/checkin`。伺服器回 409 `checkin_overflow` 時 SHALL 顯示預覽（會入帳多少、會作廢多少），由玩家選「取消」（不消耗當日簽到）或「領取」（以 `confirm_overflow: true` 再次呼叫）。回 409 `already_checked_in` SHALL 顯示今日已簽到與下次可簽到的時間（台灣時間）。簽到進行中按鈕 SHALL 禁用，`finally` 恢復。簽到入口 SHALL NOT 提供儲值、訂閱或記錄頁（屬後續的 change）。
+簽到 SHALL 呼叫 `POST /api/wallet/checkin`。伺服器回 409 `checkin_overflow` 時 SHALL 顯示預覽（會入帳多少、會作廢多少），由玩家選「取消」（不消耗當日簽到）或「領取」（以 `confirm_overflow: true` 再次呼叫）。回 409 `already_checked_in` SHALL 顯示今日已簽到與下次可簽到的時間（台灣時間）。簽到進行中按鈕 SHALL 禁用，`finally` 恢復。簽到狀態機 SHALL 與錢包頁共用同一份實作，兩處行為一致。遊戲頁的簽到入口 SHALL 只負責餘額不足時的快速簽到；記錄與儲值方向由錢包頁（`wallet-hub-page`）提供，**真實的儲值與訂閱仍不提供**（待金流規範）。
 
 #### Scenario: 一般簽到
 - **WHEN** 玩家按簽到，餘額未超過上限
@@ -54,3 +58,7 @@
 #### Scenario: 重複點擊
 - **WHEN** 簽到請求進行中玩家再次按下
 - **THEN** 只送出一個請求
+
+#### Scenario: 遊戲頁與錢包頁一致
+- **WHEN** 同一個玩家在遊戲頁與錢包頁分別遇到超過上限的簽到
+- **THEN** 兩處的預覽內容、取消與領取的行為相同
