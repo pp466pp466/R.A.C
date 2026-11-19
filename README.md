@@ -86,8 +86,7 @@ node --test "tests/js/**/*.test.js"
 | `OPENROUTER_ZDR` | 否 | `true` 或 `false`，預設 `false`。要求只路由到不保存提示的端點；免費端點通常沒有，要求了卻沒有符合的端點時呼叫失敗，不會改成不帶偏好重送 |
 | `OPENROUTER_JSON_SCHEMA` | 否 | `true` 或 `false`，預設 `false`。該模型支援結構描述輸出參數時才開啟；預設改在系統指令附結構描述 |
 | `OPENROUTER_REASONING` | 否 | `true` 或 `false`，預設 `false`。是否讓推理型模型先思考；關閉時每個請求都帶「不推理」的參數，首字延遲才會在 1 秒內（實測見 `docs/RPG.md` 7.2），開啟時推理型模型首字前可能要等 5 至 35 秒 |
-| `ADULT_MODE_ENABLED` | 否 | `true` 或 `false`，預設 `false`。成人模式的部署開關（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_ENABLED`）；各環境規則相同，staging 與 production 須明確設為 `true` 才生效。這只是玩家能使用成人模式的條件之一：玩家仍須已滿 18 歲並在切換時完成成年確認 |
-| `ADULT_MODE_MODELS` | 開啟成人模式時 | 取得書面許可所涵蓋的模型識別碼（以逗號分隔；取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_MODELS`）；開啟時 RPG 用途的主要與備援模型都必須在清單內，否則啟動失敗。關閉時完全不影響行為 |
+| `SAFE_MODE_FORCED` | 否 | `true` 或 `false`，預設 `false`（玩家可在個人頁關閉安全模式）。緊急煞車：設為 `true` 時，所有玩家與所有存檔的生效模式一律是安全模式（玩家保存的偏好不被改寫，解除後恢復）。營運出事時全站停用「關閉安全模式」的開關，不是使用門檻，不需要書面許可或模型清單；四個環境都可設定，值不是布林啟動失敗（訊息只含變數名稱）；重新啟動後生效。取代已淘汰的 `ADULT_MODE_ENABLED`、`ADULT_MODE_MODELS` |
 
 規則：
 
@@ -100,7 +99,7 @@ node --test "tests/js/**/*.test.js"
 - **Google 登入為選用**：識別碼與密鑰兩者都設定才啟用，只設定一個會啟動失敗；啟用時必須設定 `BASE_URL`。在 Google Cloud Console 把「已授權的重新導向 URI」設為 `<BASE_URL>/auth/google/callback`，本機瀏覽器請一律使用 `BASE_URL` 的主機名稱（例如 `http://localhost:5000`），不要改用 `127.0.0.1`。
 - Gemini 金鑰（`GEMINI_API_KEY`）由客服對話 change（C-3）接上，目前只需存在於本機 `.env`。
 - **RPG 用途的 OpenAI 相容端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：客服與摘要永遠走 Gemini，沒有設定這組變數時只有 RPG 用途不可用。測試階段先用免費模型（識別碼以 `:free` 結尾）確認好不好用；免費端點的上游可能保存或拿去訓練提示，**只用無害的合成文字、不輸入真實個資**。換成付費模型只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`），程式不用動。金鑰一樣只放 `.env` 或平台機密功能。
-- **成人模式的環境開關**：內容分級已由 `sexual_content_level` 0 至 3 改為三種模式（安全、一般、成人，AGENTS.md 第 7 節）。成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉，不能在程式裡寫死為開啟；development、testing、staging 與 production 的規則相同（staging 與 production 須明確設定才生效）。開啟時必須設定 RPG 用途，並在 `ADULT_MODE_MODELS` 列出書面許可涵蓋的模型（須涵蓋 `OPENROUTER_MODEL` 與 `OPENROUTER_FALLBACK_MODEL`）。**舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED` 與 `SEXUAL_CONTENT_LEVEL3_MODELS` 已淘汰**：應用程式讀到會忽略並在啟動時各警告一次（只含變數名稱），成人模式維持關閉；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕。**這只是部署層的開關：RPG 尚未實作，所以目前沒有任何送出露骨內容的入口；任何入口出現之前，仍須先完成劇情輸出的審查層（RC-2）與法務覆核。**
+- **緊急煞車的環境開關**：內容分級已由 `sexual_content_level` 0 至 3 改為三種模式，再改為兩種（安全模式開、關，AGENTS.md 第 7 節；change `safe-mode-toggle`）。部署層的鎖改為反向的緊急煞車 `SAFE_MODE_FORCED`：預設未啟用（玩家可在個人頁關閉安全模式），不能在程式裡寫死為啟用；啟用時所有生效模式一律是安全模式，要求關閉安全模式得到 403 `safe_mode_forced`。**舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`、`ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 已淘汰**：應用程式讀到會忽略並在啟動時各警告一次（只含變數名稱，不回顯值，值不合法也不會啟動失敗），不論值為何都不改變任何行為；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕（可含 `SAFE_MODE_FORCED`）。書面許可與法務意見不再是關閉安全模式的前提；模型供應商與資料使用條款的評估屬上線前關卡。
 
 ## 建立首位管理員
 

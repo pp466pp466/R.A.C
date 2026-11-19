@@ -41,12 +41,13 @@ def test_does_not_list_the_retired_email_verification_variable():
     assert "EMAIL_VERIFICATION_REQUIRED" not in parse_assignments()
 
 
-def test_lists_the_adult_mode_variables_and_no_longer_the_old_level_3_ones():
-    """內容分級改為三種模式：`ADULT_MODE_*` 取代 `SEXUAL_CONTENT_LEVEL3_*`（content-tier-modes 規格「已淘汰的環境變數」）。"""
+def test_lists_the_emergency_brake_and_no_longer_the_old_adult_mode_or_level_3_variables():
+    """內容分級改為兩種模式：緊急煞車 `SAFE_MODE_FORCED` 取代 `ADULT_MODE_*`，等級 3 的兩個變數同樣已淘汰
+    （content-tier-modes 規格「舊的等級 3 環境變數已淘汰且不會開啟任何東西」「緊急煞車只能以環境設定啟用」）。"""
     names = parse_assignments()
-    assert {"ADULT_MODE_ENABLED", "ADULT_MODE_MODELS"} <= set(names)
-    assert not {"SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS"} & set(names)
-    assert names["ADULT_MODE_ENABLED"] == "" and names["ADULT_MODE_MODELS"] == ""          # 預設不開啟，範例不帶任何值
+    assert "SAFE_MODE_FORCED" in names
+    assert names["SAFE_MODE_FORCED"] == ""                              # 預設不啟用，範例不帶任何值
+    assert not {"ADULT_MODE_ENABLED", "ADULT_MODE_MODELS", "SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS"} & set(names)
 
 
 def test_every_variable_the_config_reads_is_listed():

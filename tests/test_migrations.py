@@ -1346,6 +1346,63 @@ def test_0019_adds_two_nullable_declaration_columns_to_users_and_keeps_every_row
     engine.dispose()
 
 
+def test_0020_adds_one_nullable_hint_column_to_sessions_and_keeps_every_row(tmp_path):
+    """safe-mode-toggle：sessions 新增 safe_hint_at（可為空、不回填、不加索引）；既有存檔與回合一列不少、新欄位為空值；
+    不改寫任何既有資料（舊值 standard 於讀取時讀作 adult）；回復只移除這一欄、不串聯刪除任何資料；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'safe_mode_hint.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0020_safe_mode_hint")
+    assert revision.down_revision == "0019_adult_declaration" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0019_adult_declaration")
+    with engine.begin() as conn:
+        _insert_old_save_and_turn(conn)
+        conn.execute(Table("users", MetaData(), autoload_with=conn).update().values(content_tier_preference="standard"))
+        conn.execute(Table("sessions", MetaData(), autoload_with=conn).update().values(content_tier="standard"))
+    before_columns = {c["name"] for c in inspect(engine).get_columns("sessions")}
+    before_indexes = {i["name"] for i in inspect(engine).get_indexes("sessions")}
+
+    command.upgrade(cfg, "0020_safe_mode_hint")
+    inspector = inspect(engine)
+    added = {c["name"]: c for c in inspector.get_columns("sessions") if c["name"] not in before_columns}
+    assert set(added) == {"safe_hint_at"} and added["safe_hint_at"]["nullable"]               # 可為空：舊版程式不認識它也照常運作
+    assert {i["name"] for i in inspector.get_indexes("sessions")} == before_indexes            # 沒有新增索引
+    with engine.connect() as conn:
+        saves = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().all()
+        users = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().all()
+    assert len(saves) == 1 and saves[0]["safe_hint_at"] is None                              # 不回填
+    assert saves[0]["content_tier"] == "standard" and users[0]["content_tier_preference"] == "standard"     # 不改寫既有資料
+
+    command.downgrade(cfg, "0019_adult_declaration")
+    assert {c["name"] for c in inspect(engine).get_columns("sessions")} == before_columns
+    with engine.connect() as conn:                                                          # 回復不串聯刪除既有的存檔與回合
+        assert conn.execute(select(func.count()).select_from(Table("sessions", MetaData(), autoload_with=conn))).scalar_one() == 1
+        assert conn.execute(select(func.count()).select_from(Table("memory_logs", MetaData(), autoload_with=conn))).scalar_one() == 1
+
+    command.upgrade(cfg, "0020_safe_mode_hint")                                             # 再升級一次，不重複
+    assert {c["name"] for c in inspect(engine).get_columns("sessions")} == before_columns | {"safe_hint_at"}
+    engine.dispose()
+
+
+def test_a_save_inserted_the_way_the_old_program_does_gets_an_empty_hint_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：舊版程式形狀的存檔 INSERT（不含 safe_hint_at）成功，新欄位為空；
+    條件式更新「為空才寫入」第一次更新 1 列、第二次 0 列（提示每個存檔只出現一次的資料庫保證）。"""
+    engine = migrated_database
+    with engine.begin() as conn:
+        _insert_old_save_and_turn(conn)
+    sessions = Table("sessions", MetaData(), autoload_with=engine)
+    assert "safe_hint_at" in sessions.c
+    with engine.connect() as conn:
+        assert conn.execute(select(sessions.c.safe_hint_at)).scalar_one() is None
+    now = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:
+        first = conn.execute(sessions.update().where(sessions.c.safe_hint_at.is_(None)).values(safe_hint_at=now)).rowcount
+    with engine.begin() as conn:
+        second = conn.execute(sessions.update().where(sessions.c.safe_hint_at.is_(None)).values(safe_hint_at=now)).rowcount
+    assert (first, second) == (1, 0)
+
+
 def test_migrated_revision_columns_and_feedback_table_work_on_both_databases(migrated_database):
     """SQLite 與 SQL Server 兩軌：升級後有十七個設定（鍵唯一）；舊版程式形狀的回合 INSERT（不含新欄位）取得 revision 1、regen_count 0，
     沒有快照；回饋表的 (存檔, 回合序號, 嘗試序號) 唯一，且隨存檔串聯刪除。"""

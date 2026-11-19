@@ -1,7 +1,8 @@
-"""content-tier-modes 規格：年齡上限、生效模式取最保守者、成人模式的可用條件與成年確認的失效。
+"""content-tier-modes 規格：舊的三值判定（過渡相容層，safe-mode-toggle 2.5 移除）與從環境設定到 HTTP 的緊急煞車。
 
-兩層驗證：政策物件本身（年齡 × 部署開關 × 成年確認 × 偏好 × 劇本與存檔的組合），以及從環境設定經 `create_app`
-與組裝層一路到 HTTP 回應。API 與切換流程另見 `test_content_mode_api.py`。
+兩層驗證：政策物件本身（年齡 × 部署開關 × 成年確認 × 偏好 × 劇本與存檔的組合；這一層是過渡相容層的三值判定），以及從環境設定經
+`create_app` 與組裝層一路到 HTTP 回應（緊急煞車 `SAFE_MODE_FORCED`）。兩種模式的生效模式見 `test_effective_mode.py`，
+API 與切換流程見 `test_content_mode_api.py`。
 """
 import itertools
 from datetime import timedelta
@@ -15,18 +16,15 @@ from app.models import Base
 from app.models.user import CONTENT_TIERS, ROLE_ADMIN, ROLE_USER
 from app.services.access_policy import AccessPolicy
 from app.services.age_policy import AgePolicy
-from app.services.content_tier import ADULT_RULES_VERSION
+from app.services.content_tier import SAFE_RULES_VERSION
 from tests.support.age import TODAY_UTC
 from tests.support.age_gate import ENDPOINT, add_ai_endpoint
 from tests.support.auth import FakeClock, add_user, sign_in_as
 from tests.test_access_policy import member
 
 FREE_MODEL = "vendor/narrator:free"
-ADULT_ENV = {
-    "OPENROUTER_API_KEY": "sk-or-v1-fake-key-for-tests-0123456789", "OPENROUTER_MODEL": FREE_MODEL,
-    "ADULT_MODE_ENABLED": "true", "ADULT_MODE_MODELS": FREE_MODEL,
-}
-CONFIRMED = {"adult_confirmed_at": TODAY_UTC - timedelta(days=3), "adult_rules_version": ADULT_RULES_VERSION}
+RPG_ENV = {"OPENROUTER_API_KEY": "sk-or-v1-fake-key-for-tests-0123456789", "OPENROUTER_MODEL": FREE_MODEL}
+CONFIRMED = {"adult_confirmed_at": TODAY_UTC - timedelta(days=3), "adult_rules_version": SAFE_RULES_VERSION}
 
 
 def policy(enabled: bool | None = None) -> AccessPolicy:
@@ -83,7 +81,7 @@ def test_a_confirmation_for_an_older_rules_version_no_longer_counts():
 
 
 def test_a_missing_confirmation_time_or_rules_version_does_not_count():
-    assert policy(True).content_access(adult(adult_confirmed_at=None, adult_rules_version=ADULT_RULES_VERSION)).adult_confirmed is False
+    assert policy(True).content_access(adult(adult_confirmed_at=None, adult_rules_version=SAFE_RULES_VERSION)).adult_confirmed is False
     assert policy(True).content_access(adult(adult_confirmed_at=CONFIRMED["adult_confirmed_at"], adult_rules_version=None)).adult_confirmed is False
 
 
@@ -181,33 +179,53 @@ def content_for(app, n: int, **user_overrides) -> dict:
     return response.get_json()["content"]
 
 
-def test_by_default_the_whole_stack_caps_an_adult_at_the_standard_mode():
+def mode_for(app, n: int, **user_overrides) -> dict:
+    """以登入後的玩家身分查 `GET /api/account/content-mode`（從環境設定一路到 HTTP 回應）。"""
+    with Session(app.extensions["db_engine"]) as session:
+        user_id = add_user(session, n, **user_overrides).id
+    client = app.test_client()
+    sign_in_as(client, user_id)
+    response = client.get("/api/account/content-mode")
+    assert response.status_code == 200, response.get_data(as_text=True)
+    return response.get_json()["content_mode"]
+
+
+def test_by_default_the_brake_is_off_and_a_confirmed_adult_who_prefers_adult_has_the_adult_mode_through_the_whole_stack():
     app = make_app()
-    assert content_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "standard"
-
-
-def test_a_configured_but_disabled_switch_changes_nothing():
-    app = make_app(**{**ADULT_ENV, "ADULT_MODE_ENABLED": "false"})
-    assert content_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "standard"
-
-
-def test_with_the_switch_on_the_whole_stack_lets_a_confirmed_adult_reach_the_adult_mode_and_still_protects_minors():
-    app = make_app(**ADULT_ENV)
-    assert content_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED) == {
-        "preference": "adult", "age_cap": "adult", "effective": "adult", "reason": None,
+    assert mode_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED) == {
+        "preference": "adult", "effective": "adult", "confirmed": True, "forced": False,
     }
-    assert content_for(app, 2, age=30, content_tier_preference="adult")["reason"] == "needs_confirmation"       # 開關開了，沒有確認
-    # 未滿 18 歲者在預設規則下根本不能使用（age_restricted）；依年齡決定上限的程式碼仍保留到 safe-mode-toggle，
-    # 以「舊的 13 歲規則」注入的應用程式涵蓋它（未成年者固定安全模式、管理員不豁免）
-    legacy = make_app(age_policy=AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13"), **ADULT_ENV)
+    assert content_for(app, 2, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "adult"   # 過渡相容層也一致
+
+
+def test_with_the_brake_on_every_mode_is_safe_through_the_whole_stack_and_the_saved_preference_is_kept():
+    app = make_app(SAFE_MODE_FORCED="true")
+    assert mode_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED) == {
+        "preference": "adult", "effective": "safe", "confirmed": True, "forced": True,        # 偏好不被改寫
+    }
+    assert content_for(app, 2, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"       # 過渡相容層也一致
+
+
+def test_the_old_adult_mode_variables_change_nothing_whatever_their_value():
+    for environ in ({"ADULT_MODE_ENABLED": "true", "ADULT_MODE_MODELS": FREE_MODEL}, {"ADULT_MODE_ENABLED": "false"},
+                    {"ADULT_MODE_ENABLED": "maybe"}):
+        app = make_app(**RPG_ENV, **environ)
+        assert mode_for(app, 1, age=30, content_tier_preference="adult", **CONFIRMED)["effective"] == "adult"
+        assert mode_for(app, 2, age=30, content_tier_preference="adult", **CONFIRMED)["forced"] is False
+
+
+def test_the_brake_still_protects_minors_in_the_transitional_layer():
+    # 未滿 18 歲者在預設規則下根本不能使用（age_restricted）；舊的依年齡分支（過渡相容層）以「舊的 13 歲規則」注入的應用程式涵蓋
+    # （未成年者固定安全模式、管理員不豁免），2.5 隨依年齡的程式碼一併移除
+    legacy = make_app(age_policy=AgePolicy(min_register_age=13, min_use_age=13, version="test-legacy-13"), **RPG_ENV)
     assert content_for(legacy, 3, age=17, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"
     assert content_for(legacy, 4, age=15, role=ROLE_ADMIN, content_tier_preference="adult", **CONFIRMED)["effective"] == "safe"   # 管理員不豁免
 
 
 def test_the_policy_the_requests_use_is_built_from_the_config_not_from_a_constant():
-    for environ, expected in (({}, False), (ADULT_ENV, True)):
+    for environ, expected in (({}, False), ({"SAFE_MODE_FORCED": "true"}, True), ({"SAFE_MODE_FORCED": "false"}, False)):
         app = make_app(**environ)
         with app.app_context():
             from app.services.registry import get_access_policy
 
-            assert get_access_policy().adult_mode_enabled is expected
+            assert get_access_policy().safe_mode_forced is expected

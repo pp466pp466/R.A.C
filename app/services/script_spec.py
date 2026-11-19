@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from app.models.user import CONTENT_TIERS
-from app.services.content_tier import tier_rank
+from app.services.content_tier import legacy_tier_rank
 from app.services.errors import ValidationError
 from app.services.story_preference import AUDIENCE_ALL, parse_audience
 
@@ -371,7 +371,7 @@ def validate_script(raw: Any, *, max_tier: str, forbidden_markers: Iterable[str]
     elif tier not in CONTENT_TIERS:
         c.fail("content_tier", "內容模式只能是安全、一般或成人。")
         tier = None
-    elif tier_rank(tier) > tier_rank(max_tier):
+    elif legacy_tier_rank(tier) > legacy_tier_rank(max_tier):
         c.fail("content_tier", "宣告的內容模式高於你目前可使用的上限。")
 
     tags = _list_of_text(c, raw.get("tags"), "tags", maximum_count=TAG_MAX_COUNT, maximum=TAG_MAX)

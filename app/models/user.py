@@ -46,12 +46,14 @@ DELETION_GRACE_PERIOD = timedelta(days=7)
 TOKEN_RESET_PASSWORD = "reset_password"       # 管理員的重設密碼；信箱驗證權杖已退役（遷移前遺留的只等著過期被清除）
 TOKEN_PURPOSES = (TOKEN_RESET_PASSWORD,)
 
-# 內容模式（content-tier-modes 規格、AGENTS.md 第 7 節），由保守到寬鬆。順序與取較保守者的邏輯在 `app/services/content_tier.py`；
-# 常數放在這裡是因為資料模型不得匯入 Service，而存檔、劇本與使用者偏好的欄位預設值都要用到它們。
+# 內容模式（content-tier-modes 規格、AGENTS.md 第 7 節）只有兩種，由保守到寬鬆：`safe`（安全模式開）、`adult`（安全模式關）。
+# 順序與取較保守者的邏輯在 `app/services/content_tier.py`；常數放在這裡是因為資料模型不得匯入 Service，而存檔、劇本與使用者偏好的
+# 欄位預設值都要用到它們。舊值 `standard`（原一般模式）只在讀取時被讀作 `adult`，系統不再寫入它。
 CONTENT_TIER_SAFE = "safe"
-CONTENT_TIER_STANDARD = "standard"
+CONTENT_TIER_STANDARD = "standard"        # 舊值：只認得、不寫入；`CONTENT_TIERS` 與它於 safe-mode-toggle 2.5 移除
 CONTENT_TIER_ADULT = "adult"
-CONTENT_TIERS = (CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIER_ADULT)
+CONTENT_MODES = (CONTENT_TIER_SAFE, CONTENT_TIER_ADULT)
+CONTENT_TIERS = (CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIER_ADULT)    # 過渡相容層（三值），2.5 縮減為兩值
 
 # 讀者頻道與故事偏好（story-preference 規格）：同一組值域。劇本版本的 `audience` 與使用者的 `story_preference` 都只能是這三個值；
 # 常數放在這裡的原因同上（資料模型不得匯入 Service）。排序與預設的邏輯在 `app/services/story_preference.py`。

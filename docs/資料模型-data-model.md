@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-18 ｜ 對應 change：admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0018_rpg_turn_revision` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0018_rpg_turn_revision` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -61,8 +61,8 @@ erDiagram
         datetime age_deadline_at "玩家補填年齡的期限 建立後 24 小時 補填後清空 可為空"
         datetime locked_at "玩家帳號被鎖定的時間 只有管理員能解除 可為空"
         string lock_reason "鎖定原因的固定列舉 可為空"
-        string content_tier_preference "safe standard adult 預設 safe 確認年齡時依年齡設定 滿 18 歲不自動調高"
-        datetime adult_confirmed_at "成人模式的成年確認時間 可為空 只保存目前這一次"
+        string content_tier_preference "safe 或 adult 預設 safe 舊值 standard 讀作 adult 不自動調高"
+        datetime adult_confirmed_at "關閉安全模式的同意時間 可為空 只保存目前這一次"
         string adult_rules_version "確認時的安全規範版本 版本改變即失效 可為空"
         string adult_confirm_method "確認方式 目前只有 self_declared 可為空"
         string nickname "公開暱稱 2 至 20 字 個資 與 display_name 分開 可為空 創作劇本前必填"
@@ -90,7 +90,7 @@ erDiagram
         string title "目錄欄位 可瀏覽與篩選"
         string summary
         string world_name
-        string content_tier "作者宣告的內容模式"
+        string content_tier "作者宣告的內容模式 safe 為綁定安全模式 adult 為未綁定 舊值 standard 讀作 adult"
         string audience "讀者頻道 all male female 可為空 空值視同全讀者"
         text background
         text opening
@@ -135,7 +135,8 @@ erDiagram
         text opening_text "第 0 幕的文字 個資 可為空"
         string opening_state "pending generating ready fallback 可為空 空值視同 fallback"
         datetime opening_started_at "搶佔時間 也是這次生成的憑證 可為空"
-        string content_tier "開存檔當下的生效模式 只能往保守調整"
+        string content_tier "開存檔當下的生效模式 新版程式只寫入不讀取 存檔的生效模式現算"
+        datetime safe_hint_at "安全模式提示已出現的時間 可為空 每個存檔最多一次"
         string status "active 或 ended 已完結不可恢復"
         datetime last_active_at "期限清除的依據"
     }
@@ -330,7 +331,7 @@ erDiagram
 | 存檔複製劇本 | `sessions.script_snapshot_json` 存開存檔當時的完整標準化內容，`source_version_id` 只是可為空的參照 | 作者改版、下架或刪帳號都不影響存檔；也讓「作者被抹除時別人的存檔保留」成立 |
 | 來源參照是無動作的外鍵 | `sessions.source_version_id → script_versions.id` 沒有 `ON DELETE`；刪除版本與抹除帳號的流程先把參照清為空值 | 刪除使用者有兩條路徑到達 `sessions`（`users → sessions`，與 `users → scripts → script_versions → sessions`），SQL Server 不允許多重串聯路徑（錯誤 1785）；有外鍵才不會出現指向已刪除編號的懸空參照，忘了清空時刪除會直接失敗 |
 | 回合的唯一性與輪數 | `(session_id, client_msg_id)`、`(session_id, seq)` 唯一；`turn_number` 可為空，只在回合完成時指派，不設資料庫唯一約束 | 冪等與順序由資料庫保證；可為空的複合唯一在 SQL Server 有問題，輪數的唯一靠「同一存檔同時只處理一則」與開始回合時對存檔列的條件式 UPDATE 取鎖 |
-| 內容模式欄位 | `users.content_tier_preference` 為 `NOT NULL`、伺服器預設 `safe`（舊版程式的 INSERT 仍有效且保守）；成年確認三欄皆可為空，只保存目前這一次 | 預設最保守；規範版本改變後覆寫即可，歷史不需要保存；`0012` 依 `is_adult_at_confirmation` 一次回填（成年為 `standard`），所以滿 18 歲不會自動調高；自 `0019` 的 adult-only-signup 起，年齡確認成功一律設為 `safe`、不再寫入 `is_adult_at_confirmation` |
+| 內容模式欄位 | `users.content_tier_preference` 為 `NOT NULL`、伺服器預設 `safe`（舊版程式的 INSERT 仍有效且保守）；同意紀錄三欄（沿用 `adult_confirmed_at`、`adult_rules_version`、`adult_confirm_method`，不改欄位名）皆可為空，只保存目前這一次 | 預設最保守；規範版本改變後覆寫即可，歷史不需要保存；`0012` 依 `is_adult_at_confirmation` 一次回填（成年為 `standard`），所以滿 18 歲不會自動調高；自 `0019` 的 adult-only-signup 起，年齡確認成功一律設為 `safe`、不再寫入 `is_adult_at_confirmation`；**safe-mode-toggle 起內容模式只有 `safe` 與 `adult` 兩種**：既有資料中的 `standard`（偏好、劇本版本、存檔）**不改寫**（已發佈的劇本版本不可變，改寫與規範相衝），於讀取時一律讀作 `adult`（`parse_tier`），系統不再寫入 `standard`；`sessions.content_tier` 仍於開存檔時寫入、新版程式不讀取（存檔的生效模式一律現算），欄位於日後的 contract change 移除 |
 | 暱稱與暫停發佈是帳號的屬性（`0013`） | `users.nickname`、`nickname_code`、`publish_suspended_at` 皆可為空，舊版程式的 INSERT 仍有效；暫停時間有索引（後台清單只掃有值的列），只由條件式 UPDATE 寫入（`publish_suspended_at IS NULL` 才寫，並行的拒絕只暫停一次；管理員不會被暫停） | 暫停發佈獨立於 `locked_at`：它只停止送審，其餘功能照常，所以不能共用鎖定欄位；暱稱是公開顯示的個資，與 Google 帶來的 `display_name` 分開存放 |
 | 審查結果掛在版本上（`0013`） | `script_versions.review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at` 皆可為空；只由 `ScriptRepository.record_review` 寫入，條件是 `content_hash` 仍等於審查當時的雜湊（架構測試擋住別處的寫入）；`review_hash` 與目前的 `content_hash` 不同即視為尚未審查 | 審查期間內容被改時舊結果不會蓋在新內容上；結果是系統的判斷，不匯出給使用者，類別只有固定列舉 |
 | 送審紀錄不連到版本（`0013`） | `script_submissions` 只存（使用者、結果、類別、時間），外鍵只有 `users.id`（`CASCADE`），`(user_id, created_at)` 複合索引；`lifted` 是管理員解除暫停時補的一筆，使連續被拒中斷 | 被拒絕的送審只保留類別與時間（AGENTS.md 第 11 節）；不指向版本也就沒有 `users → script_versions → script_submissions` 的第二條串聯路徑（SQL Server 錯誤 1785）；每日次數與連續被拒都從這張表計算，不另設計數器 |
@@ -403,6 +404,7 @@ flowchart LR
     M16 --> M17["0017 story_preference<br/>users.story_preference、script_versions.audience"]
     M17 --> M18["0018 rpg_turn_revision<br/>memory_logs 的四個修訂欄位、turn_regenerations、runtime_limits 補免費重新生成次數"]
     M18 --> M19["0019 adult_declaration<br/>users.adult_declared_at、users.adult_declaration_version"]
+    M19 --> M20["0020 safe_mode_hint<br/>sessions.safe_hint_at"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -415,6 +417,7 @@ flowchart LR
 - `0017_story_preference` 只新增兩個欄位（`users.story_preference` 有預設值 `all`、`script_versions.audience` 可為空且不回填）；沒有新資料表與資料回填，降級用 `recreate="never"` 並移除 SQL Server 的預設值約束；本機開發的 `project` 已於 2026-11-11 升級到這一版。
 - `0018_rpg_turn_revision` 只新增四個 `memory_logs` 欄位（`revision`、`regen_count` 有預設值，`revising_started_at`、`state_before_json` 可為空且不回填，所以遷移之前建立的回合沒有快照、不可修訂）、一張新表 `turn_regenerations`（隨存檔串聯刪除；`(session_id, turn_seq, attempt)` 唯一）並補一個設定鍵 `rpg.free_regenerations`（先查再插）；舊版程式在新結構上可運作。降級先刪新表再用 `recreate="never"` 移除欄位，`revision`、`regen_count` 另需 `mssql_drop_default`，只在還沒有真實資料時使用；本機開發的 `project` 尚在 `0017`，新程式上線前要先備份再升級。
 - `0019_adult_declaration` 只新增兩個 `users` 欄位（`adult_declared_at`、`adult_declaration_version`，皆可為空、不回填、不建索引）：註冊時年滿 18 歲聲明的時間與當時的年齡政策版本，只是稽核紀錄、不參與年齡判斷（年齡一律由 `birth_date` 於當下計算）；沒有新資料表與資料回填，降級用 `recreate="never"`；舊版程式在新結構上可運作；`is_adult_at_confirmation` 保留但不再寫入，日後的 contract 遷移再移除。
+- `0020_safe_mode_hint` 只新增一個 `sessions` 欄位（`safe_hint_at`，可為空、不回填、不建索引）：遊戲內「可嘗試關閉安全模式」的提示已出現的時間，每個存檔最多一次，以「為空才更新、更新列數為 1 才送出」的條件式更新保證；**沒有任何資料改寫**（舊值 `standard` 於讀取時讀作 `adult`）；沒有新資料表；降級對 `sessions` 用 `recreate="never"`；舊版程式在新結構上可運作。
 - SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。

@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Iterable
 
-from app.services.content_tier import parse_tier
+from app.services.content_tier import legacy_parse_tier
 from app.services.rpg_output_rules import RuleOutcome, evaluate, leak_categories
 from app.services.rpg_world import CharacterAge
 from app.services.script_rules import DEFAULT_ADULT_AGE, SENTENCE_BREAKS, Lexicon, load_lexicon
@@ -40,7 +40,7 @@ class OutputGuard:
     def __init__(
         self, *, tier: str, characters: Iterable[CharacterAge], marker: str, adult_age: int = DEFAULT_ADULT_AGE, lexicon: Lexicon | None = None,
     ) -> None:
-        self._tier = parse_tier(tier)                # 無法判定的內容模式視為最保守的安全模式
+        self._tier = legacy_parse_tier(tier)                # 無法判定的內容模式視為最保守的安全模式
         self._characters = tuple(characters)
         self._marker = marker
         self._adult_age = adult_age

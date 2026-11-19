@@ -13,8 +13,7 @@ from app.models.user import ROLE_ADMIN
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
-from app.services.content_mode_service import state_of
-from app.services.content_tier import ADULT_RULES_VERSION
+from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.current_user import CurrentUser
 from app.services.errors import NotFound, ValidationError
 from app.services.registry import get_game_entry_service
@@ -133,7 +132,7 @@ def test_the_catalog_only_holds_versions_up_to_the_players_effective_mode(member
 def test_an_adult_who_chose_the_adult_mode_with_the_deployment_switch_on_also_sees_adult_versions(member_session):
     for index, tier in enumerate(("safe", "standard", "adult")):
         publish(member_session, title=tier, content_tier=tier, now=TODAY_UTC + timedelta(seconds=index))
-    reader = player(member_session, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=ADULT_RULES_VERSION)
+    reader = player(member_session, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
     assert titles(service_for(member_session, adult_mode=True).catalog(reader)) == ["adult", "standard", "safe"]
     assert titles(service_for(member_session, adult_mode=False).catalog(reader)) == ["standard", "safe"]        # 開關關閉時退為一般模式
 
@@ -302,9 +301,9 @@ def test_an_adult_with_the_default_settings_is_in_the_standard_mode(member_sessi
 def test_the_summary_agrees_with_the_content_mode_endpoints_effective_mode(member_session, overrides):
     reader = player(member_session, **overrides)
     policy = AccessPolicy(clock=FakeClock())
-    state = state_of(policy.content_access(reader))
+    access = policy.content_access(reader)               # 過渡相容層的三值判定；第 2 組（2.1）改為 {effective, forced}
     summary = service_for(member_session).catalog(reader)["content_mode"]
-    assert summary == {"effective": state["effective"], "is_adult": state["selectable"]["standard"]}
+    assert summary == {"effective": access.effective, "is_adult": access.is_adult}
 
 
 # ---- 一頁的查詢次數固定 -------------------------------------------------------------------------

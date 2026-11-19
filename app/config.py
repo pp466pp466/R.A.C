@@ -171,10 +171,13 @@ class OpenAICompatibleSettings:
 
 @dataclass(frozen=True)
 class ContentSettings:
-    """內容模式的環境設定（AGENTS.md 第 7 節）。成人模式的部署開關預設關閉，只能以環境設定開啟。"""
+    """內容模式的環境設定（AGENTS.md 第 7 節）。
 
-    adult_mode_enabled: bool = False
-    adult_models: tuple[str, ...] = ()      # 取得書面許可所涵蓋的模型識別碼；開啟時 RPG 用途的模型必須都在裡面
+    `safe_mode_forced` 是緊急煞車（`SAFE_MODE_FORCED`）：預設未啟用（玩家可關閉安全模式），啟用時所有生效模式一律是安全模式。
+    它是營運出事時全站停用「關閉安全模式」的開關，不是使用門檻，不得在程式中寫死。
+    """
+
+    safe_mode_forced: bool = False
 
 
 @dataclass(frozen=True)
@@ -312,17 +315,20 @@ def _get(values: Mapping[str, str], name: str) -> str:
 
 
 OBSOLETE_EMAIL_VERIFICATION_VARIABLE = "EMAIL_VERIFICATION_REQUIRED"
-# 內容分級由 sexual_content_level 0 至 3 改為三種模式後，等級 3 的兩個變數被 `ADULT_MODE_*` 取代
+# 內容分級由 sexual_content_level 0 至 3 改為三種模式後，等級 3 的兩個變數被 `ADULT_MODE_*` 取代；內容模式再改為兩種（安全模式開、關）後，
+# `ADULT_MODE_*` 也被緊急煞車 `SAFE_MODE_FORCED` 取代（部署層的鎖改為反向，且不再以書面許可與模型清單為前提）
 OBSOLETE_LEVEL3_VARIABLES = ("SEXUAL_CONTENT_LEVEL3_ENABLED", "SEXUAL_CONTENT_LEVEL3_MODELS")
-OBSOLETE_VARIABLES = (OBSOLETE_EMAIL_VERIFICATION_VARIABLE, *OBSOLETE_LEVEL3_VARIABLES)
+OBSOLETE_ADULT_MODE_VARIABLES = ("ADULT_MODE_ENABLED", "ADULT_MODE_MODELS")
+OBSOLETE_VARIABLES = (OBSOLETE_EMAIL_VERIFICATION_VARIABLE, *OBSOLETE_LEVEL3_VARIABLES, *OBSOLETE_ADULT_MODE_VARIABLES)
 
 
 def _warn_obsolete_variables(values: Mapping[str, str]) -> None:
     """已淘汰、不再讀取的變數：`EMAIL_VERIFICATION_REQUIRED`（玩家只用 Google 登入，沒有信箱驗證）與
-    `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`（被 `ADULT_MODE_*` 取代）。
+    `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`（被 `ADULT_MODE_*` 取代）與
+    `ADULT_MODE_ENABLED`、`ADULT_MODE_MODELS`（被緊急煞車 `SAFE_MODE_FORCED` 取代）。
 
     平台設定裡殘留它們不該讓部署失敗（含 production），只提醒移除；警告只含變數名稱，不回顯值。
-    **忽略舊的等級 3 變數 = 成人模式維持關閉**：失敗時偏向保守，舊變數不會讓任何東西開啟。
+    **舊變數一律被忽略**：不論值為何，緊急煞車與玩家可用的模式都不因它們而改變（值不合法也不會讓啟動失敗）。
     """
     for name in OBSOLETE_VARIABLES:
         if _get(values, name):
@@ -604,31 +610,13 @@ def _resolve_rpg_llm(env: str, values: Mapping[str, str], base: LlmSettings) -> 
     )
 
 
-def _resolve_content(values: Mapping[str, str], rpg: OpenAICompatibleSettings | None) -> ContentSettings:
-    """內容模式的環境設定。成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉，不得在程式中寫死為開啟；
-    開啟必須同時滿足（AGENTS.md 第 7 節）：
-    - RPG 用途已設定，且 `ADULT_MODE_MODELS`（書面許可涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型。
-    開關本身只是部署層的條件之一：玩家仍須已滿 18 歲並完成成年確認才能使用（由 `AccessPolicy` 判斷）。
-    各環境開啟的規則相同：staging 與 production 沒有明確設定就是關閉。
-    清單只在開關開啟時才驗證與生效：關閉時不影響任何行為。錯誤訊息只含變數名稱。"""
-    enabled = _bool_setting(values, "ADULT_MODE_ENABLED")
-    models = tuple(part.strip() for part in _get(values, "ADULT_MODE_MODELS").split(",") if part.strip())
-    if not enabled:
-        return ContentSettings(adult_mode_enabled=False, adult_models=models)
-    if rpg is None:
-        raise ConfigError("ADULT_MODE_ENABLED 已開啟，但 RPG 用途尚未設定（OPENROUTER_API_KEY 與 OPENROUTER_MODEL）。")
-    if not models:
-        raise ConfigError("ADULT_MODE_ENABLED 已開啟，但 ADULT_MODE_MODELS 沒有設定（須列出許可涵蓋的模型）。")
-    if any(not _OPENAI_MODEL_NAME.fullmatch(name) for name in models):
-        raise ConfigError("ADULT_MODE_MODELS 含有不合法的模型名稱。")
-    uncovered = [
-        variable
-        for variable, name in (("OPENROUTER_MODEL", rpg.llm.primary_model), ("OPENROUTER_FALLBACK_MODEL", rpg.llm.fallback_model))
-        if name not in models
-    ]
-    if uncovered:
-        raise ConfigError("ADULT_MODE_MODELS 沒有涵蓋 RPG 用途使用的模型：" + "、".join(dict.fromkeys(uncovered)) + "。")
-    return ContentSettings(adult_mode_enabled=True, adult_models=models)
+def _resolve_content(values: Mapping[str, str]) -> ContentSettings:
+    """內容模式的環境設定：只有緊急煞車 `SAFE_MODE_FORCED`（預設未啟用，不得在程式中寫死為啟用）。
+
+    它沒有任何前提（不需要書面許可、模型清單或法務意見），四個環境都可以設定；值不是布林（只認 true、false）
+    時啟動失敗，錯誤訊息只含變數名稱。設定於重新啟動後生效。
+    """
+    return ContentSettings(safe_mode_forced=_bool_setting(values, "SAFE_MODE_FORCED"))
 
 
 def _positive_int(values: Mapping[str, str], name: str, default: int, maximum: int) -> int:
@@ -728,7 +716,7 @@ def load_config(
 
     llm = _resolve_llm(env, values)
     rpg_llm = _resolve_rpg_llm(env, values, llm)
-    content = _resolve_content(values, rpg_llm)
+    content = _resolve_content(values)
     tunnel_trusts_proxy = _resolve_trust_proxy_headers(env, values)
 
     return AppConfig(

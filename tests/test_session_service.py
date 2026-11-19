@@ -13,7 +13,7 @@ from app.models.user import ROLE_ADMIN
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
-from app.services.content_tier import ADULT_RULES_VERSION
+from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.current_user import CurrentUser
 from app.services.errors import (
     AgeConfirmationRequired, Conflict, ContentTierRestricted, NotFound, SessionEnded, ValidationError,
@@ -159,11 +159,11 @@ def test_an_adult_declared_script_needs_the_adult_mode_to_be_active(member_sessi
     adult_script = publish_script(member_session, content_tier="adult")
     off, _ = service_for(member_session, adult_mode=False)
     with pytest.raises(ContentTierRestricted):
-        start(off, player(member_session, 1, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=ADULT_RULES_VERSION), adult_script)
+        start(off, player(member_session, 1, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION), adult_script)
     on, _ = service_for(member_session, adult_mode=True)
     with pytest.raises(ContentTierRestricted):                       # 開關開了但尚未確認
         start(on, player(member_session, 2, content_tier_preference="adult"), adult_script)
-    confirmed = player(member_session, 3, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=ADULT_RULES_VERSION)
+    confirmed = player(member_session, 3, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
     assert start(on, confirmed, adult_script).content_tier == "adult"
 
 
@@ -175,7 +175,7 @@ def test_a_safe_mode_player_can_play_a_safe_builtin_script(member_session):
 
 def test_the_save_takes_the_more_conservative_of_the_player_mode_and_the_script_declaration(member_session):
     service, _ = service_for(member_session, adult_mode=True)
-    confirmed = dict(adult_confirmed_at=TODAY_UTC, adult_rules_version=ADULT_RULES_VERSION)
+    confirmed = dict(adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
     adult_player = player(member_session, 1, content_tier_preference="adult", **confirmed)
     standard_player = player(member_session, 2)
     assert start(service, standard_player, publish_script(member_session, title="安全", content_tier="safe")).content_tier == "safe"

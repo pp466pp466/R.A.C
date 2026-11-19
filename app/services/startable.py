@@ -14,7 +14,7 @@ from typing import Any
 from app.models.script import Script, ScriptVersion
 from app.repositories.script_repository import ScriptRepository
 from app.services.access_policy import AccessPolicy
-from app.services.content_tier import most_conservative, tier_rank
+from app.services.content_tier import legacy_most_conservative, legacy_tier_rank
 from app.services.current_user import CurrentUser
 from app.services.errors import ContentTierRestricted, NotFound
 
@@ -37,9 +37,9 @@ class StartableVersions:
         if version is None:
             raise NotFound()
         effective = self._policy.effective_tier(current)
-        if tier_rank(version.content_tier) > tier_rank(effective):
+        if legacy_tier_rank(version.content_tier) > legacy_tier_rank(effective):
             raise ContentTierRestricted()
         return Startable(
             version=version, script=self._scripts.get_script_of(version), content=self._scripts.content_of(version),
-            tier=most_conservative(effective, version.content_tier),
+            tier=legacy_most_conservative(effective, version.content_tier),
         )

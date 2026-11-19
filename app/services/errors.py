@@ -81,13 +81,6 @@ class AgeRestricted(Forbidden):
     default_message = "您的年齡目前不符合使用這項功能的規定。"
 
 
-class ContentModeRestricted(Forbidden):
-    """依年齡規定，這位使用者不能使用要求的內容模式（403）：未滿成年門檻者只能使用安全模式。訊息不帶年齡數字。"""
-
-    code = "content_mode_restricted"
-    default_message = "依年齡規定，您目前只能使用安全模式。"
-
-
 class ContentTierRestricted(Forbidden):
     """劇本宣告的內容模式高於玩家目前生效的模式（403）：不開出存檔。"""
 
@@ -95,11 +88,11 @@ class ContentTierRestricted(Forbidden):
     default_message = "這個劇本的內容模式高於您目前的設定，無法開始。"
 
 
-class AdultModeUnavailable(Forbidden):
-    """成人模式在這個部署沒有開放（403）：部署層的開關為關閉。"""
+class SafeModeForced(Forbidden):
+    """緊急煞車啟用中（403）：全站暫時只提供安全模式，玩家不能關閉安全模式（切回安全模式仍可）。"""
 
-    code = "adult_mode_unavailable"
-    default_message = "目前未開放成人模式。"
+    code = "safe_mode_forced"
+    default_message = "目前系統暫時只提供安全模式。"
 
 
 class NotFound(ServiceError):

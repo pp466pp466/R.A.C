@@ -17,7 +17,7 @@ from app.models.llm_call_log import LlmCallLog
 from app.models.rpg_session import RpgSession
 from app.models.script import Script, ScriptVersion
 from app.models.user import (
-    AUDIENCES, CONTENT_TIER_SAFE, CONTENT_TIERS, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
+    AUDIENCES, CONTENT_MODES, CONTENT_TIER_SAFE, DELETION_GRACE_PERIOD, ROLE_ADMIN, STATUS_ACTIVE,
     STATUS_DELETION_PENDING, User,
 )
 from app.repositories.base import BaseRepository
@@ -199,11 +199,11 @@ class UserRepository(BaseRepository[User]):
     def set_content_preference(self, user: User, tier: str) -> bool:
         """設定內容模式偏好。條件式 UPDATE：只有已完成年齡確認（有生日）的帳號才寫入，回傳是否真的寫入。
 
-        `tier` 必須是三種模式之一，否則拋出 `ValueError`（程式錯誤，不是使用者輸入錯誤；使用者輸入由
-        `ContentModeService` 先驗證）。這裡不判斷「這個人可不可以用這個模式」，那是 `AccessPolicy` 與 Service 的責任。
+        `tier` 必須是兩種模式之一（`safe`、`adult`；系統不再寫入舊值 `standard`），否則拋出 `ValueError`（程式錯誤，不是使用者輸入錯誤；
+        使用者輸入由 `ContentModeService` 先驗證）。這裡不判斷「這個人可不可以用這個模式」，那是 `AccessPolicy` 與 Service 的責任。
         """
-        if tier not in CONTENT_TIERS:
-            raise ValueError("內容模式必須是 safe、standard、adult 之一。")
+        if tier not in CONTENT_MODES:
+            raise ValueError("內容模式必須是 safe、adult 之一。")
         changed = self._run_update(
             user,
             update(User).where(User.id == user.id).where(User.birth_date.is_not(None)).values(content_tier_preference=tier),

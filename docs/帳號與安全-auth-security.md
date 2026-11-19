@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-19 ｜ 對應 change：wallet-hub（錢包頁 `/wallet` 的存取規則，第 7f 節）、admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（兩種內容模式、生效模式現算、緊急煞車、內容模式 API，第 5 節「內容模式」）、wallet-hub（錢包頁 `/wallet` 的存取規則，第 7f 節）、admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -121,39 +121,35 @@ flowchart TD
 - 管理員與各會員等級都不豁免年齡閘門。管理員帳號由指令建立，沒有生日，第一次登入後須到 `/account` 補填；**玩家**則是登入後除了年齡確認與登出什麼都不能做（受限登入狀態 `age_pending`，第 7b 節），所以玩家不會走到 `chat_gate`。
 - 全站只限滿 18 歲：最低註冊年齡與最低使用年齡都是 18，沒有可使用的未成年區間。補填時算出未滿 18 歲的玩家立即抹除（第 7b 節）；已有生日但未滿 18 歲的帳號（資料庫裡不會存在，只在單元測試製造）呼叫模型功能得到 `age_restricted`。先前「13 至 17 歲可以使用但固定安全模式」的設定已取消（它以供應商同意為前提，與 Gemini 條款的 18 歲門檻不符）。
 
-### 內容模式（change `rpg-data-and-script`，取代 `sexual_content_level` 0 至 3）
+### 內容模式（change `safe-mode-toggle`，取代 `rpg-data-and-script` 的三種模式）
 
-> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）**：全站只限滿 18 歲；內容模式改為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車。**程式尚未跟進**（屬 `safe-mode-toggle`）：以下的三種模式、`ADULT_MODE_ENABLED`、`ADULT_MODE_MODELS` 與成年確認描述的是目前的實作，由該 change 取代；依年齡決定內容上限的分支在最低年齡 18 之下不會被觸發（只剩單元測試製造的情境）。
+> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）並由 `safe-mode-toggle` 的第 1 組實作（2026-11-19）**：全站只限滿 18 歲；內容模式為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車 `SAFE_MODE_FORCED`。**過渡相容層**：目錄、開存檔與劇本創作仍走舊的三值判定（`content_access`、`effective_tier`、`author_content_cap`，依年齡上限，在最低年齡 18 之下只有單元測試製造的情境會觸發），於同一個 change 的第 2 組（2.1–2.5）改寫並移除，並以守門測試鎖住；新程式請勿使用它們。
 
-三種模式由保守到寬鬆：`safe`（安全模式）、`standard`（一般模式）、`adult`（成人模式）；順序與「取較保守者」在 `app/services/content_tier.py`（純邏輯，無法判定視為 `safe`）。**生效模式 = 玩家偏好、年齡上限、劇本宣告、存檔記錄中最保守者**（`AccessPolicy.effective_tier`）。
+內容模式只有兩種，由保守到寬鬆：`safe`（安全模式開）、`adult`（安全模式關）；順序與「取較保守者」在 `app/services/content_tier.py`（純邏輯，無法判定視為 `safe`）。**舊值 `standard`（原一般模式）一律讀作 `adult`**（`parse_tier`），不論出現在玩家偏好、劇本內容或存檔，所以既有資料不改寫；系統不再寫入 `standard`。**生效模式 = 玩家偏好（缺少目前版本同意視為 `safe`）、劇本是否綁定安全模式、緊急煞車三者中最保守者**（`AccessPolicy.effective_mode(user, script_binding=None)`，每次現算；全站只限滿 18 歲，沒有依年齡的上限；存檔不釘住自己的模式；管理員與各會員等級都不豁免）。
 
 ```mermaid
 flowchart TD
-    Age{"年齡（生日於當下計算）<br/>≥ 成年門檻？"} -->|"否或尚未確認年齡"| Cap1["年齡上限 safe<br/>不論偏好、劇本、設定或角色（含管理員）"]
-    Age -->|"是"| Open{"成人模式啟用中？<br/>部署開關開啟 且 已在目前規範版本確認"}
-    Open -->|"否（預設）"| Cap2["年齡上限 standard"]
-    Open -->|"是"| Cap3["年齡上限 adult"]
-    Cap1 --> Eff["生效模式 = most_conservative(玩家偏好, 年齡上限, 劇本宣告, 存檔記錄)"]
-    Cap2 --> Eff
-    Cap3 --> Eff
+    Brake{"緊急煞車 SAFE_MODE_FORCED<br/>啟用？"} -->|"是"| Safe["生效模式 safe<br/>玩家保存的偏好不被改寫"]
+    Brake -->|"否（預設）"| Consent{"已在目前安全規範版本下同意？"}
+    Consent -->|"否"| Safe
+    Consent -->|"是"| Pref["玩家偏好 safe 或 adult<br/>（舊值 standard 讀作 adult）"]
+    Pref --> Bind{"劇本綁定安全模式？<br/>（存檔複本的 content_tier 為 safe）"}
+    Bind -->|"是"| Safe
+    Bind -->|"否或沒有劇本"| Eff["生效模式 = most_conservative(偏好, 綁定)"]
 ```
 
-- **偏好與預設**：`users.content_tier_preference` 預設 `safe`；年齡確認成功時**一律**設為 `safe`（adult-only-signup；先前成年者為 `standard`，且 `is_adult_at_confirmation` 不再寫入）。**不自動調高**：玩家須自行切換，`GET /api/account/content-mode` 的 `selectable.standard` 為真值。成年玩家也可以自行選擇 `safe`。偏好為 `adult` 但條件不齊時退為 `standard`，不是錯誤。
-- **成人模式須同時滿足**：部署開關 `ADULT_MODE_ENABLED` 開啟；已滿 18 歲；在目前的安全規範版本（`ADULT_RULES_VERSION`）下完成成年確認；偏好為 `adult`。成年確認在切換為成人模式時完成：同時確認「我確定已滿 18 歲」與同意安全規範兩項（缺一回 400 並指出缺哪一項），記錄確認時間、規範版本與方式（目前 `self_declared`，不蒐集證件、不接第三方驗證）；規範版本改變後先前的確認失效，須重新確認；離開成人模式不清除紀錄。
-- **API**（需登入、CSRF、先過年齡閘門；受限登入狀態依既有規則被拒絕）：`GET /api/account/content-mode` 與 `PUT /api/account/content-mode`。回應只有 `preference`、`effective`、`selectable`（三種模式各是否可選）、`adult_reason`（`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`，**不含**生日、年齡區間、年齡確認時間或內部編號。錯誤：400（`mode` 不是三種之一，或缺少確認的那一項）、403 `content_mode_restricted`（未滿成年門檻者要求 `standard` 或 `adult`）、403 `adult_mode_unavailable`（部署開關關閉）、403 `age_confirmation_required`、401。成功時記錄 `account.content_mode.safe`／`standard`／`adult` 事件（只有事件名稱與使用者編號）。
-- `/account` 不再有未成年的安全模式提示（adult-only-signup 移除；`/api/auth/me` 的 `age_group` 欄位保留，已完成確認者必為 `adult`）；目前**沒有切換內容模式的介面**（RC-3）。
+- **偏好與預設**：`users.content_tier_preference` 預設 `safe`；年齡確認成功時**一律**設為 `safe`。**不自動調高**：偏好只有玩家自己切換才會改變，不因玩家輸入、模型輸出、年齡或登入而改變。
+- **關閉安全模式（偏好改為 `adult`）的條件**只有：已完成年齡確認、緊急煞車未啟用、並在**目前的安全規範版本**（`SAFE_RULES_VERSION`）下同意（`confirm_rules` 為明確的 `true`；缺少回 400 並指出 `confirm_rules`）。不再要求「我確定已滿 18 歲」的勾選（全站皆成年）；同意成功時記錄確認時間、規範版本與方式（`self_declared`，沿用 `users.adult_confirmed_at`／`adult_rules_version`／`adult_confirm_method`，不蒐集證件、不接第三方驗證）。規範版本改變後先前的同意失效，偏好仍是 `adult` 者的生效模式退為 `safe`（不是錯誤），須重新同意；已在目前版本同意者再次關閉不需要重新勾選；回到 `safe` 不清除紀錄。
+- **API**（需登入、CSRF、先過年齡閘門；受限登入狀態依既有規則被拒絕）：`GET /api/account/content-mode` 與 `PUT /api/account/content-mode`。回應只有 `preference`（`safe` 或 `adult`）、`effective`（生效模式，不含劇本）、`confirmed`（是否已在目前版本同意）與 `forced`（緊急煞車是否啟用），**不含**生日、年齡區間、年齡確認時間、同意的時間戳記或內部編號。錯誤：400（`mode` 不是 `safe` 或 `adult`，含舊值 `standard`；或缺少 `confirm_rules`）、403 `safe_mode_forced`（緊急煞車時要求 `adult`；要求 `safe` 仍成功）、403 `age_confirmation_required`、401。成功時記錄 `account.content_mode.safe`／`adult` 事件（只有事件名稱與使用者編號）。`/account` 目前**沒有切換介面**（safe-mode-toggle 第 3 組實作）。
+- `/account` 不再有未成年的安全模式提示（adult-only-signup 移除；`/api/auth/me` 的 `age_group` 欄位保留，已完成確認者必為 `adult`）。
 - **故事偏好**（change `story-preference`）：`users.story_preference`（`all`／`male`／`female`，預設 `all`）**只影響劇本清單的排序**，與內容模式是兩回事——不影響生效的內容模式、可看或可玩的劇本、敘事、提示詞與額度，也不被年齡確認、切換內容模式或滿 18 歲自動改變。端點 `GET`／`PUT /api/account/story-preference` 用 `require_login()`（受限登入狀態一律被拒），**不過年齡閘門 `require_chat_access`**——那一道檢查的是「能不能呼叫模型」，偏好不涉及模型。值必須完全等於三個列舉值之一（否則 400 並指出 `story_preference`，偏好不變，錯誤不回顯輸入）；請求中沒有任何可指定他人的欄位。`CurrentUser.public_dict` 多一個 `story_preference` 鍵（`/api/auth/me`），不含生日與年齡區間。成功只記 `account.story_preference_changed`（事件名稱與使用者編號，不含值）。
-- 年齡規則的數字不在 `AccessPolicy` 內嵌（測試以 AST 掃描不得出現 13、17、18）；`AccessPolicy.content_access(user)` 回傳 `ContentAccess`（偏好、年齡上限、生效模式、是否已成年、成人模式是否可選、是否已確認、原因）。
+- 年齡規則的數字不在 `AccessPolicy` 內嵌（測試以 AST 掃描不得出現 13、17、18）；`AccessPolicy.mode_state(user)` 回傳 `ModeState`（偏好、生效模式、是否已同意、緊急煞車）。過渡相容層的 `content_access(user)` 仍回傳 `ContentAccess`（三值判定，第 2 組移除）。
 
-**成人模式的環境開關**（AGENTS.md 第 7 節）：`ADULT_MODE_ENABLED` 預設關閉，**不能在程式裡寫死為開啟**，由組裝處依設定傳入 `AccessPolicy(adult_mode_enabled=…)`；未成年者、尚未完成年齡確認者、管理員與各會員等級都不受開關影響（未成年永遠是安全模式）。
+**緊急煞車的環境開關**（AGENTS.md 第 7 節）：`SAFE_MODE_FORCED`（`true` 或 `false`）預設未啟用（玩家可關閉安全模式），**不能在程式裡寫死為啟用**，由組裝處依設定傳入 `AccessPolicy(safe_mode_forced=…)`。它是營運出事時全站停用「關閉安全模式」的開關，**不是使用門檻**：不需要 RPG 用途、模型清單、書面許可或法務前提；四個環境都可以設定；值不是布林啟動失敗，訊息只指出變數名稱；啟用時所有玩家與所有存檔的生效模式一律是 `safe`（保存的偏好不被改寫，解除後恢復），要求關閉安全模式回 403 `safe_mode_forced`。設定於重新啟動後生效，不需要資料庫遷移或程式改版。
 
-| 環境 | 開關 | 條件 |
-|---|---|---|
-| development、testing、staging、production | 可開啟；staging 與 production 須明確設定才生效 | 必須已設定 RPG 用途，且 `ADULT_MODE_MODELS`（取得書面許可所涵蓋的模型）非空並涵蓋 RPG 用途的主要與備援模型，否則啟動失敗；值不是布林也啟動失敗，訊息只指出變數名稱 |
-
-- 舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS` 已淘汰：忽略、啟動時各警告一次（只含變數名稱），**忽略 = 成人模式維持關閉**；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕。
-- 清單只在開關開啟時才驗證，關閉時完全不影響行為；它是「防止換了模型卻忘了許可範圍」的護欄，不是許可本身的證明。**許可涵蓋的供應商與日期須由人另外記錄**（使用者尚未提供，見 [路線圖-roadmap.md](路線圖-roadmap.md)）。
-- **這只是資料與政策基礎**：RPG 尚未實作，目前沒有任何送出露骨內容的入口。任何入口出現之前，仍須先完成**自家審查層**（安全模式與一般模式的界線、擋未成年、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕，屬 RC-2；**審查層已於 rpg-turn-engine 實作**）。書面許可與法務意見原本也列為前提，**2026-11-17 規範修訂後不再是前提**（見本節開頭的說明）。
+- 舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`、`ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 已淘汰：忽略、啟動時各警告一次（只含變數名稱，不回顯值，值不合法也不會啟動失敗），**不論值為何都不改變緊急煞車與玩家可用的模式**；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕（可含 `SAFE_MODE_FORCED`）。
+- 模型供應商與資料使用條款的評估（免費模型的輸入輸出可能被供應商留存或審閱）屬上線前關卡（`launch-gates`），隱私權政策與服務條款須揭露（第 3 組更新）；書面許可與法務意見**不再是**關閉安全模式的前提。
+- **自家審查層已於 rpg-turn-engine 實作**：擋未成年的性內容、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕；這四類絕對禁止項不隨模式放寬。
 
 ## 6. 權限規則與端點清單
 

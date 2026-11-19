@@ -18,7 +18,7 @@ import hmac
 import re
 from typing import Any
 
-from app.services.content_tier import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, parse_tier
+from app.services.content_tier import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, legacy_parse_tier
 from app.services.cs_intents import contains_text
 from app.services.llm_output import SemanticRule
 from app.services.protagonist import ORIGIN_TRANSMIGRATOR
@@ -191,7 +191,7 @@ def _common(role: str, data_rules: str, *, tier: str, language: str, origin: str
         raise ValueError("洩漏標記不可為空")
     return _fill(_COMMON_TEMPLATE, {
         "<<ROLE>>": role, "<<LANGUAGE>>": language_instruction(language), "<<MIN_CHARS>>": str(NARRATION_MIN_CHARS),
-        "<<MAX_CHARS>>": str(NARRATION_MAX_CHARS), "<<BOUNDARY>>": TIER_BOUNDARIES[parse_tier(tier)],
+        "<<MAX_CHARS>>": str(NARRATION_MAX_CHARS), "<<BOUNDARY>>": TIER_BOUNDARIES[legacy_parse_tier(tier)],
         "<<EXTRA_RULES>>": _extra_rules(origin, extra), "<<DATA_RULES>>": data_rules, "<<MARKER>>": marker,
     })
 

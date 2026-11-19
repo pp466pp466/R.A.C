@@ -7,7 +7,7 @@ Controller 只讀取請求、呼叫 Service、處理登入狀態；確認本人�
   這台裝置也一併清除。
 - `POST /api/account/export`：匯出自己的帳號資料與全部對話（本文 `{"format": "json" | "csv"}`），回應是附件下載、禁止快取。
   用 POST 是為了受 CSRF 與來源檢查保護，也不會被預取連結觸發。受限登入狀態（等待刪除）不能匯出：請在申請刪除之前匯出。
-- `GET /api/account/content-mode`、`PUT /api/account/content-mode`：查詢與切換自己的內容模式（安全、一般、成人）。
+- `GET /api/account/content-mode`、`PUT /api/account/content-mode`：查詢與切換自己的安全模式（`mode` 為 `safe` 或 `adult`）。
   先過年齡閘門；回應只含偏好、生效模式、各模式是否可選與成人模式沒有啟用的原因，不含生日與年齡區間。
   切換為成人模式時本文須帶 `confirm_adult` 與 `confirm_rules` 兩項確認（見 `ContentModeService`）。
 - `GET /api/account/story-preference`、`PUT /api/account/story-preference`：查詢與設定自己的故事偏好（全讀者、男頻、女頻）。
@@ -67,9 +67,7 @@ def get_content_mode():
 def set_content_mode():
     user = require_login()
     body = read_json_object()
-    state = get_content_mode_service().set_mode(
-        user, body.get("mode"), confirm_adult=body.get("confirm_adult"), confirm_rules=body.get("confirm_rules")
-    )
+    state = get_content_mode_service().set_mode(user, body.get("mode"), confirm_rules=body.get("confirm_rules"))
     return jsonify(ok=True, content_mode=state)
 
 

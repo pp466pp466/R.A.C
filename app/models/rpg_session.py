@@ -99,7 +99,11 @@ class RpgSession(Base, PublicIdMixin, TimestampMixin):
     opening_state: Mapped[str | None] = mapped_column(Unicode(12), nullable=True)
     opening_started_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)     # 搶佔時間：逾時者可被接手
 
-    content_tier: Mapped[str] = mapped_column(Unicode(10), default=CONTENT_TIER_SAFE)   # 開存檔當下的生效模式，只能往保守方向調整
+    # 開存檔當下的生效模式（safe-mode-toggle 起新版程式只寫入、不讀取：存檔的生效模式一律現算，不釘住；欄位於日後的 contract change 移除）
+    content_tier: Mapped[str] = mapped_column(Unicode(10), default=CONTENT_TIER_SAFE)
+    # 遊戲內「可嘗試關閉安全模式」的提示已出現的時間（safe-mode-toggle，expand 階段新增，可為空）：每個存檔最多一次，
+    # 以「safe_hint_at 為空才更新、更新列數為 1 才送出」的條件式更新保證。只有時間戳記，不含任何玩家文字。
+    safe_hint_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     status: Mapped[str] = mapped_column(Unicode(10), default=SESSION_ACTIVE)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)          # 玩家自行封存，與劇情完結是兩件事

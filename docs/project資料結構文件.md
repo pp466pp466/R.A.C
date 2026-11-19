@@ -1,8 +1,8 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-17 ｜ 對應 change：adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0019_adult_declaration`（實際的 `project` 目前為 `0017_story_preference`，0018 與 0019 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（`sessions` 新增 `safe_hint_at`；舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0020_safe_mode_hint`（實際的 `project` 目前為 `0017_story_preference`，0018、0019 與 0020 尚未套用，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
-本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、251 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、252 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
 流程與資料表的對應（登入與註冊、客服對話各碰到哪些資料表）見第 10.1 節；簡報 [1.0簡報.md](1.0簡報.md) 摘要了本文件。
 
@@ -16,13 +16,13 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0019_adult_declaration`；實際的 `project` 目前為 `0017_story_preference`（`alembic_version` 只有一列；0017 已於 2026-11-11 套用，0018 與 0019 尚未套用，見第 14 節） |
-| 資料表與欄位 | 21 張業務資料表、251 個欄位、51 個索引與唯一約束、18 個外鍵 |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0020_safe_mode_hint`；實際的 `project` 目前為 `0017_story_preference`（`alembic_version` 只有一列；0017 已於 2026-11-11 套用，0018、0019 與 0020 尚未套用，見第 14 節） |
+| 資料表與欄位 | 21 張業務資料表、252 個欄位、51 個索引與唯一約束、18 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
 
-**`0018_rpg_turn_revision`（`memory_logs` 的四個修訂欄位、新表 `turn_regenerations`、設定鍵 `rpg.free_regenerations`）與 `0019_adult_declaration`（`users` 的兩個年滿 18 歲聲明欄位）尚未套用到實際的 `project`**：本文第 5 節以 ORM 以 SQL Server 方言編譯的結構為準，已由 `tests/test_project_db_schema_doc.py` 逐項比對，並在整合測試資料庫 `project_test` 上完成 upgrade → downgrade → upgrade；套用到 `project` 時依第 14 節的做法先備份、再升級並追加「套用」列。
+**`0018_rpg_turn_revision`（`memory_logs` 的四個修訂欄位、新表 `turn_regenerations`、設定鍵 `rpg.free_regenerations`）、`0019_adult_declaration`（`users` 的兩個年滿 18 歲聲明欄位）與 `0020_safe_mode_hint`（`sessions.safe_hint_at`，可為空）尚未套用到實際的 `project`**：本文第 5 節以 ORM 以 SQL Server 方言編譯的結構為準，已由 `tests/test_project_db_schema_doc.py` 逐項比對，並在整合測試資料庫 `project_test` 上完成 upgrade → downgrade → upgrade；套用到 `project` 時依第 14 節的做法先備份、再升級並追加「套用」列。
 
 **`0016_rpg_turn_engine`（`memory_logs.attempt`、`sessions` 的第 0 幕三欄、`llm_call_logs.first_chunk_ms`、設定鍵 `rpg.max_months_per_turn`）已於 2026-11-09 套用到實際的 `project`**：`alembic current` 為 `0016_rpg_turn_engine (head)`，`alembic check` 回報 `No new upgrade operations detected.`，`flask show-rpg-settings` 列出 `rpg.max_months_per_turn = 24`（來自資料庫，不是保底預設），唯讀查詢確認 20 張資料表、232 個欄位、17 個外鍵、`runtime_limits` 16 列，與本文一致。
 
@@ -71,7 +71,7 @@ flowchart LR
 | `script_versions` | 劇本版本 | RPG 劇本 | 劇本的每個版本：固定規格的全部欄位、狀態、內容雜湊與審查結果。已發佈的版本不可變，修改一律新增版本。 | ScriptRepository（狀態只在此寫入，有架構測試擋住別處） | 隨劇本刪除（CASCADE）；刪除草稿時直接刪除 | 33 |
 | `script_version_tags` | 劇本版本標籤 | RPG 劇本 | 版本的標籤（以顯示形式儲存，查詢以小寫比對），讓目錄日後可以篩選。 | ScriptRepository | 隨版本刪除（CASCADE） | 3 |
 | `script_submissions` | 劇本送審紀錄 | RPG 劇本 | 每次成功送審、被自動拒絕與管理員解除暫停各一筆，用來算每日送審次數與連續被拒；不含任何劇本文字。 | ScriptSubmissionRepository | 建立後 365 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 5 |
-| `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 29 |
+| `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 30 |
 | `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出；最後一輪可被重新生成或編輯（修訂版本、免費次數、認領時間與回合前快照）。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串；回合前快照在下一輪完成時清為空值 | 16 |
 | `turn_regenerations` | 重新生成與編輯的回饋 | RPG 存檔 | 玩家重新生成時選的分類與填的理由（供營運檢視），與每次修訂的結果；不存被取代的行動與劇情。 | TurnRegenerationRepository | 隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出 | 11 |
 | `wallets` | 遊戲幣錢包 | 遊戲幣 | 每位玩家至多一個：免費與付費兩個餘額（不得為負）與每次異動加 1 的版本號（樂觀鎖）。 | WalletRepository（餘額只由它寫入，架構測試守住） | 隨帳號抹除（CASCADE），不匿名化保留；視為個資，納入個人資料匯出 | 7 |
@@ -433,7 +433,8 @@ erDiagram
         text opening_text "第 0 幕的文字 可為空"
         string opening_state "第 0 幕的狀態 可為空"
         datetime opening_started_at "第 0 幕開始生成的時間 可為空"
-        string content_tier "開存檔當下的生效內容模式"
+        string content_tier "開存檔當下的生效內容模式 新版不讀取"
+        datetime safe_hint_at "安全模式提示已出現的時間 可為空"
         string status "存檔狀態"
         datetime ended_at "完結時間"
         bool is_archived "玩家自行封存"
@@ -1100,14 +1101,15 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 19 | `opening_text` | NVARCHAR(max) | 是 | — | — | 第 0 幕（開場）的文字：`ready` 為生成的開場，`fallback` 為劇本的初始對話（可能是空字串）；`pending`、`generating` 與遷移之前建立的存檔為空。玩家文字衍生的個資：不進日誌、不在管理員預設可檢視的範圍，隨存檔保存、刪除與匯出。0016 新增。 |
 | 20 | `opening_state` | NVARCHAR(12) | 是 | — | — | 第 0 幕的狀態：pending｜generating｜ready｜fallback（值見第 6 節）。新存檔為 pending；遷移之前建立的存檔為空，視同 fallback，不生成也不阻擋回合。搶佔、接手、完成與退回都是帶狀態條件的單一 UPDATE；ready 與 fallback 之後不再重新生成。0016 新增。 |
 | 21 | `opening_started_at` | DATETIME2(6) | 是 | — | — | 第 0 幕開始生成的時間（UTC），同時是這次生成的憑證：寫回必須帶同一個值，所以被接手而過時的產生器不會覆蓋新的結果；`generating` 超過 90 秒視同生成者已不在，可被接手；退回 pending 時清為空值。不納入匯出。0016 新增。 |
-| 22 | `content_tier` | NVARCHAR(10) | 否 | — | — | 開存檔當下的生效內容模式；只能往保守方向調整。 |
-| 23 | `status` | NVARCHAR(10) | 否 | — | — | 存檔狀態：active｜ended（已完結，歷史可讀，不得再新增回合，不可恢復）。 |
-| 24 | `ended_at` | DATETIME2(6) | 是 | — | — | 完結時間。 |
-| 25 | `is_archived` | BIT | 否 | — | — | 玩家自行封存；與劇情完結是兩件事。 |
-| 26 | `last_active_at` | DATETIME2(6) | 否 | — | — | 最後活動時間（UTC）；期限清除（365 天）的依據。 |
-| 27 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
-| 28 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 29 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
+| 22 | `content_tier` | NVARCHAR(10) | 否 | — | — | 開存檔當下的生效內容模式（`safe`｜`adult`；舊值 `standard` 讀作 `adult`）。safe-mode-toggle 起新版程式只寫入、不讀取：存檔的生效模式一律現算（玩家偏好、劇本是否綁定安全模式、緊急煞車取最保守者），不釘住；欄位於日後的 contract change 移除。 |
+| 23 | `safe_hint_at` | DATETIME2(6) | 是 | — | — | 遊戲內「可嘗試關閉安全模式」的提示已出現的時間（UTC）：每個存檔最多一次，以「為空才更新、更新列數為 1 才送出」的條件式更新保證（多 worker、換裝置與重送都不重複）。只有時間戳記，不含任何玩家文字；不回填、不建索引。0020 新增。 |
+| 24 | `status` | NVARCHAR(10) | 否 | — | — | 存檔狀態：active｜ended（已完結，歷史可讀，不得再新增回合，不可恢復）。 |
+| 25 | `ended_at` | DATETIME2(6) | 是 | — | — | 完結時間。 |
+| 26 | `is_archived` | BIT | 否 | — | — | 玩家自行封存；與劇情完結是兩件事。 |
+| 27 | `last_active_at` | DATETIME2(6) | 否 | — | — | 最後活動時間（UTC）；期限清除（365 天）的依據。 |
+| 28 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
+| 29 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 30 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
 
 索引與約束：
 
@@ -1268,7 +1270,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `script_versions.review_categories_json` | `minor_sexual`｜`sexual_violence`｜`non_consensual`｜`real_person_sexual`｜`minor_suspected`｜`real_person_suspected`｜`tier_mismatch`｜`other_concern` | 見下方「審查類別」。 |
 | `script_submissions.outcome` | `sent`｜`auto_rejected`｜`lifted` | sent＝成功送審（進入待審）；auto_rejected＝規則層或模型層明確拒絕；lifted＝管理員解除暫停發佈（使連續被拒中斷，不計入每日送審次數）。 |
 | `script_submissions.categories_json` | `minor_sexual`｜`sexual_violence`｜`non_consensual`｜`real_person_sexual`｜`minor_suspected`｜`real_person_suspected`｜`tier_mismatch`｜`other_concern` | 與 script_versions.review_categories_json 相同的類別列舉。 |
-| `sessions.content_tier` | `safe`｜`standard`｜`adult` | 開存檔當下的生效內容模式（玩家設定、劇本宣告與年齡上限中最保守者），之後只能往保守方向調整。 |
+| `sessions.content_tier` | `safe`｜`adult`（舊值 `standard` 讀作 `adult`） | 開存檔當下的生效內容模式；新版程式只寫入、不讀取（存檔的生效模式一律現算）。 |
 | `sessions.status` | `active`｜`ended` | active＝進行中；ended＝已完結（歷史可讀，不得再新增回合，不可恢復）。 |
 | `wallet_entries.kind` | `signup_grant`｜`daily_checkin`｜`turn_hold`｜`turn_refund`｜`admin_adjust` | signup_grant＝首次註冊贈幣；daily_checkin＝每日簽到；turn_hold＝冒險回合的預扣（結算後即為消耗）；turn_refund＝預扣的退回；admin_adjust＝管理員調整。 |
 | `wallet_entries.resolution` | `settled`｜`refunded` | 只有預扣列使用，只能從空值設定一次：settled＝已結算；refunded＝已退回。 |
@@ -1617,6 +1619,7 @@ flowchart LR
 | `0017_story_preference` | 2026-11-10 | 故事偏好與劇本讀者頻道：users 新增 story_preference（NOT NULL、預設 'all'）；script_versions 新增 audience（可為空，既有版本不回填） | 新增欄位 |
 | `0018_rpg_turn_revision` | 2026-11-12 | 重新生成與編輯最後一輪：memory_logs 新增 revision（NOT NULL、預設 1）、regen_count（NOT NULL、預設 0）、revising_started_at 與 state_before_json（可為空，不回填）；新增 turn_regenerations；runtime_limits 補 rpg.free_regenerations（只插入缺少的） | 新增欄位與資料表，寫入初始資料 |
 | `0019_adult_declaration` | 2026-11-17 | 全站只限滿 18 歲（adult-only-signup）：users 新增 adult_declared_at（DATETIME2(6)）與 adult_declaration_version（NVARCHAR(40)），皆可為空、不回填、不建索引；`is_adult_at_confirmation` 保留但不再寫入 | 新增欄位 |
+| `0020_safe_mode_hint` | 2026-11-19 | 安全模式開關（safe-mode-toggle）：sessions 新增 safe_hint_at（DATETIME2(6)），可為空、不回填、不建索引；遊戲內提示每個存檔只出現一次的記錄。沒有資料改寫：舊值 `standard` 於讀取時讀作 `adult` | 新增欄位 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1721,3 +1724,4 @@ flowchart TD
 | 2026-11-16 | 文件 | 本文件 | 校對並補充：以 `tests/test_project_db_schema_doc.py` 與 `tests/test_design_docs.py` 確認與 ORM 一致；對照實際的 `project`（唯讀，只查詢版本與結構計數，不讀任何資料列）：`alembic_version` 為 `0017_story_preference`、20 張資料表、234 個欄位、17 個外鍵、`runtime_limits` 16 列，與第 1 節的記載一致；新增第 10.1 節「流程與資料表的對應」（登入與註冊、客服對話）。**沒有結構變更、沒有遷移、沒有套用到 `project`**；`0018_rpg_turn_revision` 仍待備份後套用 | 本文件；`docs/1.0簡報.md` |
 | 2026-11-16 | 文件 | 本文件 | 同步 rpg-turn-revision 的規則修訂（AGENTS.md 第 7 節「玩家重新生成與編輯輸入」，`437a5f5`）：編輯由「一律付費並使免費次數歸零」改為與重新生成共用每回合前 N 次免費、成功才計次、編輯不歸零；修訂 `memory_logs.regen_count`（第 5 節欄位說明，成功的重新生成與編輯都加 1）、`turn_regenerations.is_free`（第 5 節欄位說明，編輯在免費次數內也是免費）、`turn_regenerations.kind`（第 7 節固定值）與 `rpg.free_regenerations`（`runtime_limits` 的初始資料說明）四處的語意。**只是語意說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：欄位型別、預設值與 `0018_rpg_turn_revision` 的內容都不變 | 本文件 |
 | 2026-11-17 | 新增 | 欄位 `users.adult_declared_at`（DATETIME2(6)，可為空）、`users.adult_declaration_version`（NVARCHAR(40)，可為空） | 全站只限滿 18 歲：新使用者在登入頁勾選「我確認已滿 18 歲」的時間與當時的年齡政策版本，只是稽核紀錄、不參與年齡判斷；管理員與升級前的帳號維持空值；`is_adult_at_confirmation` 保留但不再寫入（日後收縮）；`users` 由 36 欄變 38 欄、全庫欄位共 251 個。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0019_adult_declaration` |
+| 2026-11-19 | 新增 | 欄位 `sessions.safe_hint_at`（DATETIME2(6)，可為空） | 安全模式開關：遊戲內「可嘗試關閉安全模式」的提示已出現的時間，每個存檔最多一次（條件式更新保證）；不回填、不建索引、不含任何玩家文字；`sessions` 由 29 欄變 30 欄、全庫欄位共 252 個。沒有資料改寫：玩家偏好、劇本版本與存檔中的舊值 `standard` 於讀取時讀作 `adult`；`sessions.content_tier` 保留並仍於開存檔時寫入，但新版程式不讀它（日後另立 contract change 移除）。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0020_safe_mode_hint` |

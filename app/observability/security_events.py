@@ -64,9 +64,8 @@ ACCOUNT_UNCONFIRMED_PURGED = "account.unconfirmed_purged"
 APPEAL_SUBMITTED = "account.appeal_submitted"
 
 # ---- 內容模式（content-tier-modes）----
-# 事件名稱本身表達玩家切換後的模式；只有事件名稱與內部編號，不帶勾選的內容或其他個資
+# 事件名稱本身表達玩家切換後的模式（兩種：安全模式開 `safe`、安全模式關 `adult`）；只有事件名稱與內部編號，不帶勾選的內容或其他個資
 CONTENT_MODE_SAFE = "account.content_mode.safe"
-CONTENT_MODE_STANDARD = "account.content_mode.standard"
 CONTENT_MODE_ADULT = "account.content_mode.adult"
 
 # ---- 故事偏好（story-preference）----

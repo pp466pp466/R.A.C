@@ -193,8 +193,10 @@ def get_access_policy() -> AccessPolicy:
     return AccessPolicy(
         age_policy=get_age_policy(),
         clock=get_clock(),
-        # 成人模式的部署開關只能以環境設定開啟（預設關閉）；啟動時已驗證過條件（見 app/config.py）
-        adult_mode_enabled=config.content.adult_mode_enabled,
+        # 緊急煞車只能以環境設定啟用（預設未啟用，見 app/config.py 的 SAFE_MODE_FORCED）；啟用時所有生效模式一律是安全模式
+        safe_mode_forced=config.content.safe_mode_forced,
+        # 過渡相容層（safe-mode-toggle 2.5 移除）：舊的三值判定沒有部署層的鎖，只在緊急煞車啟用時關閉
+        adult_mode_enabled=not config.content.safe_mode_forced,
     )
 
 
