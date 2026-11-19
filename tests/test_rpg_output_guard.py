@@ -17,11 +17,11 @@ SAMPLES_PATH = PROJECT_ROOT / "tests" / "fixtures" / "rpg_output_samples.json"
 CHUNK_SIZES = (None, 1, 2, 5, 13)
 
 
-def guard(tier="standard", characters=(), marker=MARKER):
+def guard(tier="adult", characters=(), marker=MARKER):
     return OutputGuard(tier=tier, characters=characters, marker=marker)
 
 
-def run(text, *, tier="standard", characters=(), chunk=None, marker=MARKER):
+def run(text, *, tier="adult", characters=(), chunk=None, marker=MARKER):
     """把文字餵給審查狀態機（`chunk` 為每次餵的字數，None 為整段），回傳 `(釋放的文字, 命中類別, 狀態機)`。"""
     machine = guard(tier, characters, marker)
     released: list[str] = []
@@ -111,7 +111,7 @@ def test_the_held_sentence_before_a_hit_is_never_released():
 
 
 def test_hit_categories_are_lowercase_enumeration_identifiers_only():
-    for text, tier in (("他們發生了性行為。", "safe"), ("她今年十五歲。他們發生了性行為。", "adult"), ("階段是 revealed。", "standard")):
+    for text, tier in (("他們發生了性行為。", "safe"), ("她今年十五歲。他們發生了性行為。", "adult"), ("階段是 revealed。", "adult")):
         _, categories, _ = run(text, tier=tier)
         assert categories and all(re.fullmatch(r"[a-z_]+", category) for category in categories)
 
@@ -124,14 +124,18 @@ def test_a_lone_violence_or_crime_term_passes_and_is_only_noted():
     assert categories == () and released == "警方逮捕了犯下強姦案的嫌犯。" and machine.noted_categories == ("other_concern",)
 
 
-def test_the_standard_mode_blocks_explicit_wording_and_the_adult_mode_does_not():
-    assert run("他們發生了性行為。", tier="standard")[1] == ("tier_mismatch",)
+def test_the_safe_mode_blocks_explicit_wording_and_the_adult_mode_does_not():
+    assert run("他們發生了性行為。", tier="safe")[1] == ("tier_mismatch",)
     assert run("他們發生了性行為。", tier="adult")[1] == ()
 
 
 def test_the_safe_mode_blocks_even_a_suggestion():
     assert run("兩人之間瀰漫著情慾。", tier="safe")[1] == ("tier_mismatch",)
-    assert run("兩人之間瀰漫著情慾。", tier="standard")[1] == ()
+    assert run("兩人之間瀰漫著情慾。", tier="adult")[1] == ()
+
+
+def test_the_legacy_standard_value_is_read_as_the_adult_scale():
+    assert run("他們發生了性行為。", tier="adult")[1] == ()
 
 
 @pytest.mark.parametrize(("text", "category"), [
@@ -175,7 +179,7 @@ def test_an_unknown_age_npc_is_never_blocked_for_the_missing_record_even_in_an_e
 
 
 def test_an_unknown_age_never_blocks_by_itself():
-    assert run("小七低著頭站在一旁。他們之間瀰漫著情慾。", tier="standard", characters=[CharacterAge("小七", None)])[1] == ()
+    assert run("小七低著頭站在一旁。他們之間瀰漫著情慾。", tier="adult", characters=[CharacterAge("小七", None)])[1] == ()
 
 
 def test_names_are_matched_without_regard_to_case_and_width_but_only_within_the_same_paragraph():
@@ -206,7 +210,7 @@ def test_the_minor_cue_and_the_sexual_wording_in_the_same_paragraph_are_bound_ev
 
 def test_a_vague_appearance_description_alone_does_not_block():
     text = "小雅嬌小的身影站在門口，娃娃臉上帶著笑意。他們之間瀰漫著情慾。"
-    assert run(text, tier="standard", characters=[adult("小雅", 25)])[1] == ()
+    assert run(text, tier="adult", characters=[adult("小雅", 25)])[1] == ()
 
 
 def test_an_ordinary_minor_or_child_without_sexual_wording_is_never_blocked():
@@ -229,13 +233,13 @@ def test_the_secret_marker_is_blocked_before_the_sentence_ends_and_across_chunks
 
 
 def test_the_marker_is_found_in_upper_case_and_with_spaces():
-    assert run("識別碼 A1B2C3D4E5F60718293A4B5C。", tier="standard")[1] == (CATEGORY_MARKER_LEAK,)
-    assert run("識別碼 a1b2 c3d4 e5f6 0718 293a 4b5c。", tier="standard")[1] == (CATEGORY_MARKER_LEAK,)
+    assert run("識別碼 A1B2C3D4E5F60718293A4B5C。", tier="adult")[1] == (CATEGORY_MARKER_LEAK,)
+    assert run("識別碼 a1b2 c3d4 e5f6 0718 293a 4b5c。", tier="adult")[1] == (CATEGORY_MARKER_LEAK,)
 
 
 @pytest.mark.parametrize("text", ["她的階段是 Surface。", "他已經 REVEALED 了。", "進入 cracking 階段。", "【/記事簿】出現了。", "【本次行動】"])
 def test_leaked_settings_are_blocked(text):
-    assert run(text, tier="standard")[1] == (CATEGORY_SETTING_LEAK,)
+    assert run(text, tier="adult")[1] == (CATEGORY_SETTING_LEAK,)
 
 
 def test_a_setting_word_split_across_chunks_is_still_caught_early():
@@ -297,7 +301,7 @@ def test_the_sample_set_is_well_formed_and_covers_every_required_group():
     samples = load_samples()
     ids = [sample["id"] for sample in samples]
     assert len(ids) == len(set(ids))
-    assert all(sample["expect"] in ("pass", "block") and sample["tier"] in ("safe", "standard", "adult") and sample["text"] for sample in samples)
+    assert all(sample["expect"] in ("pass", "block") and sample["tier"] in ("safe", "adult") and sample["text"] for sample in samples)
     groups = {sample["group"] for sample in samples}
     assert {"violence", "family", "school", "romance", "crime-news", "minor-record", "minor-text", "cross-sentence", "red-line", "tier", "leak", "known-gap"} <= groups
     assert sum(1 for s in samples if s["expect"] == "pass") >= 20 and sum(1 for s in samples if s["expect"] == "block" and not s.get("known_gap")) >= 20

@@ -8,8 +8,8 @@ Controller 只讀取請求、呼叫 Service、處理登入狀態；確認本人�
 - `POST /api/account/export`：匯出自己的帳號資料與全部對話（本文 `{"format": "json" | "csv"}`），回應是附件下載、禁止快取。
   用 POST 是為了受 CSRF 與來源檢查保護，也不會被預取連結觸發。受限登入狀態（等待刪除）不能匯出：請在申請刪除之前匯出。
 - `GET /api/account/content-mode`、`PUT /api/account/content-mode`：查詢與切換自己的安全模式（`mode` 為 `safe` 或 `adult`）。
-  先過年齡閘門；回應只含偏好、生效模式、各模式是否可選與成人模式沒有啟用的原因，不含生日與年齡區間。
-  切換為成人模式時本文須帶 `confirm_adult` 與 `confirm_rules` 兩項確認（見 `ContentModeService`）。
+  先過年齡閘門；回應只含 `preference`、`effective`、`confirmed`（是否已在目前版本同意）與 `forced`（緊急煞車），不含生日與年齡區間。
+  關閉安全模式（`adult`）時，尚未在目前版本同意者本文須帶 `confirm_rules`（見 `ContentModeService`）；緊急煞車時要求 `adult` 回 403。
 - `GET /api/account/story-preference`、`PUT /api/account/story-preference`：查詢與設定自己的故事偏好（全讀者、男頻、女頻）。
   偏好只影響劇本清單的排序，所以只要求已登入（受限登入狀態一律拒絕），不過年齡閘門；值必須完全等於列舉值，否則 400 與欄位錯誤。
 - `PUT /api/account/nickname`：設定或更改自己的公開暱稱（第一次設定時產生短代號，之後不變）。先過年齡閘門，受限登入狀態不可用；

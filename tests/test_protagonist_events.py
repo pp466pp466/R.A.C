@@ -52,7 +52,7 @@ def test_every_event_is_emitted_and_its_extra_fields_are_all_in_the_log_whitelis
     protagonist_events.log_rejected(user_id=1, stage="start", layer="model", categories=["minor_sexual", "other_concern"])
     protagonist_events.log_review(user_id=1, model="m", verdict="flag", attempt=2)
     protagonist_events.log_review_unavailable(user_id=1, reason="degraded")
-    protagonist_events.log_session_started(user_id=1, tier="standard", anchor="anchored")
+    protagonist_events.log_session_started(user_id=1, tier="adult", anchor="anchored")
     records = capture(caplog)
     assert {record.event for record in records} == set(protagonist_events.EVENT_NAMES)
     standard = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}

@@ -101,7 +101,7 @@ def make_save(session, owner: User, snapshot: dict, *, source=None, turns: int =
 def test_the_json_has_every_version_of_my_scripts_with_all_the_spec_fields(member_session):
     s = member_session
     me = add_user(s, 1)
-    published, draft = make_script(s, me, content_tier="standard", tags=["仙俠", "Fantasy"])
+    published, draft = make_script(s, me, content_tier="adult", tags=["仙俠", "Fantasy"])
     s.commit()
     data = export_json(s, me)
     (script,) = data["scripts"]
@@ -111,7 +111,7 @@ def test_the_json_has_every_version_of_my_scripts_with_all_the_spec_fields(membe
     for key in ("title", "summary", "world_name", "content_tier", "background", "opening", "rules", "tags", "calendar", "ending_mode",
                 "ending_text", "ending_age", "characters", "locations", "milestones", "spec_version", "created_at", "published_at"):
         assert key in first, key
-    assert first["title"] == "青雲問道" and first["content_tier"] == "standard" and first["tags"] == ["仙俠", "Fantasy"]
+    assert first["title"] == "青雲問道" and first["content_tier"] == "adult" and first["tags"] == ["仙俠", "Fantasy"]
     assert first["calendar"] == {"name": "乾歷朝", "start_year": 1200} and first["characters"][0]["name"] == "林曉"
     assert first["published_at"] is not None and second["published_at"] is None and second["title"] == "第二版草稿標題"
 

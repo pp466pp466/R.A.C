@@ -17,7 +17,7 @@ from typing import Any, Sequence
 
 from app.llm.types import LLMContent
 from app.services import rpg_prompt as prompt
-from app.services.content_tier import legacy_parse_tier
+from app.services.content_tier import parse_tier
 from app.services.cs_intents import contains_text
 from app.services.llm_output import SemanticRule
 from app.services.notebook_policy import WINDOW_TURNS, length_of
@@ -78,7 +78,7 @@ def build_capture_system(tier: str, language: str, marker: str) -> str:
     replacements = {
         "<<WINDOW>>": str(WINDOW_TURNS), "<<LANGUAGE>>": prompt.language_instruction(language), "<<MAX_ENTRIES>>": str(MAX_ENTRIES_PER_CAPTURE),
         "<<MAX_CHARS>>": str(MAX_ENTRY_CHARS), "<<USAGE>>": LABEL_USAGE, "<<PREVIOUS>>": LABEL_PREVIOUS, "<<ROOM>>": LABEL_ROOM,
-        "<<BOUNDARY>>": prompt.TIER_BOUNDARIES[legacy_parse_tier(tier)], "<<LABELS>>": "、".join(BLOCK_LABELS), "<<MARKER>>": marker,
+        "<<BOUNDARY>>": prompt.TIER_BOUNDARIES[parse_tier(tier)], "<<LABELS>>": "、".join(BLOCK_LABELS), "<<MARKER>>": marker,
     }
     text = _TEMPLATE
     for placeholder, value in replacements.items():

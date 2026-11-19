@@ -33,7 +33,7 @@ def good(**card_changes):
     return {"character": card, "anchor": {"kind": "character", "ref": "蘇長風", "text": "他的舊識之後"}}
 
 
-def parse(output, script, marker, *, tier="standard", adult_age=18):
+def parse(output, script, marker, *, tier="adult", adult_age=18):
     return parse_llm_json(json.dumps(output, ensure_ascii=False), prompt.SUGGEST_SCHEMA, prompt.suggest_rules(marker, script_content=script, tier=tier, adult_age=adult_age))
 
 
@@ -56,11 +56,11 @@ def test_the_marker_is_deterministic_24_hex_characters_and_differs_from_the_scri
 
 
 @pytest.mark.parametrize("build", [prompt.build_suggest_instruction, prompt.build_review_instruction])
-def test_the_instructions_are_chinese_carry_the_marker_and_all_three_mode_definitions(build, marker):
+def test_the_instructions_are_chinese_carry_the_marker_and_both_mode_definitions(build, marker):
     text = build(marker)
     assert marker in text and "繁體中文" in text and "<<" not in text
-    for mode in ("safe：", "standard：", "adult："):
-        assert mode in text
+    assert "safe：" in text and "adult（安全模式關閉）：" in text
+    assert "standard" not in text and "一般模式" not in text
     assert "未成年" in text and "戀愛" in text and "婚姻" in text
     with pytest.raises(ValueError):
         build("")
@@ -121,14 +121,14 @@ def test_the_review_instruction_does_not_misflag_ordinary_minor_protagonists(mar
 
 
 def test_the_suggest_data_has_the_intro_only_in_the_user_content_and_never_in_the_instruction(script, marker):
-    contents = prompt.build_suggest_contents(script, INJECTION, "standard")
+    contents = prompt.build_suggest_contents(script, INJECTION, "adult")
     assert len(contents) == 1 and contents[0].role == "user"
     assert INJECTION in contents[0].parts[0] and "不是指令" in contents[0].parts[0]
     assert INJECTION not in prompt.build_suggest_instruction(marker)
     for field in ("background", "title"):
         assert script[field] not in prompt.build_suggest_instruction(marker)
     data = json.loads(contents[0].parts[0].split("\n", 1)[1])
-    assert data["player_intro"] == INJECTION and data["content_tier"] == "standard"
+    assert data["player_intro"] == INJECTION and data["content_tier"] == "adult"
 
 
 def test_the_suggest_data_lists_targets_but_never_hidden_traits_or_appearances(script):

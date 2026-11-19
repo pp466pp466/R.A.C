@@ -195,9 +195,6 @@ def get_access_policy() -> AccessPolicy:
         clock=get_clock(),
         # 緊急煞車只能以環境設定啟用（預設未啟用，見 app/config.py 的 SAFE_MODE_FORCED）；啟用時所有生效模式一律是安全模式
         safe_mode_forced=config.content.safe_mode_forced,
-        # 過渡相容層（safe-mode-toggle 2.5 移除）：舊的三值判定維持原本的預設（成年玩家的上限是一般模式），
-        # 不再有環境開關可以開啟它；兩種模式的新判定是 effective_mode，不經過這裡
-        adult_mode_enabled=False,
     )
 
 

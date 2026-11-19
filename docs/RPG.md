@@ -1,6 +1,6 @@
 # 開放世界文字 RPG 模組：延後事項與設計方向
 
-> 注意（2026-11-18）：AGENTS.md 已於 2026-11-17 修訂——**全站只限滿 18 歲**（不再有 13 至 17 歲可使用但固定安全模式的玩家）、內容模式改為「安全模式開（預設）／關」兩種，關閉安全模式不以供應商書面許可、法務意見或付費模型為前提，部署層開關改為緊急煞車。本文件中關於 13 至 17 歲、三種內容模式（L0 至 L3 或 safe／standard／adult）與成人模式須取得供應商許可的敘述，是**當時的決定紀錄**；現行規範以 AGENTS.md 為準，程式的跟進見 `adult-only-signup`（已實作年齡規則）與 `safe-mode-toggle`（模式數量與開關，尚未實作）。
+> 注意（2026-11-18）：AGENTS.md 已於 2026-11-17 修訂——**全站只限滿 18 歲**（不再有 13 至 17 歲可使用但固定安全模式的玩家）、內容模式改為「安全模式開（預設）／關」兩種，關閉安全模式不以供應商書面許可、法務意見或付費模型為前提，部署層開關改為緊急煞車。本文件中關於 13 至 17 歲、三種內容模式（L0 至 L3 或 safe／standard／adult）與成人模式須取得供應商許可的敘述，是**當時的決定紀錄**；現行規範以 AGENTS.md 為準，程式的跟進見 `adult-only-signup`（已實作年齡規則）與 `safe-mode-toggle`（2026-11-19 起：A 批第 1 組已實作兩種模式、生效模式現算、緊急煞車、內容模式 API 與遷移 `0020`；第 2 組已實作目錄全可見、開存檔不再依模式拒絕、存檔不釘住模式與審查尺度只有兩段；個人頁開關、目錄通知、創作頁綁定與遊戲內提示尚未實作，見 7.18）。
 > 注意（2026-11-02）：AGENTS.md 第 10、11 節的年齡確認已修訂——生日與年齡區間改在 Google 首次登入**之後**才填，沒填之前什麼都不能做，帳號最多保留 24 小時；補填時發現未滿 13 歲，立即抹除帳號與個資。下文 R-15.4 與 T-10 對年齡確認的描述（註冊時填寫、未滿 13 歲不得註冊）是修訂前的實作狀態；change ① `google-first-login` 已實作（登入後才填、24 小時期限、補填時未滿 13 歲立即抹除），以現行程式與 `docs/帳號與安全-auth-security.md` 為準。
 
 > 注意（2026-11-03）：AGENTS.md 第 5、7、10、11 節已修訂，與本文件的下列部分不同，**以 AGENTS.md 為準**，這些章節待 RC-1、RC-2 設計時改寫（**第 2 章資料模型已於 2026-11-03 依 RC-1 的實作改寫**）：①RU-1 已決定為 (c) 玩家創作並公開分享劇本（先審後發），新增 RC-7、RC-8（見 6.2）；②內容分級由 `sexual_content_level` 0 至 3 改為 `content_tier` 的 safe／standard／adult 三種模式（成人模式是玩家個人頁面開關；成年確認改為切換時勾選「我確定已滿 18 歲」與安全規範，其餘解鎖條件不變），R-15 與 G-13 的等級描述以此為準；③R-05 的「不存在死亡或結局終止狀態」只適用平台預設與首發劇本，玩家劇本可自訂結局，到結局存檔變「已完結」；④角色年齡是錨定事實，成年角色不得被改成未成年；⑤劇本屬個資，存檔開局時複製劇本內容。決定紀錄見 [report.md](report.md) 的 U-20 至 U-26；訂閱與 token 幣（U-27）尚未探索。
@@ -77,7 +77,7 @@ spec_report 主題三的 `scripts`、`sessions`、`memory_logs` 對照 AGENTS.md
 | G-10 | 沒有「玩家層」的個性覆蓋（v1.1） | R-14：個性是唯一跨存檔重複使用的內容，玩家修正後只存差異 | 新增 `user_persona_overrides`：`(user_id, trait_key)` 唯一、`overrides_json`、`version`。**只用於個性**，其餘內容一律留在存檔層 |
 | G-11 | 沒有全站性格原型庫（v1.1） | R-14：「AI 的存檔」，玩家唯讀 | 新增獨立資料表 `persona_prototypes`：`trait_key` 唯一（純文字標準化欄位）、特質定義、`status`、`version`。**不含任何使用者外鍵**。不用假使用者擁有 `sessions` 的作法 |
 | G-12 | 沒有原型草案佇列（v1.1） | R-14：AI 擬草案、管理員核可才上架 | 新增 `persona_drafts`：草案內容、來源 `user_id`、`status`（待審、核可、退回、逾期）。含玩家衍生文字，視為個資；退回或逾期清除，帳號刪除時一併刪除 |
-| G-13 | `sessions` 沒有內容分級（v1.1） | R-15：分級以旗標存在存檔上 | 新增 `sessions.content_tier`（`safe`／`standard`／`adult`；2026-11-03 起取代原本的 `sexual_content_level` 0 至 3，見 AGENTS.md 第 7 節）。用純欄位而不放 JSON，因為會用於統計與稽核。年齡確認欄位屬共用層（見 RA-10），不在本模組的 migration |
+| G-13 | `sessions` 沒有內容分級（v1.1） | R-15：分級以旗標存在存檔上 | 新增 `sessions.content_tier`（`safe`／`standard`／`adult`；2026-11-03 起取代原本的 `sexual_content_level` 0 至 3，見 AGENTS.md 第 7 節；**safe-mode-toggle 起只有 `safe`／`adult` 兩值，舊值 `standard` 讀作 `adult`，且新版程式只寫入、不讀取這個欄位，存檔的生效模式每個回合現算**）。用純欄位而不放 JSON，因為會用於統計與稽核。年齡確認欄位屬共用層（見 RA-10），不在本模組的 migration |
 | G-14 | 沒有地方存長期記憶（v1.2） | R-17：記事簿，每個存檔一本 | `sessions` 新增 `notebook_text`（`UnicodeText`，預設空字串）、`notebook_version`（整數，預設 1，玩家編輯與 AI 追加的衝突偵測）、`notebook_upto_turn`（整數，預設 0，已處理到的 boundary）。容量不存，由會員等級推得（程式常數，見 R-17.2）。純文字欄位，不放 JSON、不做內容篩選 |
 
 ### 2.2 建議的資料模型
@@ -110,7 +110,7 @@ erDiagram
         string title
         string summary
         string world_name
-        string content_tier "作者宣告 safe standard adult"
+        string content_tier "safe 為綁定安全模式 adult 為未綁定 舊值 standard 讀作 adult"
         string background
         string opening
         string rules "狀態轉移規則"
@@ -144,7 +144,7 @@ erDiagram
         int notebook_version "編輯衝突偵測"
         int notebook_upto_turn "已處理到的 boundary"
         int version "世界狀態的版本號"
-        string content_tier "開存檔當下的生效模式 safe standard adult"
+        string content_tier "開存檔當下的生效模式 新版不讀取 存檔的生效模式現算"
         string status "active 或 ended 已完結不可恢復"
         boolean is_archived "玩家自行封存 與完結無關"
         datetime last_active_at "期限清除的依據"
@@ -929,7 +929,7 @@ flowchart TB
 | 規則層結果 | 輸出的處理 |
 |---|---|
 | REJECT（未成年、非自願、真人名義） | 擋 |
-| FLAG `tier_mismatch`（安全模式出現性詞、一般模式出現露骨詞） | 擋（界線不明確取保守） |
+| FLAG `tier_mismatch`（安全模式出現性詞；**safe-mode-toggle 起沒有一般模式，安全關不因性內容產生 `tier_mismatch`**） | 擋（界線不明確取保守） |
 | FLAG `minor_suspected`、`real_person_suspected` | 擋 |
 | FLAG `other_concern`（單獨的暴力或強姦用語） | 放行並記錄類別（黑暗題材是賣點） |
 
@@ -1400,3 +1400,14 @@ flowchart LR
 - **與 RC-2c（`rpg-turn-revision`）的銜接**（以下是 RC-3b 當時對 2c 的預期；**2c 已實作，實際做法見 7.8.1：①以 `catchUp` 的 `fromSeq` 重讀最後一輪並以 `revision` 偵測覆寫；②預扣鍵沿用 `attempt`、不加 `revision`，在途紀錄加 `kind` 與 `expected_revision`；③按鈕與名稱約定照做；④理由 Modal 照做；⑤**編輯不換新的 `client_msg_id`**，而是獨立的 `edit/stream` 端點，冪等靠 `expected_revision` 與認領**）：①`since_seq` 只往後讀，後端一旦允許取代同序號的內容（重新生成、編輯輸入），增量補齊不會自己發現，2c 要在操作成功後重讀最後一輪並覆寫快取；②在途回合目前以 `client_msg_id` 辨識，2c 的預扣鍵加 `revision`（7.15）時要一併放進在途紀錄；③按鈕放在時間軸最後一輪的氣泡下方，新名稱要同步 `game-contract.js`、`session.html` 標頭與 `game.js` 的回傳三處；④理由對話框是自製 Modal（分類加 5 至 50 字），理由不進 IndexedDB 與主控台；⑤RPG 後端對「相同 `client_msg_id`、不同行動」不回 409 `message_id_reused`，而是重播已存的結果（`tests/test_game_screen_flow.py` 已固定這個行為），2c 設計編輯輸入時要用新的編號。
 - **實作中發現、沒有處理的事**：後端 `turn_view` 對被擋與中斷的回合仍回玩家自己的 `action` 文字（前端一律丟掉，不顯示也不快取）；帳號閘門非空時快照與回合端點同樣拒絕，所以「歷史可讀」只對先前已快取的內容成立。
 - **不做**：重新生成與編輯輸入（RC-2c，之後已由 `rpg-turn-revision` 實作）、錢包記錄頁與儲值（`player-hub`）、完整目錄（RC-8）、時間軸虛擬捲動、離開頁面時詢問未儲存的記事簿草稿、離線時開啟記事簿（全文刻意不進本機暫存）。
+
+### 7.18 `safe-mode-toggle` 的實作結果（2026-11-19，A 批：第 1、2 組）　**[已實作；個人頁開關、目錄通知、創作頁綁定與遊戲內提示尚未實作]**
+
+規範依據：AGENTS.md 第 7、10、11 節（2026-11-17 修訂）。這一節只記實作結果；決定與備選方案見 `openspec/changes/safe-mode-toggle/design.md`。
+
+- **兩種內容模式**：`safe`（安全模式開，預設）與 `adult`（安全模式關）。舊值 `standard` 一律讀作 `adult`（`content_tier.parse_tier`），既有的偏好、劇本版本與存檔**不改寫**（已發佈的劇本版本不可變）；系統不再寫入 `standard`，字面值只定義在 `app/services/content_tier.py`，由 `tests/architecture/test_no_legacy_tier_checks.py` 守門。
+- **生效模式每次現算**（`AccessPolicy.effective_mode`／`save_mode`）：玩家偏好（缺少目前版本的同意視為 `safe`）、劇本是否綁定安全模式（`safe`＝綁定；取自**複製進存檔的劇本**，劇本日後的下架或改版不影響進行中的存檔）、緊急煞車 `SAFE_MODE_FORCED` 三者取最保守者；沒有依年齡的上限，管理員與各會員等級不豁免。**存檔不釘住模式**：玩家在個人頁調整後，下一個回合（含重新生成、編輯與第 0 幕）、記事簿的規則層與存檔清單的模式都用新值；`sessions.content_tier` 仍於開存檔時寫入，但新版程式不讀它。
+- **目錄與開存檔**：`GET /api/sessions/catalog` 回傳**全部**上架版本（不依模式篩選）；卡片的 `content_tier` 為 `safe`（綁定）或 `adult`（未綁定，含舊值）；回應的 `content_mode` 為 `{effective, forced}`（不含 `is_adult`、生日與年齡）。劇本的內容模式**不是拒絕開存檔的理由**：`content_tier_restricted` 與 `ContentTierRestricted` 已移除；開存檔、創角資料與主角生成預覽用 `effective_mode(玩家, 劇本綁定)` 當尺度。`GET /api/sessions` 與存檔摘要的 `content_tier` 是現算的生效模式。
+- **審查尺度只有兩段**：`rpg_prompt.TIER_BOUNDARIES`、輸出審查、記事簿抓取、劇本審查與主角審查的提示詞都只有安全開與安全關；`script_rules` 只在綁定安全模式（`safe`）時因性內容產生 `tier_mismatch`，未綁定的劇本不因性內容產生；未綁定劇本中年齡小於 18 的角色出現性相關詞維持 `flag minor_suspected`。四類絕對禁止項不論模式一律執行（規則層與審查層，不依賴模型拒絕）。
+- **劇本內容**：`validate_script` 不再有 `max_tier` 參數，`content_tier` 只收 `safe`／`adult`／舊值 `standard`（標準化為 `adult`，只對新儲存的內容標準化，既有版本不重算雜湊）；作者沒有依年齡而異的內容上限。內建劇本「青雲問道」改為未綁定（`content_tier` 為 `adult`，內容本身不動），`flask seed-scripts` 新增第 2 版取代第 1 版，已開的存檔不受影響。
+- **尚未實作（同一個 change 後續各組）**：`/account` 的開關與同意 Modal、條款與隱私權政策（第 3 組）；目錄點選未綁定劇本的詢問、卡片綁定標籤、創作頁「綁定安全模式」勾選框（第 4 組；創作頁目前仍由 `max_content_tier`（固定 `adult`）與下拉選單運作）；遊戲內「可嘗試關閉安全模式」的提示（第 5 組）；部署與驗收（第 6 組）。

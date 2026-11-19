@@ -81,13 +81,6 @@ class AgeRestricted(Forbidden):
     default_message = "您的年齡目前不符合使用這項功能的規定。"
 
 
-class ContentTierRestricted(Forbidden):
-    """劇本宣告的內容模式高於玩家目前生效的模式（403）：不開出存檔。"""
-
-    code = "content_tier_restricted"
-    default_message = "這個劇本的內容模式高於您目前的設定，無法開始。"
-
-
 class SafeModeForced(Forbidden):
     """緊急煞車啟用中（403）：全站暫時只提供安全模式，玩家不能關閉安全模式（切回安全模式仍可）。"""
 

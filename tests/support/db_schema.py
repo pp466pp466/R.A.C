@@ -163,15 +163,18 @@ def enumerations() -> dict[str, tuple[str, ...]]:
     )
     from app.services import cs_intents
     from app.services.age_policy import DEFAULT_AGE_POLICY
+    from app.services.content_tier import LEGACY_TIER_STANDARD
     from app.services.runtime_limits import LIMIT_KEYS
 
+    # 資料庫裡可能儲存的內容模式值：兩種現行模式，加上遷移之前寫入、不改寫的舊值（讀取時讀作 adult）
+    STORED_CONTENT_TIERS = (*user.CONTENT_MODES, LEGACY_TIER_STANDARD)
     ledger_statuses = tuple(value for key, value in vars(llm_call_log).items() if key.startswith("STATUS_") and isinstance(value, str))
     return {
         "users.role": user.ROLES,
         "users.member_tier": (user.TIER_FREE, user.TIER_PLUS, user.TIER_VIP),
         "users.status": (user.STATUS_ACTIVE, user.STATUS_SUSPENDED, user.STATUS_DELETION_PENDING),
         "users.lock_reason": lock_strike.STRIKE_KINDS,
-        "users.content_tier_preference": user.CONTENT_TIERS,
+        "users.content_tier_preference": STORED_CONTENT_TIERS,
         "users.story_preference": user.AUDIENCES,
         "users.age_range": tuple(age_range.code for age_range in DEFAULT_AGE_POLICY.ranges),
         "users.adult_confirm_method": (user.ADULT_CONFIRM_SELF_DECLARED,),
@@ -191,14 +194,14 @@ def enumerations() -> dict[str, tuple[str, ...]]:
         "alert_states.severity": alert_state.ALERT_SEVERITIES,
         "runtime_limits.key": tuple(LIMIT_KEYS),
         "script_versions.status": script.VERSION_STATUSES,
-        "script_versions.content_tier": user.CONTENT_TIERS,
+        "script_versions.content_tier": STORED_CONTENT_TIERS,
         "script_versions.audience": user.AUDIENCES,
         "script_versions.ending_mode": script.ENDING_MODES,
         "script_versions.review_verdict": script.REVIEW_VERDICTS,
         "script_versions.review_categories_json": script.REVIEW_CATEGORIES,
         "script_submissions.outcome": script_submission.SUBMISSION_OUTCOMES,
         "script_submissions.categories_json": script.REVIEW_CATEGORIES,
-        "sessions.content_tier": user.CONTENT_TIERS,
+        "sessions.content_tier": STORED_CONTENT_TIERS,
         "sessions.status": rpg_session.SESSION_STATUSES,
         "sessions.opening_state": rpg_session.OPENING_STATES,
         "memory_logs.turn_status": rpg_session.TURN_STATUSES,

@@ -174,7 +174,7 @@ def test_ordinary_links_pass_for_minors_and_romance_passes_between_adults(member
 ])
 def test_an_explicit_red_line_in_the_card_is_a_422_with_categories_only_and_no_model_calls(member_session, changes):
     reviews, protagonist_reviews = PassingReviews(), PassingProtagonistReviews()
-    service, _ = service_for(member_session, adult_mode=True, reviews=reviews, protagonist_reviews=protagonist_reviews)
+    service, _ = service_for(member_session, reviews=reviews, protagonist_reviews=protagonist_reviews)
     adult = player(member_session, content_tier_preference="adult", adult_confirmed_at=None)
     with pytest.raises(ProtagonistRejected) as caught:
         open_save(service, adult, script(member_session), **start_kwargs(name="林舟", age=30, **changes))

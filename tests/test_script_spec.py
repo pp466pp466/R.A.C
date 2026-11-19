@@ -18,14 +18,14 @@ from tests.support.script_data import valid
 SENTINEL = "ZZ不該出現的使用者輸入ZZ"
 
 
-def errors_of(raw, *, max_tier="adult", **kwargs) -> dict[str, str]:
+def errors_of(raw, **kwargs) -> dict[str, str]:
     with pytest.raises(ValidationError) as caught:
-        validate_script(raw, max_tier=max_tier, **kwargs)
+        validate_script(raw, **kwargs)
     return caught.value.fields
 
 
-def check(raw, *, max_tier="adult", **kwargs):
-    return validate_script(raw, max_tier=max_tier, **kwargs).content
+def check(raw, **kwargs):
+    return validate_script(raw, **kwargs).content
 
 
 def char(**changes) -> dict:
@@ -37,7 +37,7 @@ def char(**changes) -> dict:
 # ---- 規格版本與驗證結果 ---------------------------------------------------------------
 
 def test_valid_content_returns_normalized_content_with_the_spec_version_and_a_hash():
-    result = validate_script(valid(), max_tier="standard")
+    result = validate_script(valid())
     assert result.spec_version == SPEC_VERSION == 1
     assert result.content["spec_version"] == 1
     assert result.content["title"] == "青雲問道"
@@ -46,14 +46,14 @@ def test_valid_content_returns_normalized_content_with_the_spec_version_and_a_ha
 
 
 def test_validating_the_same_content_twice_gives_identical_output():
-    first, second = validate_script(valid(), max_tier="safe"), validate_script(valid(), max_tier="safe")
+    first, second = validate_script(valid()), validate_script(valid())
     assert first == second
 
 
 def test_the_input_is_not_modified():
     raw = valid()
     snapshot = copy.deepcopy(raw)
-    validate_script(raw, max_tier="safe")
+    validate_script(raw)
     assert raw == snapshot
 
 
@@ -88,15 +88,16 @@ def test_content_that_is_not_a_mapping_is_rejected():
 
 
 def test_normalized_content_can_be_validated_again_and_only_version_1_is_accepted():
-    result = validate_script(valid(), max_tier="safe")
-    assert validate_script(result.content, max_tier="safe") == result            # 冪等
+    result = validate_script(valid())
+    assert validate_script(result.content) == result            # 冪等
     for version in (2, 0, "1", 1.0, True):
         assert "spec_version" in errors_of({**result.content, "spec_version": version})
 
 
-def test_an_unknown_author_tier_is_a_programming_error():
-    with pytest.raises(ValueError):
-        validate_script(valid(), max_tier="mature")
+def test_there_is_no_author_cap_parameter_any_more():
+    """全站只限滿 18 歲，沒有依年齡而異的作者上限：驗證函式不再接受 max_tier。"""
+    with pytest.raises(TypeError):
+        validate_script(valid(), **{"max_tier": "adult"})
 
 
 # ---- 目錄與設定欄位 -------------------------------------------------------------------
@@ -444,53 +445,59 @@ def heavy(extra: int) -> dict:
 
 
 def test_the_base_content_for_the_total_tests_is_7952_characters():
-    result = validate_script(heavy(0), max_tier="safe")
+    result = validate_script(heavy(0))
     assert result.total_chars == 7952
 
 
 def test_exactly_8000_characters_pass():
-    result = validate_script(heavy(48), max_tier="safe")
+    result = validate_script(heavy(48))
     assert result.total_chars == TOTAL_CHARS_MAX == 8000
 
 
 def test_8001_characters_fail_at_total_with_both_numbers_in_the_message():
-    fields = errors_of(heavy(49), max_tier="safe")
+    fields = errors_of(heavy(49))
     assert set(fields) == {"total"}
     assert "8001" in fields["total"] and "8000" in fields["total"]
 
 
 def test_8200_characters_fail_at_total():
-    assert "8200" in errors_of(heavy(248), max_tier="safe")["total"]
+    assert "8200" in errors_of(heavy(248))["total"]
 
 
 def test_numbers_do_not_count_toward_the_total():
-    small = validate_script(valid(), max_tier="safe")
+    small = validate_script(valid())
     bigger_numbers = valid()
     bigger_numbers["characters"][0]["age"] = 9999
     bigger_numbers["calendar"]["start_year"] = 99999
-    assert validate_script(bigger_numbers, max_tier="safe").total_chars == small.total_chars
+    assert validate_script(bigger_numbers).total_chars == small.total_chars
 
 
 def test_duplicates_that_are_dropped_do_not_count():
-    with_duplicates = validate_script(valid(tags=["仙俠", "仙俠"], locations=["山莊", "山莊"]), max_tier="safe")
-    without = validate_script(valid(tags=["仙俠"], locations=["山莊"]), max_tier="safe")
+    with_duplicates = validate_script(valid(tags=["仙俠", "仙俠"], locations=["山莊", "山莊"]))
+    without = validate_script(valid(tags=["仙俠"], locations=["山莊"]))
     assert with_duplicates.total_chars == without.total_chars
 
 
-# ---- 宣告分級不得高於作者的上限 ----------------------------------------------------------
+# ---- 內容模式：safe（綁定安全模式）、adult（未綁定），舊值 standard 標準化為 adult ------------------------
 
-@pytest.mark.parametrize(
-    ("cap", "declared", "accepted"),
-    [("safe", "safe", True), ("safe", "standard", False), ("safe", "adult", False),
-     ("standard", "safe", True), ("standard", "standard", True), ("standard", "adult", False),
-     ("adult", "safe", True), ("adult", "standard", True), ("adult", "adult", True)],
-)
-def test_the_declared_tier_may_not_exceed_the_authors_cap(cap, declared, accepted):
-    raw = valid(content_tier=declared)
-    if accepted:
-        assert check(raw, max_tier=cap)["content_tier"] == declared
-    else:
-        assert set(errors_of(raw, max_tier=cap)) == {"content_tier"}
+@pytest.mark.parametrize(("declared", "stored"), [("safe", "safe"), ("adult", "adult"), ("standard", "adult")])
+def test_the_declared_tier_is_safe_or_adult_and_the_legacy_standard_is_normalized_to_adult(declared, stored):
+    assert check(valid(content_tier=declared))["content_tier"] == stored
+
+
+@pytest.mark.parametrize("declared", ["mature", "SAFE", "Standard", " adult", 1, True, ["safe"]])
+def test_any_other_declared_tier_is_rejected_naming_only_the_field(declared):
+    fields = errors_of(valid(content_tier=declared))
+    assert set(fields) == {"content_tier"} and "mature" not in fields["content_tier"]
+
+
+def test_a_missing_or_empty_declared_tier_is_required():
+    assert set(errors_of(valid(content_tier=...))) == {"content_tier"}
+    assert set(errors_of(valid(content_tier=""))) == {"content_tier"}
+
+
+def test_a_legacy_standard_version_validates_to_the_same_hash_as_the_same_content_declared_adult():
+    assert validate_script(valid(content_tier="standard")).content_hash == validate_script(valid(content_tier="adult")).content_hash
 
 
 # ---- 錯誤格式 -------------------------------------------------------------------------
@@ -529,7 +536,7 @@ def test_messages_are_traditional_chinese_and_never_echo_the_input():
 
 def test_the_validation_error_carries_a_general_message_and_the_fields():
     with pytest.raises(ValidationError) as caught:
-        validate_script(valid(title=""), max_tier="safe")
+        validate_script(valid(title=""))
     assert caught.value.code == "validation_error"
     assert caught.value.fields and "title" in caught.value.fields
 
@@ -552,13 +559,13 @@ def test_the_hash_does_not_depend_on_key_order_or_surrounding_whitespace():
     reordered = dict(reversed(list(raw.items())))
     reordered["title"] = "  青雲問道\n"
     reordered["characters"] = [dict(reversed(list(raw["characters"][0].items())))]
-    assert validate_script(reordered, max_tier="safe").content_hash == validate_script(raw, max_tier="safe").content_hash
+    assert validate_script(reordered).content_hash == validate_script(raw).content_hash
 
 
 def test_the_hash_is_the_sha256_of_the_canonical_json():
     import hashlib
 
-    content = check(valid(), max_tier="safe")
+    content = check(valid())
     canonical = json.dumps(content, sort_keys=True, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     assert hash_content(content) == hashlib.sha256(canonical).hexdigest()
 
@@ -574,19 +581,19 @@ def test_the_hash_is_the_sha256_of_the_canonical_json():
     ],
 )
 def test_any_substantive_change_changes_the_hash(change):
-    base = validate_script(valid(), max_tier="adult").content_hash
-    assert validate_script(valid(**change), max_tier="adult").content_hash != base
+    base = validate_script(valid()).content_hash
+    assert validate_script(valid(**change)).content_hash != base
 
 
 def test_the_order_of_list_items_is_part_of_the_content():
     first = valid(locations=["甲地", "乙地"])
     second = valid(locations=["乙地", "甲地"])
-    assert validate_script(first, max_tier="safe").content_hash != validate_script(second, max_tier="safe").content_hash
+    assert validate_script(first).content_hash != validate_script(second).content_hash
 
 
 def test_a_json_round_trip_does_not_change_the_hash():
-    result = validate_script(valid(), max_tier="safe")
-    again = validate_script(json.loads(json.dumps(result.content, ensure_ascii=False)), max_tier="safe")
+    result = validate_script(valid())
+    again = validate_script(json.loads(json.dumps(result.content, ensure_ascii=False)))
     assert again.content_hash == result.content_hash and again.content == result.content
 
 
@@ -596,7 +603,7 @@ def test_reading_the_json_columns_back_from_either_database_gives_the_same_hash(
     result = validate_script(valid(milestones=[
         {"title": "宗門大測", "trigger": {"kind": "age", "value": 20}},
         {"title": "收徒大典", "note": "年度盛事", "trigger": {"kind": "year", "value": 1215}},
-    ]), max_tier="safe")
+    ]))
     content = result.content
     script = Script()
     member_session.add(script)
@@ -618,7 +625,7 @@ def test_reading_the_json_columns_back_from_either_database_gives_the_same_hash(
         "calendar": {"name": stored.calendar_name, "start_year": stored.calendar_start_year}, "ending_mode": stored.ending_mode,
         "characters": stored.characters_json, "locations": stored.locations_json, "milestones": stored.milestones_json,
     }
-    assert validate_script(rebuilt, max_tier="safe").content_hash == result.content_hash
+    assert validate_script(rebuilt).content_hash == result.content_hash
 
 
 # ---- 玩家主角與劇本角色共用同一套角色驗證（rpg-protagonist「與劇本角色同一套規則」）--------------------------
@@ -628,7 +635,7 @@ def _as_script_character(raw) -> tuple[dict | None, dict[str, str]]:
     content = valid()
     content["characters"] = [raw]
     try:
-        return validate_script(content, max_tier="adult").content["characters"][0], {}
+        return validate_script(content).content["characters"][0], {}
     except ValidationError as exc:
         return None, {
             key.replace("characters[0]", "protagonist", 1): message
@@ -723,28 +730,28 @@ PRE_AUDIENCE_HASH = "c329c48c22e7c8107bcc49c84b4af9cea5b688e34a2e305986b4d0a394f
 
 
 def test_existing_content_keeps_its_hash_bit_for_bit_after_the_audience_field_was_added():
-    result = validate_script(PRE_AUDIENCE_CONTENT, max_tier="adult")
+    result = validate_script(PRE_AUDIENCE_CONTENT)
     assert result.content_hash == PRE_AUDIENCE_HASH
     assert "audience" not in result.content
 
 
 @pytest.mark.parametrize("given", [None, "", "all"])
 def test_a_missing_empty_or_all_audience_leaves_the_content_and_hash_exactly_as_without_the_field(given):
-    base = validate_script(valid(), max_tier="adult")
+    base = validate_script(valid())
     raw = valid()
     raw["audience"] = given
-    result = validate_script(raw, max_tier="adult")
-    assert result.content == base.content and result.content_hash == base.content_hash == validate_script(valid(audience=given), max_tier="adult").content_hash
+    result = validate_script(raw)
+    assert result.content == base.content and result.content_hash == base.content_hash == validate_script(valid(audience=given)).content_hash
     assert "audience" not in result.content
 
 
 @pytest.mark.parametrize("channel", ["male", "female"])
 def test_a_male_or_female_audience_is_kept_and_changes_the_hash(channel):
-    base = validate_script(valid(), max_tier="adult")
-    result = validate_script(valid(audience=channel), max_tier="adult")
+    base = validate_script(valid())
+    result = validate_script(valid(audience=channel))
     assert result.content["audience"] == channel
     assert result.content_hash != base.content_hash
-    assert result.content_hash != validate_script(valid(audience="female" if channel == "male" else "male"), max_tier="adult").content_hash
+    assert result.content_hash != validate_script(valid(audience="female" if channel == "male" else "male")).content_hash
     assert {k: v for k, v in result.content.items() if k != "audience"} == base.content
 
 
@@ -757,15 +764,15 @@ def test_an_invalid_audience_is_reported_on_the_audience_field_without_echoing_t
 
 @pytest.mark.parametrize("channel", [None, "all", "male", "female"])
 def test_validating_normalized_content_again_is_idempotent_with_the_audience_field(channel):
-    first = validate_script(valid(audience=channel), max_tier="adult")
-    again = validate_script(json.loads(json.dumps(first.content, ensure_ascii=False)), max_tier="adult")
+    first = validate_script(valid(audience=channel))
+    again = validate_script(json.loads(json.dumps(first.content, ensure_ascii=False)))
     assert again.content == first.content and again.content_hash == first.content_hash
 
 
 def test_the_audience_does_not_count_toward_the_total_characters():
-    base = validate_script(valid(), max_tier="adult")
+    base = validate_script(valid())
     for channel in ("male", "female"):
-        assert validate_script(valid(audience=channel), max_tier="adult").total_chars == base.total_chars
+        assert validate_script(valid(audience=channel)).total_chars == base.total_chars
 
 
 def test_an_invalid_audience_is_reported_together_with_other_errors():

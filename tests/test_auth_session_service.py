@@ -226,7 +226,7 @@ def test_verifying_the_age_touches_nobody_else(member_session):
 
 
 def test_the_stored_adult_flag_is_only_a_record_and_decides_nothing(member_session):
-    """把「確認當時是否成年」改成與生日矛盾的值：年齡群組與內容上限仍由生日當下計算。"""
+    """把「確認當時是否成年」改成與生日矛盾的值：年齡群組仍由生日當下計算，這個紀錄不參與任何判斷（生效模式也不看年齡）。"""
     from app.services.access_policy import AccessPolicy
     from tests.support.age import TODAY_UTC
 
@@ -234,7 +234,7 @@ def test_the_stored_adult_flag_is_only_a_record_and_decides_nothing(member_sessi
     service = make_auth_service(member_session)
     current = service.resolve_session(user.id, 1)
     assert service.profile(current)["age_group"] == "minor"
-    assert AccessPolicy(clock=lambda: TODAY_UTC).content_access(current).age_cap == "safe"
+    assert AccessPolicy(clock=lambda: TODAY_UTC).effective_mode(current) == "safe"           # 偏好預設 safe，與紀錄和年齡無關
 
 
 # ---- 變更密碼 -----------------------------------------------------------------

@@ -85,7 +85,7 @@ class ScriptSubmissionService:
             raise SubmissionLimit(retry_after=max(1, int((end - now).total_seconds())))
 
         content = self._scripts.content_of(version)
-        validate_script(content, max_tier=self._policy.author_content_cap(current))      # 規格不變；上限只會隨年齡變寬鬆
+        validate_script(content)                                                         # 規格不變（全站只限滿 18 歲，沒有依年齡的上限）
         rules = check_rules(content, tier=version.content_tier, adult_age=self._policy.adult_age)
         if rules.verdict == REVIEW_REJECT:
             self._reject(user.id, user.public_id, "rules", rules.categories, now)

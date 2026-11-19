@@ -513,11 +513,11 @@ def test_player_text_stays_in_the_data_blocks_and_never_in_the_system_instructio
     world.set_notebook("玩家寫的獨特記事簿內容")
     world.complete(11)
     world.kit.provider.script(Step(reply("設定甲。")))
-    world.run(content_tier="standard")
+    world.run(content_tier="adult")
     request = world.kit.provider.calls[0]
     for secret in ("玩家寫的獨特記事簿內容", "行動3", "劇情7"):
         assert secret not in request.system_instruction and secret in world.prompt_text()
-    assert MARKER in request.system_instruction and rpg_prompt.TIER_BOUNDARIES["standard"] in request.system_instruction
+    assert MARKER in request.system_instruction and rpg_prompt.TIER_BOUNDARIES["adult"] in request.system_instruction
 
 
 def test_no_database_transaction_is_open_while_the_model_is_called(world):

@@ -21,15 +21,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Callable, Iterable
 
-from app.models.user import CONTENT_TIER_STANDARD
 from app.repositories.script_repository import ScriptRepository
 from app.services.errors import ValidationError
 from app.services.script_spec import ValidatedScript, validate_script
 
 SEED_DIRECTORY = Path(__file__).resolve().parent.parent / "data" / "scripts"
-
-# 內建劇本允許宣告的最高內容模式。首發劇本宣告 `safe`；內建劇本不宣告成人模式（成人模式需要書面許可與法務覆核，見 AGENTS.md 第 7 節）。
-BUILTIN_MAX_TIER = CONTENT_TIER_STANDARD
 
 SEED_KEY_PATTERN = re.compile(r"[a-z0-9][a-z0-9-]{0,58}")          # scripts.seed_key 為 60 字，保守取 59 字
 FILE_FIELDS = frozenset({"seed_key", "content"})
@@ -142,7 +138,7 @@ class ScriptSeedService:
         if not isinstance(seed_key, str) or not SEED_KEY_PATTERN.fullmatch(seed_key):
             problems.append(f"{name}：seed_key（只能是小寫英數字與連字號，最多 59 字）")
         try:
-            validated = validate_script(data.get("content"), max_tier=BUILTIN_MAX_TIER, forbidden_markers=self._markers)
+            validated = validate_script(data.get("content"), forbidden_markers=self._markers)
         except ValidationError as error:
             for path_in_content, message in error.fields.items():
                 problems.append(f"{name}：content.{path_in_content}（{message}）")

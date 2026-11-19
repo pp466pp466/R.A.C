@@ -20,8 +20,7 @@ import unicodedata
 from dataclasses import dataclass
 from typing import Any, Iterable
 
-from app.models.user import CONTENT_TIERS
-from app.services.content_tier import legacy_tier_rank
+from app.services.content_tier import is_readable_tier, parse_tier
 from app.services.errors import ValidationError
 from app.services.story_preference import AUDIENCE_ALL, parse_audience
 
@@ -339,15 +338,14 @@ def _validate_trigger(collector: _Collector, value: Any, path: str, calendar: di
     return {"kind": kind, "value": number}
 
 
-def validate_script(raw: Any, *, max_tier: str, forbidden_markers: Iterable[str] = ()) -> ValidatedScript:
+def validate_script(raw: Any, *, forbidden_markers: Iterable[str] = ()) -> ValidatedScript:
     """驗證並標準化一份劇本內容。
 
-    `max_tier`：作者的內容模式上限（未成年作者為 `safe`）；宣告的 `content_tier` 不得高於它。
+    `content_tier`：`safe`（綁定安全模式）或 `adult`（未綁定，跟隨玩家的設定）；舊值 `standard` 接受並標準化為 `adult`
+    （只對這次驗證的結果標準化，既有版本不重算雜湊）。全站只限滿 18 歲，沒有依年齡而異的作者上限。
     `forbidden_markers`：系統不公開的標記字串，文字欄位不得包含（呼叫端提供，錯誤訊息不顯示它們）。
     失敗時拋出 `ValidationError`，`fields` 為「欄位路徑 → 說明」。
     """
-    if max_tier not in CONTENT_TIERS:
-        raise ValueError("max_tier 必須是三種內容模式之一。")
     if not isinstance(raw, dict):
         raise ValidationError("劇本內容必須是一份資料。", fields={"content": "劇本內容必須是一份資料。"})
 
@@ -368,11 +366,11 @@ def validate_script(raw: Any, *, max_tier: str, forbidden_markers: Iterable[str]
     if tier is None or tier == "":
         c.fail("content_tier", "這個欄位為必填。")
         tier = None
-    elif tier not in CONTENT_TIERS:
-        c.fail("content_tier", "內容模式只能是安全、一般或成人。")
+    elif not is_readable_tier(tier):
+        c.fail("content_tier", "內容模式只能是「綁定安全模式」或「未綁定」。")
         tier = None
-    elif legacy_tier_rank(tier) > legacy_tier_rank(max_tier):
-        c.fail("content_tier", "宣告的內容模式高於你目前可使用的上限。")
+    else:
+        tier = parse_tier(tier)                           # 舊值 standard 標準化為 adult
 
     tags = _list_of_text(c, raw.get("tags"), "tags", maximum_count=TAG_MAX_COUNT, maximum=TAG_MAX)
     calendar = _validate_calendar(c, raw.get("calendar"))

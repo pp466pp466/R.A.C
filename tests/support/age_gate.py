@@ -21,7 +21,7 @@ def add_ai_endpoint(app: Flask) -> None:
         policy = get_access_policy()
         policy.require_chat_access(user)
         app.work_done.append(user.id)
-        access = policy.content_access(user)
+        state = policy.mode_state(user)
         return jsonify(ok=True, content={
-            "preference": access.preference, "age_cap": access.age_cap, "effective": access.effective, "reason": access.reason,
+            "preference": state.preference, "effective": state.effective, "confirmed": state.confirmed, "forced": state.forced,
         })

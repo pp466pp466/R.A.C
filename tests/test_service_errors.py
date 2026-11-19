@@ -157,7 +157,7 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "RateLimited": 429, "DailyQuotaExceeded": 429, "ConversationLimitReached": 409, "ChatSuspended": 403, "SystemBusy": 503,
         "AdminTargetForbidden": 403, "AccountDeletionPending": 403, "AccountLocked": 403, "UnderageAccountErased": 400,
         "AppealPending": 409, "AppealRateLimited": 429,
-        "SafeModeForced": 403, "ContentTierRestricted": 403, "SessionEnded": 409,
+        "SafeModeForced": 403, "SessionEnded": 409,
         # rpg-script-authoring
         "Unprocessable": 422, "ScriptAutoRejected": 422, "ScriptRejected": 422, "NicknameRequired": 409, "ScriptLimitReached": 409,
         "DraftChanged": 409, "NotDraft": 409, "NotPending": 409, "OpenVersionExists": 409, "AuthorNameLocked": 409, "NotSuspended": 409,

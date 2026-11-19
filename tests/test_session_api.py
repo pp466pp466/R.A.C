@@ -16,6 +16,7 @@ from app.models import LlmCallLog, RpgSession, RuntimeLimit, User, Wallet, Walle
 from app.models.user import STATUS_DELETION_PENDING
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
+from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.game_entry_service import CARD_FIELDS, SAVE_FIELDS
 from tests.support.auth import START, FakeClock, add_user, sign_in_as
 from tests.support.client import raw_client
@@ -169,10 +170,11 @@ def test_setup_for_another_players_draft_is_the_same_404_as_for_a_missing_versio
     assert (mine.status_code, mine.get_data()) == (ghost.status_code, ghost.get_data()) and mine.status_code == 404
 
 
-def test_setup_for_a_script_above_the_players_mode_is_a_403(app):
-    client = signed_in(app, age=30, content_tier_preference="safe")                 # 選了安全模式的玩家（全站只限滿 18 歲，沒有未成年者）
-    response = client.get(f"/api/sessions/setup/{builtin(app, title='一般', content_tier='standard')}")
-    assert response.status_code == 403 and response.get_json()["error"]["code"] == "content_tier_restricted"
+@pytest.mark.parametrize("declared", ["adult", "standard", "safe"])
+def test_setup_for_a_script_not_bound_to_the_safe_mode_is_a_200_for_a_safe_mode_player(app, declared):
+    client = signed_in(app, age=30, content_tier_preference="safe")                 # 安全模式開的玩家：劇本的內容模式不是拒絕的理由
+    response = client.get(f"/api/sessions/setup/{builtin(app, title='未綁定', content_tier=declared)}")
+    assert response.status_code == 200 and "content_tier_restricted" not in response.get_data(as_text=True)
 
 
 # ---- POST /protagonist/suggest -----------------------------------------------------------------------
@@ -304,10 +306,12 @@ def test_another_players_draft_is_the_same_404_as_a_missing_version_and_costs_no
     assert saves(app) == 0 and provider.calls == []
 
 
-def test_the_script_above_the_players_mode_is_a_403(app, provider):
-    client = signed_in(app, age=30, content_tier_preference="safe")                 # 選了安全模式的玩家
-    response = client.post("/api/sessions", json=start_body(builtin(app, title="一般", content_tier="standard")))
-    assert response.status_code == 403 and response.get_json()["error"]["code"] == "content_tier_restricted" and saves(app) == 0
+def test_a_script_not_bound_to_the_safe_mode_can_be_started_by_a_safe_mode_player_and_plays_safe(app, provider):
+    client = signed_in(app, age=30, content_tier_preference="safe")                 # 安全模式開的玩家
+    provider.script(verdict())
+    response = client.post("/api/sessions", json=start_body(builtin(app, title="未綁定", content_tier="adult")))
+    assert response.status_code == 201 and saves(app) == 1                          # 不回 content_tier_restricted
+    assert response.get_json()["session"]["content_tier"] == "safe"                 # 該存檔以安全模式遊玩
 
 
 def test_the_owner_may_start_a_save_from_their_own_draft_after_the_script_review(app, provider):
@@ -415,37 +419,43 @@ def test_a_restricted_login_gets_its_own_403_code_on_both_lists(app, path, overr
     assert "scripts" not in response.get_json() and "sessions" not in response.get_json()
 
 
-def test_an_admin_who_has_not_confirmed_the_age_reads_a_safe_list_but_still_cannot_start_a_save(app, provider):
+def test_an_admin_who_has_not_confirmed_the_age_reads_the_whole_list_in_the_safe_mode_but_still_cannot_start_a_save(app, provider):
     safe = builtin(app, title="安全")
-    builtin(app, title="一般", content_tier="standard")
+    builtin(app, title="未綁定", content_tier="adult")
     client = signed_in(app, role="admin", age=None)
     body = client.get(CATALOG).get_json()
-    assert [card["id"] for card in body["scripts"]] == [safe]
-    assert body["content_mode"] == {"effective": "safe", "is_adult": False}
+    assert len(body["scripts"]) == 2 and safe in [card["id"] for card in body["scripts"]]
+    assert body["content_mode"] == {"effective": "safe", "forced": False}
     assert client.get(MINE).get_json()["sessions"] == []
     start = client.post(MINE, json=start_body(safe))
     assert start.status_code == 403 and start.get_json()["error"]["code"] == "age_confirmation_required"
     assert saves(app) == 0 and provider.calls == []
 
 
-def test_a_minor_is_told_why_the_catalog_is_safe_and_the_response_has_no_age_data(app):
+def test_the_catalog_summary_has_no_age_data_and_no_is_adult(app):
     builtin(app, title="安全")
-    builtin(app, title="一般", content_tier="standard")
-    response = signed_in(app, age=15).get(CATALOG)
+    response = signed_in(app, age=30).get(CATALOG)
     body = response.get_json()
-    assert [card["title"] for card in body["scripts"]] == ["安全"]
-    assert body["content_mode"] == {"effective": "safe", "is_adult": False}
+    assert body["content_mode"] == {"effective": "safe", "forced": False}
     text = response.get_data(as_text=True)
-    for forbidden in ("birth", "age_range", "age_policy", "\"age\""):
+    for forbidden in ("birth", "age_range", "age_policy", "\"age\"", "is_adult"):
         assert forbidden not in text
 
 
-def test_an_adult_with_the_default_settings_reads_the_standard_catalog(app):
-    safe, standard = builtin(app, title="安全"), builtin(app, title="一般", content_tier="standard")
-    builtin(app, title="成人", content_tier="adult")
+def test_a_player_with_the_default_settings_reads_every_published_script_in_the_safe_mode(app):
+    ids = [builtin(app, title=title, content_tier=tier) for title, tier in (("安全", "safe"), ("舊值", "standard"), ("未綁定", "adult"))]
     body = signed_in(app).get(CATALOG).get_json()
-    assert sorted(card["id"] for card in body["scripts"]) == sorted([safe, standard])
-    assert body["content_mode"] == {"effective": "standard", "is_adult": True}
+    assert sorted(card["id"] for card in body["scripts"]) == sorted(ids)
+    assert body["content_mode"] == {"effective": "safe", "forced": False}
+    assert {card["title"]: card["content_tier"] for card in body["scripts"]} == {"安全": "safe", "舊值": "adult", "未綁定": "adult"}
+
+
+def test_a_player_who_turned_the_safe_mode_off_sees_the_same_list_and_the_adult_mode(app):
+    ids = [builtin(app, title=title, content_tier=tier) for title, tier in (("安全", "safe"), ("未綁定", "adult"))]
+    agreed = dict(content_tier_preference="adult", adult_confirmed_at=START, adult_rules_version=SAFE_RULES_VERSION)
+    body = signed_in(app, **agreed).get(CATALOG).get_json()
+    assert sorted(card["id"] for card in body["scripts"]) == sorted(ids)
+    assert body["content_mode"] == {"effective": "adult", "forced": False}
 
 
 def test_only_published_versions_are_listed_never_the_owners_own_draft(app):
@@ -516,7 +526,7 @@ def test_the_catalog_response_has_exactly_the_documented_keys_and_no_script_body
     response = client.get(CATALOG)
     body = response.get_json()
     assert set(body) == {"ok", "scripts", "has_more", "content_mode"} and body["ok"] is True
-    assert set(body["content_mode"]) == {"effective", "is_adult"}
+    assert set(body["content_mode"]) == {"effective", "forced"}
     card = body["scripts"][0]
     assert set(card) == set(CARD_FIELDS) and card["author_name"] == "官方" and card["audience"] == "all"
     assert isinstance(card["id"], str) and len(card["id"]) == 36 and isinstance(card["tags"], list)

@@ -357,7 +357,7 @@ class GameService:
         if save.opening_state is not None and save.opening_state not in (OPENING_READY, OPENING_FALLBACK):
             raise OpeningPending()
 
-        tier = self._policy.effective_tier(current, save_tier=save.content_tier)
+        tier = self._policy.save_mode(current, save.script_snapshot_json)
         adult_age = self._policy.adult_age
         rules = check_text_rules([text], tier=tier, adult_age=adult_age)
         if rules.verdict == REVIEW_REJECT:
@@ -451,7 +451,7 @@ class GameService:
                 raise Conflict(TURN_IN_PROGRESS_MESSAGE, code="turn_in_progress")          # 同一回合已有未逾時的認領
             raise NotRevisable(state.reason or NOT_REVISABLE_NOT_LAST)
 
-        tier = self._policy.effective_tier(current, save_tier=save.content_tier)
+        tier = self._policy.save_mode(current, save.script_snapshot_json)
         if kind == KIND_EDIT:
             if new_action == original.user_action:
                 raise RevisionInvalid({"action": "新的行動需要和原本的不同。"})
@@ -542,7 +542,7 @@ class GameService:
             usage_events.log_denied(user_id=current.id, reason=usage_events.DENIED_GLOBAL_BUDGET)
             raise SystemBusy()
 
-        tier = self._policy.effective_tier(current, save_tier=save.content_tier)
+        tier = self._policy.save_mode(current, save.script_snapshot_json)
         protagonist = rpg_world.protagonist_from_session(save.protagonist_json, save.player_name, save.character_age)
         world = rpg_world.WorldState.from_fields(
             entities=save.entities_json, goals=save.goals_json, milestone_progress=save.milestone_progress_json,
@@ -577,7 +577,7 @@ class GameService:
             raise NotFound()
         script = save.script_snapshot_json if isinstance(save.script_snapshot_json, dict) else {}
         return {
-            "id": save.public_id, "title": script.get("title"), "content_tier": save.content_tier, "status": save.status,
+            "id": save.public_id, "title": script.get("title"), "content_tier": self._policy.save_mode(current, script), "status": save.status,
             "ended": save.status == SESSION_ENDED, "protagonist": save.protagonist_json, "version": save.version,
             "completed_turns": self._sessions.count_complete_turns(current.id, session_public_id) or 0,
             "opening": opening_view(save, script), "world": world_view(save),

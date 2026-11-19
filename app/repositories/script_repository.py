@@ -38,7 +38,7 @@ from app.models.script import (
     ENDING_NONE, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING,
     VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
 )
-from app.models.user import AUDIENCE_ALL, AUDIENCE_FEMALE, AUDIENCE_MALE, CONTENT_TIER_SAFE, CONTENT_TIERS
+from app.models.user import AUDIENCE_ALL, AUDIENCE_FEMALE, AUDIENCE_MALE
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
     AuthorNameLockedError, DraftChangedError, DuplicateSeedKeyError, InvalidVersionTransitionError, OpenVersionExistsError,
@@ -110,19 +110,13 @@ def _audience_order(preference: str | None) -> list[Any]:
     )]
 
 
-def _tiers_up_to(max_tier: str) -> tuple[str, ...]:
-    """不高於 `max_tier` 的全部內容模式；無法判定的上限視為最保守的安全模式。"""
-    if max_tier not in CONTENT_TIERS:
-        return (CONTENT_TIER_SAFE,)
-    return CONTENT_TIERS[: CONTENT_TIERS.index(max_tier) + 1]
-
-
-def _published_window(statement: Any, max_tier: str, *, limit: int, offset: int, preference: str | None) -> Any:
+def _published_window(statement: Any, *, limit: int, offset: int, preference: str | None) -> Any:
     """上架清單的條件與排序，`list_published` 與 `list_published_cards` 共用，兩者的集合與順序因此不會分歧：
-    只含 `published`、宣告的內容模式不高於 `max_tier`；先依偏好分層、再由新到舊（發佈時間，同時間依編號），最後才分頁。"""
+    只含 `published`，**不依內容模式篩選**（所有玩家都看得到所有上架的劇本；綁定安全模式只影響生效模式）；
+    先依偏好分層、再由新到舊（發佈時間，同時間依編號），最後才分頁。"""
     return (
         statement
-        .where(ScriptVersion.status == VERSION_PUBLISHED, ScriptVersion.content_tier.in_(_tiers_up_to(max_tier)))
+        .where(ScriptVersion.status == VERSION_PUBLISHED)
         .order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc())
         .limit(limit)
         .offset(offset)
@@ -450,29 +444,29 @@ class ScriptRepository(BaseRepository[Script]):
         )
 
     def list_published(
-        self, max_tier: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,
+        self, *, limit: int = 20, offset: int = 0, preference: str | None = None,
     ) -> list[ScriptVersion]:
-        """上架中的版本，宣告的內容模式不高於 `max_tier`（由新到舊）。
+        """上架中的全部版本，不依內容模式篩選（由新到舊）。
 
         `preference`（故事偏好：`male`／`female`）只影響順序：符合偏好的頻道排最前，其次全讀者，其餘仍在清單內；同一層維持由新到舊。
         排序在 LIMIT／OFFSET 之前完成，所以分頁之間的順序一致。空值、`all` 或無法辨識時與不帶偏好的查詢完全相同。
         """
-        statement = _published_window(select(ScriptVersion), max_tier, limit=limit, offset=offset, preference=preference)
+        statement = _published_window(select(ScriptVersion), limit=limit, offset=offset, preference=preference)
         return list(self._session.scalars(statement))
 
     def list_published_cards(
-        self, max_tier: str, *, limit: int = 12, offset: int = 0, preference: str | None = None,
+        self, *, limit: int = 12, offset: int = 0, preference: str | None = None,
     ) -> list[tuple[ScriptVersion, Script]]:
         """入口畫面的劇本卡片：與 `list_published` 完全相同的集合與順序，但**一次查詢**連同劇本（筆名與短代號）取回，
         回傳 `(版本, 劇本)`。呼叫端要標籤時另用 `tags_of_versions` 一次取回整頁，所以整頁的查詢次數固定、不隨筆數增加。"""
         statement = _published_window(
             select(ScriptVersion, Script).join(Script, Script.id == ScriptVersion.script_id),
-            max_tier, limit=limit, offset=offset, preference=preference,
+            limit=limit, offset=offset, preference=preference,
         )
         return [(version, script) for version, script in self._session.execute(statement).all()]
 
     def list_published_by_tag(
-        self, tag: str, max_tier: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,
+        self, tag: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,
     ) -> list[ScriptVersion]:
         """依標籤查詢上架中的版本（不分大小寫）；`preference` 的意義同 `list_published`。"""
         statement = (
@@ -480,7 +474,6 @@ class ScriptRepository(BaseRepository[Script]):
             .join(ScriptVersionTag, ScriptVersionTag.version_id == ScriptVersion.id)
             .where(
                 ScriptVersion.status == VERSION_PUBLISHED,
-                ScriptVersion.content_tier.in_(_tiers_up_to(max_tier)),
                 func.lower(ScriptVersionTag.tag) == tag.casefold(),
             )
             .order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc())

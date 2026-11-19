@@ -12,7 +12,7 @@ from typing import Iterable
 
 from app.models.rpg_session import REGEN_KINDS
 from app.models.script import REVIEW_CATEGORIES
-from app.models.user import CONTENT_TIERS
+from app.models.user import CONTENT_MODES
 
 logger = logging.getLogger("app.rpg")
 
@@ -110,7 +110,7 @@ def log_turn_started(*, user_id: int, session_id: int, turn_number: int, attempt
     _info(
         EVENT_TURN_STARTED, "RPG 回合開始", user_id=user_id, session_id=_integer("session_id", session_id),
         turn_number=_integer("turn_number", turn_number), attempt=_integer("attempt", attempt), outcome=_choice("開始方式", start, STARTS),
-        reason=_choice("內容模式", tier, CONTENT_TIERS), model=model,
+        reason=_choice("內容模式", tier, CONTENT_MODES), model=model,
     )
 
 
@@ -173,7 +173,7 @@ def log_session_ended(*, user_id: int, session_id: int, turn_number: int, reason
 def log_opening_started(*, user_id: int, session_id: int, tier: str, model: str | None) -> None:
     _info(
         EVENT_OPENING_STARTED, "RPG 第 0 幕開始生成", user_id=user_id, session_id=_integer("session_id", session_id),
-        reason=_choice("內容模式", tier, CONTENT_TIERS), model=model,
+        reason=_choice("內容模式", tier, CONTENT_MODES), model=model,
     )
 
 

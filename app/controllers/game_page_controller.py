@@ -14,8 +14,8 @@
   非擁有者與不存在的存檔得到相同的 404 頁面；**權限判斷全在 Service**，這裡不寫。頁面外殼只有（`tojson` 已跳脫的 JSON 區塊）：
   - `session`：`id`、`title`、`content_tier`、`ended`、`player_name`（都來自 `session_summary`）。
   - `user`：`public_id`（本機暫存的資料庫名稱用，對外識別碼）與 `member_tier`。沒有 email、生日與年齡。
-  - `gate`：同上（`AccessPolicy.chat_gate` 的結果）；`content_mode`：`AccessPolicy.content_access` 的生效模式與「是否已滿成年門檻」
-    （與 `/api/sessions/catalog` 的 `content_mode` 同一個來源與形狀，沒有生日與年齡），供畫面說明未成年固定為安全模式的原因。
+  - `gate`：同上（`AccessPolicy.chat_gate` 的結果）；`content_mode`：`AccessPolicy.mode_state` 的生效模式與緊急煞車是否啟用
+    （`{effective, forced}`，與 `/api/sessions/catalog` 的 `content_mode` 同一個來源與形狀，沒有生日與年齡）。
   - `stream`：串流的前端逾時（閒置 `STREAM_IDLE_TIMEOUT_MS`、總計 `STREAM_TOTAL_TIMEOUT_MS`，見 `docs/RPG.md` 7.15、7.17.3；前端不寫死數值）。
   - `limits`：`action_max`，直接引用後端的 `game_service.ACTION_MAX`（後端調整時前端一起變）。
   - `revision_limits`：`reason_min`、`reason_max`（重新生成理由的字數範圍）與 `categories`（五個分類的識別字串），直接引用 `game_service` 的常數。
@@ -74,7 +74,7 @@ def game_session_page(session_public_id: str):
     user = current_user()
     summary = get_game_entry_service().session_summary(user, session_public_id)               # 非擁有者與不存在：NotFound -> 404 頁
     policy = get_access_policy()
-    access = policy.content_access(user)
+    mode = policy.mode_state(user)
     state = {
         "session": {
             "id": summary["id"], "title": summary["title"], "content_tier": summary["content_tier"], "ended": summary["ended"],
@@ -82,7 +82,7 @@ def game_session_page(session_public_id: str):
         },
         "user": {"public_id": user.public_id, "member_tier": user.member_tier},
         "gate": policy.chat_gate(user),
-        "content_mode": {"effective": access.effective, "is_adult": access.is_adult},
+        "content_mode": {"effective": mode.effective, "forced": mode.forced},
         "stream": {"idle_timeout_ms": STREAM_IDLE_TIMEOUT_MS, "total_timeout_ms": STREAM_TOTAL_TIMEOUT_MS},
         "limits": {"action_max": ACTION_MAX},
         # 重新生成理由的字數範圍與分類列舉（rpg-turn-revision）：直接引用後端常數，前端不寫死；分類的繁體中文文案在前端

@@ -224,8 +224,8 @@ def content_mode_of(client) -> dict:
 
 
 def startable_ids(app, user: User, versions) -> set[str]:
-    """這位玩家可以拿來開存檔的版本（對每個版本逐一解析，被內容上限擋下的不算）。"""
-    from app.services.errors import ContentTierRestricted, NotFound
+    """這位玩家可以拿來開存檔的版本（對每個版本逐一解析；劇本的內容模式不是拒絕的理由，所以只有找不到的版本不算）。"""
+    from app.services.errors import NotFound
 
     with Session(app.extensions["db_engine"]) as s:
         current = CurrentUser.from_model(s.get(User, user.id))
@@ -234,7 +234,7 @@ def startable_ids(app, user: User, versions) -> set[str]:
         for public_id in versions:
             try:
                 resolver.resolve(current, public_id)
-            except (NotFound, ContentTierRestricted):
+            except NotFound:
                 continue
             found.add(public_id)
         return found
@@ -265,21 +265,21 @@ def test_changing_the_preference_changes_neither_the_effective_mode_nor_the_play
     user = seed(app, age=30)
     client = logged_in_client(app, user)
     before = (content_mode_of(client), startable_ids(app, user, catalogue))
-    assert before[1] == {catalogue[0], catalogue[1]}                      # 一般模式的成年玩家：成人劇本不可玩（與偏好無關）
+    assert before[1] == set(catalogue)                                    # 所有上架的劇本都可玩（與偏好無關）
     for value in ("male", "female", "all"):
         assert put(client, value).status_code == 200
         assert (content_mode_of(client), startable_ids(app, user, catalogue)) == before, value
 
 
 @pytest.mark.parametrize("app", [LEGACY_13], indirect=True)
-def test_under_a_legacy_13_policy_a_minor_stays_in_the_safe_mode_whatever_the_preference_is(app, catalogue):
+def test_under_a_legacy_13_policy_a_minor_stays_in_the_safe_mode_and_every_script_stays_startable_whatever_the_preference_is(app, catalogue):
     user = seed(app, age=15)
     client = logged_in_client(app, user)
     for value in ("male", "female", "all"):
         put(client, value)
         state = content_mode_of(client)["content_mode"]
         assert state["effective"] == "safe" and state["forced"] is False
-        assert startable_ids(app, user, catalogue) == {catalogue[0]}
+        assert startable_ids(app, user, catalogue) == set(catalogue)
 
 
 def test_switching_the_content_mode_does_not_change_the_preference(app):

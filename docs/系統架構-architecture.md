@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-19 ｜ 對應 change：wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -129,8 +129,8 @@ flowchart TD
 | 元件 | 責任 |
 |---|---|
 | `script_spec.py`（純運算） | 固定規格 v1 的驗證與標準化，輸出標準化內容與 `content_hash`；沒有資料庫、網路與時間的依賴 |
-| `content_tier.py`（純邏輯） | 三種內容模式的順序與「取較保守者」，無法判定視為 `safe`；不內嵌任何年齡數字 |
-| `AccessPolicy.content_access`／`effective_tier` | 依生日於當下計算的年齡、部署開關與成年確認，算出年齡上限與生效模式；管理員與各等級不豁免 |
+| `content_tier.py`（純邏輯） | 兩種內容模式（`safe`、`adult`）的順序與「取較保守者」，舊值 `standard` 讀作 `adult`，無法判定視為 `safe`；不內嵌任何年齡數字 |
+| `AccessPolicy.effective_mode`／`save_mode`／`mode_state` | 每次現算生效模式：玩家偏好（缺少目前版本同意視為 `safe`）、劇本是否綁定安全模式（存檔用複製進存檔的劇本）、緊急煞車三者取最保守者；沒有依年齡的上限，存檔不釘住模式；管理員與各等級不豁免 |
 | `ContentModeService` | 玩家查詢與切換自己的內容模式、成年確認；`GET`／`PUT /api/account/content-mode` |
 | `story_preference.py`（純邏輯） | 故事偏好與讀者頻道共用的值域（`all`／`male`／`female`）、`parse_audience`（嚴格解析）、`normalize_audience`（缺值視為全讀者）與清單排序層級 `rank`；值域常數放在 `app/models/user.py`（資料模型不得匯入 Service），這裡自模型匯入，所以與 `content_tier.py` 一樣不在 `PURE_MODULES` 清單內 |
 | `StoryPreferenceService` | 玩家查詢與設定自己的故事偏好：輸入必須完全等於列舉值，否則 `ValidationError`（欄位 `story_preference`）；只讀寫呼叫者本人的資料列；`GET`／`PUT /api/account/story-preference`。偏好只影響劇本清單排序，不碰 `AccessPolicy`，也不過年齡閘門 |
@@ -152,7 +152,7 @@ flowchart TD
     Sub --> Rules
     Sub --> Rev["ScriptReviewService 模型層<br/>kind script_review"]
     Rev --> Llm["LlmService.run_structured<br/>RPG 用途的供應商 不使用 Gemini"]
-    Sub --> Pol["AccessPolicy<br/>年齡閘門 require_can_submit author_content_cap"]
+    Sub --> Pol["AccessPolicy<br/>年齡閘門 require_can_submit"]
     Auth --> Lim["RuntimeLimits<br/>每次使用時現讀資料庫"]
     Sub --> Lim
     Sess["SessionService 開存檔"] -->|"ReviewGate 內建劇本免審"| Rev
@@ -213,7 +213,7 @@ flowchart TD
 ```mermaid
 flowchart TD
     Ctl["session_api_controller<br/>GET catalog 與 GET 我的存檔"] --> GSvc["GameEntryService<br/>唯讀 不呼叫模型 不碰錢包"]
-    GSvc --> Pol["AccessPolicy.content_access<br/>生效模式 不過年齡閘門"]
+    GSvc --> Pol["AccessPolicy.mode_state／save_mode<br/>生效模式 不過年齡閘門"]
     GSvc --> SR["ScriptRepository<br/>list_published_cards 與 tags_of_versions"]
     GSvc --> SessR["SessionRepository<br/>list_owned 與 complete_turn_counts"]
     GSvc --> Pref["story_preference<br/>normalize_audience"]
@@ -221,7 +221,7 @@ flowchart TD
     Ctl --> Cur["require_login<br/>受限登入狀態 403"]
     Page["game_page_controller<br/>/game、/game/存檔、/game/start/版本"] -->|"session_summary"| GSvc
     Page --> Gate["AccessPolicy.chat_gate<br/>初始狀態的 gate 只讀"]
-    Page --> Mode["AccessPolicy.content_access<br/>遊戲頁初始狀態的 content_mode 只讀"]
+    Page --> Mode["AccessPolicy.mode_state<br/>遊戲頁初始狀態的 content_mode 只讀"]
 ```
 
 | 元件 | 責任 |
@@ -237,7 +237,7 @@ flowchart TD
 - **分頁**：`limit`（劇本預設 12、至多 24；存檔預設 20、至多 50）與 `offset`（至多 10000）在 Service 驗證，Controller 只把查詢字串轉成整數（不是整數回 400 並指出欄位）；不合法時一次回報所有不合法的欄位。
 - **沒有寫入也沒有日誌**：標題、筆名與主角姓名都是玩家文字衍生的內容，Service 連日誌都不寫；兩個端點呼叫前後遊戲幣餘額、帳本與模型呼叫帳本都不變（`tests/test_session_api.py`）。
 - 組裝在 `registry.py` 的 `get_game_entry_service()`（只注入兩個 Repository 與 `AccessPolicy`，沒有任何模型供應商）。
-- **頁面控制器**（`app/controllers/game_page_controller.py`，MVC，只回 HTML）：`/game` 以 `login_required_page` 保護，初始狀態只有 `user`（會員等級與故事偏好）與 `gate`（`AccessPolicy.chat_gate` 的結果），**沒有清單內容**，由前端呼叫上面兩個端點取得；`/game/<存檔識別碼>` 是**遊戲主畫面**（rpg-game-ui）的外殼：呼叫 `GameEntryService.session_summary`，非擁有者與不存在得到逐字相同的 404 頁面，權限判斷全在 Service、Controller 不寫；初始狀態（`tojson` 已跳脫）只有 `session`（`id`、`title`、`content_tier`、`ended`、`player_name`）、`user`（`public_id` 供本機暫存的資料庫名稱用，加會員等級）、`gate`（`chat_gate`）、`content_mode`（`AccessPolicy.content_access` 的生效模式與是否已滿成年門檻，與 `/api/sessions/catalog` 同一個來源與形狀，供畫面說明未成年固定為安全模式的原因，不含生日與年齡）、`stream`（前端逾時：閒置 `STREAM_IDLE_TIMEOUT_MS` ＝ 45000、總計 `STREAM_TOTAL_TIMEOUT_MS` ＝ 180000，具名常數，依據見 `docs/RPG.md` 7.15、7.17.3）`limits`（`action_max` ＝ `game_service.ACTION_MAX`，後端調整時前端一起變）與 `revision_limits`（`reason_min`、`reason_max` 與五個回饋分類的識別字串，直接引用 `game_service` 的 `REASON_MIN`、`REASON_MAX`、`CATEGORIES`，前端不寫死；rpg-turn-revision），**沒有回合內容、第 0 幕、記事簿、世界狀態、email、生日與年齡**——這些由前端依序呼叫既有端點（快照、第 0 幕串流、回合、錢包）取得，所以頁面外殼永遠沒有劇情，返回上一頁或頁面快取也不會看到舊內容，本頁不改任何端點；`/game/start/<版本識別碼>` 是開存檔精靈的頁面：初始狀態只有 `member_tier`、`gate` 與兩個請求逾時（`suggest_timeout_ms` = 後端單次請求總預算 + 5 秒，`start_timeout_ms` = `2 × 預算 + 5 秒`，都由設定算出），**沒有劇本內容**，版本識別碼不出現在頁面內容（前端自己從網址讀取並呼叫 `setup` 端點；Vue 掛載的 `wizard.js` 已實作）。三條都只接受 GET；路徑段數不同（`/game/start/<x>` 兩段、`/game/<x>` 一段），所以不會互相吃掉，`/game/start` 單獨一段會被當成存檔識別碼而得到 404（`tests/test_game_pages.py`）。受限登入狀態由 `login_required_page` 導向各自的頁面，`tests/test_restricted_session.py` 的全路由掃描把三條都列為「必須被掃到」。前端模組見 [前端結構](前端結構-frontend.md) 第 3d 節。
+- **頁面控制器**（`app/controllers/game_page_controller.py`，MVC，只回 HTML）：`/game` 以 `login_required_page` 保護，初始狀態只有 `user`（會員等級與故事偏好）與 `gate`（`AccessPolicy.chat_gate` 的結果），**沒有清單內容**，由前端呼叫上面兩個端點取得；`/game/<存檔識別碼>` 是**遊戲主畫面**（rpg-game-ui）的外殼：呼叫 `GameEntryService.session_summary`，非擁有者與不存在得到逐字相同的 404 頁面，權限判斷全在 Service、Controller 不寫；初始狀態（`tojson` 已跳脫）只有 `session`（`id`、`title`、`content_tier`、`ended`、`player_name`）、`user`（`public_id` 供本機暫存的資料庫名稱用，加會員等級）、`gate`（`chat_gate`）、`content_mode`（`AccessPolicy.mode_state` 的生效模式與緊急煞車是否啟用 `{effective, forced}`，與 `/api/sessions/catalog` 同一個來源與形狀，供畫面顯示目前模式與緊急煞車的說明，不含生日與年齡、也沒有 `is_adult`）、`stream`（前端逾時：閒置 `STREAM_IDLE_TIMEOUT_MS` ＝ 45000、總計 `STREAM_TOTAL_TIMEOUT_MS` ＝ 180000，具名常數，依據見 `docs/RPG.md` 7.15、7.17.3）`limits`（`action_max` ＝ `game_service.ACTION_MAX`，後端調整時前端一起變）與 `revision_limits`（`reason_min`、`reason_max` 與五個回饋分類的識別字串，直接引用 `game_service` 的 `REASON_MIN`、`REASON_MAX`、`CATEGORIES`，前端不寫死；rpg-turn-revision），**沒有回合內容、第 0 幕、記事簿、世界狀態、email、生日與年齡**——這些由前端依序呼叫既有端點（快照、第 0 幕串流、回合、錢包）取得，所以頁面外殼永遠沒有劇情，返回上一頁或頁面快取也不會看到舊內容，本頁不改任何端點；`/game/start/<版本識別碼>` 是開存檔精靈的頁面：初始狀態只有 `member_tier`、`gate` 與兩個請求逾時（`suggest_timeout_ms` = 後端單次請求總預算 + 5 秒，`start_timeout_ms` = `2 × 預算 + 5 秒`，都由設定算出），**沒有劇本內容**，版本識別碼不出現在頁面內容（前端自己從網址讀取並呼叫 `setup` 端點；Vue 掛載的 `wizard.js` 已實作）。三條都只接受 GET；路徑段數不同（`/game/start/<x>` 兩段、`/game/<x>` 一段），所以不會互相吃掉，`/game/start` 單獨一段會被當成存檔識別碼而得到 404（`tests/test_game_pages.py`）。受限登入狀態由 `login_required_page` 導向各自的頁面，`tests/test_restricted_session.py` 的全路由掃描把三條都列為「必須被掃到」。前端模組見 [前端結構](前端結構-frontend.md) 第 3d 節。
 
 ### 遊戲幣錢包（game-wallet）
 

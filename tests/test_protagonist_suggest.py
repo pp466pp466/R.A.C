@@ -17,7 +17,7 @@ from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.repositories.script_repository import ScriptRepository
 from app.services.access_policy import AccessPolicy
 from app.services.errors import (
-    ContentTierRestricted, NotFound, ProtagonistRejected, SuggestionLimit, SuggestionUnavailable, ValidationError,
+    NotFound, ProtagonistRejected, SuggestionLimit, SuggestionUnavailable, ValidationError,
 )
 from app.services.protagonist_prompt import protagonist_marker
 from app.services.protagonist_service import ProtagonistService
@@ -121,14 +121,12 @@ def test_the_owner_may_preview_with_their_own_draft(member_session):
     assert result["protagonist"]["name"] == "林舟"
 
 
-def test_a_script_declared_above_the_players_mode_is_a_403_with_no_model_call_and_no_count(member_session):
-    safe_player = player(member_session, 1, content_tier_preference="safe")          # 選了安全模式的成年玩家
-    version = script_version(member_session, content_tier="standard")
-    provider = FakeLLMProvider()
-    service = make_service(member_session, provider)
-    with pytest.raises(ContentTierRestricted):
-        service.suggest(safe_player, version.public_id, INTRO)
-    assert provider.calls == [] and ledger(member_session) == []
+def test_a_script_not_bound_to_the_safe_mode_is_not_refused_for_a_safe_mode_player_and_is_suggested_in_the_safe_scale(member_session):
+    safe_player = player(member_session, 1, content_tier_preference="safe")          # 安全模式開的玩家
+    version = script_version(member_session, content_tier="adult")                    # 未綁定的劇本
+    provider = FakeLLMProvider().script(output())
+    result = make_service(member_session, provider).suggest(safe_player, version.public_id, INTRO)
+    assert result["protagonist"]["name"] == "林舟" and len(provider.calls) == 1        # 不回 content_tier_restricted，照常生成
 
 
 # ---- 自我介紹：只作資料、不落地 ---------------------------------------------------------------------
@@ -363,14 +361,14 @@ def test_setup_reflects_the_remaining_count_and_whether_the_model_is_configured(
     assert make_service(member_session, None, llm=False).setup(user, version.public_id)["suggestions_available"] is False
 
 
-def test_setup_has_the_same_visibility_and_tier_rules_as_starting(member_session):
+def test_setup_has_the_same_visibility_rules_as_starting_and_the_script_mode_is_no_reason_to_refuse(member_session):
     owner, other, safe_player = player(member_session, 1), player(member_session, 2), player(member_session, 3, content_tier_preference="safe")
     draft = draft_script(member_session, owner)
     service = make_service(member_session, FakeLLMProvider())
     with pytest.raises(NotFound):
         service.setup(other, draft.public_id)
-    with pytest.raises(ContentTierRestricted):
-        service.setup(safe_player, script_version(member_session, title="一般", content_tier="standard").public_id)
+    assert service.setup(safe_player, script_version(member_session, title="未綁定", content_tier="adult").public_id)["title"]
+    assert service.setup(safe_player, script_version(member_session, title="舊值", content_tier="standard").public_id)["title"]
     assert service.setup(owner, draft.public_id)["title"]
 
 

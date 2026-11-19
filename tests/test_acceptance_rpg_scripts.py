@@ -195,7 +195,7 @@ def test_the_opening_has_no_action_and_the_state_call_follows_the_ending_keyword
 def test_the_ending_script_content_validates_as_a_custom_ending_script():
     from app.services.script_spec import validate_script
 
-    result = validate_script(harness.ending_script_content(), max_tier="adult")
+    result = validate_script(harness.ending_script_content())
     assert result.content["ending_mode"] == "custom"
 
 

@@ -1,6 +1,6 @@
-"""access-control 規格：權限判斷集中在政策物件；非擁有者一律 404；角色與會員等級的語意；年齡閘門與內容模式的年齡上限。
+"""access-control 規格：權限判斷集中在政策物件；非擁有者一律 404；角色與會員等級的語意；年齡閘門；內容模式只有兩種、沒有依年齡的上限。
 
-成人模式的部署開關、成年確認與生效模式的完整組合見 `test_content_tier_modes.py`。
+生效模式的完整組合（偏好 × 同意 × 劇本綁定 × 緊急煞車）見 `test_effective_mode.py`，從環境設定到 HTTP 見 `test_content_tier_modes.py`。
 """
 import ast
 from datetime import date
@@ -14,6 +14,7 @@ from app.models.user import (
 )
 from app.services.access_policy import AccessPolicy
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
+from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.current_user import CurrentUser
 from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound
 from tests.support.age import TODAY, TODAY_UTC, birth_date_for_age
@@ -160,14 +161,12 @@ def test_the_minimum_use_age_comes_only_from_the_policy_so_a_looser_policy_still
     POLICY.require_chat_access(member(age=18))                                                              # 剛滿 18 歲通過
 
 
-def test_turning_18_lifts_the_limit_without_any_stored_flag_changing():
-    """年齡由生日於當下計算：同一個人，時鐘前進過生日後內容上限自動改變。"""
-    teen = member(age=None, birth_date=date(2008, 10, 28))           # 明天才滿 18 歲
-    assert POLICY.content_access(teen).age_cap == "safe"
+def test_turning_18_changes_nothing_about_the_content_mode_and_no_stored_flag_changes():
+    """年齡由生日於當下計算：同一個人，時鐘前進過生日後，生效模式沒有任何變化（沒有依年齡的上限，也不會自動調高偏好）。"""
+    teen = member(age=None, birth_date=date(2008, 10, 28), content_tier_preference="safe")           # 明天才滿 18 歲
     tomorrow = AccessPolicy(clock=lambda: TODAY_UTC.replace(day=28))
-    assert tomorrow.content_access(teen).age_cap == "standard"
-    # 上限自動解除，但儲存的偏好不會跟著改變：玩家須自行切換
-    assert tomorrow.content_access(teen).preference == "safe" and tomorrow.content_access(teen).effective == "safe"
+    assert POLICY.effective_mode(teen) == tomorrow.effective_mode(teen) == "safe"
+    assert tomorrow.mode_state(teen).preference == "safe"
 
 
 @pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
@@ -200,43 +199,37 @@ def test_a_member_who_passes_leaves_no_log_line(log_lines):
     assert [line for line in log_lines() if line.get("event") == "auth.age_gate_denied"] == []
 
 
-# ---- 內容模式的年齡上限 --------------------------------------------------------
+# ---- 內容模式（兩種；生效模式的表格驅動測試見 test_effective_mode.py）--------------------------
 
-@pytest.mark.parametrize("age", [13, 14, 15, 16, 17])
-@pytest.mark.parametrize("preference", ["safe", "standard", "adult"])
-def test_a_minor_is_always_in_safe_mode_whatever_the_stored_preference(age, preference):
-    access = POLICY.content_access(member(age=age, content_tier_preference=preference))
-    assert (access.age_cap, access.effective, access.is_adult, access.reason) == ("safe", "safe", False, "not_adult")
-    assert access.selectable == ("safe",) and access.adult_selectable is False
-
-
-@pytest.mark.parametrize("age", [18, 19, 30, 65, 100])
-def test_an_adult_is_capped_at_the_standard_mode_when_the_adult_mode_is_not_available(age):
-    access = POLICY.content_access(member(age=age, content_tier_preference="adult"))
-    assert (access.age_cap, access.effective, access.is_adult, access.reason) == ("standard", "standard", True, "disabled")
-    assert access.selectable == ("safe", "standard")
-
-
-def test_a_member_without_an_age_check_is_treated_conservatively():
-    access = POLICY.content_access(member(age=None, content_tier_preference="standard"))
-    assert (access.age_cap, access.effective, access.reason) == ("safe", "safe", "not_adult")
+@pytest.mark.parametrize("age", [18, 19, 30, 65, 100, None])
+def test_the_effective_mode_has_no_age_cap(age):
+    consent = {"adult_confirmed_at": TODAY_UTC, "adult_rules_version": SAFE_RULES_VERSION}
+    assert POLICY.effective_mode(member(age=age, content_tier_preference="adult", **consent)) == "adult"
 
 
 @pytest.mark.parametrize("role", [ROLE_USER, ROLE_ADMIN])
 @pytest.mark.parametrize("tier", MEMBER_TIERS)
-def test_neither_role_nor_tier_changes_the_content_access(role, tier):
-    assert POLICY.content_access(member(age=15, role=role, member_tier=tier, content_tier_preference="adult")).effective == "safe"
-    assert POLICY.content_access(member(age=40, role=role, member_tier=tier, content_tier_preference="standard")).effective == "standard"
-
-
-def test_the_cap_follows_the_adult_age_in_the_policy_not_a_number_in_the_code():
-    older = policy_for(age_policy=AgePolicy(adult_age=21))
-    assert older.content_access(member(age=20)).age_cap == "safe" and older.content_access(member(age=21)).age_cap == "standard"
+def test_neither_role_nor_tier_changes_the_effective_mode(role, tier):
+    consent = {"adult_confirmed_at": TODAY_UTC, "adult_rules_version": SAFE_RULES_VERSION}
+    assert POLICY.effective_mode(member(age=40, role=role, member_tier=tier, content_tier_preference="adult", **consent)) == "adult"
+    assert POLICY.effective_mode(member(age=40, role=role, member_tier=tier, content_tier_preference="safe", **consent)) == "safe"
 
 
 def test_an_unrecognised_stored_preference_is_treated_as_safe():
-    assert POLICY.content_access(member(age=30, content_tier_preference="mature")).effective == "safe"
-    assert POLICY.content_access(member(age=30, content_tier_preference="")).preference == "safe"
+    consent = {"adult_confirmed_at": TODAY_UTC, "adult_rules_version": SAFE_RULES_VERSION}
+    assert POLICY.effective_mode(member(age=30, content_tier_preference="mature", **consent)) == "safe"
+    assert POLICY.mode_state(member(age=30, content_tier_preference="")).preference == "safe"
+
+
+def test_the_save_mode_takes_the_script_binding_from_the_snapshot_and_treats_a_missing_one_as_bound():
+    consent = {"adult_confirmed_at": TODAY_UTC, "adult_rules_version": SAFE_RULES_VERSION}
+    relaxed = member(age=30, content_tier_preference="adult", **consent)
+    assert POLICY.save_mode(relaxed, {"content_tier": "adult"}) == "adult"
+    assert POLICY.save_mode(relaxed, {"content_tier": "standard"}) == "adult"        # 舊值讀作 adult
+    assert POLICY.save_mode(relaxed, {"content_tier": "safe"}) == "safe"             # 綁定
+    for broken in ({}, {"content_tier": ""}, {"content_tier": "mature"}, None, "not a dict", []):
+        assert POLICY.save_mode(relaxed, broken) == "safe"                           # 缺少或無法判定：取保守，不是忽略
+    assert AccessPolicy(clock=lambda: TODAY_UTC, safe_mode_forced=True).save_mode(relaxed, {"content_tier": "adult"}) == "safe"
 
 
 def test_the_policy_source_has_no_age_numbers_of_its_own():

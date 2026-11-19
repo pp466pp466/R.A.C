@@ -9,8 +9,7 @@
 - 內容模式（`effective_mode`，見 AGENTS.md 第 7 節與 content-tier-modes 規格）只有兩種：`safe`（安全模式開）與 `adult`
   （安全模式關）。生效的模式每次現算，是玩家偏好（缺少目前安全規範版本下的同意時視為 `safe`）、劇本是否綁定安全模式、
   緊急煞車三者中最保守的一個；全站只限滿 18 歲者使用，不再有依年齡設定的上限，存檔也不釘住模式。管理員與各會員等級都不豁免。
-  **過渡相容層**（safe-mode-toggle 第 2 組完成前暫時保留，2.5 移除）：`content_access`、`effective_tier`、`author_content_cap`
-  仍是舊的三值判定（依年齡上限），供尚未改寫的目錄、開存檔與劇本創作使用。年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，
+  存檔的生效模式用 `save_mode`（劇本綁定取自複製進存檔的劇本）。年齡一律由生日於當下計算，年齡數字只來自 `AgePolicy`，
   這裡不內嵌任何年齡數字。
 管理員存取他人資料必須走專用的 Repository 方法並寫入稽核紀錄（`AdminService`，見 admin-console 規格），不是用這裡繞過擁有者檢查；
 `require_admin` 是後台功能的唯一入口，非管理員得到與「不存在」相同的 404。
@@ -25,17 +24,9 @@ from app.models.base import utcnow
 from app.models.user import ROLE_ADMIN, STATUS_ACTIVE
 from app.observability import admin_events, security_events
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, age_on, taipei_today
-from app.services.content_tier import (
-    CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, SAFE_RULES_VERSION, legacy_most_conservative,
-    legacy_parse_tier, most_conservative, parse_tier,
-)
+from app.services.content_tier import CONTENT_TIER_SAFE, SAFE_RULES_VERSION, most_conservative, parse_tier
 from app.services.current_user import CurrentUser
 from app.services.errors import AgeConfirmationRequired, AgeRestricted, Forbidden, NotFound, PublishSuspended
-
-# 成人模式目前沒有啟用的原因（`ContentAccess.reason`，也是內容模式 API 回應的列舉值）
-REASON_NOT_ADULT = "not_adult"                  # 未滿成年門檻，或尚未完成年齡確認
-REASON_DISABLED = "disabled"                    # 部署層的開關為關閉
-REASON_NEEDS_CONFIRMATION = "needs_confirmation"  # 尚未確認，或確認的安全規範版本已不是目前的版本
 
 
 @dataclass(frozen=True)
@@ -54,54 +45,18 @@ class ModeState:
     forced: bool
 
 
-@dataclass(frozen=True)
-class ContentAccess:
-    """一位使用者目前的內容模式狀態（不含劇本與存檔，那兩者只在 `effective_tier` 加入）。
-
-    - `preference`：玩家存的偏好（無法判定時為 `safe`）；
-    - `age_cap`：年齡上限，由當下的年齡與成人模式是否啟用決定；
-    - `effective`：偏好與年齡上限中較保守者；
-    - `is_adult`：當下已滿成年門檻（介面據此顯示「現在可以切換為一般模式」）；
-    - `adult_selectable`：玩家可以切換為成人模式（已成年且部署開關開啟；尚未確認時，切換須同時勾選兩項確認）；
-    - `adult_confirmed`：已在目前的安全規範版本下完成成年確認；
-    - `reason`：成人模式目前**沒有啟用**的原因，已啟用時為 `None`。
-    """
-
-    preference: str
-    age_cap: str
-    effective: str
-    is_adult: bool
-    adult_selectable: bool
-    adult_confirmed: bool
-    reason: str | None
-
-    @property
-    def selectable(self) -> tuple[str, ...]:
-        """目前可以切換成的模式（由保守到寬鬆）。安全模式永遠可選，成年玩家也可以自行選擇它。"""
-        modes = [CONTENT_TIER_SAFE]
-        if self.is_adult:
-            modes.append(CONTENT_TIER_STANDARD)
-        if self.adult_selectable:
-            modes.append(CONTENT_TIER_ADULT)
-        return tuple(modes)
-
-
 class AccessPolicy:
     def __init__(
         self,
         *,
         age_policy: AgePolicy = DEFAULT_AGE_POLICY,
         clock: Callable[[], datetime] = utcnow,
-        adult_mode_enabled: bool = False,
         safe_mode_forced: bool = False,
     ) -> None:
-        if not isinstance(adult_mode_enabled, bool):
-            raise ValueError("adult_mode_enabled 必須是布林值。")
         if not isinstance(safe_mode_forced, bool):
             raise ValueError("safe_mode_forced 必須是布林值。")
         self._age_policy = age_policy
         self._clock = clock
-        self._adult_mode_enabled = adult_mode_enabled      # 過渡相容層（2.5 移除）：舊的三值判定用
         self._safe_mode_forced = safe_mode_forced
 
     def is_admin(self, user: CurrentUser) -> bool:
@@ -167,6 +122,13 @@ class AccessPolicy:
             modes.append(script_binding)
         return most_conservative(*modes)
 
+    def save_mode(self, user: CurrentUser, script_snapshot: object) -> str:
+        """某個存檔目前的生效模式：`effective_mode`，劇本綁定取自**複製進存檔的劇本**（`script_snapshot_json` 的 `content_tier`），
+        所以劇本日後的下架、改版或刪除不影響進行中的存檔；快照缺少或無法判定該欄位時視為綁定（取保守，不是忽略）。
+        存檔本身不記錄也不釘住模式（`sessions.content_tier` 新版程式不讀）：玩家調整設定後，下一次呼叫就是新的結果。"""
+        binding = script_snapshot.get("content_tier") if isinstance(script_snapshot, dict) else None
+        return self.effective_mode(user, binding if binding is not None else "")
+
     def mode_state(self, user: CurrentUser) -> ModeState:
         """個人頁與內容模式 API 用的狀態（不含劇本）。"""
         return ModeState(
@@ -176,59 +138,10 @@ class AccessPolicy:
             forced=self._safe_mode_forced,
         )
 
-    # ---- 過渡相容層（safe-mode-toggle 2.5 移除）：舊的三值判定，依年齡上限 ----------------
-
-    @property
-    def adult_mode_enabled(self) -> bool:
-        """舊的成人模式開關（組裝處傳入；過渡相容層用，緊急煞車不在這裡）。"""
-        return self._adult_mode_enabled
-
-    def content_access(self, user: CurrentUser) -> ContentAccess:
-        """這位使用者目前的內容模式狀態。
-
-        尚未完成年齡確認者保守地視為未成年（他們本來也不能使用 AI 功能）；未成年者不論開關與偏好為何都是安全模式，
-        管理員與各會員等級都不豁免。成年者的上限是一般模式，成人模式啟用中才到成人模式；偏好為成人模式但尚未啟用時
-        退為一般模式，不是錯誤。
-        """
-        age = self._age(user)
-        is_adult = age is not None and age >= self._age_policy.adult_age
-        confirmed = self.rules_confirmed(user)
-        preference = legacy_parse_tier(user.content_tier_preference)
-        if not is_adult:
-            return ContentAccess(preference, CONTENT_TIER_SAFE, CONTENT_TIER_SAFE, False, False, confirmed, REASON_NOT_ADULT)
-        if self._safe_mode_forced:                   # 緊急煞車：所有人一律安全模式
-            return ContentAccess(preference, CONTENT_TIER_SAFE, CONTENT_TIER_SAFE, True, False, confirmed, REASON_DISABLED)
-        selectable = self._adult_mode_enabled
-        if not selectable:
-            reason = REASON_DISABLED
-        elif not confirmed:
-            reason = REASON_NEEDS_CONFIRMATION
-        else:
-            reason = None
-        age_cap = CONTENT_TIER_ADULT if reason is None else CONTENT_TIER_STANDARD
-        return ContentAccess(preference, age_cap, legacy_most_conservative(preference, age_cap), True, selectable, confirmed, reason)
-
-    def author_content_cap(self, user: CurrentUser) -> str:
-        """作者可以宣告的內容模式上限（rpg-script-authoring）：由生日於當下算出的年齡決定，未成年者（含尚未完成年齡確認）只能宣告
-        安全模式，成年者可宣告到成人模式。**不要求作者本人開啟成人模式**：宣告只是劇本的屬性，誰能遊玩由玩家的生效模式決定
-        （`effective_tier` 取劇本宣告與玩家上限中較保守者）。管理員與各會員等級不豁免。"""
-        age = self._age(user)
-        return CONTENT_TIER_ADULT if age is not None and age >= self._age_policy.adult_age else CONTENT_TIER_SAFE
-
     def require_can_submit(self, user: CurrentUser) -> None:
         """送審的權限：被暫停發佈（連續被自動拒絕）的玩家不能送審，其餘功能不受影響；管理員不會被暫停。"""
         if user.role != ROLE_ADMIN and user.publish_suspended_at is not None:
             raise PublishSuspended()
-
-    def effective_tier(self, user: CurrentUser, *, script_tier: str | None = None, save_tier: str | None = None) -> str:
-        """實際生效的內容模式：玩家偏好、年齡上限、劇本宣告（有劇本時）與存檔記錄（有存檔時）中最保守的一個。
-
-        沒有劇本或存檔時不傳（`None`）；傳入了卻無法判定的值一律視為安全模式，不會被忽略。存檔的模式只能在上限之內調整，
-        這裡不會因為任何輸入把模式調高。
-        """
-        tiers = [self.content_access(user).effective]
-        tiers += [tier for tier in (script_tier, save_tier) if tier is not None]
-        return legacy_most_conservative(*tiers)
 
     # ---- 是否可使用 AI 功能 -------------------------------------------------
 

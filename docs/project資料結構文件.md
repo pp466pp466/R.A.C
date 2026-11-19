@@ -227,7 +227,7 @@ erDiagram
         datetime age_deadline_at "玩家補填年齡的期限"
         datetime locked_at "玩家帳號被自動鎖定的時間"
         string lock_reason "鎖定原因"
-        string content_tier_preference "玩家選擇的內容模式"
+        string content_tier_preference "玩家選擇的內容模式 safe 或 adult 舊值 standard 讀作 adult"
         datetime adult_confirmed_at "切換成人模式時的成年確認時間"
         string adult_rules_version "確認當時的安全規範版本"
         string adult_confirm_method "確認方式"
@@ -375,7 +375,7 @@ erDiagram
         string title "標題"
         string summary "簡介"
         string world_name "世界觀名稱"
-        string content_tier "作者宣告的內容模式"
+        string content_tier "作者設定的內容模式 safe 為綁定 adult 為未綁定"
         string audience "讀者頻道"
         text background "背景與體系"
         text opening "初始對話"
@@ -667,7 +667,7 @@ flowchart TD
 | 23 | `age_deadline_at` | DATETIME2(6) | 是 | — | — | 玩家補填年齡的期限（建立後 24 小時）；補填成功後清空；逾時由每小時的排程刪除帳號。 |
 | 24 | `locked_at` | DATETIME2(6) | 是 | — | — | 玩家帳號被自動鎖定的時間；只有管理員能解除。 |
 | 25 | `lock_reason` | NVARCHAR(20) | 是 | — | — | 鎖定原因：identity_rejected｜rate_limited。 |
-| 26 | `content_tier_preference` | NVARCHAR(10) | 否 | `'safe'` | — | 玩家選擇的內容模式：safe｜standard｜adult；年齡確認時依年齡設定，滿 18 歲不自動調高；資料庫預設最保守的 'safe'。 |
+| 26 | `content_tier_preference` | NVARCHAR(10) | 否 | `'safe'` | — | 玩家選擇的內容模式：safe（安全模式開）｜adult（安全模式關）；舊值 standard 讀取時讀作 adult（不改寫既有資料，系統不再寫入）。年齡確認成功一律設為 safe、不自動調高；偏好為 adult 但沒有目前版本的同意時，生效模式仍是 safe；資料庫預設最保守的 'safe'。 |
 | 27 | `adult_confirmed_at` | DATETIME2(6) | 是 | — | — | 切換成人模式時的成年確認時間；只保存目前這一次。 |
 | 28 | `adult_rules_version` | NVARCHAR(40) | 是 | — | — | 確認當時的安全規範版本；版本改變後視為失效、須重新確認。 |
 | 29 | `adult_confirm_method` | NVARCHAR(20) | 是 | — | — | 確認方式（目前只有 self_declared，自行聲明）。 |
@@ -999,7 +999,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 8 | `title` | NVARCHAR(30) | 否 | — | — | 標題（至多 30 字）；目錄欄位，可瀏覽與篩選。 |
 | 9 | `summary` | NVARCHAR(150) | 否 | — | — | 簡介（至多 150 字）。 |
 | 10 | `world_name` | NVARCHAR(50) | 否 | — | — | 世界觀名稱（至多 50 字）。 |
-| 11 | `content_tier` | NVARCHAR(10) | 否 | — | — | 作者宣告的內容模式：safe｜standard｜adult。 |
+| 11 | `content_tier` | NVARCHAR(10) | 否 | — | — | 作者設定的內容模式：safe（綁定安全模式）｜adult（未綁定，跟隨玩家的設定）；舊值 standard 讀作 adult（已發佈的版本不可變，不改寫）。 |
 | 12 | `audience` | NVARCHAR(10) | 是 | — | — | 讀者頻道：all（全讀者）｜male（男頻）｜female（女頻）；屬版本內容，與版本一起不可變，修改須產生新版本。**空值視同全讀者**：0017 之前建立的版本為空，不回填；新版本寫入明確的值。0017 新增。 |
 | 13 | `background` | NVARCHAR(max) | 否 | — | — | 背景與體系（至多 1500 字）；世界特有的系統以自由文字寫在這裡。 |
 | 14 | `opening` | NVARCHAR(max) | 是 | — | — | 初始對話（至多 500 字，選填）。 |
@@ -1243,7 +1243,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `users.member_tier` | `free`｜`plus`｜`vip` | 只影響額度、不影響權限：每日對話輪數 30／100／300、每分鐘訊息數 6／10／20、對話數上限 20／100／500、記事簿容量 2000／5000／10000 字、劇本數 3／10／30、每日送審 3／5／10（後兩者存在 runtime_limits，可調整）。 |
 | `users.status` | `active`｜`suspended`｜`deletion_pending` | active＝正常；suspended＝被管理員停權；deletion_pending＝申請刪除，7 天寬限期內可撤銷。 |
 | `users.lock_reason` | `identity_rejected`｜`rate_limited` | 與 lock_strikes.kind 相同：identity_rejected＝已辨識身分卻被拒的登入、年齡確認不一致；rate_limited＝被每分鐘訊息數上限擋下。 |
-| `users.content_tier_preference` | `safe`｜`standard`｜`adult` | safe＝安全模式（未滿 18 歲固定）；standard＝一般模式（浪漫、曖昧與感官，不露骨）；adult＝成人模式（成年角色間合意的露骨內容，須同時滿足部署開關、供應商許可與成年確認）。 |
+| `users.content_tier_preference` | `safe`｜`standard`｜`adult` | safe＝安全模式開（預設）；adult＝安全模式關（成年角色間合意的露骨內容；須在目前版本的安全規範下同意才生效，緊急煞車啟用時一律不生效）；**standard 是舊值（原一般模式）：讀取時讀作 adult，不改寫既有資料，系統不再寫入**。 |
 | `users.story_preference` | `all`｜`male`｜`female` | all＝全讀者（預設）；male＝男頻；female＝女頻。只影響劇本清單的排序（符合偏好者排最前，其次全讀者，其餘仍可瀏覽），不影響內容分級、敘事與權限。 |
 | `users.age_range` | `under_13`｜`13_17`｜`18_24`｜`25_34`｜`35_44`｜`45_54`｜`55_plus` | 玩家自行選擇的年齡區間，須與生日對照一致才寫入；未滿 13 歲者不得使用，發現時立即抹除帳號。 |
 | `users.adult_confirm_method` | `self_declared` | 目前只有 self_declared（自行聲明）；日後法務要求更強的方式時只更換確認方式。 |
@@ -1263,7 +1263,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `alert_states.severity` | `warning`｜`critical` | warning＝警告；critical＝嚴重；只有告警中才有值。 |
 | `runtime_limits.key` | `script_limit.free`｜`script_limit.plus`｜`script_limit.vip`｜`script_submit_daily.free`｜`script_submit_daily.plus`｜`script_submit_daily.vip`｜`protagonist_suggest_daily.free`｜`protagonist_suggest_daily.plus`｜`protagonist_suggest_daily.vip`｜`script_reject_streak`｜`coin.turn_cost.standard`｜`coin.signup_grant`｜`coin.checkin_grant`｜`coin.free_cap`｜`coin.hold_timeout_seconds`｜`rpg.max_months_per_turn`｜`rpg.free_regenerations` | 見下方「營運限制」。 |
 | `script_versions.status` | `draft`｜`pending_review`｜`published`｜`rejected`｜`superseded` | 見下方「劇本版本狀態」。 |
-| `script_versions.content_tier` | `safe`｜`standard`｜`adult` | 作者宣告的內容模式；未滿 18 歲的作者只能宣告 safe。玩家只能遊玩不高於自己生效模式的劇本。 |
+| `script_versions.content_tier` | `safe`｜`standard`｜`adult` | safe＝綁定安全模式（該劇本的存檔恆以安全模式遊玩）；adult＝未綁定（跟隨玩家的設定）；舊值 standard 讀作 adult。所有玩家都看得到並可開存檔所有上架的劇本，劇本的模式只影響生效模式；沒有依年齡而異的作者上限。 |
 | `script_versions.audience` | `all`｜`male`｜`female` | 讀者頻道；空值（0017 之前的版本）視同 all。標準化內容只在 male 或 female 時帶 audience 鍵，all 不進內容雜湊，所以既有內容的雜湊不變。 |
 | `script_versions.ending_mode` | `none`｜`custom` | none＝無結局的開放世界（預設）；custom＝自訂結局（附結局說明與選填的壽終年齡）。 |
 | `script_versions.review_verdict` | `pass`｜`flag`｜`reject` | pass＝通過；flag＝有疑慮（仍可送審，進人工並標示類別）；reject＝明確違反（直接拒絕）。 |
@@ -1725,3 +1725,4 @@ flowchart TD
 | 2026-11-16 | 文件 | 本文件 | 同步 rpg-turn-revision 的規則修訂（AGENTS.md 第 7 節「玩家重新生成與編輯輸入」，`437a5f5`）：編輯由「一律付費並使免費次數歸零」改為與重新生成共用每回合前 N 次免費、成功才計次、編輯不歸零；修訂 `memory_logs.regen_count`（第 5 節欄位說明，成功的重新生成與編輯都加 1）、`turn_regenerations.is_free`（第 5 節欄位說明，編輯在免費次數內也是免費）、`turn_regenerations.kind`（第 7 節固定值）與 `rpg.free_regenerations`（`runtime_limits` 的初始資料說明）四處的語意。**只是語意說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：欄位型別、預設值與 `0018_rpg_turn_revision` 的內容都不變 | 本文件 |
 | 2026-11-17 | 新增 | 欄位 `users.adult_declared_at`（DATETIME2(6)，可為空）、`users.adult_declaration_version`（NVARCHAR(40)，可為空） | 全站只限滿 18 歲：新使用者在登入頁勾選「我確認已滿 18 歲」的時間與當時的年齡政策版本，只是稽核紀錄、不參與年齡判斷；管理員與升級前的帳號維持空值；`is_adult_at_confirmation` 保留但不再寫入（日後收縮）；`users` 由 36 欄變 38 欄、全庫欄位共 251 個。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0019_adult_declaration` |
 | 2026-11-19 | 新增 | 欄位 `sessions.safe_hint_at`（DATETIME2(6)，可為空） | 安全模式開關：遊戲內「可嘗試關閉安全模式」的提示已出現的時間，每個存檔最多一次（條件式更新保證）；不回填、不建索引、不含任何玩家文字；`sessions` 由 29 欄變 30 欄、全庫欄位共 252 個。沒有資料改寫：玩家偏好、劇本版本與存檔中的舊值 `standard` 於讀取時讀作 `adult`；`sessions.content_tier` 保留並仍於開存檔時寫入，但新版程式不讀它（日後另立 contract change 移除）。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0020_safe_mode_hint` |
+| 2026-11-19 | 文件 | 本文件 | 同步 safe-mode-toggle 第 2 組的規則修訂（內容模式只有 safe／adult 兩種）：修訂 `users.content_tier_preference`、`script_versions.content_tier`、`sessions.content_tier` 三處的固定值與欄位說明（第 5、6 節與 ERD）——舊值 `standard` 讀取時讀作 `adult`、不改寫既有資料；劇本的模式只影響生效模式（所有上架劇本都可開存檔）；`sessions.content_tier` 新版程式只寫入、不讀取（存檔的生效模式現算）。**只是語意說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：欄位型別、預設值與 `0020_safe_mode_hint` 的內容都不變 | 本文件 |

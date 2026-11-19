@@ -20,6 +20,7 @@ from app.models.llm_call_log import KIND_SCRIPT_REVIEW
 from app.models.script import REVIEW_FLAG, REVIEW_PASS, REVIEW_REJECT, ScriptVersion
 from app.observability import script_events
 from app.repositories.script_repository import ScriptRepository
+from app.services.content_tier import parse_tier
 from app.services.llm_service import DEGRADED_BLOCKED, LlmService
 from app.services.script_review_prompt import (
     REVIEW_SCHEMA, build_review_contents, build_review_instruction, review_rules,
@@ -87,7 +88,7 @@ class ScriptReviewService:
         content_hash = version.content_hash
         if version.review_hash == content_hash and version.review_verdict in (REVIEW_PASS, REVIEW_FLAG, REVIEW_REJECT):
             return ModelReview(version.review_verdict, tuple(version.review_categories_json or ()), from_record=True)
-        review = self.review_model(user_id, content, version.content_tier)
+        review = self.review_model(user_id, content, parse_tier(version.content_tier))
         if review.verdict is None:
             return review
         recorded = self._scripts.record_review(version.id, content_hash, review.verdict, review.categories, self._clock())

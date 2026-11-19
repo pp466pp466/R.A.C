@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from app.models.user import ROLE_ADMIN
+from app.models.user import ROLE_ADMIN, User
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
@@ -31,10 +31,10 @@ from tests.test_llm_providers_by_purpose import GEMINI_KEY, make_app, request_sc
 GHOST = "00000000-0000-4000-8000-000000000000"
 
 
-def service_for(session, adult_mode=False) -> GameEntryService:
+def service_for(session, safe_mode_forced=False) -> GameEntryService:
     return GameEntryService(
         scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        policy=AccessPolicy(clock=FakeClock(), adult_mode_enabled=adult_mode),
+        policy=AccessPolicy(clock=FakeClock(), safe_mode_forced=safe_mode_forced),
     )
 
 
@@ -118,31 +118,27 @@ def test_each_card_id_is_the_version_public_id_that_the_setup_and_start_endpoint
     assert card["id"] == version.public_id and len(card["id"]) == 36
 
 
-@pytest.mark.parametrize("overrides, expected", [
-    ({"content_tier_preference": "safe"}, ["安全"]),                                    # 安全模式的玩家：只含宣告為安全的版本
-    ({}, ["一般", "安全"]),                                                              # 成年玩家預設一般模式：不含成人
-    ({"age": 15, "content_tier_preference": "standard"}, ["安全"]),                      # 未滿 18 歲：不論偏好都是安全
+AGREED = {"adult_confirmed_at": TODAY_UTC, "adult_rules_version": SAFE_RULES_VERSION}
+
+
+@pytest.mark.parametrize("overrides", [
+    {},                                                          # 預設：安全模式開
+    {"content_tier_preference": "adult", **AGREED},              # 已關閉安全模式並同意目前規範
+    {"content_tier_preference": "adult"},                        # 偏好 adult 但沒有同意紀錄
+    {"age": None, "role": ROLE_ADMIN},                           # 尚未完成年齡確認的管理員
 ])
-def test_the_catalog_only_holds_versions_up_to_the_players_effective_mode(member_session, overrides, expected):
-    for index, tier in enumerate(("safe", "standard", "adult")):
-        publish(member_session, title={"safe": "安全", "standard": "一般", "adult": "成人"}[tier], content_tier=tier, now=TODAY_UTC + timedelta(seconds=index))
-    assert titles(service_for(member_session).catalog(player(member_session, **overrides))) == expected
-
-
-def test_an_adult_who_chose_the_adult_mode_with_the_deployment_switch_on_also_sees_adult_versions(member_session):
+def test_the_catalog_holds_every_published_version_whatever_the_players_mode(member_session, overrides):
     for index, tier in enumerate(("safe", "standard", "adult")):
         publish(member_session, title=tier, content_tier=tier, now=TODAY_UTC + timedelta(seconds=index))
-    reader = player(member_session, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
-    assert titles(service_for(member_session, adult_mode=True).catalog(reader)) == ["adult", "standard", "safe"]
-    assert titles(service_for(member_session, adult_mode=False).catalog(reader)) == ["standard", "safe"]        # 開關關閉時退為一般模式
+    assert titles(service_for(member_session).catalog(player(member_session, **overrides))) == ["adult", "standard", "safe"]
+    assert titles(service_for(member_session, safe_mode_forced=True).catalog(player(member_session, 2, **overrides))) == ["adult", "standard", "safe"]
 
 
-def test_an_admin_who_has_not_confirmed_the_age_still_gets_a_safe_catalog_instead_of_an_error(member_session):
-    publish(member_session, title="安全", content_tier="safe")
-    publish(member_session, title="一般", content_tier="standard", now=TODAY_UTC + timedelta(seconds=1))
-    admin = player(member_session, age=None, role=ROLE_ADMIN)
-    page = service_for(member_session).catalog(admin)
-    assert titles(page) == ["安全"] and page["content_mode"] == {"effective": "safe", "is_adult": False}
+def test_a_card_reports_the_binding_with_the_legacy_standard_read_as_adult(member_session):
+    for index, tier in enumerate(("safe", "standard", "adult")):
+        publish(member_session, title=tier, content_tier=tier, now=TODAY_UTC + timedelta(seconds=index))
+    cards = {card["title"]: card["content_tier"] for card in service_for(member_session).catalog(player(member_session))["scripts"]}
+    assert cards == {"safe": "safe", "standard": "adult", "adult": "adult"}
 
 
 # ---- 可玩劇本清單：排序與分頁 ----------------------------------------------------------------
@@ -192,7 +188,7 @@ def test_has_more_is_true_only_when_something_is_left_after_this_page(member_ses
     service, reader = service_for(member_session), player(member_session)
     assert [len(p["scripts"]) for p in (service.catalog(reader, limit=3), service.catalog(reader, limit=2), service.catalog(reader, limit=2, offset=2))] == [3, 2, 1]
     assert [service.catalog(reader, limit=3)["has_more"], service.catalog(reader, limit=2)["has_more"], service.catalog(reader, limit=2, offset=2)["has_more"]] == [False, True, False]
-    assert service.catalog(reader, offset=OFFSET_MAX) == {"scripts": [], "has_more": False, "content_mode": {"effective": "standard", "is_adult": True}}
+    assert service.catalog(reader, offset=OFFSET_MAX) == {"scripts": [], "has_more": False, "content_mode": {"effective": "safe", "forced": False}}
 
 
 def test_an_empty_catalog_is_a_normal_empty_page(member_session):
@@ -282,28 +278,33 @@ def test_a_builtin_script_whose_pen_name_is_empty_is_still_signed_as_official_bu
 
 # ---- 內容模式摘要 -------------------------------------------------------------------------------
 
-def test_a_minor_sees_why_the_catalog_is_safe_and_the_summary_has_no_birthday_or_age(member_session):
-    publish(member_session, title="一般劇本", content_tier="standard")
-    reader = player(member_session, age=15)
+def test_the_summary_is_only_the_effective_mode_and_the_brake_and_has_no_birthday_age_or_is_adult(member_session):
+    publish(member_session, title="未綁定", content_tier="adult")
+    reader = player(member_session, age=30)
     page = service_for(member_session).catalog(reader)
-    assert page["content_mode"] == {"effective": "safe", "is_adult": False} and page["scripts"] == []
+    assert page["content_mode"] == {"effective": "safe", "forced": False} and len(page["scripts"]) == 1
     dumped = json.dumps(page, ensure_ascii=False)
-    for private in (reader.birth_date.isoformat(), "birth", "age"):
+    for private in (reader.birth_date.isoformat(), "birth", "age", "is_adult"):
         assert private not in dumped
 
 
-def test_an_adult_with_the_default_settings_is_in_the_standard_mode(member_session):
-    page = service_for(member_session).catalog(player(member_session))
-    assert page["content_mode"] == {"effective": "standard", "is_adult": True}
+def test_a_player_who_agreed_and_turned_the_safe_mode_off_has_the_adult_mode_in_the_summary(member_session):
+    reader = player(member_session, content_tier_preference="adult", **AGREED)
+    assert service_for(member_session).catalog(reader)["content_mode"] == {"effective": "adult", "forced": False}
 
 
-@pytest.mark.parametrize("overrides", [{}, {"age": 15}, {"content_tier_preference": "safe"}, {"age": None, "role": ROLE_ADMIN}])
-def test_the_summary_agrees_with_the_content_mode_endpoints_effective_mode(member_session, overrides):
+def test_with_the_emergency_brake_the_summary_is_safe_and_forced(member_session):
+    reader = player(member_session, content_tier_preference="adult", **AGREED)
+    assert service_for(member_session, safe_mode_forced=True).catalog(reader)["content_mode"] == {"effective": "safe", "forced": True}
+
+
+@pytest.mark.parametrize("overrides", [{}, {"content_tier_preference": "safe"}, {"content_tier_preference": "adult", **AGREED}, {"age": None, "role": ROLE_ADMIN}])
+@pytest.mark.parametrize("forced", [False, True])
+def test_the_summary_agrees_with_the_content_mode_endpoints_effective_mode(member_session, overrides, forced):
     reader = player(member_session, **overrides)
-    policy = AccessPolicy(clock=FakeClock())
-    access = policy.content_access(reader)               # 過渡相容層的三值判定；第 2 組（2.1）改為 {effective, forced}
-    summary = service_for(member_session).catalog(reader)["content_mode"]
-    assert summary == {"effective": access.effective, "is_adult": access.is_adult}
+    state = AccessPolicy(clock=FakeClock(), safe_mode_forced=forced).mode_state(reader)
+    summary = service_for(member_session, safe_mode_forced=forced).catalog(reader)["content_mode"]
+    assert summary == {"effective": state.effective, "forced": state.forced}
 
 
 # ---- 一頁的查詢次數固定 -------------------------------------------------------------------------
@@ -441,10 +442,65 @@ def test_a_session_page_costs_two_queries_for_one_save_and_for_twelve(member_ses
 
 def test_the_owner_reads_the_summary_of_their_own_save(member_session):
     alice = player(member_session)
-    save = open_save(member_session, alice, title="青雲問道", content_tier="standard")
+    save = open_save(member_session, alice, title="青雲問道")
     summary = service_for(member_session).session_summary(alice, save.public_id)
     assert set(summary) == set(SUMMARY_FIELDS)
-    assert summary == {"id": save.public_id, "title": "青雲問道", "content_tier": "standard", "player_name": "林初", "ended": False}
+    assert summary == {"id": save.public_id, "title": "青雲問道", "content_tier": "safe", "player_name": "林初", "ended": False}
+
+
+# ---- 存檔的內容模式是現算的（不是開存檔當下釘住的值）-----------------------------------------------------------
+
+def open_save_of(session, user, binding, title="存檔", **overrides):
+    """開一個存檔，劇本複本的綁定為 `binding`；`sessions.content_tier` 欄位故意寫成與現算不同的值，證明新版程式不讀它。"""
+    save = open_save(session, user, title=title, **overrides)
+    save.script_snapshot_json = {**save.script_snapshot_json, "content_tier": binding}
+    session.commit()
+    return save
+
+
+def mode_of_listed_save(session, user, save, **service_kwargs):
+    service = service_for(session, **service_kwargs)
+    listed = {item["id"]: item["content_tier"] for item in service.my_sessions(user)["sessions"]}
+    summary = service.session_summary(user, save.public_id)["content_tier"]
+    assert listed[save.public_id] == summary                         # 清單與存檔摘要是同一個來源
+    return summary
+
+
+def test_the_listed_mode_follows_the_players_current_setting_not_the_mode_at_open_time(member_session):
+    reader = player(member_session, content_tier_preference="safe")
+    save = open_save_of(member_session, reader, "adult", content_tier="safe")                  # 開存檔當下是 safe、劇本未綁定
+    assert mode_of_listed_save(member_session, reader, save) == "safe"
+    user = member_session.get(User, reader.id)
+    user.content_tier_preference, user.adult_confirmed_at, user.adult_rules_version = "adult", TODAY_UTC, SAFE_RULES_VERSION
+    member_session.commit()
+    relaxed = CurrentUser.from_model(user)
+    assert mode_of_listed_save(member_session, relaxed, save) == "adult"                      # 玩家關閉安全模式之後，下一次讀取就是 adult
+
+
+def test_a_save_of_a_bound_script_is_always_safe_even_after_the_player_turned_the_safe_mode_off(member_session):
+    relaxed = player(member_session, content_tier_preference="adult", **AGREED)
+    save = open_save_of(member_session, relaxed, "safe", content_tier="adult")
+    assert mode_of_listed_save(member_session, relaxed, save) == "safe"
+
+
+def test_the_legacy_standard_binding_in_a_snapshot_reads_as_unbound(member_session):
+    relaxed = player(member_session, content_tier_preference="adult", **AGREED)
+    save = open_save_of(member_session, relaxed, "standard", content_tier="safe")
+    assert mode_of_listed_save(member_session, relaxed, save) == "adult"
+
+
+def test_a_snapshot_without_a_readable_binding_is_treated_as_bound(member_session):
+    relaxed = player(member_session, content_tier_preference="adult", **AGREED)
+    for n, broken in enumerate(("", "mature"), start=1):
+        save = open_save_of(member_session, relaxed, broken, title=f"壞的{n}")
+        assert mode_of_listed_save(member_session, relaxed, save) == "safe"
+
+
+def test_the_emergency_brake_makes_every_listed_save_safe(member_session):
+    relaxed = player(member_session, content_tier_preference="adult", **AGREED)
+    save = open_save_of(member_session, relaxed, "adult")
+    assert mode_of_listed_save(member_session, relaxed, save, safe_mode_forced=True) == "safe"
+    assert mode_of_listed_save(member_session, relaxed, save) == "adult"                      # 煞車解除後恢復
 
 
 def test_the_summary_of_an_ended_or_archived_save_is_still_readable(member_session):

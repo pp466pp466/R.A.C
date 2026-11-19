@@ -17,8 +17,9 @@ from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
 from app.services.current_user import CurrentUser
+from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.script_seed_service import (
-    BUILTIN_MAX_TIER, SEED_CREATED, SEED_DIRECTORY, ScriptSeedService, SeedDataError,
+    SEED_CREATED, SEED_DIRECTORY, ScriptSeedService, SeedDataError,
 )
 from app.services.script_spec import TOTAL_CHARS_MAX, hash_content, validate_script
 from app.services.session_service import SessionService
@@ -143,6 +144,32 @@ def test_a_save_opened_from_the_first_version_keeps_its_content_after_the_seed_i
     assert member_session.scalar(select(func.count()).select_from(ScriptVersion)) == 2
 
 
+def test_changing_a_seed_from_bound_to_unbound_adds_version_two_and_leaves_a_save_from_version_one_alone(member_session, seeds):
+    write_seed(seeds, "alpha", content_tier="safe")                    # 第 1 版：綁定安全模式
+    service, clock = make_service(member_session, seeds)
+    service.run()
+    player = CurrentUser.from_model(add_user(member_session, 1, content_tier_preference="adult", adult_confirmed_at=clock(),
+                                             adult_rules_version=SAFE_RULES_VERSION))
+    policy = AccessPolicy(clock=clock)
+    sessions = SessionService(
+        scripts=ScriptRepository(member_session), sessions=SessionRepository(member_session), policy=policy,
+        reviews=PassingReviews(), protagonist_reviews=PassingProtagonistReviews(), protagonist_marker=PROTAGONIST_MARKER, clock=clock,
+    )
+    first = member_session.scalar(select(ScriptVersion))
+    old_save = sessions.start_session(player, first.public_id, **start_kwargs())
+    assert policy.save_mode(player, old_save.script_snapshot_json) == "safe"        # 綁定：已關閉安全模式也是 safe
+
+    write_seed(seeds, "alpha", content_tier="adult")                   # 改為未綁定：內容改變，新增第 2 版取代第 1 版
+    report = service.run()
+    assert (report.created, report.updated, report.unchanged) == (0, 1, 0)
+    member_session.expire_all()
+    versions = list(member_session.scalars(select(ScriptVersion).order_by(ScriptVersion.version_no)))
+    assert [(v.version_no, v.status, v.content_tier) for v in versions] == [(1, VERSION_SUPERSEDED, "safe"), (2, VERSION_PUBLISHED, "adult")]
+    assert policy.save_mode(player, member_session.get(RpgSession, old_save.id).script_snapshot_json) == "safe"   # 舊存檔不受影響
+    new_save = sessions.start_session(player, versions[1].public_id, **start_kwargs())
+    assert policy.save_mode(player, new_save.script_snapshot_json) == "adult"       # 新版本：跟隨玩家的設定
+
+
 # ---- 資料不合規：整批失敗、不寫入、不回顯 ---------------------------------------------------------
 
 def test_one_invalid_file_fails_the_whole_batch_names_the_file_and_the_path_and_writes_nothing(member_session, seeds):
@@ -202,14 +229,17 @@ def test_a_missing_or_empty_directory_is_an_error_because_it_means_the_files_wer
             service.run()
 
 
-def test_the_declared_mode_must_stay_within_what_a_builtin_script_may_declare(member_session, seeds):
-    assert BUILTIN_MAX_TIER == "standard"
-    write_seed(seeds, "fine", content_tier="standard")
-    write_seed(seeds, "too-open", content_tier="adult")
+def test_the_declared_mode_must_be_safe_or_adult_and_the_legacy_standard_is_still_accepted(member_session, seeds):
+    write_seed(seeds, "fine", content_tier="safe")
+    write_seed(seeds, "open", content_tier="adult")
+    write_seed(seeds, "legacy", content_tier="standard")
+    write_seed(seeds, "too-odd", content_tier="mature")
     service, _ = make_service(member_session, seeds)
     with pytest.raises(SeedDataError) as caught:
         service.run()
-    assert [p for p in caught.value.problems if "content_tier" in p] and not any("fine.json" in p for p in caught.value.problems)
+    flagged = [p for p in caught.value.problems if "content_tier" in p]
+    assert len(flagged) == 1 and flagged[0].startswith("too-odd.json")
+    assert not any(name in p for p in caught.value.problems for name in ("fine.json", "open.json", "legacy.json"))
     assert member_session.scalar(select(func.count()).select_from(Script)) == 0
 
 
@@ -246,13 +276,14 @@ def test_the_shipped_files_are_utf8_without_a_bom_and_pass_the_fixed_spec():
         raw = path.read_bytes()
         assert not raw.startswith(b"\xef\xbb\xbf")
         raw.decode("utf-8")
-    result = validate_script(shipped()["content"], max_tier="safe")
+    result = validate_script(shipped()["content"])
     assert result.total_chars <= TOTAL_CHARS_MAX
 
 
-def test_the_shipped_script_is_safe_has_no_ending_and_has_the_required_structure():
-    content = validate_script(shipped()["content"], max_tier="safe").content
-    assert content["content_tier"] == "safe" and content["ending_mode"] == "none"
+def test_the_shipped_script_is_unbound_adult_has_no_ending_and_has_the_required_structure():
+    # 未綁定安全模式（content_tier 為 adult）：內容本身適用於安全模式，跟隨玩家的設定（safe-mode-toggle）
+    content = validate_script(shipped()["content"]).content
+    assert content["content_tier"] == "adult" and content["ending_mode"] == "none"
     assert len(content["characters"]) >= 3 and any(c["hidden_trait"] for c in content["characters"])
     assert len(content["locations"]) >= 3
     kinds = {m["trigger"]["kind"] for m in content["milestones"]}
@@ -267,7 +298,7 @@ def test_the_shipped_script_has_no_real_personal_data_or_secret_markers():
         assert pattern not in text
 
 
-def test_a_safe_mode_player_can_start_a_save_from_the_shipped_script(member_session):
+def test_a_safe_mode_player_can_start_a_save_from_the_unbound_shipped_script_and_plays_in_the_safe_mode(member_session):
     service, clock = make_service(member_session, SEED_DIRECTORY)
     service.run()
     teen = CurrentUser.from_model(add_user(member_session, 1, content_tier_preference="safe"))        # 選了安全模式的成年玩家（全站只限滿 18 歲）
@@ -370,7 +401,7 @@ def test_a_live_version_from_before_the_migration_with_an_empty_audience_is_repo
     # 已存的雜湊也要是「升級前的程式」算出的：標準化內容沒有 audience 鍵。不能沿用第一次執行時由 validate_script 算出的雜湊——
     # 那樣一旦 validate_script 對全讀者也寫入 audience，已存與重算的雜湊會一起改變，這個測試就抓不到（破壞驗證 5.1 ① 發現的缺口）。
     stored = json.loads((seeds / "alpha.json").read_text(encoding="utf-8"))["content"]
-    legacy_content = {key: value for key, value in validate_script(stored, max_tier=BUILTIN_MAX_TIER).content.items() if key != "audience"}
+    legacy_content = {key: value for key, value in validate_script(stored).content.items() if key != "audience"}
     live.content_hash = hash_content(legacy_content)
     member_session.commit()
     before = snapshot_of(member_session)
@@ -407,7 +438,7 @@ def test_the_shipped_seed_files_hash_is_unaffected_by_the_audience_field():
     for path in sorted(SEED_DIRECTORY.glob("*.json")):
         content = json.loads(path.read_text(encoding="utf-8-sig"))["content"]
         assert "audience" not in content                          # 首發劇本沒有宣告頻道，視同全讀者
-        as_all = validate_script({**content, "audience": "all"}, max_tier=BUILTIN_MAX_TIER)
-        plain = validate_script(content, max_tier=BUILTIN_MAX_TIER)
+        as_all = validate_script({**content, "audience": "all"})
+        plain = validate_script(content)
         assert as_all.content_hash == plain.content_hash
         assert "audience" not in plain.content and "audience" not in as_all.content      # 全讀者不進標準化內容（設計 D1）

@@ -16,7 +16,7 @@ from app.services.cs_prompt import leak_marker
 from app.services.rpg_world import STAGES
 
 MARKER = "0123456789abcdef01234567"
-TIERS = ("safe", "standard", "adult")
+TIERS = ("safe", "adult")                       # 只有兩段分級界線：安全開與安全關（沒有一般模式）
 ORIGINS = ("native", "transmigrator")
 
 
@@ -34,7 +34,7 @@ def test_the_system_instruction_builders_take_only_enumerated_parameters_not_fre
 
 
 def test_the_same_parameters_always_give_the_same_instruction():
-    assert system("standard", origin="transmigrator", ending_due=True) == system("standard", origin="transmigrator", ending_due=True)
+    assert system("adult", origin="transmigrator", ending_due=True) == system("adult", origin="transmigrator", ending_due=True)
     assert rp.build_opening_system("adult", "zh-Hant-TW", "native", MARKER) == rp.build_opening_system("adult", "zh-Hant-TW", "native", MARKER)
 
 
@@ -103,16 +103,21 @@ def test_each_tier_carries_only_its_own_boundary(tier):
         assert rp.TIER_BOUNDARIES[other] not in text
 
 
-def test_the_adult_boundary_never_appears_in_a_more_conservative_mode():
+def test_the_adult_boundary_never_appears_in_the_safe_mode():
     adult_only = ("成年角色之間合意的露骨內容允許", "成人模式")
-    for tier in ("safe", "standard"):
-        for phrase in adult_only:
-            assert phrase not in system(tier) and phrase not in rp.build_opening_system(tier, "zh-Hant-TW", "native", MARKER)
+    for phrase in adult_only:
+        assert phrase not in system("safe") and phrase not in rp.build_opening_system("safe", "zh-Hant-TW", "native", MARKER)
     assert all(phrase in system("adult") for phrase in adult_only)
 
 
+def test_there_is_no_standard_boundary_any_more_and_the_legacy_value_reads_as_the_adult_boundary():
+    assert set(rp.TIER_BOUNDARIES) == {"safe", "adult"}
+    assert "一般模式" not in system("safe") and "一般模式" not in system("adult")
+    assert system("standard") == system("adult")                       # 舊值讀作 adult
+
+
 def test_each_mode_has_its_own_marker_phrase_that_the_others_lack():
-    anchors = {"safe": "本場為「安全模式」", "standard": "本場為「一般模式」", "adult": "本場為「成人模式」"}
+    anchors = {"safe": "本場為「安全模式」", "adult": "本場為「成人模式」"}
     for tier, anchor in anchors.items():
         for other in TIERS:
             assert (anchor in system(other)) is (other == tier)
@@ -134,7 +139,7 @@ def test_the_absolute_bans_are_in_every_mode():
 def test_the_adult_mode_keeps_explicitly_underage_characters_out_but_does_not_require_an_age_for_everyone():
     adult_text = system("adult")
     assert "未滿 18 歲" in adult_text and "不得出現在露骨場景" in adult_text
-    assert "沒有明確年齡的角色不需要特別處理" in adult_text and "沒有明確年齡的角色不需要特別處理" not in system("standard")
+    assert "沒有明確年齡的角色不需要特別處理" in adult_text and "沒有明確年齡的角色不需要特別處理" not in system("safe")
     assert "都必須在資料中有明確的成年年齡紀錄" not in adult_text            # 使用者 2026-11-09 修訂：玩家對話產生的角色不需要明確年齡
 
 

@@ -29,14 +29,14 @@ MODEL = "rpg-primary-model"
 
 
 class GameKit:
-    def __init__(self, session: Session, *, adult_mode: bool = False) -> None:
+    def __init__(self, session: Session, *, safe_mode_forced: bool = False) -> None:
         self.session = session
         self.clock = FakeClock()
         self.sessions = SessionRepository(session)
         self.wallets = WalletRepository(session)
         self.limits = RuntimeLimits(limits=RuntimeLimitRepository(session), clock=self.clock)
         self.wallet = WalletService(wallets=self.wallets, limits=self.limits, clock=self.clock)
-        self.policy = AccessPolicy(clock=self.clock, adult_mode_enabled=adult_mode)
+        self.policy = AccessPolicy(clock=self.clock, safe_mode_forced=safe_mode_forced)
         self.budget_exhausted = False
         self.game = GameService(
             sessions=self.sessions, regenerations=TurnRegenerationRepository(session), wallet=self.wallet, policy=self.policy, limits=self.limits,

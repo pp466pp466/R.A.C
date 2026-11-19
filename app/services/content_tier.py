@@ -9,8 +9,6 @@
 - 無法判定（缺少、空字串或不是兩種之一）一律視為最保守的 `safe`（`parse_tier`），不拋出錯誤：
   預設最保守是安全模式的底線，寧可少給也不要因為髒資料而放寬。
 
-檔案最下方的「過渡相容層」是 safe-mode-toggle 第 1 組與第 2 組之間的暫時產物（讓每個 commit 的測試都是綠的），
-第 2 組的 2.5 移除並以守門測試鎖住；新程式請勿使用它。
 """
 from __future__ import annotations
 
@@ -21,26 +19,25 @@ from app.models.user import (
     CONTENT_MODES,
     CONTENT_TIER_ADULT,
     CONTENT_TIER_SAFE,
-    CONTENT_TIER_STANDARD,
-    CONTENT_TIERS,
 )
 
 __all__ = [
     "ADULT_CONFIRM_SELF_DECLARED",
     "CONTENT_MODES",
-    "CONTENT_TIERS",
     "CONTENT_TIER_ADULT",
     "CONTENT_TIER_SAFE",
-    "CONTENT_TIER_STANDARD",
+    "LEGACY_TIER_STANDARD",
     "SAFE_RULES_VERSION",
+    "is_readable_tier",
     "is_tier",
-    "legacy_most_conservative",
-    "legacy_parse_tier",
-    "legacy_tier_rank",
     "most_conservative",
     "parse_tier",
     "tier_rank",
 ]
+
+# 舊值（原一般模式）：只認得、不寫入，一律讀作 `adult`。**這個字面值只允許出現在這個檔案**（全碼庫的守門測試 `test_no_legacy_tier_checks`）：
+# 其他程式要判斷「是不是可讀的內容模式值」請用 `is_readable_tier`，要取得模式請用 `parse_tier`。
+LEGACY_TIER_STANDARD = "standard"
 
 # 「安全規範」的版本。玩家關閉安全模式時同意的是這一版；改版後所有人的先前同意視為失效、須重新同意
 # （規格：安全規範的版本改變後，先前的同意視為失效）。規範內容由法務覆核後才會改版，改版時必須一併更新對外的規範頁面。
@@ -55,9 +52,14 @@ def is_tier(value: Any) -> bool:
     return isinstance(value, str) and value in _RANK
 
 
+def is_readable_tier(value: Any) -> bool:
+    """是不是可以被讀取的內容模式值：兩種現行模式，或舊值 `standard`（讀作 `adult`）。劇本內容的驗證用它決定要不要接受該值。"""
+    return is_tier(value) or (isinstance(value, str) and value == LEGACY_TIER_STANDARD)
+
+
 def parse_tier(value: Any) -> str:
     """把任意輸入轉為兩種模式之一：舊值 `standard` 讀作 `adult`；缺少或不合法一律回傳最保守的 `safe`。"""
-    if value == CONTENT_TIER_STANDARD and isinstance(value, str):
+    if isinstance(value, str) and value == LEGACY_TIER_STANDARD:
         return CONTENT_TIER_ADULT
     return value if is_tier(value) else CONTENT_TIER_SAFE
 
@@ -73,25 +75,3 @@ def most_conservative(*tiers: Any) -> str:
         return CONTENT_TIER_SAFE
     return min((parse_tier(tier) for tier in tiers), key=_RANK.__getitem__)
 
-
-# ---- 過渡相容層（safe-mode-toggle 2.5 移除）-----------------------------------------------------------------
-# 三值的判定：第 2 組改完目錄、開存檔與審查之前，這些呼叫端仍依「safe、standard、adult」三種運作。
-
-_LEGACY_RANK = {tier: rank for rank, tier in enumerate(CONTENT_TIERS)}
-
-
-def legacy_parse_tier(value: Any) -> str:
-    """三值版的 `parse_tier`：`standard` 維持 `standard`；缺少或不合法回傳 `safe`。"""
-    return value if isinstance(value, str) and value in _LEGACY_RANK else CONTENT_TIER_SAFE
-
-
-def legacy_tier_rank(value: Any) -> int:
-    """三值版的順序值：`safe` 0、`standard` 1、`adult` 2；無法判定視為 0。"""
-    return _LEGACY_RANK[legacy_parse_tier(value)]
-
-
-def legacy_most_conservative(*tiers: Any) -> str:
-    """三值版的取最保守者；沒有任何輸入、或任一輸入無法判定，結果都是 `safe`。"""
-    if not tiers:
-        return CONTENT_TIER_SAFE
-    return min((legacy_parse_tier(tier) for tier in tiers), key=_LEGACY_RANK.__getitem__)

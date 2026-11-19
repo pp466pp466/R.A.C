@@ -10,7 +10,7 @@ import logging
 from typing import Iterable
 
 from app.models.script import REVIEW_CATEGORIES, REVIEW_VERDICTS
-from app.models.user import CONTENT_TIERS
+from app.models.user import CONTENT_MODES
 
 logger = logging.getLogger("app.protagonist")
 
@@ -80,6 +80,6 @@ def log_review_unavailable(*, user_id: int, reason: str) -> None:
 
 def log_session_started(*, user_id: int, tier: str, anchor: str) -> None:
     """開出存檔：內容模式與是否帶有錨定事實（固定列舉）；存檔本身的內部編號不記（沒有需要）。"""
-    if tier not in CONTENT_TIERS or anchor not in ANCHOR_OUTCOMES:
+    if tier not in CONTENT_MODES or anchor not in ANCHOR_OUTCOMES:
         raise ValueError(f"未知的內容模式或錨定事實結果：{tier!r}、{anchor!r}")
     _info(EVENT_SESSION_STARTED, "開存檔", user_id=user_id, kind=tier, outcome=anchor)

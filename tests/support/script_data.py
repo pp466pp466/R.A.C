@@ -25,6 +25,6 @@ def valid(**changes: Any) -> dict[str, Any]:
     return content
 
 
-def validated(max_tier: str = "adult", **changes: Any) -> ValidatedScript:
-    """驗證並標準化 `valid(**changes)`（作者上限預設為最寬鬆，讓測試可以自由宣告內容模式）。"""
-    return validate_script(valid(**changes), max_tier=max_tier)
+def validated(**changes: Any) -> ValidatedScript:
+    """驗證並標準化 `valid(**changes)`（可以自由宣告內容模式 `safe` 或 `adult`）。"""
+    return validate_script(valid(**changes))

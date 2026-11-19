@@ -3,15 +3,16 @@
 **唯讀**：不呼叫模型、不碰錢包與額度、不寫入任何資料（連日誌也不寫：標題、筆名與主角姓名都是玩家文字衍生的內容）。
 
 **不過年齡閘門**（`require_chat_access`）：`/game` 是登入後的預設頁面，尚未完成年齡確認的管理員也會落在這裡；清單不花成本，
-內容模式對尚未確認年齡者本來就是安全模式（`AccessPolicy.content_access`），所以放行是安全的。真正會花成本的「開始」由開存檔
+生效模式缺少目前版本的同意時本來就是安全模式（`AccessPolicy.effective_mode`），所以放行是安全的。真正會花成本的「開始」由開存檔
 既有的閘門擋下。呼叫端（Controller）只需要確認已登入；受限登入狀態在更早的登入檢查就被擋下。
 
-**可玩劇本**（`catalog`）：上架中的版本，宣告的內容模式不高於玩家目前**生效**的模式（玩家偏好與年齡上限中較保守者）；依玩家的
-故事偏好排序（只影響順序、不增減集合）；分頁用 `limit + 1` 取回，多出的一筆只用來決定 `has_more`。每張卡片只含白名單欄位
+**可玩劇本**（`catalog`）：上架中的**全部**版本，不依內容模式篩選（所有玩家都看得到所有上架的劇本；綁定安全模式只影響生效模式）；
+依玩家的故事偏好排序（只影響順序、不增減集合）；分頁用 `limit + 1` 取回，多出的一筆只用來決定 `has_more`。每張卡片只含白名單欄位
 （`CARD_FIELDS`）：沒有劇本內文、內容雜湊、審查結果、作者的使用者編號與任何內部整數編號。一頁的資料以固定次數的查詢取回
 （版本與劇本一次、標籤一次），不隨筆數增加。
 
-**我的存檔**（`my_sessions`）：只有自己的、不含已封存者，依最後活動由新到舊；每筆只含白名單欄位（`SAVE_FIELDS`）。各存檔已完成的
+**我的存檔**（`my_sessions`）：只有自己的、不含已封存者，依最後活動由新到舊；每筆只含白名單欄位（`SAVE_FIELDS`），其中
+`content_tier` 是**現算的生效模式**（玩家目前的設定、存檔複本的劇本綁定與緊急煞車，不是開存檔當下的值）。各存檔已完成的
 輪數一次查詢取回。標題取自存檔的劇本複本（JSON 欄位不能做篩選，但讀出後取值是允許的）。
 
 **存檔摘要**（`session_summary`）：只回擁有者自己的存檔；非擁有者與不存在的得到相同的 `NotFound`（404）。
@@ -27,6 +28,7 @@ from app.models.script import OFFICIAL_AUTHOR_NAME, Script, ScriptVersion
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
+from app.services.content_tier import parse_tier
 from app.services.current_user import CurrentUser, iso_utc
 from app.services.errors import NotFound, ValidationError
 from app.services.story_preference import normalize_audience
@@ -55,22 +57,22 @@ class GameEntryService:
         self._policy = policy
 
     def catalog(self, current: CurrentUser, *, limit: object = CATALOG_DEFAULT_LIMIT, offset: object = 0) -> dict[str, Any]:
-        """玩家可以開存檔的上架劇本一頁：`{"scripts": [卡片…], "has_more": 布林, "content_mode": {"effective", "is_adult"}}`。
+        """玩家可以開存檔的上架劇本一頁：`{"scripts": [卡片…], "has_more": 布林, "content_mode": {"effective", "forced"}}`。
 
-        `content_mode` 讓畫面說明「為什麼沒看到某些劇本」（特別是未滿成年門檻固定為安全模式）：只有生效的模式與是否已滿成年門檻，
-        與 `/api/account/content-mode` 的生效模式同一個來源，**不含**生日、年齡或年齡區間。
+        `content_mode` 讓畫面判斷「點選未綁定安全模式的劇本時是否要詢問修改安全模式」：玩家目前的生效模式（不含劇本）與緊急煞車是否啟用，
+        與 `/api/account/content-mode` 同一個來源，**不含**生日、年齡、年齡區間，也不含 `is_adult`。
         """
         size, skip = _page(limit, offset, maximum=CATALOG_MAX_LIMIT)
-        access = self._policy.content_access(current)
+        mode = self._policy.mode_state(current)
         rows = self._scripts.list_published_cards(
-            access.effective, limit=size + 1, offset=skip, preference=normalize_audience(current.story_preference),
+            limit=size + 1, offset=skip, preference=normalize_audience(current.story_preference),
         )
         page = rows[:size]
         tags = self._scripts.tags_of_versions([version.id for version, _ in page])
         return {
             "scripts": [_card(version, script, tags.get(version.id, [])) for version, script in page],
             "has_more": len(rows) > size,
-            "content_mode": {"effective": access.effective, "is_adult": access.is_adult},
+            "content_mode": {"effective": mode.effective, "forced": mode.forced},
         }
 
     def my_sessions(self, current: CurrentUser, *, limit: object = SESSIONS_DEFAULT_LIMIT, offset: object = 0) -> dict[str, Any]:
@@ -80,7 +82,7 @@ class GameEntryService:
         page = rows[:size]
         counts = self._sessions.complete_turn_counts(current.id, [save.id for save in page])
         return {
-            "sessions": [_save_item(save, counts.get(save.id, 0)) for save in page],
+            "sessions": [_save_item(save, counts.get(save.id, 0), self._policy.save_mode(current, save.script_snapshot_json)) for save in page],
             "has_more": len(rows) > size,
         }
 
@@ -90,8 +92,8 @@ class GameEntryService:
         if save is None:
             raise NotFound()
         return {
-            "id": save.public_id, "title": _title_of(save), "content_tier": save.content_tier, "player_name": save.player_name,
-            "ended": save.status == SESSION_ENDED,
+            "id": save.public_id, "title": _title_of(save), "content_tier": self._policy.save_mode(current, save.script_snapshot_json),
+            "player_name": save.player_name, "ended": save.status == SESSION_ENDED,
         }
 
 
@@ -115,7 +117,7 @@ def _card(version: ScriptVersion, script: Script, tags: list[str]) -> dict[str, 
     return {
         "id": version.public_id, "title": version.title, "summary": version.summary, "world_name": version.world_name,
         "tags": list(tags), "author_name": author_name, "author_code": script.author_code,
-        "content_tier": version.content_tier, "audience": normalize_audience(version.audience),
+        "content_tier": parse_tier(version.content_tier), "audience": normalize_audience(version.audience),
     }
 
 
@@ -124,9 +126,9 @@ def _title_of(save: RpgSession) -> Any:
     return snapshot.get("title")
 
 
-def _save_item(save: RpgSession, completed_turns: int) -> dict[str, Any]:
+def _save_item(save: RpgSession, completed_turns: int, mode: str) -> dict[str, Any]:
     return {
-        "id": save.public_id, "title": _title_of(save), "content_tier": save.content_tier,
+        "id": save.public_id, "title": _title_of(save), "content_tier": mode,
         "status": SESSION_ENDED if save.status == SESSION_ENDED else SESSION_ACTIVE, "player_name": save.player_name,
         "completed_turns": completed_turns, "last_active_at": iso_utc(save.last_active_at),
     }

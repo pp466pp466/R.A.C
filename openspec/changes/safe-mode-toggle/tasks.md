@@ -13,12 +13,12 @@
 
 ## 2. 目錄、開存檔與審查尺度
 
-- [ ] 2.1 `script_repository`：目錄與依標籤查詢移除 `max_tier` 篩選；`startable.py`、`session_service.py`、創角資料與主角生成移除劇本模式比較與 `ContentTierRestricted`，新增 `SafeModeForced` 錯誤碼對應；`game_entry_service` 卡片的 `content_tier` 經 `parse_tier`、`content_mode` 改為 `{effective, forced}`、我的存檔的模式現算（存檔複本的劇本綁定＋玩家設定＋煞車）；改寫 `rpg-entry-api`、`rpg-sessions`、`script-store` 對應的測試（安全模式玩家看得到並開得了未綁定劇本、綁定劇本的存檔恆為 safe、設定改變後下一回合生效）並通過
-- [ ] 2.2 `game_service`：三處（回合、重生／編輯、第 0 幕）改用 `effective_mode(current, script_binding=<存檔複本的 content_tier>)`，不再讀 `save.content_tier`；開存檔仍寫入當下現算值但不被讀取；測試涵蓋「玩家中途關閉安全模式後下一回合使用 adult 界線」與「綁定劇本不受影響」並通過
-- [ ] 2.3 `rpg_prompt.TIER_BOUNDARIES` 刪 `standard` 段；`script_rules.check_text_rules`／`check_rules` 刪 `STANDARD` 分支（`safe` 才產生 `tier_mismatch`，未綁定不因性內容產生）；`rpg_output_guard`、`script_review_prompt` 對應兩值；`script_spec.validate_script` 移除 `max_tier`、接受 `safe`／`adult`／`standard`（標準化為 `adult`，只對新儲存內容標準化）；`script_authoring_service`／`script_submission_service` 移除作者上限傳遞；改寫 `rpg-turn-context`、`rpg-output-review`、`script-fixed-spec`、`script-review`、`script-authoring` 相關測試並通過
-- [ ] 2.4 `app/data/scripts/xianxia-qingyun.json` 的 `content_tier` 改為 `adult`；更新 `tests/` 內種子相關案例（新增第 2 版取代第 1 版、舊存檔不受影響、15 歲玩家案例改為安全模式玩家）；驗證 `flask seed-scripts` 預覽與實跑的結果
-- [ ] 2.5 補一支全碼庫守門測試：`app/` 內不得有比較 `== "standard"`／`CONTENT_TIER_STANDARD` 的判斷（舊值只允許出現在 `content_tier.py` 的讀取正規化），移除 1.1、1.3 的過渡相容層（`CONTENT_TIERS` 縮為兩值、`effective_tier`、`content_access`、`is_adult`、`author_content_cap`）；`tests/architecture` 與守門測試通過
-- [ ] 2.6 本批收尾：相關 pytest 全過（rpg 回合、審查、劇本、主角、種子、`tests/architecture`）；更新 `docs/RPG.md`（內容分級與審查段）、`docs/系統架構-architecture.md`、`docs/資料模型-data-model.md` 並讓 `tests/test_design_docs.py` 通過；更新 HANDOFF.md；列出簡報衝突
+- [x] 2.1 `script_repository`：目錄與依標籤查詢移除 `max_tier` 篩選；`startable.py`、`session_service.py`、創角資料與主角生成移除劇本模式比較與 `ContentTierRestricted`，新增 `SafeModeForced` 錯誤碼對應；`game_entry_service` 卡片的 `content_tier` 經 `parse_tier`、`content_mode` 改為 `{effective, forced}`、我的存檔的模式現算（存檔複本的劇本綁定＋玩家設定＋煞車）；改寫 `rpg-entry-api`、`rpg-sessions`、`script-store` 對應的測試（安全模式玩家看得到並開得了未綁定劇本、綁定劇本的存檔恆為 safe、設定改變後下一回合生效）並通過
+- [x] 2.2 `game_service`：三處（回合、重生／編輯、第 0 幕）改用 `effective_mode(current, script_binding=<存檔複本的 content_tier>)`，不再讀 `save.content_tier`；開存檔仍寫入當下現算值但不被讀取；測試涵蓋「玩家中途關閉安全模式後下一回合使用 adult 界線」與「綁定劇本不受影響」並通過
+- [x] 2.3 `rpg_prompt.TIER_BOUNDARIES` 刪 `standard` 段；`script_rules.check_text_rules`／`check_rules` 刪 `STANDARD` 分支（`safe` 才產生 `tier_mismatch`，未綁定不因性內容產生）；`rpg_output_guard`、`script_review_prompt` 對應兩值；`script_spec.validate_script` 移除 `max_tier`、接受 `safe`／`adult`／`standard`（標準化為 `adult`，只對新儲存內容標準化）；`script_authoring_service`／`script_submission_service` 移除作者上限傳遞；改寫 `rpg-turn-context`、`rpg-output-review`、`script-fixed-spec`、`script-review`、`script-authoring` 相關測試並通過
+- [x] 2.4 `app/data/scripts/xianxia-qingyun.json` 的 `content_tier` 改為 `adult`；更新 `tests/` 內種子相關案例（新增第 2 版取代第 1 版、舊存檔不受影響、15 歲玩家案例改為安全模式玩家）；驗證 `flask seed-scripts` 預覽與實跑的結果
+- [x] 2.5 補一支全碼庫守門測試：`app/` 內不得有比較 `== "standard"`／`CONTENT_TIER_STANDARD` 的判斷（舊值只允許出現在 `content_tier.py` 的讀取正規化），移除 1.1、1.3 的過渡相容層（`CONTENT_TIERS` 縮為兩值、`effective_tier`、`content_access`、`is_adult`、`author_content_cap`）；`tests/architecture` 與守門測試通過
+- [x] 2.6 本批收尾：相關 pytest 全過（rpg 回合、審查、劇本、主角、種子、`tests/architecture`）；更新 `docs/RPG.md`（內容分級與審查段）、`docs/系統架構-architecture.md`、`docs/資料模型-data-model.md` 並讓 `tests/test_design_docs.py` 通過；更新 HANDOFF.md；列出簡報衝突
 
 ## 3. 個人頁的安全模式開關與同意 Modal、條款與隱私權政策
 

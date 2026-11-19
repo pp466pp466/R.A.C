@@ -4,7 +4,7 @@
 
 - **系統指令只由固定樣板與列舉參數組成**（語言、內容模式、來歷、是否為結局回合、標記字串）。玩家與作者撰寫的任何文字（行動、主角、NPC 特質、
   劇本、記事簿、第 0 幕、狀態轉移規則、結局說明）一律以資料區塊放在使用者內容區（`rpg_context`），絕不進入這裡（AGENTS.md 第 10 節）。
-- **分級界線依存檔的內容模式只帶入對應的一段**；成人模式的界線不會出現在較保守的模式。
+- **分級界線依生效模式只帶入對應的一段**（只有兩段：安全開與安全關，每回合現算）；安全關（`adult`）的界線不會出現在安全開（`safe`）的指令。
 - **弧線階段以行為描述表達**，指令與資料區塊都不使用階段的英文識別字，並明文禁止在劇情中提到設定用語與資料區塊標題：2026-11-09 對真實模型的實測中，
   提示詞若直接寫出「階段為 surface」，模型會在劇情裡複誦。輸出審查另把階段英文名稱與區塊標題列為「洩漏設定」（`LEAK_SETTING_PATTERNS`）。
 - 不公開標記 = `HMAC-SHA256(SECRET_KEY, "rpg-marker-v1")` 的前 24 個十六進位字元（與客服、劇本審查、主角的標記分開）：模型輸出含它即視為被擋
@@ -18,7 +18,7 @@ import hmac
 import re
 from typing import Any
 
-from app.services.content_tier import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, legacy_parse_tier
+from app.services.content_tier import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, parse_tier
 from app.services.cs_intents import contains_text
 from app.services.llm_output import SemanticRule
 from app.services.protagonist import ORIGIN_TRANSMIGRATOR
@@ -96,11 +96,8 @@ TIER_BOUNDARIES = {
 - 不得出現性行為與性暗示（含以隱喻、省略或暗示帶過），不得描寫性器官、脫衣與帶有性意味的撫摸。
 - 牽手、擁抱、告白與簡短的親吻等一般的親密情感表達允許。
 - 不得出現露骨的暴力血腥與虐待描寫，也不得描寫自殺與自殘的方法。""",
-    CONTENT_TIER_STANDARD: """\
-- 本場為「一般模式」：可以有浪漫、曖昧、性暗示、深吻與情慾張力。
-- 性行為與性器官只能淡出或暗示，不得描寫；場景在關鍵處轉換或淡出。界線不明確時，採用較保守的寫法。""",
     CONTENT_TIER_ADULT: """\
-- 本場為「成人模式」：成年角色之間合意的露骨內容允許。
+- 本場為「成人模式」（安全模式關閉）：成年角色之間合意的露骨內容允許。
 - 資料中年齡紀錄未滿 18 歲、或劇情中明確標示為未成年的角色，不得出現在露骨場景；沒有明確年齡的角色不需要特別處理，也不要替他們編造年齡。
 - 一切必須是雙方自願。""",
 }
@@ -191,7 +188,7 @@ def _common(role: str, data_rules: str, *, tier: str, language: str, origin: str
         raise ValueError("洩漏標記不可為空")
     return _fill(_COMMON_TEMPLATE, {
         "<<ROLE>>": role, "<<LANGUAGE>>": language_instruction(language), "<<MIN_CHARS>>": str(NARRATION_MIN_CHARS),
-        "<<MAX_CHARS>>": str(NARRATION_MAX_CHARS), "<<BOUNDARY>>": TIER_BOUNDARIES[legacy_parse_tier(tier)],
+        "<<MAX_CHARS>>": str(NARRATION_MAX_CHARS), "<<BOUNDARY>>": TIER_BOUNDARIES[parse_tier(tier)],
         "<<EXTRA_RULES>>": _extra_rules(origin, extra), "<<DATA_RULES>>": data_rules, "<<MARKER>>": marker,
     })
 

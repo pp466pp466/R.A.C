@@ -16,7 +16,7 @@ from app.services.access_policy import AccessPolicy
 from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.current_user import CurrentUser
 from app.services.errors import (
-    AgeConfirmationRequired, Conflict, ContentTierRestricted, NotFound, SessionEnded, ValidationError,
+    AgeConfirmationRequired, Conflict, NotFound, SessionEnded, ValidationError,
 )
 from app.services.session_service import SessionService
 from tests.support.age import TODAY_UTC
@@ -28,11 +28,11 @@ from tests.support.script_data import validated
 GHOST = "00000000-0000-4000-8000-000000000000"
 
 
-def service_for(session, adult_mode=False, reviews=None, protagonist_reviews=None):
+def service_for(session, safe_mode_forced=False, reviews=None, protagonist_reviews=None):
     clock = FakeClock()
     return SessionService(
         scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        policy=AccessPolicy(clock=clock, adult_mode_enabled=adult_mode), reviews=reviews or PassingReviews(),
+        policy=AccessPolicy(clock=clock, safe_mode_forced=safe_mode_forced), reviews=reviews or PassingReviews(),
         protagonist_reviews=protagonist_reviews or PassingProtagonistReviews(), protagonist_marker=PROTAGONIST_MARKER, clock=clock,
     ), clock
 
@@ -138,49 +138,45 @@ def test_a_non_string_version_id_is_a_404_not_an_error(member_session):
 
 # ---- 內容模式 -----------------------------------------------------------------------------
 
-def test_a_safe_mode_player_cannot_start_a_script_declared_standard(member_session):
+def test_a_safe_mode_player_can_start_a_script_not_bound_to_the_safe_mode_and_plays_it_in_the_safe_mode(member_session):
     service, _ = service_for(member_session)
-    version = publish_script(member_session, content_tier="standard")
     safe_adult = player(member_session, 1, content_tier_preference="safe")
-    with pytest.raises(ContentTierRestricted) as caught:
-        start(service, safe_adult, version)
-    assert caught.value.code == "content_tier_restricted"
-    assert count(member_session, RpgSession) == 0
+    for n, declared in enumerate(("adult", "standard"), start=1):       # 未綁定（含舊值 standard）：不回 content_tier_restricted
+        save = start(service, safe_adult, publish_script(member_session, title=f"未綁定{n}", content_tier=declared))
+        assert save.content_tier == "safe"
+    assert count(member_session, RpgSession) == 2
 
 
-def test_a_script_declared_at_or_below_the_effective_mode_can_be_started(member_session):
+def test_a_script_bound_to_the_safe_mode_can_be_started_by_anyone_and_stays_safe(member_session):
     service, _ = service_for(member_session)
-    standard_adult = player(member_session, 1)                       # 確認時已成年：偏好 standard
-    assert start(service, standard_adult, publish_script(member_session, title="一般", content_tier="standard")).content_tier == "standard"
-    assert start(service, standard_adult, publish_script(member_session, title="安全", content_tier="safe")).content_tier == "safe"
+    relaxed = player(member_session, 1, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
+    assert start(service, relaxed, publish_script(member_session, title="綁定", content_tier="safe")).content_tier == "safe"
 
 
-def test_an_adult_declared_script_needs_the_adult_mode_to_be_active(member_session):
-    adult_script = publish_script(member_session, content_tier="adult")
-    off, _ = service_for(member_session, adult_mode=False)
-    with pytest.raises(ContentTierRestricted):
-        start(off, player(member_session, 1, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION), adult_script)
-    on, _ = service_for(member_session, adult_mode=True)
-    with pytest.raises(ContentTierRestricted):                       # 開關開了但尚未確認
-        start(on, player(member_session, 2, content_tier_preference="adult"), adult_script)
-    confirmed = player(member_session, 3, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
-    assert start(on, confirmed, adult_script).content_tier == "adult"
+def test_the_start_mode_follows_the_players_agreed_preference_and_the_script_binding(member_session):
+    service, _ = service_for(member_session)
+    confirmed = dict(adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
+    cases = (
+        (player(member_session, 1, content_tier_preference="adult", **confirmed), "未綁定", "adult", "adult"),
+        (player(member_session, 2, content_tier_preference="adult"), "沒有同意", "adult", "safe"),                          # 沒有同意紀錄
+        (player(member_session, 3, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version="old"), "舊版本", "adult", "safe"),
+        (player(member_session, 4, content_tier_preference="adult", **confirmed), "綁定", "safe", "safe"),
+        (player(member_session, 5, content_tier_preference="standard", **confirmed), "舊偏好", "standard", "adult"),         # 舊值讀作 adult
+    )
+    for user, title, declared, expected in cases:
+        assert start(service, user, publish_script(member_session, title=title, content_tier=declared)).content_tier == expected, title
+
+
+def test_the_emergency_brake_makes_every_new_save_safe(member_session):
+    forced, _ = service_for(member_session, safe_mode_forced=True)
+    relaxed = player(member_session, 1, content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
+    assert start(forced, relaxed, publish_script(member_session, content_tier="adult")).content_tier == "safe"
 
 
 def test_a_safe_mode_player_can_play_a_safe_builtin_script(member_session):
     service, _ = service_for(member_session)
     save = start(service, player(member_session, content_tier_preference="safe"), publish_script(member_session, content_tier="safe"))
     assert save.content_tier == "safe"
-
-
-def test_the_save_takes_the_more_conservative_of_the_player_mode_and_the_script_declaration(member_session):
-    service, _ = service_for(member_session, adult_mode=True)
-    confirmed = dict(adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
-    adult_player = player(member_session, 1, content_tier_preference="adult", **confirmed)
-    standard_player = player(member_session, 2)
-    assert start(service, standard_player, publish_script(member_session, title="安全", content_tier="safe")).content_tier == "safe"
-    assert start(service, adult_player, publish_script(member_session, title="一般", content_tier="standard")).content_tier == "standard"
-    assert start(service, adult_player, publish_script(member_session, title="成人", content_tier="adult")).content_tier == "adult"
 
 
 # ---- 複本 -----------------------------------------------------------------------------------

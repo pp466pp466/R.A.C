@@ -81,8 +81,7 @@ def test_the_instruction_lists_every_category_names_the_modes_and_carries_the_ma
     text = build_review_instruction(MARKER)
     for category in REVIEW_CATEGORIES:
         assert category in text
-    for tier in ("safe", "standard", "adult"):
-        assert tier in text
+    assert "safe" in text and "adult" in text and "standard" not in text and "一般模式" not in text
     assert MARKER in text and "繁體中文" in text and "資料" in text
     assert "一般的未成年角色" in text and "不得因為角色年齡小" in text
     with pytest.raises(ValueError):
@@ -123,12 +122,12 @@ def test_a_value_containing_the_marker_anywhere_fails_the_leak_rule():
 
 
 def test_the_script_text_goes_into_the_data_block_with_the_declared_tier_and_nothing_else_about_the_author():
-    content = validated(rules=UNIQUE, content_tier="standard").content
-    (message,) = build_review_contents(content, "standard")
+    content = validated(rules=UNIQUE, content_tier="adult").content
+    (message,) = build_review_contents(content, "adult")
     text = message.parts[0]
     assert message.role == "user" and text.startswith(DATA_NOTE) and UNIQUE in text
     data = json.loads(text.split("\n", 1)[1])
-    assert data["declared_content_tier"] == "standard" and data["script"]["rules"] == UNIQUE
+    assert data["declared_content_tier"] == "adult" and data["script"]["rules"] == UNIQUE
     assert not ({"id", "public_id", "content_hash", "author", "author_name", "nickname", "creator"} & set(data["script"]))
 
 

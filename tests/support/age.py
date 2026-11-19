@@ -9,7 +9,7 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 from typing import Any
 
-from app.models.user import CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD
+from app.models.user import CONTENT_TIER_SAFE
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy, range_for_age
 
 TODAY = date(2026, 10, 27)
@@ -39,8 +39,8 @@ def age_fields(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: 
 def age_columns(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today: date = TODAY, confirmed_at: datetime = TODAY_UTC) -> dict[str, Any]:
     """直接寫入 `users` 的年齡欄位值（不經過 Service），代表「已完成年齡確認」的帳號。
 
-    內容模式偏好：這個輔助值沿用「成年者 `standard`、未成年 `safe`」，方便測試涵蓋各種模式；**正式的年齡確認流程自 adult-only-signup 起一律設為 `safe`**
-    （見 `UserRepository.complete_age_verification_if_unset`），需要正式流程的結果時請走 Service 而不是這個輔助。
+    內容模式偏好：一律是 `safe`，與正式的年齡確認流程相同（自 adult-only-signup 起；見 `UserRepository.complete_age_verification_if_unset`）。
+    需要「已關閉安全模式」的玩家時，傳入 `content_tier_preference="adult"` 與目前版本的同意紀錄（`adult_confirmed_at`、`adult_rules_version`）。
     """
     chosen = range_for_age(age, policy)
     assert chosen is not None
@@ -50,5 +50,5 @@ def age_columns(age: int = 30, *, policy: AgePolicy = DEFAULT_AGE_POLICY, today:
         "is_adult_at_confirmation": age >= policy.adult_age,
         "age_confirmed_at": confirmed_at,
         "age_policy_version": policy.version,
-        "content_tier_preference": CONTENT_TIER_STANDARD if age >= policy.adult_age else CONTENT_TIER_SAFE,
+        "content_tier_preference": CONTENT_TIER_SAFE,
     }

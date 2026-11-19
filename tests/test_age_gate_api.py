@@ -118,7 +118,7 @@ def test_verifying_one_member_does_not_open_the_gate_for_another(app):
 
 
 # =============================================================================
-# 未滿 18 歲不可用（預設規則）；成年者上限為一般模式（成人模式預設關閉）
+# 未滿 18 歲不可用（預設規則）；成年者預設是安全模式（偏好 safe，沒有依年齡的上限）
 # =============================================================================
 
 @pytest.mark.parametrize("age", [13, 15, 17])
@@ -130,18 +130,18 @@ def test_a_teen_is_refused_by_the_default_policy_with_age_restricted_and_the_wor
 
 
 @pytest.mark.parametrize("age", [13, 15, 17])
-def test_under_a_legacy_13_policy_a_teen_can_use_the_endpoint_but_only_in_safe_mode(legacy_app, age):
+def test_under_a_legacy_13_policy_a_teen_can_use_the_endpoint_and_is_in_safe_mode_because_the_preference_is_safe(legacy_app, age):
     seed(legacy_app, 1, age=age)
     response = signed_in(legacy_app, 1).post(ENDPOINT, json={})
     assert response.status_code == 200
-    assert response.get_json()["content"] == {"preference": "safe", "age_cap": "safe", "effective": "safe", "reason": "not_adult"}
+    assert response.get_json()["content"] == {"preference": "safe", "effective": "safe", "confirmed": False, "forced": False}
 
 
 @pytest.mark.parametrize("age", [18, 30, 70])
-def test_an_adult_reaches_the_standard_mode_and_never_the_adult_mode_by_default(app, age):
+def test_an_adult_starts_in_the_safe_mode_by_default_and_nothing_raises_it_automatically(app, age):
     seed(app, 1, age=age)
     assert signed_in(app, 1).post(ENDPOINT, json={}).get_json()["content"] == {
-        "preference": "standard", "age_cap": "standard", "effective": "standard", "reason": "disabled",
+        "preference": "safe", "effective": "safe", "confirmed": False, "forced": False,
     }
 
 
@@ -150,7 +150,7 @@ def test_under_a_legacy_13_policy_an_admin_who_is_a_teen_is_still_in_safe_mode(l
     assert signed_in(legacy_app, 1).post(ENDPOINT, json={}).get_json()["content"]["effective"] == "safe"
 
 
-def test_under_a_legacy_13_policy_a_teen_who_turns_18_is_released_without_logging_in_again():
+def test_turning_18_does_not_change_the_safe_mode_and_needs_no_new_login():
     clock = FakeClock()
     config = load_config(environ={"APP_ENV": "testing"})
     application = create_app(config, clock=clock, age_policy=LEGACY_13)
@@ -160,11 +160,11 @@ def test_under_a_legacy_13_policy_a_teen_who_turns_18_is_released_without_loggin
         tomorrow_18 = birth_date_for_age(18).replace(day=birth_date_for_age(18).day + 1)
         add_user(session, 1, age=17, birth_date=tomorrow_18)
     client = signed_in(application, 1)
-    assert client.post(ENDPOINT, json={}).get_json()["content"]["age_cap"] == "safe"
+    assert client.post(ENDPOINT, json={}).get_json()["content"]["effective"] == "safe"
     clock.advance(days=1)
     released = client.post(ENDPOINT, json={}).get_json()["content"]
-    # 年齡上限自動解除，但偏好不會自動調高：確認當時未成年，所以仍是安全模式
-    assert released == {"preference": "safe", "age_cap": "standard", "effective": "safe", "reason": "disabled"}
+    # 滿 18 歲不會自動調高：偏好沒有改變、仍是安全模式（沒有依年齡的上限，也沒有因年齡而自動放寬）
+    assert released == {"preference": "safe", "effective": "safe", "confirmed": False, "forced": False}
 
 
 # =============================================================================

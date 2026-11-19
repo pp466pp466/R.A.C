@@ -21,11 +21,13 @@ from app.config import PROJECT_ROOT, load_config
 from app.models import Base, RpgSession, Wallet
 from app.models.rpg_session import SESSION_ENDED
 from app.models.script import REVIEW_CATEGORIES
-from app.models.user import CONTENT_TIERS, MEMBER_TIERS, ROLE_ADMIN
+from app.models.user import CONTENT_MODES, MEMBER_TIERS, ROLE_ADMIN
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.protagonist import ORIGINS
 from app.services.story_preference import AUDIENCES
+from app.services.content_tier import SAFE_RULES_VERSION
+from tests.support.age import TODAY_UTC
 from tests.support.auth import START, FakeClock, add_user
 from tests.support.idor import logged_in_client
 from tests.support.protagonist import protagonist as stored_protagonist
@@ -185,7 +187,7 @@ def test_the_owner_gets_the_game_page_with_exactly_the_agreed_initial_state(app)
         "reason_min": 5, "reason_max": 50,
         "categories": ["setting_mismatch", "repetitive_or_dull", "typo_or_quality", "blocked_transition", "other"],
     }
-    assert set(state["content_mode"]) == {"effective", "is_adult"} and state["content_mode"]["is_adult"] is True
+    assert state["content_mode"] == {"effective": "safe", "forced": False}              # 預設安全模式開；沒有 is_adult、生日與年齡
     html = response.get_data(as_text=True)
     assert re.search(r'<div id="game-app" class="gm-shell" v-cloak>', html)
     assert re.search(r'<a class="gm-nav__link" href="/game"[^>]*>回到冒險</a>', html)
@@ -274,12 +276,16 @@ def test_the_game_page_carries_the_gate_the_server_decided(app):
     assert state_of(client.get(f"/game/{open_save(app, user)}"))["gate"] == "age_restricted"
 
 
-def test_a_minor_gets_the_age_fixed_content_mode_from_the_server_with_no_birth_date_or_age(app):
+def test_the_game_page_gets_the_computed_content_mode_from_the_server_with_no_birth_date_or_age(app):
     client, user = client_for(app, age=15)
-    mode = state_of(client.get(f"/game/{open_save(app, user)}"))["content_mode"]
-    assert mode == {"effective": "safe", "is_adult": False}                       # 與 /api/sessions/catalog 的 content_mode 同一個來源與形狀
-    client, user = client_for(app, 2, age=30)
-    assert state_of(client.get(f"/game/{open_save(app, user)}"))["content_mode"]["is_adult"] is True
+    response = client.get(f"/game/{open_save(app, user)}")
+    mode = state_of(response)["content_mode"]
+    assert mode == {"effective": "safe", "forced": False}                         # 與 /api/sessions/catalog 的 content_mode 同一個來源與形狀
+    html = response.get_data(as_text=True)
+    assert "is_adult" not in html and user.birth_date.isoformat() not in html
+    agreed = dict(content_tier_preference="adult", adult_confirmed_at=TODAY_UTC, adult_rules_version=SAFE_RULES_VERSION)
+    client, user = client_for(app, 2, age=30, **agreed)
+    assert state_of(client.get(f"/game/{open_save(app, user)}"))["content_mode"] == {"effective": "adult", "forced": False}
 
 
 def test_someone_elses_save_and_a_missing_one_get_the_identical_404(app):
@@ -707,7 +713,8 @@ def test_the_label_tables_cover_exactly_the_enums_the_backend_uses():
     """後端新增或改名列舉值時，這裡會失敗，提醒同步 `game-labels.js`（否則畫面會退回預設文字而不是正確的名稱）。"""
     source = read(JS_DIR / "game-labels.js")
     assert sorted(labels_in(source, "MEMBER_LABELS")) == sorted(MEMBER_TIERS)
-    assert sorted(labels_in(source, "TIER_LABELS")) == sorted(CONTENT_TIERS)
+    # 前端的 TIER_LABELS 仍有三個標籤（含舊值 standard）；safe-mode-toggle 4.1 改為兩種（綁定標籤）後，這裡改成只比對 CONTENT_MODES
+    assert sorted(labels_in(source, "TIER_LABELS")) == sorted((*CONTENT_MODES, "standard"))
     assert sorted(labels_in(source, "AUDIENCE_LABELS")) == sorted(AUDIENCES)
     assert sorted(labels_in(source, "ORIGIN_LABELS")) == sorted(ORIGINS)
     assert sorted(labels_in(source, "STATUS_LABELS")) == ["active", "ended"]

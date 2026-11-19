@@ -138,10 +138,10 @@ def test_a_failed_confirmation_leaves_no_preference_behind(member_session):
 
 def test_a_repeated_submission_never_changes_the_preference(member_session):
     s = member_session
-    user = add_user(s, 1, age=30)
-    assert s.get(User, user.id).content_tier_preference == "standard"
+    user = add_user(s, 1, age=30, content_tier_preference="adult")           # 玩家自己選過的偏好：重複送出年齡確認不會把它改回去
+    assert s.get(User, user.id).content_tier_preference == "adult"
     submit(s, user, **age_fields(15))
-    assert s.get(User, user.id).content_tier_preference == "standard"
+    assert s.get(User, user.id).content_tier_preference == "adult"
 
 
 # ---- 不一致：通用說明並計次 -----------------------------------------------------------------------------

@@ -177,7 +177,7 @@ def test_fullwidth_digits_in_an_age_still_count():
 
 def test_a_grown_up_protagonist_with_a_three_year_old_baby_passes():
     result = check(
-        tier="standard", background="龍傲天帶著三歲的寶寶闖蕩江湖，一路上餵奶、換尿布、哄睡。",
+        tier="adult", background="龍傲天帶著三歲的寶寶闖蕩江湖，一路上餵奶、換尿布、哄睡。",
         characters=[character("龍傲天", 28, "霸氣"), character("小寶", 3, "愛哭又黏人", appearance="圓圓的臉蛋")],
     )
     assert result == RulesResult(REVIEW_PASS, (), load_lexicon().version)
@@ -196,11 +196,11 @@ def test_parent_and_child_and_childcare_stories_pass():
         "母親照顧八歲的兒子，每晚講睡前故事。", "新手爸爸學習幫嬰兒洗澡、拍嗝、哄睡。", "小朋友們在公園玩耍，大人在一旁聊天。",
         "他看著孩童們的笑臉，想起自己的童年。", "未成年人需要監護人的陪同，這是宗門的規矩。",
     ):
-        assert check(tier="standard", background=text).verdict == REVIEW_PASS, text
+        assert check(tier="adult", background=text).verdict == REVIEW_PASS, text
 
 
-def test_a_minor_character_without_sexual_words_passes_in_every_tier():
-    for tier in ("safe", "standard", "adult"):
+def test_a_minor_character_without_sexual_words_passes_in_both_modes():
+    for tier in ("safe", "adult"):
         assert check(tier=tier, characters=[character("小明", 12, "好奇", appearance="瘦小")]).verdict == REVIEW_PASS
 
 
@@ -216,7 +216,7 @@ def test_the_minor_sentence_and_the_explicit_sentence_in_different_sentences_is_
     "兒童節那天，門口交易所裡擠滿了人。",
 ])
 def test_ordinary_sentences_that_contain_a_lexicon_word_as_part_of_another_word_do_not_match(text):
-    result = check(tier="standard", background=text)
+    result = check(tier="adult", background=text)
     assert result.verdict != REVIEW_REJECT, (text, result)
     assert "minor_sexual" not in result.categories
 
@@ -229,8 +229,8 @@ def test_an_adult_age_that_looks_like_a_minor_age_in_chinese_numerals_is_not_a_m
 # ---- 有疑慮：標示類別、進人工 ----------------------------------------------------------------
 
 
-def test_a_minor_character_with_sexual_words_in_their_own_text_is_flagged_in_standard_and_adult():
-    for tier in ("standard", "adult"):
+def test_a_minor_character_with_sexual_words_in_their_own_text_is_flagged_when_the_script_is_unbound():
+    for tier in ("adult",):
         result = check(tier=tier, characters=[character("小明", 17, "情慾旺盛", appearance="瘦小")])
         assert result == RulesResult(REVIEW_FLAG, ("minor_suspected",), load_lexicon().version)
 
@@ -250,9 +250,15 @@ def test_a_safe_script_with_sexual_words_is_flagged_as_a_tier_mismatch():
     assert check(tier="safe", background="兩人情慾難耐。").categories == ("tier_mismatch",)
 
 
-def test_a_standard_script_with_explicit_words_is_flagged_but_suggestive_words_are_fine():
-    assert check(tier="standard", background="他們做愛。").categories == ("tier_mismatch",)
-    assert check(tier="standard", background="兩人情慾難耐，春宵苦短。").verdict == REVIEW_PASS
+def test_an_unbound_script_never_gets_a_tier_mismatch_from_sexual_words_whether_suggestive_or_explicit():
+    assert check(tier="adult", background="他們做愛。").verdict == REVIEW_PASS
+    assert check(tier="adult", background="兩人情慾難耐，春宵苦短。").verdict == REVIEW_PASS
+
+
+def test_the_legacy_standard_value_is_read_as_unbound_adult_in_every_check():
+    assert check(tier="standard", background="他們做愛。").verdict == REVIEW_PASS                 # 不因性內容產生 tier_mismatch
+    flagged = check(tier="standard", characters=[character("小明", 17, "情慾旺盛", appearance="瘦小")])
+    assert flagged == RulesResult(REVIEW_FLAG, ("minor_suspected",), load_lexicon().version)    # 與 adult 相同
 
 
 def test_an_adult_script_with_explicit_words_between_adults_passes():
@@ -349,7 +355,7 @@ def protagonist_check(*, tier="safe", anchor=None, intro=None, adult_age=18, **f
 def test_an_ordinary_protagonist_of_any_age_passes():
     assert protagonist_check().verdict == REVIEW_PASS
     assert protagonist_check(age=10, personality="天真愛哭的學童", appearance="圓臉，扎著兩根辮子").verdict == REVIEW_PASS
-    assert protagonist_check(age=15, tier="standard", anchor="他的同門師弟", intro="我是個十五歲的遊方學徒，想拜師。").verdict == REVIEW_PASS
+    assert protagonist_check(age=15, tier="adult", anchor="他的同門師弟", intro="我是個十五歲的遊方學徒，想拜師。").verdict == REVIEW_PASS
 
 
 @pytest.mark.parametrize(("field", "sentence"), [
@@ -382,10 +388,9 @@ def test_a_minor_protagonist_with_an_explicit_term_in_their_own_text_is_rejected
     assert script.verdict == REVIEW_FLAG and script.categories == ("minor_suspected",)
 
 
-def test_a_suggestive_term_on_a_minor_protagonist_is_flagged_only_in_standard_and_adult_modes():
+def test_a_suggestive_term_on_a_minor_protagonist_is_flagged_as_suspected_when_unbound_and_as_a_mismatch_when_safe():
     suggestive = "渴望情慾的少年"
-    assert protagonist_check(age=15, tier="standard", personality=suggestive).categories == ("minor_suspected",)
-    assert protagonist_check(age=15, tier="adult", personality=suggestive).verdict == REVIEW_FLAG
+    assert protagonist_check(age=15, tier="adult", personality=suggestive).categories == ("minor_suspected",)
     safe = protagonist_check(age=15, tier="safe", personality=suggestive)
     assert safe.verdict == REVIEW_FLAG and safe.categories == ("tier_mismatch",)
 

@@ -221,38 +221,31 @@ def test_a_missing_or_malformed_content_is_a_validation_error(app, body):
     assert response.status_code == 400 and "content" in response.get_json()["error"]["fields"]
 
 
-# ---- 作者的內容模式上限 -----------------------------------------------------------------------------
+# ---- 內容模式：綁定安全模式（safe）或未綁定（adult），沒有依年齡而異的作者上限 ---------------------------------------
 
 
-@pytest.mark.parametrize(("age", "tier", "ok"), [(18, "standard", True), (18, "adult", True), (30, "adult", True)])
-def test_the_declared_tier_may_not_exceed_the_authors_age_cap(app, age, tier, ok):
-    response = create(author(app, age=age), content_tier=tier)
+@pytest.mark.parametrize(("declared", "stored"), [("safe", "safe"), ("adult", "adult"), ("standard", "adult")])
+def test_the_declared_mode_is_saved_as_safe_or_adult_and_the_legacy_standard_is_stored_as_adult(app, declared, stored):
+    response = create(author(app), content_tier=declared)
     assert response.status_code == 201
+    assert rows(app, ScriptVersion)[0].content_tier == stored
 
 
-@pytest.mark.parametrize("app", [LEGACY_13], indirect=True)
-@pytest.mark.parametrize(("age", "tier", "ok"), [(15, "safe", True), (15, "standard", False), (15, "adult", False), (17, "standard", False)])
-def test_under_a_legacy_13_policy_a_minor_author_may_not_declare_above_the_safe_cap(app, age, tier, ok):
-    response = create(author(app, age=age), content_tier=tier)
-    if ok:
-        assert response.status_code == 201
-    else:
-        assert response.status_code == 400 and set(response.get_json()["error"]["fields"]) == {"content_tier"}
+@pytest.mark.parametrize("declared", ["mature", "", 1])
+def test_any_other_declared_mode_is_a_400_naming_the_field(app, declared):
+    response = create(author(app), content_tier=declared)
+    assert response.status_code == 400 and set(response.get_json()["error"]["fields"]) == {"content_tier"}
 
 
-def test_an_adult_author_whose_own_preference_is_safe_may_still_declare_adult(app):
+def test_an_author_whose_own_preference_is_safe_may_still_leave_the_script_unbound(app):
     assert create(author(app, content_tier_preference="safe"), content_tier="adult").status_code == 201
 
 
-def test_the_cap_is_computed_from_the_birthday_now_not_stored(app):
-    """17 歲時確認年齡的玩家，滿 18 歲之後可以宣告成人模式（偏好不變，上限由生日於當下計算）。"""
-    from datetime import timedelta
-
-    from tests.support.age import birth_date_for_age
-
-    just_adult = birth_date_for_age(18) - timedelta(days=0)
-    client = author(app, birth_date=just_adult, content_tier_preference="safe", is_adult_at_confirmation=False)
-    assert create(client, content_tier="adult").status_code == 201
+@pytest.mark.parametrize("app", [LEGACY_13], indirect=True)
+@pytest.mark.parametrize("age", [15, 17])
+def test_there_is_no_age_cap_on_the_declared_mode_even_under_a_legacy_13_policy(app, age):
+    """全站只限滿 18 歲，作者沒有依年齡而異的內容上限（這份舊規則只用來證明程式碼不再依年齡分支）。"""
+    assert create(author(app, age=age), content_tier="adult").status_code == 201
 
 
 # ---- 儲存時的規則層 ------------------------------------------------------------------------------------
@@ -438,7 +431,7 @@ def test_the_example_is_the_builtin_script_content_and_passes_the_fixed_spec(app
     response = author(app).get("/api/scripts/example")
     assert response.status_code == 200
     content = response.get_json()["content"]
-    assert validate_script(content, max_tier="adult").content["title"] == content["title"]
+    assert validate_script(content).content["title"] == content["title"]
     text = response.get_data(as_text=True)
     assert "content_hash" not in text and "public_id" not in text and "seed_key" not in text
 

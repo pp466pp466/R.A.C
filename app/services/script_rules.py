@@ -8,9 +8,9 @@
 - 性相關詞與性暴力專用詞同句 -> `sexual_violence`；性相關詞與非自願用語（或強姦用語）同句 -> `non_consensual`；
 - 性相關詞與真人用語同句 -> `real_person_sexual`。
 一般的未成年角色（帶著三歲寶寶的成年主角、校園日常、親子與育兒）不含性相關詞，所以不會命中；更寬鬆的跨句判斷只標示（`flag`，
-進人工），交給模型層與人工審核：宣告一般或成人模式的劇本裡，年齡小於成年門檻的角色其文字出現性相關詞（`minor_suspected`）、
-性相關詞與真人用語分散在不同句（`real_person_suspected`）、宣告安全模式卻出現性相關詞，或宣告一般模式卻出現露骨的用語
-（`tier_mismatch`）、性暴力或強姦用語單獨出現（`other_concern`）。
+進人工），交給模型層與人工審核：未綁定安全模式（`adult`，含舊值 `standard`）的劇本裡，年齡小於成年門檻的角色其文字出現性相關詞
+（`minor_suspected`）、性相關詞與真人用語分散在不同句（`real_person_suspected`）、綁定安全模式（`safe`）卻出現性相關詞
+（`tier_mismatch`；未綁定的劇本不因性內容產生 `tier_mismatch`）、性暴力或強姦用語單獨出現（`other_concern`）。
 
 **直接拒絕的主軸是「露骨的性用語與未成年用語同句」（不分先後）**；其餘的組合都要求同一句裡有露骨的性用語，單獨出現的暴力用語
 （例如犯罪劇情、新聞、性侵害防治課）只標示。
@@ -35,7 +35,8 @@ from app.models.script import (
     CATEGORY_MINOR_SEXUAL, CATEGORY_MINOR_SUSPECTED, CATEGORY_NON_CONSENSUAL, CATEGORY_OTHER_CONCERN, CATEGORY_REAL_PERSON_SEXUAL,
     CATEGORY_REAL_PERSON_SUSPECTED, CATEGORY_SEXUAL_VIOLENCE, CATEGORY_TIER_MISMATCH, REVIEW_FLAG, REVIEW_PASS, REVIEW_REJECT,
 )
-from app.models.user import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD
+from app.models.user import CONTENT_TIER_ADULT, CONTENT_TIER_SAFE
+from app.services.content_tier import parse_tier
 
 LEXICON_PATH = Path(__file__).resolve().parent.parent / "data" / "review" / "lexicon.json"
 DEFAULT_ADULT_AGE = 18
@@ -235,6 +236,7 @@ def _evaluate(
 ) -> RulesResult:
     """規則層的核心。`texts` 是會被模型讀到的文字（每段各自切句）；`characters` 是有年齡的角色；`extra_own_texts` 是主角額外的自述
     （錨定事實、自我介紹），計入該角色自己的文字。"""
+    tier = parse_tier(tier)                       # 舊值 standard 讀作 adult；無法判定視為綁定安全模式（safe）
     rejected: set[str] = set()
     flagged: set[str] = set()
     saw_explicit = saw_suggestive = saw_real_person = False
@@ -272,7 +274,7 @@ def _evaluate(
     if rejected:
         return RulesResult(REVIEW_REJECT, tuple(sorted(rejected)), lex.version)
 
-    if tier in (CONTENT_TIER_STANDARD, CONTENT_TIER_ADULT):
+    if tier == CONTENT_TIER_ADULT:
         for character in characters:
             age = character.get("age")
             if isinstance(age, int) and not isinstance(age, bool) and age < adult_age:
@@ -281,7 +283,7 @@ def _evaluate(
                     flagged.add(CATEGORY_MINOR_SUSPECTED)
     if (saw_explicit or saw_suggestive) and saw_real_person:
         flagged.add(CATEGORY_REAL_PERSON_SUSPECTED)
-    if (tier == CONTENT_TIER_SAFE and (saw_explicit or saw_suggestive)) or (tier == CONTENT_TIER_STANDARD and saw_explicit):
+    if tier == CONTENT_TIER_SAFE and (saw_explicit or saw_suggestive):
         flagged.add(CATEGORY_TIER_MISMATCH)
 
     if flagged:

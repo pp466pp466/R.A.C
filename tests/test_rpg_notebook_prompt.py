@@ -13,7 +13,7 @@ from app.services.llm_output import parse_llm_json
 from app.services.rpg_context import EMPTY_LIST, EMPTY_NOTEBOOK, HistoryTurn
 
 MARKER = "0123456789abcdef01234567"
-TIERS = ("safe", "standard", "adult")
+TIERS = ("safe", "adult")
 
 
 def turn(number, action="往北走", narration="她點了點頭。", status="complete"):
@@ -40,7 +40,7 @@ def test_the_system_builder_takes_only_enumerated_parameters_not_free_text():
 
 
 def test_the_same_parameters_always_give_the_same_instruction():
-    assert system("standard") == system("standard")
+    assert system("adult") == system("adult")
     assert system("safe") != system("adult")
 
 
@@ -112,11 +112,10 @@ def test_the_language_parameter_defaults_to_traditional_chinese_and_rejects_unkn
 
 
 def test_each_instruction_carries_only_its_own_content_tier_boundary():
-    safe, standard, adult = (system(tier) for tier in TIERS)
-    assert rpg_prompt.TIER_BOUNDARIES["safe"] in safe and rpg_prompt.TIER_BOUNDARIES["standard"] not in safe and rpg_prompt.TIER_BOUNDARIES["adult"] not in safe
-    assert rpg_prompt.TIER_BOUNDARIES["standard"] in standard and rpg_prompt.TIER_BOUNDARIES["adult"] not in standard
+    safe, adult = (system(tier) for tier in TIERS)
+    assert rpg_prompt.TIER_BOUNDARIES["safe"] in safe and rpg_prompt.TIER_BOUNDARIES["adult"] not in safe
     assert rpg_prompt.TIER_BOUNDARIES["adult"] in adult and rpg_prompt.TIER_BOUNDARIES["safe"] not in adult
-    assert "成人模式" not in safe and "成人模式" not in standard
+    assert "成人模式" not in safe
 
 
 def test_an_unrecognized_tier_gets_the_safe_boundary():
@@ -290,7 +289,7 @@ def test_the_window_size_in_the_instruction_is_the_policy_constant():
     from app.services.notebook_policy import WINDOW_TURNS
 
     assert f"最近 {WINDOW_TURNS} 輪" in system()
-    assert len({system(tier) for tier in TIERS}) == 3                         # 三種內容模式各有自己的指令
+    assert len({system(tier) for tier in TIERS}) == 2                         # 兩種內容模式各有自己的指令
 
 
 # ---- 超出要求的整數（只記錄，不丟不截）----------------------------------------------------------------

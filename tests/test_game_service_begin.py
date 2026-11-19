@@ -7,15 +7,19 @@ from datetime import timedelta
 import pytest
 from sqlalchemy import func, select
 
-from app.models import MemoryLog
+from app.models import MemoryLog, User
 from app.models.rpg_session import OPENING_FALLBACK, OPENING_GENERATING, OPENING_PENDING, TURN_COMPLETE, TURN_INTERRUPTED, TURN_STREAMING
 from app.observability import rpg_events
+from app.services.content_tier import SAFE_RULES_VERSION
+from app.services.current_user import CurrentUser
 from app.services.errors import (
     AgeConfirmationRequired, Conflict, InputBlocked, InsufficientCoins, NotFound, OpeningPending, SessionEnded, SystemBusy, ValidationError,
 )
 from app.services.game_service import HOLD_KEY_PREFIX, hold_key
 from app.services.wallet_service import HOLD_KEY_MAX
+from tests.support.age import TODAY_UTC
 from tests.support.game import MARKER, MODEL, GameKit
+from tests.support.script_data import validated
 
 ACTION = "我走進山門，向守門的弟子行禮。"
 GHOST = "00000000-0000-4000-8000-000000000000"
@@ -180,13 +184,37 @@ def test_a_sexual_action_in_safe_mode_is_not_blocked_and_the_tier_is_not_raised(
     assert plan is not None and plan.tier == "safe"
 
 
-def test_the_effective_tier_is_the_most_conservative_of_the_save_and_the_players_cap(kit):
-    adult = kit.player(1)
-    save = kit.open_save(adult, tier="standard")
-    assert begin(kit, adult, save).plan.tier == "standard"
-    safe_player = kit.player(2, content_tier_preference="safe")                  # 全站只限滿 18 歲：上限來自玩家自己選的安全模式
-    safe_save = kit.open_save(safe_player, tier="standard")                      # 存檔記錄較寬鬆，但玩家目前選的是安全模式
-    assert begin(kit, safe_player, safe_save).plan.tier == "safe"
+AGREED = {"adult_confirmed_at": TODAY_UTC, "adult_rules_version": SAFE_RULES_VERSION}
+UNBOUND = validated(content_tier="adult").content       # 劇本未綁定安全模式
+BOUND = validated(content_tier="safe").content          # 劇本綁定安全模式
+
+
+def test_the_effective_mode_is_computed_from_the_players_setting_and_the_save_copys_binding_not_the_stored_column(kit):
+    relaxed = kit.player(1, content_tier_preference="adult", **AGREED)
+    unbound = kit.open_save(relaxed, content=UNBOUND, tier="safe")              # 欄位寫 safe：新版程式不讀它
+    assert begin(kit, relaxed, unbound).plan.tier == "adult"
+    bound = kit.open_save(relaxed, content=BOUND, tier="adult")                 # 欄位寫 adult：同樣不讀，綁定的劇本恆為 safe
+    assert begin(kit, relaxed, bound).plan.tier == "safe"
+    safe_player = kit.player(2, content_tier_preference="safe")                 # 玩家選了安全模式開
+    assert begin(kit, safe_player, kit.open_save(safe_player, content=UNBOUND, tier="adult")).plan.tier == "safe"
+
+
+def test_a_player_who_turns_the_safe_mode_off_between_two_turns_plays_the_next_turn_in_the_adult_mode(kit):
+    player = kit.player(1, content_tier_preference="safe")
+    save = kit.open_save(player, content=UNBOUND)
+    assert begin(kit, player, save, msg="m-1").plan.tier == "safe"
+    finish(kit, player, save, msg="m-1")
+    user = kit.session.get(User, player.id)                                      # 玩家在個人頁關閉安全模式並同意
+    user.content_tier_preference, user.adult_confirmed_at, user.adult_rules_version = "adult", TODAY_UTC, SAFE_RULES_VERSION
+    kit.session.flush()
+    assert begin(kit, CurrentUser.from_model(user), save, msg="m-2").plan.tier == "adult"
+
+
+def test_the_emergency_brake_makes_the_next_turn_safe_without_touching_the_saved_preference(kit):
+    forced = GameKit(kit.session, safe_mode_forced=True)
+    player = forced.player(1, content_tier_preference="adult", **AGREED)
+    save = forced.open_save(player, content=UNBOUND, tier="adult")
+    assert begin(forced, player, save).plan.tier == "safe" and player.content_tier_preference == "adult"
 
 
 def test_a_spent_global_budget_is_system_busy_without_a_hold(kit):

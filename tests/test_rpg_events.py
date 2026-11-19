@@ -59,7 +59,7 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         rpg_events.log_turn_failed(user_id=1, session_id=2, attempt=1, reason="timeout", model=None)
         rpg_events.log_state_failed(user_id=1, session_id=2, turn_number=3, reason="validation")
         rpg_events.log_session_ended(user_id=1, session_id=2, turn_number=3, reason="age")
-        rpg_events.log_opening_started(user_id=1, session_id=2, tier="standard", model="m")
+        rpg_events.log_opening_started(user_id=1, session_id=2, tier="adult", model="m")
         rpg_events.log_opening_ready(user_id=1, session_id=2, chars=300, latency_ms=3000, first_chunk_ms=None, model="m")
         rpg_events.log_opening_fallback(user_id=1, session_id=2, reason="blocked", categories=("minor_sexual",))
         rpg_events.log_opening_reset(user_id=1, session_id=2)

@@ -5,8 +5,8 @@ import pytest
 
 from app.models.user import ADULT_CONFIRM_SELF_DECLARED, CONTENT_MODES
 from app.services.content_tier import (
-    CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, CONTENT_TIER_STANDARD, CONTENT_TIERS, SAFE_RULES_VERSION,
-    is_tier, legacy_most_conservative, legacy_parse_tier, legacy_tier_rank, most_conservative, parse_tier, tier_rank,
+    CONTENT_TIER_ADULT, CONTENT_TIER_SAFE, LEGACY_TIER_STANDARD, SAFE_RULES_VERSION,
+    is_readable_tier, is_tier, most_conservative, parse_tier, tier_rank,
 )
 
 
@@ -76,15 +76,11 @@ def test_the_safe_rules_have_a_version_and_the_confirmation_method_is_self_decla
     assert SAFE_RULES_VERSION != "2026-11-03-draft-1"      # 換了新版本：所有舊的同意因版本不符而失效
 
 
-# ---- 過渡相容層（safe-mode-toggle 2.5 移除；這組測試隨之刪除）---------------------------------------------
-
-def test_the_transitional_three_value_layer_still_orders_safe_standard_adult():
-    assert CONTENT_TIERS == ("safe", "standard", "adult")
-    assert [legacy_tier_rank(tier) for tier in CONTENT_TIERS] == [0, 1, 2]
-    assert legacy_parse_tier(CONTENT_TIER_STANDARD) == CONTENT_TIER_STANDARD
-    assert legacy_most_conservative("standard", "adult") == "standard"
-    assert legacy_most_conservative("adult", "bogus") == "safe"
-    assert legacy_most_conservative() == "safe"
+def test_the_legacy_standard_value_is_defined_once_and_is_readable_but_not_a_current_mode():
+    assert LEGACY_TIER_STANDARD == "standard"
+    assert is_readable_tier("standard") and is_readable_tier("safe") and is_readable_tier("adult")
+    assert not any(is_readable_tier(value) for value in (None, "", "mature", "SAFE", "Standard", 0, True, ["safe"]))
+    assert not is_tier(LEGACY_TIER_STANDARD)                  # 不是現行的模式：只在 parse_tier 被讀作 adult
 
 
 def test_the_module_embeds_no_age_numbers_and_imports_no_infrastructure():

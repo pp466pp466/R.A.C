@@ -77,7 +77,7 @@ class NotebookService:
             self._reject(current, save.id, "too_long", length)
             raise NotebookTooLong(length, capacity)
 
-        rules = check_text_rules([cleaned], tier=save.content_tier, adult_age=self._policy.adult_age)
+        rules = check_text_rules([cleaned], tier=self._policy.save_mode(current, save.script_snapshot_json), adult_age=self._policy.adult_age)
         if rules.verdict == REVIEW_REJECT:
             self._reject(current, save.id, "blocked", length, categories=rules.categories)
             raise NotebookBlocked(rules.categories)

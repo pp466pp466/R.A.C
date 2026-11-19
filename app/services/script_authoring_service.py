@@ -1,8 +1,8 @@
 """玩家創作劇本：建立、編輯、新草稿、刪除、撤回、筆名與額度（見 script-authoring 規格與 rpg-script-authoring 的 design D4）。
 
 每個方法都先過帳號與年齡閘門（與其他會員功能同一個入口，`AccessPolicy.require_chat_access`），Repository 的方法一律帶 `user_id`，
-別人的劇本與版本得到 `NotFound`（與不存在相同）。固定規格的驗證由純函式 `validate_script` 負責，作者的內容模式上限來自
-`AccessPolicy.author_content_cap`（未成年 `safe`，成年到 `adult`）。**每次儲存都先跑規則層**（`script_rules`）：明確命中紅線時拒絕
+別人的劇本與版本得到 `NotFound`（與不存在相同）。固定規格的驗證由純函式 `validate_script` 負責（`content_tier` 只有 `safe`＝綁定安全模式與 `adult`＝未綁定，
+沒有依年齡而異的作者上限）。**每次儲存都先跑規則層**（`script_rules`）：明確命中紅線時拒絕
 儲存、被拒絕的文字不寫入（既有草稿維持原樣），回應只有類別；有疑慮（`flag`）照常儲存，疑慮在送審時重新計算。儲存時的拒絕不計入
 送審次數與連續被拒。
 
@@ -16,7 +16,7 @@ from datetime import datetime
 from typing import Any, Callable
 
 from app.models.script import REVIEW_REJECT, VERSION_DRAFT, Script, ScriptVersion
-from app.models.user import User
+from app.models.user import CONTENT_TIER_ADULT, User
 from app.observability import script_events
 from app.repositories.errors import (
     AuthorNameLockedError, DraftChangedError, InvalidVersionTransitionError, OpenVersionExistsError, VersionNotDraftError,
@@ -116,7 +116,7 @@ class ScriptAuthoringService:
             },
             "publish_suspended": user.publish_suspended_at is not None,
             "has_nickname": user.nickname is not None,
-            "max_content_tier": self._policy.author_content_cap(current),
+            "max_content_tier": CONTENT_TIER_ADULT,           # 過渡：舊的創作頁下拉選單用（全站只限滿 18 歲，沒有上限）；safe-mode-toggle 4.3 隨勾選框一併移除
             "spec": spec_limits(),
         }
 
@@ -247,7 +247,7 @@ class ScriptAuthoringService:
     def _validate(self, current: CurrentUser, raw_content: object) -> ValidatedScript:
         if not isinstance(raw_content, dict):
             raise ValidationError(fields={"content": CONTENT_MESSAGE})
-        return validate_script(raw_content, max_tier=self._policy.author_content_cap(current))
+        return validate_script(raw_content)
 
     def _check_rules(self, user: User, validated: ValidatedScript) -> None:
         """儲存時的規則層：明確命中紅線就拒絕（不寫入、不計次），只告知類別。"""
