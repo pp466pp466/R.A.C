@@ -22,11 +22,11 @@
 
 ## 3. 個人頁的安全模式開關與同意 Modal、條款與隱私權政策
 
-- [ ] 3.1 新增 `app/static/js/auth/account-safe-mode.js`（純函式與狀態機：載入、切換、同意 Modal 開關、緊急煞車停用、請求失敗還原、返回位置驗證 `safeReturnPath`）與 Node 測試（`tests/js/`，含沙盒載入）；驗證：開→關需同意、已同意直接送出、關→開直接送出、煞車禁用、請求期間禁用並於 `finally` 恢復、無效返回位置被丟棄
-- [ ] 3.2 `auth/account.html` 與 `account.js`：新增「安全模式」區塊（開關、兩種狀態說明、自製 Modal、無 `data-bs-*`、無 `v-html`、無年齡勾選）；`auth_page_controller` 初始狀態只帶開／關、`confirmed`、`forced` 與已驗證的返回位置；改寫 `tests/test_account_page.py` 並通過（初始狀態不含生日與年齡區間、管理員未完成年齡確認不顯示、載入順序）
-- [ ] 3.3 瀏覽器冒煙（本機 Chrome，自己的埠）：360／1280 px 無水平溢出、無純白文字、無主控台錯誤；開關在安全規範 Modal 的取消／Esc／確認路徑；帶 `?return=/game/start/…` 時完成後導回、帶惡意返回位置時被忽略；結果記入 README 驗收紀錄
-- [ ] 3.4 `/terms`、`/privacy`：補上露骨內容、安全模式兩種狀態與絕對禁止項、年滿 18 歲與謊報責任、敏感內容可能被模型供應商留存或審閱、關閉安全模式時內容可能被 RPG 模型供應商留存或審閱；更正 `/terms` 第 5 節「預設使用一般模式」一句；提高條款版本；改寫 `tests/test_legal_pages.py` 與年齡確認相關測試並通過（頁面仍標示草稿、沒有「一般模式」字樣）
-- [ ] 3.5 本批收尾：Node 全套與相關 pytest 通過；更新 `docs/前端結構-frontend.md`（新檔與 `/account` 載入順序）、`docs/帳號與安全-auth-security.md`（含條款與隱私權政策的揭露）；更新 HANDOFF.md；列出簡報衝突
+- [x] 3.1 新增 `app/static/js/auth/account-safe-mode.js`（純函式與狀態機：載入、切換、同意 Modal 開關、緊急煞車停用、請求失敗還原、返回位置驗證 `safeReturnPath`）與 Node 測試（`tests/js/`，含沙盒載入）；驗證：開→關需同意、已同意直接送出、關→開直接送出、煞車禁用、請求期間禁用並於 `finally` 恢復、無效返回位置被丟棄
+- [x] 3.2 `auth/account.html` 與 `account.js`：新增「安全模式」區塊（開關、兩種狀態說明、自製 Modal、無 `data-bs-*`、無 `v-html`、無年齡勾選）；`auth_page_controller` 初始狀態只帶開／關、`confirmed`、`forced` 與已驗證的返回位置；改寫 `tests/test_account_page.py` 並通過（初始狀態不含生日與年齡區間、管理員未完成年齡確認不顯示、載入順序）
+- [x] 3.3 瀏覽器冒煙（本機 Chrome，自己的埠）：360／1280 px 無水平溢出、無純白文字、無主控台錯誤；開關在安全規範 Modal 的取消／Esc／確認路徑；帶 `?return=/game/start/…` 時完成後導回、帶惡意返回位置時被忽略；結果記入 README 驗收紀錄
+- [x] 3.4 `/terms`、`/privacy`：補上露骨內容、安全模式兩種狀態與絕對禁止項、年滿 18 歲與謊報責任、敏感內容可能被模型供應商留存或審閱、關閉安全模式時內容可能被 RPG 模型供應商留存或審閱；更正 `/terms` 第 5 節「預設使用一般模式」一句；提高條款版本；改寫 `tests/test_legal_pages.py` 與年齡確認相關測試並通過（頁面仍標示草稿、沒有「一般模式」字樣）
+- [x] 3.5 本批收尾：Node 全套與相關 pytest 通過；更新 `docs/前端結構-frontend.md`（新檔與 `/account` 載入順序）、`docs/帳號與安全-auth-security.md`（含條款與隱私權政策的揭露）；更新 HANDOFF.md；列出簡報衝突
 
 ## 4. 目錄通知、卡片標示與創作頁綁定
 

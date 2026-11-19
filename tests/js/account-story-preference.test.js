@@ -40,7 +40,7 @@ function setupAccount({ user = BASE_USER, put } = {}) {
   run('app/static/vendor/vue/vue.global.prod.js');
   let options = null;
   sandbox.Vue = Object.assign({}, sandbox.Vue, { createApp: (given) => { options = given; return { use() {}, component() {}, mount() {} }; } });
-  ['js/auth/auth-common.js', 'js/auth/auth-form.js', 'js/auth/auth-flows.js', 'js/auth/account-lifecycle.js', 'js/ui/restriction.js']
+  ['js/auth/auth-common.js', 'js/auth/auth-form.js', 'js/auth/auth-flows.js', 'js/auth/account-lifecycle.js', 'js/auth/account-safe-mode.js', 'js/ui/restriction.js']
     .forEach((file) => run('app/static/' + file));
   sandbox.UI = Object.assign(sandbox.UI || {}, {
     toast: (message, settings) => toasts.push({ message, type: settings && settings.type ? settings.type : 'info' }),

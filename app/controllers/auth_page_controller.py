@@ -12,7 +12,7 @@ from app.observability import security_events
 from app.runtime import get_age_policy, get_clock, get_identity_provider
 from app.security.admin_step import read_admin_step, store_admin_step
 from app.security.oauth_cookie import clear_transaction, read_transaction
-from app.security.redirects import landing_for, safe_next
+from app.security.redirects import landing_for, safe_next, safe_return_path
 from app.security.session import current_user, login_required_page, login_user
 from app.services.age_policy import EARLIEST_BIRTH_DATE, taipei_today
 from app.services.appeal_service import APPEAL_HOURLY_LIMIT, MAX_APPEAL_CHARS
@@ -23,7 +23,9 @@ from app.services.google_sign_in_service import (
 from app.services.account_deletion_service import CONFIRM_TEXT
 from app.services.game_service import REASON_MAX, REASON_MIN
 from app.services.legal import CURRENT_TERMS_VERSION
-from app.services.registry import admin_password_reset_available, get_auth_service, get_google_sign_in_service
+from app.services.registry import (
+    admin_password_reset_available, get_access_policy, get_auth_service, get_google_sign_in_service,
+)
 
 auth_pages_bp = Blueprint("auth_pages", __name__)
 
@@ -76,7 +78,6 @@ def _legal_context() -> dict:
     return {
         "terms_version": CURRENT_TERMS_VERSION,
         "min_age": policy.min_register_age,
-        "adult_age": policy.adult_age,
         "reason_min": REASON_MIN,
         "reason_max": REASON_MAX,
     }
@@ -163,6 +164,24 @@ def reset_password_page():
 
 # ---- 帳號設定 -----------------------------------------------------------------
 
+def _content_mode_state(user) -> dict | None:
+    """帳號頁「安全模式」區塊的初始狀態；沒有資格使用時回傳 `None`，區塊不顯示（例如尚未完成年齡確認的管理員）。
+
+    只含列舉值與布林：生效的模式（`safe` 或 `adult`）、是否已在目前版本的安全規範下同意、緊急煞車是否啟用，以及已驗證的返回位置
+    （`/account?return=/game/…`，不合規則的值丟棄）。不含生日、年齡區間、同意的時間戳記或內部編號。
+    """
+    policy = get_access_policy()
+    if policy.chat_gate(user) is not None:
+        return None
+    mode = policy.mode_state(user)
+    return {
+        "effective": mode.effective,
+        "confirmed": mode.confirmed,
+        "forced": mode.forced,
+        "returnPath": safe_return_path(request.args.get("return")),
+    }
+
+
 @auth_pages_bp.get("/account")
 @login_required_page(allow_pending_deletion=True)         # 等待刪除的人在這裡撤銷；頁面只顯示撤銷區塊
 def account_page():
@@ -171,7 +190,11 @@ def account_page():
     scheduled = user.deletion_scheduled_at
     return render_template(
         "auth/account.html",
-        initial_state=_state(user=get_auth_service().profile(user), deletion={"confirmText": CONFIRM_TEXT}),
+        initial_state=_state(
+            user=get_auth_service().profile(user),
+            deletion={"confirmText": CONFIRM_TEXT},
+            contentMode=None if user.awaiting_deletion else _content_mode_state(user),     # 等待刪除者只有撤銷與登出，沒有安全模式區塊
+        ),
         awaiting_deletion=user.awaiting_deletion,
         # 撤銷期限已過、排程還沒執行：不顯示注定失敗的撤銷按鈕（頁面開著時剛好過期的情形由前端處理 grace_expired）
         grace_over=scheduled is not None and scheduled <= get_clock()(),

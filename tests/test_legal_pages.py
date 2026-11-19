@@ -104,9 +104,10 @@ def test_the_privacy_page_numbers_for_age_still_come_from_the_policy_not_the_tex
 def test_the_terms_version_names_the_new_draft_and_the_registration_records_it():
     # rpg-turn-revision 補了重新生成理由與遊戲幣帳本的告知（draft-6），之後又把編輯改為與重新生成共用免費次數（draft-7）；
     # adult-only-signup 加入僅限滿 18 歲、註冊時的年滿 18 歲聲明與謊報責任（draft-8，2026-11-18）；
+    # safe-mode-toggle 加入露骨內容、安全模式兩種狀態與供應商留存或審閱的揭露（draft-9，2026-11-19）；
     # 版本隨內容提高（只影響之後新註冊者記錄的版本）
-    assert CURRENT_TERMS_VERSION == "2026-11-18-draft-8" and len(CURRENT_TERMS_VERSION) <= 40
-    assert CURRENT_TERMS_VERSION != "2026-11-16-draft-7"            # 提高過：不是先前的版本
+    assert CURRENT_TERMS_VERSION == "2026-11-19-draft-9" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION not in ("2026-11-16-draft-7", "2026-11-18-draft-8")            # 提高過：不是先前的版本
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
@@ -164,13 +165,14 @@ def test_the_privacy_policy_no_longer_points_to_a_registration_page_either(clien
     assert 'href="/login"' in html and 'href="/terms"' in html
 
 
-def test_the_terms_say_new_accounts_start_in_the_safe_mode(client):
-    """adult-only-signup（design D5）：新帳號的預設內容模式是安全模式；條款不得再說成年者預設一般模式。"""
+def test_the_terms_say_every_account_starts_with_the_safe_mode_on_and_there_is_no_middle_mode(client):
+    """safe-mode-toggle：只有安全模式開與關兩種；所有帳號一開始都是開；沒有「一般模式」，也沒有成年者預設一般模式的說法。"""
     html = client.get("/terms").get_data(as_text=True)
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
-    assert "新帳號預設使用安全模式，可以自行調整為一般模式" in section
-    assert "預設使用一般模式" not in section and "成年的使用者預設" not in section
-    assert "成人模式預設關閉" in section                                            # 成人模式的說明不變（留給 safe-mode-toggle）
+    assert "所有帳號一開始都是<strong>安全模式開</strong>" in section
+    assert "只有兩種狀態" in section and "安全模式開" in section and "安全模式關" in section
+    for stale in ("預設使用一般模式", "成年的使用者預設", "調整為一般模式", "成人模式預設關閉", "安全模式、一般模式與成人模式"):
+        assert stale not in section, stale
 
 
 # ---- RPG、劇本與主角（rpg-script-authoring、rpg-character-creation）新增的揭露 ----------------------------------
@@ -221,7 +223,7 @@ def test_the_privacy_policy_does_not_promise_features_that_do_not_exist_yet(clie
 def test_the_terms_describe_the_rpg_the_content_modes_and_the_absolute_prohibitions(client):
     html = client.get("/terms").get_data(as_text=True)
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
-    for needle in ("安全模式、一般模式與成人模式", "成人模式預設關閉", "自行聲明", "無論哪一種模式，一律禁止", "未成年（含看似未成年的角色）的性內容",
+    for needle in ("只有兩種狀態", "本服務含露骨內容", "謊報年齡者須自行承擔", "無論哪一種模式，一律禁止", "未成年（含看似未成年的角色）的性內容",
                    "性暴力", "非自願的性情節", "以真人名義的性內容", "我們只告知類別", "暫停而不是放行", "暫停送審權限", "申訴頁",
                    "筆名", "先審後發", "授權本平台保存", "不含您的署名", "公開分享尚未開放", "AI 生成的主角與聯繫只是建議", "性奴等禁斷關係", "隨帳號一併刪除"):
         assert needle in section, needle
@@ -231,7 +233,8 @@ def test_the_terms_describe_the_rpg_the_content_modes_and_the_absolute_prohibiti
 def test_the_age_numbers_in_the_new_terms_section_come_from_the_age_policy(client):
     html = client.get("/terms").get_data(as_text=True)
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
-    assert "13 至 17 歲" not in section and "我確定已滿 18 歲" in section        # 數字來自年齡政策：最低年齡 18，沒有未成年者的固定安全模式說明
+    assert "13 至 17 歲" not in section and "我確定已滿" not in section           # 數字來自年齡政策：最低年齡 18；關閉安全模式時沒有另外的年齡勾選
+    assert "本服務僅限滿 18 歲者使用（見第 2 節）" in section and "年滿 18 歲聲明" in section
 
 
 # ---- 重新生成與編輯最後一輪（rpg-turn-revision）新增的揭露 ----------------------------------------------------
@@ -312,3 +315,60 @@ def test_the_new_terms_text_hardcodes_no_coin_or_free_regeneration_numbers(clien
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
     revision = section.split("<strong>遊戲幣</strong>", 1)[1].split("<strong>刪除帳號</strong>", 1)[0]
     assert not re.search(r"\d+\s*(?:幣|枚)|前\s*\d+\s*次|第\s*\d+\s*次", revision)
+
+
+# ---- 安全模式（safe-mode-toggle）新增的揭露 --------------------------------------------------------------------------
+
+def terms_section_five(client) -> str:
+    html = client.get("/terms").get_data(as_text=True)
+    return html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
+
+
+def test_the_terms_disclose_explicit_content_the_two_states_the_bans_the_age_duty_and_provider_retention(client):
+    html = client.get("/terms").get_data(as_text=True)
+    section = terms_section_five(client)
+    for needle in (
+        "本服務含露骨內容", "成年角色之間合意的露骨內容可能出現", "是否出現取決於模型，我們不保證",          # 露骨內容（不保證結果）
+        "性行為與性暗示", "露骨的暴力血腥與虐待描寫", "自殺與自殘方法的描寫", "簡短的親吻",                # 安全模式開的界線
+        "在「帳號設定」頁自行開關", "同意安全規範", "記錄同意的時間與安全規範的版本",                        # 如何切換與同意紀錄
+        "較保守", "綁定安全模式", "緊急煞車", "不會自動替您關閉安全模式",                                    # 生效模式、綁定、煞車、不自動調高
+        "露骨內容僅限成年使用者", "謊報年齡者須自行承擔因此產生的一切責任",                                  # 年滿 18 歲與謊報責任
+        "這些敏感內容可能被模型供應商留存或審閱", "請勿輸入真實的個人資料",                                  # 供應商留存或審閱
+        "無論哪一種模式，一律禁止", "以真人名義的性內容",                                                    # 絕對禁止項
+    ):
+        assert needle in section, needle
+    assert "草稿" in html and "尚待法務覆核" in html                                                       # 仍標示為草稿
+
+
+def test_the_terms_hardcode_no_age_number_for_the_explicit_content_duty(client, monkeypatch):
+    """年齡數字一律來自年齡政策，不寫死在樣板裡。"""
+    monkeypatch.setattr("app.controllers.auth_page_controller.get_age_policy", lambda: type("P", (), {
+        "min_register_age": 21, "adult_age": 21})())
+    section = terms_section_five(client)
+    assert "本服務僅限滿 21 歲者使用（見第 2 節）" in section and "年滿 21 歲聲明" in section
+
+
+def test_the_privacy_policy_discloses_that_turning_the_safe_mode_off_may_let_the_rpg_provider_keep_or_review_the_content(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>4. RPG 與劇本的資料會傳送至 RPG 模型服務</h2>", 1)[1].split("<h2>5.", 1)[0]
+    for needle in ("安全模式關閉時", "您輸入的行動，以及模型產生的劇情", "成年角色之間合意的露骨內容可能出現",
+                   "敏感內容可能被模型供應商留存或人工審閱", "不以付費模型為前提", "請保持安全模式開啟", "請勿輸入真實的個人資料",
+                   "不會把您的信箱、生日與年齡區間傳送至這個服務"):
+        assert needle in section, needle
+    collected = html.split("<h2>1. 我們蒐集哪些資料</h2>", 1)[1].split("<h2>2.", 1)[0]
+    for needle in ("安全模式的設定與同意紀錄", "同意安全規範的時間與規範版本", "不含您寫的任何文字"):
+        assert needle in collected, needle
+
+
+def test_neither_policy_page_has_the_old_three_mode_wording_or_a_minor_exception(client):
+    for path in ("/terms", "/privacy"):
+        html = client.get(path).get_data(as_text=True)
+        for stale in ("一般模式", "成人模式", "13 歲以上", "13 至 17 歲", "我確定已滿", "預設關閉", "僅限安全模式"):
+            assert stale not in html, (path, stale)
+        assert "草稿" in html and CURRENT_TERMS_VERSION in html
+
+
+def test_the_privacy_policy_still_does_not_promise_features_that_do_not_exist_after_the_safe_mode_wording(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    for forbidden in ("將提供", "後續版本提供", "將於", "保證不會被留存", "保證不會被審閱"):
+        assert forbidden not in html, forbidden

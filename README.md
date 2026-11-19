@@ -2102,6 +2102,26 @@ app.mount('#app');
 
 **未驗證**：①**4.2 只有使用者的口頭回報「全部沒問題」**（見上表），逐項細節與截圖沒有，所以下列只是「請使用者做的項目」，不能當成逐項證據：一般玩家（六個頁面標籤與前往 `/wallet`、簽到含超過上限的預覽與取消／領取、今日已簽到與倒數、儲值按鈕無法點擊且餘額不變、紀錄與載入更多）、管理員（標籤「不消耗」、註冊贈幣說明、零增減量的列）、受限帳號（被鎖定、待確認年齡、等待刪除進 `/wallet` 被導向；`/account` 等待刪除時沒有標籤）；驗收環境（5010）**尚未部署到展示環境**。②Windows 的 Chrome 以外的瀏覽器。③超過免費幣上限預覽的實機畫面：有證據的只有 Node 沙盒測試（後端 409 預覽的資料形狀沿用既有），使用者的實測有沒有走到這一步不明（實測中曾因把幣加在「付費」而沒觸發預覽）；倒數歸零的實機行為（只由沙盒與純函式測試，實機只看到逐秒遞減）。④量測腳本與截圖放在暫存資料夾，沒有進專案，之後要重測需重寫。⑤儲值價格與幣包只是示意：**上線給真實玩家前須換掉或拿掉**（後續的 `wallet-topup`，須先探索金流、價格、退款與付款紀錄保存期限）。
 
+### 驗收紀錄（safe-mode-toggle C 批第 3 組，2026-11-19，已實作、尚未提交、尚未使用者驗收）
+
+日期 2026-11-19；第 3 組（tasks 3.1 至 3.5）：個人頁的安全模式開關與同意 Modal、返回位置、條款與隱私權政策。
+
+| 檔案 | 內容 |
+|---|---|
+| `app/static/js/auth/account-safe-mode.js` | 純函式與狀態機（`Auth.safeMode`）：`safeReturnPath`、`normalize`、`planToggle`、`createController`、固定文案 |
+| `app/templates/auth/account.html`、`app/static/js/auth/account.js`、`app/static/css/auth.css` | 「安全模式」區塊（`role="switch"` 開關）、同意 Modal（`actions` 插槽自訂按鈕）、開關與勾選框樣式 |
+| `app/controllers/auth_page_controller.py`、`app/security/redirects.py` | 初始狀態 `contentMode`（只有 `effective`、`confirmed`、`forced`、`returnPath`）與 `safe_return_path` |
+| `app/templates/legal/{terms,privacy}.html`、`app/services/legal.py` | 露骨內容、兩種狀態、絕對禁止項、18 歲與謊報、供應商留存或審閱的揭露；`CURRENT_TERMS_VERSION` 為 `2026-11-19-draft-9` |
+| `tests/js/account-safe-mode.test.js`、`account-safe-mode-page.test.js`、`fixtures/safe-return-path-cases.json`、`tests/test_account_safe_mode_page.py`、`tests/test_safe_next.py`、`tests/test_legal_pages.py` | Node 與 pytest；前後端的返回位置規則共用同一張案例表 |
+
+| 已驗證 | 結果 |
+|---|---|
+| Node 單元測試（3.1、3.2） | `account-safe-mode` 30 項、`account-safe-mode-page` 12 項通過；Node 全套（`node --test --test-concurrency=2 "tests/js/**/*.test.js"`）**1368 項通過、0 失敗** |
+| 相關 pytest（3.5；**不是全套**，全套留到 6.1） | `tests/architecture`、帳號頁、安全模式頁、`safe_next`、條款與隱私權政策、auth 頁、Google 登入、內容模式 API、設計文件、README、`test_agents_skill_sync` 等 **1395 通過、2 略過（沿用 A 批的守門測試允許清單）、0 失敗** |
+| 瀏覽器冒煙（3.3；Playwright 加本機 Chrome，拋棄式 SQLite 與自己的 5013／5014 埠，沒有碰使用者的驗收資料庫或 SQL Server） | 共 **50 項通過、0 失敗**（主流程 43、緊急煞車 7）：360／1280 px 水平溢出 0、純白文字 0、主控台錯誤與失敗請求 0；開關預設為開；Modal 只有一個勾選框、確認鈕勾選前停用、無年齡字樣；Esc、取消與點遮罩都不送請求；確認後 `PUT {mode:'adult', confirm_rules:true}`、Toast、伺服器端 `adult`／已同意；已同意者開→關直接送 `{mode:'adult'}`、關→開直接送 `{mode:'safe'}`，皆無 Modal；有效返回位置顯示提示與連結、成功後導向該路徑、沒有修改直接按返回也能回去；`https://evil.example/`、`//evil.example/`、`/account`、`/game/../account`、`/game//x` 都被忽略；尚未完成年齡確認的管理員沒有區塊；緊急煞車時開關顯示為開並禁用、點擊沒有請求、伺服器端保留玩家的同意；360 與 1280 px 截圖目視（Modal 的第一張 360 px 截圖拍在淡入動畫中途，等動畫結束後重拍，版面正常） |
+
+**未驗證**：真實手機與其他瀏覽器、使用者親自驗收（屬 6.3）、`/terms` 與 `/privacy` 的法務覆核（仍標示草稿）、展示環境部署（屬 6.2）。
+
 ## 容器建置與驗收
 
 正式環境以 Docker 映像部署（見 AGENTS.md 第 9 節）。映像以 `python:3.14-slim-bookworm` 為基底（Python 版本與 `.python-version` 一致；明確指定 Debian 12，因為 Microsoft ODBC Driver 18 官方支援它），內含 `unixodbc` 與 `msodbcsql18`、前端資產與 108 個字型切片，約 277 MB。

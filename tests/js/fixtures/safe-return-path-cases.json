@@ -1,0 +1,37 @@
+{
+  "valid": [
+    "/game/start/0b6f3a52-1c8e-4d57-9a41-7f2e6c1d8b90",
+    "/game/",
+    "/game/6c3f1a2e-0000-4000-8000-000000000001",
+    "/game/start/abc?x=1",
+    "/game/start/%E5%8A%87%E6%9C%AC"
+  ],
+  "invalid": [
+    "",
+    "/game",
+    "/account",
+    "/admin",
+    "/cs",
+    "https://example.com/",
+    "//example.com/",
+    "/game//evil.example",
+    "/game/start/..%2f..%2faccount",
+    "/game/../account",
+    "/game/start/..",
+    "/game\\evil",
+    "/game/start/a\\b",
+    "/game/%5cevil",
+    "/game/%2f%2fevil.example",
+    "/game/start/a\nb",
+    "/game/start/a\rb",
+    "/game/start/%0d%0aSet-Cookie:x=1",
+    "/game/start/%00",
+    "/game/start/\u007f",
+    "/game/start/x?url=https://evil.example",
+    "javascript:alert(1)",
+    "/GAME/start/abc",
+    " /game/start/abc"
+  ],
+  "tooLongLength": 201,
+  "notStrings": [null, 0, 1, true, false, [], {}, ["/game/start/abc"]]
+}

@@ -99,6 +99,28 @@
     </form>
   </section>
 
+  <section v-if="safeMode.available" class="account-section" aria-labelledby="safe-mode-title">
+    <h2 id="safe-mode-title">{{ safeModeCopy.title }}</h2>
+    <p v-if="safeMode.returnPath" class="auth-hint" role="status">{{ safeModeCopy.returnHint }}</p>
+    <div class="account-switch-row">
+      <button type="button" id="safe_mode_switch" class="account-switch" role="switch"
+              :aria-checked="safeMode.safe ? 'true' : 'false'" aria-describedby="safe-mode-state"
+              :class="{ 'account-switch--on': safeMode.safe }"
+              :disabled="safeMode.busy || safeMode.forced" :aria-busy="safeMode.busy ? 'true' : 'false'"
+              @click="toggleSafeMode">
+        <span class="account-switch__track" aria-hidden="true"><span class="account-switch__thumb"></span></span>
+        <span class="account-switch__label">{{ safeMode.busy ? safeModeCopy.busy : (safeMode.safe ? safeModeCopy.onLabel : safeModeCopy.offLabel) }}</span>
+      </button>
+    </div>
+    <p id="safe-mode-state" class="auth-hint">{{ safeMode.safe ? safeModeCopy.stateOn : safeModeCopy.stateOff }}</p>
+    <p v-if="safeMode.forced" class="auth-hint" role="status">{{ safeModeCopy.forcedNote }}</p>
+    <p class="auth-hint">{{ safeModeCopy.boundNote }}</p>
+    <p v-if="safeMode.error && !safeMode.modalOpen" class="auth-form-error" role="alert">{{ safeMode.error }}</p>
+    <div v-if="safeMode.returnPath" class="auth-actions">
+      <a class="ui-btn" :href="safeMode.returnPath">{{ safeModeCopy.returnLink }}</a>
+    </div>
+  </section>
+
   <section v-if="ageConfirmed" class="account-section" aria-labelledby="nickname-title">
     <h2 id="nickname-title">暱稱與劇本創作</h2>
     <p v-if="!nickname" class="auth-hint" role="status">創作劇本前請先設定暱稱。</p>
@@ -173,6 +195,25 @@
   </section>
 {% endraw %}{% endif %}{% raw %}
 
+  <ui-modal v-model="safeMode.modalOpen" :title="safeModeCopy.modalTitle" :status-code="safeModeCopy.modalCode"
+            :closable="!safeMode.busy" @close="cancelSafeModeModal">
+    <p>{{ safeModeCopy.modalIntro }}</p>
+    <ul class="account-bullets">
+      <li v-for="point in safeModeCopy.rulesPoints" :key="point">{{ point }}</li>
+    </ul>
+    <p class="auth-hint"><a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>有完整的說明。</p>
+    <label class="account-check">
+      <input type="checkbox" name="confirm_rules" v-model="safeMode.agreed" :disabled="safeMode.busy">
+      <span>{{ safeModeCopy.agreeLabel }}</span>
+    </label>
+    <p v-if="safeMode.error" class="auth-form-error" role="alert">{{ safeMode.error }}</p>
+    <template #actions>
+      <button type="button" class="ui-btn" :disabled="safeMode.busy" @click="cancelSafeModeModal">{{ safeModeCopy.cancel }}</button>
+      <button type="button" class="ui-btn ui-btn--primary" :disabled="!safeMode.agreed || safeMode.busy"
+              :aria-busy="safeMode.busy ? 'true' : 'false'" @click="confirmSafeMode">{{ safeMode.busy ? safeModeCopy.busy : safeModeCopy.confirm }}</button>
+    </template>
+  </ui-modal>
+
   <ui-modal v-model="logoutAllOpen" title="登出所有裝置" status-code="CONFIRM_REQUIRED" confirm-text="登出所有裝置" @confirm="logoutAll">
     <p>這會讓您在所有裝置（包含目前這一台）上的登入全部失效，之後需要重新登入。</p>
   </ui-modal>
@@ -241,5 +282,6 @@
 {% block page_script %}
   <script src="{{ url_for('static', filename='js/auth/auth-flows.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account-lifecycle.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auth/account-safe-mode.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account.js') }}"></script>
 {% endblock %}

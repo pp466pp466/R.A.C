@@ -8,6 +8,7 @@
   var Vue = window.Vue;
   var state = Auth.readInitialState(document);
   var lifecycle = Auth.lifecycle;
+  var safeModeApi = Auth.safeMode;                          // account-safe-mode.js：安全模式區塊的純函式與狀態機
   var TIER_LABELS = { free: '一般', plus: '進階', vip: '尊榮' };
   var STORY_PREFERENCES = ['all', 'male', 'female'];       // 全讀者、男頻、女頻（伺服器是唯一的驗證者，這裡只用來還原初始選取）
 
@@ -51,6 +52,19 @@
       function leave(path) {
         window.location.assign(path);
       }
+
+      // ---- 安全模式（account-safe-mode-setting）：狀態機與純函式在 account-safe-mode.js，這裡只接線 ----
+      // 關閉需要先同意安全規範（Modal，由 Vue 狀態接管）；開啟直接送出；緊急煞車時開關禁用；請求期間禁用並一律恢復。
+      var safeModePanel = safeModeApi.createController({
+        initial: state.contentMode,
+        reactive: Vue.reactive,
+        request: function (body) { return axios.put(safeModeApi.ENDPOINT, body); },
+        describeError: Auth.describeError,
+        toast: function (message, settings) { UI.toast(message, settings); },
+        navigate: leave,
+        later: function (fn, ms) { return window.setTimeout(fn, ms); },
+        onError: function (info) { onError(info); }
+      });
 
       function logout() {
         return actions.run(function () {
@@ -242,6 +256,11 @@
         restrictionKind: restrictionKind,
         nicknameForm: nicknameForm,
         storyForm: storyForm,
+        safeMode: safeModePanel.view,
+        safeModeCopy: safeModeApi.COPY,
+        toggleSafeMode: safeModePanel.toggle,
+        confirmSafeMode: safeModePanel.confirm,
+        cancelSafeModeModal: safeModePanel.cancel,
         nickname: nickname,
         nicknameText: nicknameText,
         ageConfirmed: ageConfirmed,

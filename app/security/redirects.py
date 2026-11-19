@@ -16,6 +16,8 @@ from app.services.current_user import RESTRICTION_AGE_PENDING, CurrentUser
 
 DEFAULT_AFTER_LOGIN = "/game"      # RPG 的入口：選擇劇本與我的存檔（單一常數；不直接進入聊天，客服 `/cs` 改由導覽列進入，仍可直接開啟）
 MAX_NEXT_LENGTH = 200
+RETURN_PREFIX = "/game/"           # 帳號頁的返回位置（`/account?return=`）只能回到遊戲區（見 account-safe-mode-setting 規格）
+MAX_RETURN_LENGTH = 200
 
 
 def safe_next(value: object, default: str = DEFAULT_AFTER_LOGIN) -> str:
@@ -33,6 +35,25 @@ def safe_next(value: object, default: str = DEFAULT_AFTER_LOGIN) -> str:
             return default
     if "://" in decoded.split("?", 1)[0]:
         return default
+    return value
+
+
+def safe_return_path(value: object) -> str | None:
+    """帳號頁（`/account?return=…`）的返回位置：只有以 `/game/` 開頭的站內路徑有效，無效時回傳 `None`（頁面照一般模式顯示）。
+
+    比 `safe_next` 更嚴：必須在遊戲區之內；含 `//`、反斜線、控制字元、`..` 段落、`://` 或超過 200 字的一律丟棄，連同百分比編碼
+    解開後再檢查一次。前端 `account-safe-mode.js` 的 `safeReturnPath` 使用同一份規則（兩邊的測試共用 `tests/js/fixtures/safe-return-path-cases.json`）。
+    """
+    if not isinstance(value, str) or not value or len(value) > MAX_RETURN_LENGTH or not value.startswith(RETURN_PREFIX):
+        return None
+    for candidate in (value, unquote(value)):
+        if "\\" in candidate or "//" in candidate:
+            return None
+        if any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in candidate):
+            return None
+        path_only = candidate.split("?", 1)[0].split("#", 1)[0]
+        if "://" in path_only or ".." in path_only.split("/"):
+            return None
     return value
 
 

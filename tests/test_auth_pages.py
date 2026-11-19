@@ -313,9 +313,10 @@ def test_the_account_state_and_page_never_hold_the_birthday_or_the_range(full_ap
 @pytest.mark.parametrize("age", [15, 18, 30])
 def test_the_account_page_has_no_safe_mode_notice_for_a_minor_whatever_the_age(full_app, age):
     """adult-only-signup：全站只限滿 18 歲，帳號頁不再有「目前為安全模式」的未成年提示。
-    15 歲的帳號資料庫裡不存在（只在測試裡製造），用來證明畫面不再依 `age_group` 顯示任何提示。"""
+    15 歲的帳號資料庫裡不存在（只在測試裡製造），用來證明畫面不再依 `age_group` 顯示任何提示。
+    safe-mode-toggle 之後帳號頁有「安全模式」開關區塊（`safe-mode-title`），它顯示玩家自己的設定，與年齡無關，所以不再用這個識別碼判斷。"""
     html = logged_in(full_app, age=age).get("/account").get_data(as_text=True)
-    assert "ageGroup" not in html and "safe-mode-title" not in html
+    assert "ageGroup" not in html
     assert "目前為安全模式" not in html and "年齡限制" not in html and "不會自動改變" not in html
 
 
