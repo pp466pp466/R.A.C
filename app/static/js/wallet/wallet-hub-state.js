@@ -13,6 +13,11 @@
  *   `shouldReloadAtZero(input)`：倒數歸零時要不要重讀錢包——歸零才讀、進行中不重複、**兩次讀取至少相隔 60 秒**（本機時鐘比伺服器快、重讀後仍不能簽到時，不會無止境地請求）。
  *   `createTicker({ now, setInterval, clearInterval, onTick })`：每秒呼叫 `onTick(現在時間)` 的計時器；`start()` 重複呼叫只有一個計時器、`stop()` 一定清除。
  *   計時器只在「看得到倒數」時啟動；離開簽到卡的檢視與頁面卸載時由呼叫端停止（wallet-hub.js）。
+ * - **儲值分頁（示意）**（D9）：`topupViewOf(demo, turnCost)` 把 wallet-demo-packages.js 的資料組成卡片文字（幣數、另贈、約可進行幾輪、價格）；只有 `IS_DEMO === true` 才有卡片，
+ *   而且有卡片時一定有「示意，非正式價格」的說明；資料不合格的卡片略過。這個檔案**不寫任何幣數與價格**，數字只在資料模組裡。
+ * - **紀錄檢視**（D10）：`entryViewOf`／`entriesPageOf`（帳本一列與一頁的整理：「贈送」「付費」各自的增減量，正數「+」、負數「−」、千分位，0 就是「0」；尚未結算標「處理中」；
+ *   形狀不對整頁拒絕）、`mergeEntries`（接在後面並去除重複序號）、`entriesFailureText`（失敗說明）、`recordsViewOf`（loading｜failed｜empty｜list 與載入更多的四種狀態）。
+ * - **使用說明** `guideOf(state)`：只陳述已定案的規則，沒有價格、付款方式與退款。
  * 所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。載入順序：無相依（wallet-hub.js 在它之後）。
  */
 (function (root, factory) {
@@ -123,6 +128,134 @@
     return '免費遊戲幣（簽到與贈送）最多持有 ' + freeCap + ' 幣；領取後超過上限的部分會作廢，領取前會先提醒你。';
   }
 
+  // ---- 儲值分頁（示意）--------------------------------------------------------------------------------
+
+  var DEMO_NOTICE = '示意，非正式價格。儲值功能尚未開放，目前無法購買。';
+  var NOT_OPEN_NOTICE = '儲值功能尚未開放。';
+  var MAX_PACKS = 12;
+  var MAX_SAFE = 9007199254740991;
+  var MINUS = '−';                                            // U+2212：負號，與「+」在版面上等寬對齊
+
+  function isInt(value) { return typeof value === 'number' && isFinite(value) && Math.floor(value) === value && Math.abs(value) <= MAX_SAFE; }
+
+  /* 非負整數加千分位逗號：1000 → "1,000"（不依賴瀏覽器的語系）。 */
+  function groupDigits(value) { return String(value).replace(/\B(?=(\d{3})+(?!\d))/g, ','); }
+
+  /* 儲值分頁的畫面資料。`demo` 是 wallet-demo-packages.js 匯出的 { IS_DEMO, CURRENCY, PACKAGES }（資料只在那個檔案裡，這裡不寫任何幣數與價格）；`turnCost` 是每輪幣價。
+     **只有 `IS_DEMO === true` 才有卡片**，而且有卡片時一定有「示意，非正式價格」的說明（`notice`）；沒有示意資料就只說「尚未開放」，絕不顯示沒有標示的價格。
+     每張卡片的資料不合格（幣數不是正整數、贈送不是非負整數、價格不是正整數、id 空白或重複）就略過，最多 12 張。 */
+  function topupViewOf(demo, turnCost) {
+    var source = isObject(demo) ? demo : {};
+    if (source.IS_DEMO !== true || !Array.isArray(source.PACKAGES)) { return { demo: false, notice: NOT_OPEN_NOTICE, cards: [] }; }
+    var currency = typeof source.CURRENCY === 'string' ? source.CURRENCY : '';
+    var cost = isCount(turnCost) && turnCost > 0 ? turnCost : 0;
+    var seen = [];
+    var cards = [];
+    source.PACKAGES.forEach(function (pack) {
+      if (cards.length >= MAX_PACKS || !isObject(pack)) { return; }
+      if (typeof pack.id !== 'string' || pack.id === '' || seen.indexOf(pack.id) !== -1) { return; }
+      if (!isCount(pack.coins) || pack.coins < 1 || !isCount(pack.bonus) || !isCount(pack.price) || pack.price < 1) { return; }
+      seen.push(pack.id);
+      var turns = cost > 0 ? Math.floor((pack.coins + pack.bonus) / cost) : 0;
+      cards.push({
+        id: pack.id,
+        coinsText: groupDigits(pack.coins) + ' 幣',
+        bonusText: pack.bonus > 0 ? '另贈 ' + groupDigits(pack.bonus) + ' 幣' : '',
+        turnsText: turns > 0 ? '約可進行 ' + turns + ' 輪冒險' : '',
+        priceText: currency + groupDigits(pack.price)
+      });
+    });
+    return { demo: true, notice: DEMO_NOTICE, cards: cards };
+  }
+
+  // ---- 紀錄檢視 ---------------------------------------------------------------------------------------
+
+  /* 增減量的文字：正數帶「+」、負數用「−」、千分位；0 是「0」（管理員的零金額預扣會出現）；不是整數也當成 0（呼叫端已先驗證，這裡只是保底）。 */
+  function signedDelta(value) {
+    if (!isInt(value) || value === 0) { return '0'; }
+    return value > 0 ? '+' + groupDigits(value) : MINUS + groupDigits(-value);
+  }
+
+  /* 帳本的一列（`GET /api/wallet/entries` 的一筆）整理成畫面用的形狀；欄位不合格回傳 null。`formatTime(iso)` 由呼叫端注入（台灣時間，例如 Game.formatTaipeiTime）。
+     增減量分成「贈送」與「付費」兩個部分，只列出不是 0 的；兩者都是 0 就只有「0」。尚未結算的預扣（`pending`）另標「處理中」。文字都是純文字。 */
+  function entryViewOf(raw, formatTime) {
+    if (!isObject(raw) || !isCount(raw.seq) || !isInt(raw.free_delta) || !isInt(raw.paid_delta)) { return null; }
+    var parts = [];
+    if (raw.free_delta !== 0) { parts.push('贈送 ' + signedDelta(raw.free_delta)); }
+    if (raw.paid_delta !== 0) { parts.push('付費 ' + signedDelta(raw.paid_delta)); }
+    if (parts.length === 0) { parts.push('0'); }
+    var label = typeof raw.label === 'string' ? raw.label.trim() : '';
+    var time = typeof formatTime === 'function' ? formatTime(raw.created_at) : '';
+    return { key: raw.seq, label: label === '' ? '其他' : label, pending: raw.pending === true, timeText: typeof time === 'string' ? time : '', parts: parts };
+  }
+
+  /* 一頁帳本：{ items, nextBefore }；回應的形狀不對（不是陣列、任何一列不合格）整頁回傳 null——寧可顯示錯誤，也不顯示缺了幾筆的帳本。
+     `nextBefore` 只認非負整數，而且這一頁沒有任何列時一律是 null（不會無止境地要下一頁）。 */
+  function entriesPageOf(response, formatTime) {
+    if (!isObject(response) || !Array.isArray(response.entries)) { return null; }
+    var items = [];
+    for (var index = 0; index < response.entries.length; index += 1) {
+      var item = entryViewOf(response.entries[index], formatTime);
+      if (item === null) { return null; }
+      items.push(item);
+    }
+    return { items: items, nextBefore: items.length > 0 && isCount(response.next_before) ? response.next_before : null };
+  }
+
+  /* 把新的一頁接在後面；同一個序號只留一列（兩次請求的範圍重疊也不會重複顯示）。不修改傳入的陣列。 */
+  function mergeEntries(current, incoming) {
+    var merged = Array.isArray(current) ? current.slice() : [];
+    var known = {};
+    merged.forEach(function (item) { known[item.key] = true; });
+    (Array.isArray(incoming) ? incoming : []).forEach(function (item) {
+      if (isObject(item) && isCount(item.key) && known[item.key] !== true) { known[item.key] = true; merged.push(item); }
+    });
+    return merged;
+  }
+
+  /* 紀錄清單讀取失敗的說明（`info` 是 UI.walletApi 整理過的失敗物件）。 */
+  function entriesFailureText(info) {
+    var source = isObject(info) ? info : {};
+    if (source.kind === 'network') { return '目前無法連線，請檢查網路後再試。'; }
+    if (source.kind === 'timeout') { return '連線逾時，請稍後再試。'; }
+    if (source.status === 429 || source.status === 502 || source.status === 503 || source.status === 504) { return '系統目前較忙碌，請稍後再試。'; }
+    return '紀錄暫時無法讀取，請稍後再試。';
+  }
+
+  /* 紀錄檢視的畫面資料。`input`：{ phase（idle｜loading｜ready｜failed：第一頁的狀態）, items, error（第一頁失敗的說明）, hasMore, moreBusy, moreError }。
+     mode：loading（還沒有結果）｜failed（第一頁失敗，沒有清單）｜empty（讀到了但沒有紀錄）｜list（有清單）。
+     moreMode（只有 list 時有意義）：more（可以載入更多）｜loading（正在載入）｜error（載入更多失敗，已載入的清單仍保留）｜end（沒有更舊的了）。 */
+  function recordsViewOf(input) {
+    var source = isObject(input) ? input : {};
+    var items = Array.isArray(source.items) ? source.items : [];
+    var base = { mode: 'loading', items: [], errorText: '', moreMode: 'end' };
+    if (source.phase === 'failed') { base.mode = 'failed'; base.errorText = typeof source.error === 'string' ? source.error : ''; return base; }
+    if (source.phase !== 'ready') { return base; }
+    if (items.length === 0) { base.mode = 'empty'; return base; }
+    base.mode = 'list';
+    base.items = items;
+    if (source.moreBusy === true) { base.moreMode = 'loading'; }
+    else if (typeof source.moreError === 'string' && source.moreError !== '') { base.moreMode = 'error'; base.errorText = source.moreError; }
+    else if (source.hasMore === true) { base.moreMode = 'more'; }
+    return base;
+  }
+
+  // ---- 使用說明 ---------------------------------------------------------------------------------------
+
+  /* 使用說明的每一行：只陳述已定案的規則（每輪幣數、先扣贈送幣再扣付費幣、不過期、贈送幣上限），沒有價格、付款方式、退款與訂閱。
+     每輪幣數與上限取自錢包（`state` 是全站的錢包狀態庫的 `state`），還沒讀到時不寫數字；管理員改說不消耗。 */
+  function guideOf(state) {
+    var source = isObject(state) ? state : {};
+    var ready = source.status === 'ready';
+    var lines = [];
+    if (ready && source.exempt === true) { lines.push('管理員帳號進行冒險時不消耗遊戲幣。'); }
+    else if (ready && isCount(source.turnCost) && source.turnCost > 0) { lines.push('每一輪冒險消耗 ' + source.turnCost + ' 遊戲幣。'); }
+    lines.push('扣款時先扣贈送幣，再扣付費幣。');
+    lines.push('遊戲幣不會過期，贈送幣與付費幣都一樣。');
+    if (ready && isCount(source.freeCap) && source.freeCap > 0) { lines.push('贈送幣有持有上限，目前是 ' + source.freeCap + ' 幣；領取時超過上限的部分會作廢。'); }
+    return lines;
+  }
+
   // ---- 倒數 -------------------------------------------------------------------------------------------
 
   /* 距離下次可簽到的毫秒數：`nextResetAt` 是伺服器給的 UTC ISO 字串，`nowMs` 是目前時間；時間不合法回傳 null，已經過了回傳 0。 */
@@ -179,6 +312,10 @@
     TABS: TABS, RELOAD_GAP_MS: RELOAD_GAP_MS, TICK_MS: TICK_MS,
     isTab: isTab, initialView: initialView, selectTab: selectTab, openRecords: openRecords, closeRecords: closeRecords, tabFromKey: tabFromKey,
     balanceView: balanceView, checkinCardOf: checkinCardOf, signupGiftText: signupGiftText, freeCapNote: freeCapNote,
+    DEMO_NOTICE: DEMO_NOTICE, NOT_OPEN_NOTICE: NOT_OPEN_NOTICE, MAX_PACKS: MAX_PACKS,
+    groupDigits: groupDigits, topupViewOf: topupViewOf,
+    signedDelta: signedDelta, entryViewOf: entryViewOf, entriesPageOf: entriesPageOf, mergeEntries: mergeEntries, entriesFailureText: entriesFailureText, recordsViewOf: recordsViewOf,
+    guideOf: guideOf,
     remainingMs: remainingMs, formatCountdown: formatCountdown, countdownText: countdownText, shouldReloadAtZero: shouldReloadAtZero, createTicker: createTicker
   };
 });

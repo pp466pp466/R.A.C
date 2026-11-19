@@ -6,8 +6,12 @@
    與 wallet-hub.js 的約定（樣板用到的每個名稱，wallet-hub.js 的 setup() 都要回傳；tests/js/wallet-hub-template.test.js 兩邊對照）：
    狀態：memberText（會員等級的文字）、restriction（被鎖定或暫停發佈時的申訴捷徑種類）、balance（頂部餘額：amountText、splitText、exempt、failed、loading、aria）、
         view（'main' 或 'records'）、tab（'free' 或 'topup'）、checkinCard（簽到卡：mode、headline）、checkinBusy、checkinMessage、checkinFailed、
-        countdownText（倒數的 時:分:秒）、signupGift（註冊贈幣卡的說明）、capNote（免費幣上限說明）。
-   方法：retryWallet、openRecords、closeRecords、selectTab、onTabKeydown、claimCheckin、confirmOverflow、cancelOverflow。 #}
+        countdownText（倒數的 時:分:秒）、signupGift（註冊贈幣卡的說明）、capNote（免費幣上限說明）、
+        topup（儲值分頁：notice 示意說明、cards 示意幣包卡片；資料只來自 wallet-demo-packages.js，樣板不寫任何幣數與價格）、
+        recordsView（紀錄檢視：mode、items、errorText、moreMode）、guide（使用說明的每一行）、guideOpen（使用說明 Modal 的開關）。
+   方法：retryWallet、openRecords、closeRecords、selectTab、onTabKeydown、claimCheckin、confirmOverflow、cancelOverflow、
+        loadMoreRecords、retryRecords、openGuide。
+   儲值分頁沒有任何點擊綁定（按鈕一律停用），整個頁面唯一的寫入請求是簽到。 #}
 {% block title %}錢包{% endblock %}
 {% block head_assets %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/wallet.css') }}">
@@ -22,6 +26,7 @@
     <a class="wh-topbar__link" href="/cs">客服</a>
     <a class="wh-topbar__link" href="/scripts">創作</a>
     <a class="wh-topbar__link" href="/account">帳號</a>
+    <button type="button" class="wh-topbar__link wh-topbar__button" @click="openGuide">使用說明</button>
   </header>
 
   <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
@@ -80,18 +85,57 @@
       <p v-if="capNote" class="wh-hint">{{ capNote }}</p>
     </section>
 
-    <!-- ===== 儲值 ===== -->
+    <!-- ===== 儲值（示意）：卡片的資料只來自 wallet-demo-packages.js；按鈕一律停用，沒有任何點擊綁定與請求 ===== -->
     <section v-if="view === 'main'" v-show="tab === 'topup'" class="wh-panel" id="wh-panel-topup" role="tabpanel" aria-labelledby="wh-tab-topup">
-      <p class="wh-hint">儲值功能尚未開放。</p>
+      <p class="wh-demo-notice" role="note">{{ topup.notice }}</p>
+      <div v-if="topup.cards.length > 0" class="wh-cards wh-packs">
+        <article v-for="pack in topup.cards" :key="pack.id" class="wh-card wh-pack">
+          <p class="wh-pack__tag"><span class="wh-badge">示意，非正式價格</span></p>
+          <h2 class="wh-card__title wh-pack__coins">{{ pack.coinsText }}</h2>
+          <p v-if="pack.bonusText" class="wh-pack__bonus">{{ pack.bonusText }}</p>
+          <p v-if="pack.turnsText" class="wh-pack__turns">{{ pack.turnsText }}</p>
+          <p class="wh-pack__price">{{ pack.priceText }}</p>
+          <p class="wh-card__actions"><button type="button" class="ui-btn" disabled>即將推出</button></p>
+        </article>
+      </div>
     </section>
 
     <!-- ===== 紀錄（頁內檢視，沒有獨立網址）===== -->
     <section v-if="view === 'records'" class="wh-panel" id="wh-panel-records" aria-labelledby="wh-records-title">
       <p class="wh-back"><button type="button" class="ui-btn" @click="closeRecords">返回</button></p>
       <h2 class="wh-card__title" id="wh-records-title">遊戲幣紀錄</h2>
-      <p class="wh-hint">紀錄清單準備中。</p>
+      <p v-if="recordsView.mode === 'loading'" class="wh-hint" role="status">載入中…</p>
+      <p v-if="recordsView.mode === 'empty'" class="wh-hint">還沒有任何遊戲幣紀錄。簽到、領取贈幣或進行冒險之後，每一筆變動都會列在這裡。</p>
+      <p v-if="recordsView.mode === 'failed'" class="wh-error" role="alert">
+        {{ recordsView.errorText }}
+        <button type="button" class="ui-btn" @click="retryRecords">重試</button>
+      </p>
+      <ul v-if="recordsView.mode === 'list'" class="wh-records">
+        <li v-for="item in recordsView.items" :key="item.key" class="wh-record">
+          <span class="wh-record__label">{{ item.label }}</span>
+          <span v-if="item.pending" class="wh-badge">處理中</span>
+          <span class="wh-record__delta"><span v-for="part in item.parts" :key="part" class="wh-record__part">{{ part }}</span></span>
+          <span class="wh-record__time">{{ item.timeText }}</span>
+        </li>
+      </ul>
+      <div v-if="recordsView.mode === 'list'" class="wh-records__more">
+        <button v-if="recordsView.moreMode === 'more'" type="button" class="ui-btn" @click="loadMoreRecords">載入更多</button>
+        <button v-if="recordsView.moreMode === 'loading'" type="button" class="ui-btn" disabled aria-busy="true">載入中…</button>
+        <p v-if="recordsView.moreMode === 'error'" class="wh-error" role="alert">
+          {{ recordsView.errorText }}
+          <button type="button" class="ui-btn" @click="retryRecords">重試</button>
+        </p>
+        <p v-if="recordsView.moreMode === 'end'" class="wh-hint">已經是最舊的紀錄。</p>
+      </div>
     </section>
   </main>
+
+  <!-- ===== 使用說明（頂列「使用說明」開啟；共用的電影感 Modal，開關由 Vue 狀態接管）===== -->
+  <ui-modal v-model="guideOpen" title="使用說明" status-code="GUIDE" :show-cancel="false" confirm-text="我知道了">
+    <ul class="wh-guide">
+      <li v-for="line in guide" :key="line">{{ line }}</li>
+    </ul>
+  </ui-modal>
 
   <ui-toast-region></ui-toast-region>
 {% endraw %}
@@ -104,6 +148,7 @@
   <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-state.js') }}"></script>
   <script src="{{ url_for('static', filename='js/ui/wallet-checkin.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/wallet/wallet-demo-packages.js') }}"></script>
   <script src="{{ url_for('static', filename='js/wallet/wallet-hub-state.js') }}"></script>
   <script src="{{ url_for('static', filename='js/wallet/wallet-hub.js') }}"></script>
 {% endblock %}

@@ -21,7 +21,7 @@ const START_MS = Date.UTC(2026, 10, 18, 4, 0, 0);              // 2026-11-18 12:
 
 const SCRIPTS = [
   'js/auth/auth-common.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/wallet-api.js', 'js/ui/wallet-store.js', 'js/ui/ui-components.js',
-  'js/game/game-labels.js', 'js/game/game-state.js', 'js/ui/wallet-checkin.js', 'js/wallet/wallet-hub-state.js',
+  'js/game/game-labels.js', 'js/game/game-state.js', 'js/ui/wallet-checkin.js', 'js/wallet/wallet-demo-packages.js', 'js/wallet/wallet-hub-state.js',
 ];
 
 /* 伺服器的錯誤回應形狀（controllers/errors.py）：`error` 是 { code, message }，簽到預覽 `checkin` 在最外層。 */

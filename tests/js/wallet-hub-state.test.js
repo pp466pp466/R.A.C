@@ -300,3 +300,172 @@ test('every text of the page is plain: no markup characters in any fixed sentenc
   ];
   for (const text of texts) { assert.doesNotMatch(text, /[<>]/); }
 });
+
+// ---- 儲值分頁（示意）--------------------------------------------------------------------------------------------
+
+const DEMO = (packages, extra) => Object.assign({ IS_DEMO: true, CURRENCY: 'NT$', PACKAGES: packages }, extra);
+const PACK = (id, coins, bonus, price) => ({ id, coins, bonus, price });
+
+test('digits are grouped by thousands without depending on the browser locale', () => {
+  assert.equal(H.groupDigits(0), '0');
+  assert.equal(H.groupDigits(999), '999');
+  assert.equal(H.groupDigits(1000), '1,000');
+  assert.equal(H.groupDigits(1234567), '1,234,567');
+});
+
+test('a demo package becomes a card with coins, the extra coins, how many turns it covers and the price', () => {
+  const view = H.topupViewOf(DEMO([PACK('a', 1000, 100, 90), PACK('b', 300, 0, 30)]), 30);
+  assert.equal(view.demo, true);
+  assert.equal(view.notice, H.DEMO_NOTICE);
+  assert.ok(view.notice.includes('示意，非正式價格'));
+  assert.deepEqual(view.cards, [
+    { id: 'a', coinsText: '1,000 幣', bonusText: '另贈 100 幣', turnsText: '約可進行 36 輪冒險', priceText: 'NT$90' },
+    { id: 'b', coinsText: '300 幣', bonusText: '', turnsText: '約可進行 10 輪冒險', priceText: 'NT$30' },
+  ]);
+});
+
+test('without a per-turn price (an admin, or the wallet is not read) the cards say nothing about turns', () => {
+  for (const cost of [null, undefined, 0, -30, 1.5, '30', NaN]) {
+    assert.equal(H.topupViewOf(DEMO([PACK('a', 1000, 0, 90)]), cost).cards[0].turnsText, '', String(cost));
+  }
+  assert.equal(H.topupViewOf(DEMO([PACK('a', 10, 0, 90)]), 30).cards[0].turnsText, '');           // 連一輪都不到就不寫「約可進行 0 輪」
+});
+
+test('cards show only when the data says it is a demo; otherwise the tab only says it is not open and shows no price at all', () => {
+  const packages = [PACK('a', 1000, 100, 90)];
+  for (const demo of [DEMO(packages, { IS_DEMO: false }), DEMO(packages, { IS_DEMO: 'true' }), DEMO(packages, { IS_DEMO: 1 }), DEMO(packages, { IS_DEMO: undefined }), undefined, null, {}, 'x', DEMO(null)]) {
+    assert.deepEqual(H.topupViewOf(demo, 30), { demo: false, notice: H.NOT_OPEN_NOTICE, cards: [] }, String(JSON.stringify(demo)));
+  }
+  assert.ok(!H.NOT_OPEN_NOTICE.includes('示意'));
+});
+
+test('a package with unusable data is skipped, ids must be unique, and there are at most twelve cards', () => {
+  const good = PACK('ok', 100, 0, 10);
+  const bad = [
+    PACK('', 100, 0, 10), PACK(7, 100, 0, 10), PACK('zero', 0, 0, 10), PACK('neg', -100, 0, 10), PACK('frac', 1.5, 0, 10), PACK('bonus', 100, -1, 10), PACK('bonusfrac', 100, 0.5, 10),
+    PACK('free', 100, 0, 0), PACK('price', 100, 0, '10'), PACK('nan', NaN, 0, 10), null, 'x', [], { id: 'missing' },
+  ];
+  assert.deepEqual(H.topupViewOf(DEMO([good, ...bad, PACK('ok', 5, 0, 5)]), 30).cards.map((card) => card.id), ['ok']);       // 重複的 id 只留第一張
+  const many = Array.from({ length: 20 }, (_unused, index) => PACK(`p${index}`, 100, 0, 10));
+  assert.equal(H.topupViewOf(DEMO(many), 30).cards.length, H.MAX_PACKS);
+  assert.equal(H.MAX_PACKS, 12);
+});
+
+test('the currency mark is optional and the card text is plain text', () => {
+  assert.equal(H.topupViewOf(DEMO([PACK('a', 100, 0, 10)], { CURRENCY: undefined }), 30).cards[0].priceText, '10');
+  const view = H.topupViewOf(DEMO([PACK('a', 100, 10, 10)]), 30);
+  for (const text of [view.notice, H.NOT_OPEN_NOTICE, view.cards[0].coinsText, view.cards[0].bonusText, view.cards[0].turnsText, view.cards[0].priceText]) { assert.doesNotMatch(text, /[<>]/); }
+});
+
+// ---- 紀錄檢視 -------------------------------------------------------------------------------------------------------
+
+const TIME = (iso) => (typeof iso === 'string' ? `T:${iso}` : '');
+const RAW = (seq, label, free, paid, extra) => Object.assign({ seq, kind: 'x', label, pending: false, free_delta: free, paid_delta: paid, created_at: `2026-11-18T04:0${seq % 10}:00Z` }, extra);
+
+test('an amount is shown with a plus for gains, a true minus sign for losses, thousands separators, and a plain 0', () => {
+  assert.equal(H.signedDelta(200), '+200');
+  assert.equal(H.signedDelta(-30), '−30');                              // U+2212，不是半形連字號
+  assert.equal(H.signedDelta(-30).charCodeAt(0), 0x2212);
+  assert.equal(H.signedDelta(1500), '+1,500');
+  assert.equal(H.signedDelta(-1234567), '−1,234,567');
+  assert.equal(H.signedDelta(0), '0');
+  for (const bad of [1.5, NaN, Infinity, '5', null, undefined, {}]) { assert.equal(H.signedDelta(bad), '0', String(bad)); }
+});
+
+test('a ledger row lists the free and the paid change apart, only the ones that are not zero, and a row of two zeros is a single 0', () => {
+  assert.deepEqual(H.entryViewOf(RAW(3, '每日簽到', 200, 0), TIME).parts, ['贈送 +200']);
+  assert.deepEqual(H.entryViewOf(RAW(3, '冒險回合', -20, -10), TIME).parts, ['贈送 −20', '付費 −10']);
+  assert.deepEqual(H.entryViewOf(RAW(3, '管理員調整', 0, 500), TIME).parts, ['付費 +500']);
+  assert.deepEqual(H.entryViewOf(RAW(3, '冒險回合', 0, 0), TIME).parts, ['0']);                  // 管理員的零金額預扣
+});
+
+test('a ledger row carries the server label as plain text, the pending flag, the time from the injected formatter, and the sequence as its key', () => {
+  const row = H.entryViewOf(RAW(7, '冒險回合', -30, 0, { pending: true }), TIME);
+  assert.deepEqual(row, { key: 7, label: '冒險回合', pending: true, timeText: 'T:2026-11-18T04:07:00Z', parts: ['贈送 −30'] });
+  assert.equal(H.entryViewOf(RAW(7, '冒險回合', -30, 0, { pending: 'yes' }), TIME).pending, false);       // 只認布林 true
+  assert.equal(H.entryViewOf(RAW(7, '  ', 1, 0), TIME).label, '其他');
+  assert.equal(H.entryViewOf(RAW(7, 42, 1, 0), TIME).label, '其他');
+  assert.equal(H.entryViewOf(RAW(7, '<b>x</b>', 1, 0), TIME).label, '<b>x</b>');                      // 不處理標記：由樣板以純文字顯示
+  assert.equal(H.entryViewOf(RAW(7, '冒險回合', 1, 0, { created_at: undefined }), TIME).timeText, '');
+  assert.equal(H.entryViewOf(RAW(7, '冒險回合', 1, 0), undefined).timeText, '');                      // 沒有格式化函式也不拋出
+});
+
+test('a ledger row with a bad sequence or a bad amount is rejected', () => {
+  for (const raw of [null, undefined, 'x', [], {}, RAW(-1, 'a', 1, 0), RAW(1.5, 'a', 1, 0), RAW('1', 'a', 1, 0), RAW(1, 'a', 1.5, 0), RAW(1, 'a', 1, '0'), RAW(1, 'a', NaN, 0), RAW(1, 'a', undefined, 0), RAW(1, 'a', 0, null)]) {
+    assert.equal(H.entryViewOf(raw, TIME), null, JSON.stringify(raw));
+  }
+});
+
+test('a page is the rows in the server order plus the cursor, and a broken answer is refused as a whole', () => {
+  const page = H.entriesPageOf({ ok: true, entries: [RAW(3, 'a', 1, 0), RAW(2, 'b', 0, 1)], next_before: 2 }, TIME);
+  assert.deepEqual(page.items.map((item) => item.key), [3, 2]);
+  assert.equal(page.nextBefore, 2);
+  assert.equal(H.entriesPageOf({ entries: [RAW(3, 'a', 1, 0)], next_before: null }, TIME).nextBefore, null);
+  assert.equal(H.entriesPageOf({ entries: [RAW(3, 'a', 1, 0)] }, TIME).nextBefore, null);
+  for (const bad of ['2', -1, 1.5, {}, NaN]) { assert.equal(H.entriesPageOf({ entries: [RAW(3, 'a', 1, 0)], next_before: bad }, TIME).nextBefore, null, String(bad)); }
+  assert.equal(H.entriesPageOf({ entries: [], next_before: 5 }, TIME).nextBefore, null);              // 沒有任何列時不會有下一頁，不會無止境地要
+  for (const broken of [null, undefined, 'x', [], {}, { entries: 'x' }, { entries: {} }, { entries: [RAW(3, 'a', 1, 0), { seq: 2 }] }, { entries: [null] }]) {
+    assert.equal(H.entriesPageOf(broken, TIME), null, JSON.stringify(broken));
+  }
+});
+
+test('the next page goes after the loaded list, a repeated sequence is kept once, and nothing passed in is changed', () => {
+  const first = [H.entryViewOf(RAW(3, 'a', 1, 0), TIME), H.entryViewOf(RAW(2, 'b', 1, 0), TIME)];
+  const next = [H.entryViewOf(RAW(2, 'b', 1, 0), TIME), H.entryViewOf(RAW(1, 'c', 1, 0), TIME)];
+  const merged = H.mergeEntries(first, next);
+  assert.deepEqual(merged.map((item) => item.key), [3, 2, 1]);
+  assert.equal(first.length, 2);
+  assert.equal(next.length, 2);
+  assert.deepEqual(H.mergeEntries(undefined, next).map((item) => item.key), [2, 1]);
+  assert.deepEqual(H.mergeEntries(first, undefined).map((item) => item.key), [3, 2]);
+  assert.deepEqual(H.mergeEntries(first, [null, 'x', {}]).map((item) => item.key), [3, 2]);
+});
+
+test('each kind of failure reading the ledger has its own plain explanation', () => {
+  assert.match(H.entriesFailureText({ kind: 'network', status: 0 }), /無法連線/);
+  assert.match(H.entriesFailureText({ kind: 'timeout', status: 0 }), /逾時/);
+  for (const status of [429, 502, 503, 504]) { assert.match(H.entriesFailureText({ kind: 'server', status }), /較忙碌/, String(status)); }
+  for (const info of [{ kind: 'server', status: 500 }, { kind: 'server', status: 404 }, {}, null, undefined, 'x']) { assert.match(H.entriesFailureText(info), /暫時無法讀取/, String(JSON.stringify(info))); }
+  for (const info of [{ kind: 'network' }, { kind: 'timeout' }, { status: 503 }, {}]) { assert.doesNotMatch(H.entriesFailureText(info), /[<>]/); }
+});
+
+test('the records view moves from loading to a list, an empty state or a failure, and the "load more" part has its own four states', () => {
+  const items = [{ key: 2 }, { key: 1 }];
+  assert.deepEqual(H.recordsViewOf({ phase: 'idle', items: [] }), { mode: 'loading', items: [], errorText: '', moreMode: 'end' });
+  assert.equal(H.recordsViewOf({ phase: 'loading', items: [] }).mode, 'loading');
+  assert.deepEqual(H.recordsViewOf({ phase: 'failed', items: [], error: '壞了' }), { mode: 'failed', items: [], errorText: '壞了', moreMode: 'end' });
+  assert.deepEqual(H.recordsViewOf({ phase: 'ready', items: [] }), { mode: 'empty', items: [], errorText: '', moreMode: 'end' });
+  assert.deepEqual(H.recordsViewOf({ phase: 'ready', items, hasMore: true }), { mode: 'list', items, errorText: '', moreMode: 'more' });
+  assert.equal(H.recordsViewOf({ phase: 'ready', items, hasMore: false }).moreMode, 'end');
+  assert.equal(H.recordsViewOf({ phase: 'ready', items, hasMore: true, moreBusy: true }).moreMode, 'loading');
+  assert.deepEqual(H.recordsViewOf({ phase: 'ready', items, hasMore: true, moreError: '沒連上' }), { mode: 'list', items, errorText: '沒連上', moreMode: 'error' });
+  assert.equal(H.recordsViewOf({ phase: 'ready', items, hasMore: true, moreBusy: true, moreError: '沒連上' }).moreMode, 'loading');     // 重試進行中不顯示舊的錯誤
+  assert.equal(H.recordsViewOf(undefined).mode, 'loading');
+  assert.equal(H.recordsViewOf({ phase: 'ready', items: 'x' }).mode, 'empty');
+});
+
+// ---- 使用說明 -------------------------------------------------------------------------------------------------------
+
+test('the guide states the per-turn price and the cap from the wallet, and the settled rules without any price or way to pay', () => {
+  const lines = H.guideOf(READY({ turnCost: 30, freeCap: 1000 }));
+  assert.deepEqual(lines, [
+    '每一輪冒險消耗 30 遊戲幣。',
+    '扣款時先扣贈送幣，再扣付費幣。',
+    '遊戲幣不會過期，贈送幣與付費幣都一樣。',
+    '贈送幣有持有上限，目前是 1000 幣；領取時超過上限的部分會作廢。',
+  ]);
+  for (const line of lines) { assert.doesNotMatch(line, /價格|付款|付費購買|退款|訂閱|儲值|NT\$|元(?![\w])|[<>]/, line); }
+});
+
+test('the guide tells an admin that nothing is consumed, and writes no number before the wallet is read', () => {
+  const admin = H.guideOf(READY({ exempt: true, turnCost: null, freeCap: 1000 }));
+  assert.equal(admin[0], '管理員帳號進行冒險時不消耗遊戲幣。');
+  assert.ok(admin.every((line) => !line.includes('每一輪冒險消耗')));
+  for (const status of ['idle', 'loading', 'failed']) {
+    const lines = H.guideOf(READY({ status, turnCost: 30, freeCap: 1000 }));
+    assert.equal(lines.length, 2, status);
+    assert.ok(lines.every((line) => !/\d/.test(line)), status);
+  }
+  assert.equal(H.guideOf(undefined).length, 2);
+  assert.ok(H.guideOf(READY({ turnCost: null, freeCap: null })).every((line) => !/\d/.test(line)));      // 沒有幣價與上限就不寫
+});

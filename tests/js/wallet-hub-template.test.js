@@ -12,11 +12,19 @@ const assert = require('node:assert/strict');
 const vm = require('node:vm');
 const { setupWallet, serverError, read, START_MS } = require('./support/wallet-hub-sandbox.js');
 const { plain } = require('./support/vue-runtime.js');
+const H = require('../../app/static/js/wallet/wallet-hub-state.js');
+const Demo = require('../../app/static/js/wallet/wallet-demo-packages.js');
 
 const TEMPLATE = 'app/templates/wallet/hub.html';
 const CONTRACT = {
-  state: ['memberText', 'restriction', 'balance', 'view', 'tab', 'checkinCard', 'checkinBusy', 'checkinMessage', 'checkinFailed', 'countdownText', 'signupGift', 'capNote'],
-  methods: ['retryWallet', 'openRecords', 'closeRecords', 'selectTab', 'onTabKeydown', 'claimCheckin', 'confirmOverflow', 'cancelOverflow'],
+  state: [
+    'memberText', 'restriction', 'balance', 'view', 'tab', 'checkinCard', 'checkinBusy', 'checkinMessage', 'checkinFailed', 'countdownText', 'signupGift', 'capNote',
+    'topup', 'recordsView', 'guide', 'guideOpen',
+  ],
+  methods: [
+    'retryWallet', 'openRecords', 'closeRecords', 'selectTab', 'onTabKeydown', 'claimCheckin', 'confirmOverflow', 'cancelOverflow',
+    'loadMoreRecords', 'retryRecords', 'openGuide',
+  ],
 };
 const CONTRACT_NAMES = [].concat(CONTRACT.state, CONTRACT.methods).sort();
 
@@ -33,11 +41,13 @@ function templateNames(html) {
   for (const match of body.matchAll(/\s(?:v-if|v-else-if|v-show|v-model|:[\w-]+|@[\w.-]+)="([^"]*)"/g)) { expressions.push(match[1]); }
   for (const match of body.matchAll(/\sv-for="[^"]*?\sin\s([^"]*)"/g)) { expressions.push(match[1]); }
   for (const match of body.matchAll(/\sref="(\w+)"/g)) { names.add(match[1]); }
+  const aliases = new Set();                                           // v-for 的迴圈變數（pack、item…）是樣板自己的區域名稱，不是 setup() 的回傳
+  for (const match of body.matchAll(/\sv-for="\(?\s*(\w+)(?:\s*,\s*(\w+))?\s*\)?\s+in\s/g)) { aliases.add(match[1]); if (match[2]) { aliases.add(match[2]); } }
   for (const expression of expressions) {
     const stripped = expression.replace(/'[^']*'/g, "''");
     for (const match of stripped.matchAll(/(?<![\w.$])([A-Za-z_$][\w$]*)/g)) { names.add(match[1]); }
   }
-  return [...names].filter((name) => !JS_WORDS.has(name)).sort();
+  return [...names].filter((name) => !JS_WORDS.has(name) && !aliases.has(name)).sort();
 }
 
 /* 與 tests/js/wizard-template.test.js 相同的做法：編譯器在瀏覽器裡用 DOM 解開 HTML 實體，本範本的屬性沒有使用實體，以原樣回傳的替身滿足它。 */
@@ -164,10 +174,10 @@ const WALLET = (total, checkin, extra) => Object.assign({
 const ok = (data) => Promise.resolve({ data });
 const networkError = () => Promise.reject(Object.assign(new Error('Network Error'), { code: 'ERR_NETWORK' }));
 
-/* 依路徑回應：`wallets`、`checkins` 是依序的回應，最後一個會一直重複；每個可以是 { wallet }（成功）、Error 或 serverError（失敗）。 */
-function server({ wallets = [], checkins = [] }) {
-  const queues = { '/api/wallet': wallets, '/api/wallet/checkin': checkins };
-  const counters = { '/api/wallet': 0, '/api/wallet/checkin': 0 };
+/* 依路徑回應：`wallets`、`checkins`、`entries` 是依序的回應，最後一個會一直重複；每個可以是回應本文（成功）、函式（自己回傳 Promise）、Error 或 serverError（失敗）。 */
+function server({ wallets = [], checkins = [], entries = [] }) {
+  const queues = { '/api/wallet': wallets, '/api/wallet/checkin': checkins, '/api/wallet/entries': entries };
+  const counters = { '/api/wallet': 0, '/api/wallet/checkin': 0, '/api/wallet/entries': 0 };
   return (request) => {
     const queue = queues[request.url];
     if (!queue || queue.length === 0) { return Promise.reject(new Error('unexpected request ' + request.method + ' ' + request.url)); }
@@ -179,6 +189,13 @@ function server({ wallets = [], checkins = [] }) {
 
 const gets = (env) => env.requests.filter((request) => request.method === 'get' && request.url === '/api/wallet');
 const posts = (env) => env.requests.filter((request) => request.method === 'post');
+const entryGets = (env) => env.requests.filter((request) => request.method === 'get' && request.url === '/api/wallet/entries');
+
+/* 帳本的一列（API 的形狀）；`created_at` 從 START_MS 往前每個序號一分鐘，所以台灣時間是 2026-11-18 12:00 往前。 */
+const ROW = (seq, label, free, paid, extra) => Object.assign({
+  seq, kind: 'test', label, pending: false, free_delta: free, paid_delta: paid, created_at: iso(START_MS - seq * 60000),
+}, extra);
+const PAGE = (rows, next) => ({ ok: true, entries: rows, next_before: next === undefined ? null : next });
 
 async function open(config) {
   const env = setupWallet({ respond: server(config) });
@@ -483,15 +500,15 @@ test('switching tabs sends no request, the keyboard moves between them, and an u
 });
 
 test('the records view hides the tabs, remembers the tab, and going back returns to it', async () => {
-  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }] });
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [PAGE([])] });
   env.page.selectTab('topup');
-  env.page.openRecords();
+  await env.page.openRecords();
   assert.deepEqual([env.page.view.value, env.page.tab.value], ['records', 'topup']);
   env.page.selectTab('free');
   assert.equal(env.page.tab.value, 'topup');                           // 紀錄檢視裡分頁列是隱藏的
   env.page.closeRecords();
   assert.deepEqual([env.page.view.value, env.page.tab.value], ['main', 'topup']);
-  assert.equal(env.requests.length, 1);
+  assert.deepEqual(env.requests.map((request) => request.url), ['/api/wallet', '/api/wallet/entries']);   // 錢包一次，紀錄第一頁一次
 });
 
 test('the timer runs only while the countdown is visible: leaving the free tab or opening the records stops it, coming back starts it again', async () => {
@@ -523,6 +540,316 @@ test('leaving the page clears the timer, both when the component unmounts and wh
   assert.equal(hidden.activeIntervals().length, 0);
 });
 
+// ---- 儲值（示意）與使用說明 -------------------------------------------------------------------------------------------
+
+test('the top-up tab shows the demo notice and one card per demo package, with every number taken from the data module', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }] });
+  const view = plain(env.page.topup.value);
+  assert.equal(view.demo, true);
+  assert.ok(view.notice.includes('示意，非正式價格'));
+  assert.equal(view.cards.length, Demo.PACKAGES.length);
+  Demo.PACKAGES.forEach((pack, index) => {
+    const card = view.cards[index];
+    assert.equal(card.id, pack.id);
+    assert.equal(card.coinsText, `${H.groupDigits(pack.coins)} 幣`);
+    assert.equal(card.priceText, `${Demo.CURRENCY}${H.groupDigits(pack.price)}`);
+    assert.equal(card.bonusText, pack.bonus > 0 ? `另贈 ${H.groupDigits(pack.bonus)} 幣` : '');
+    assert.equal(card.turnsText, `約可進行 ${Math.floor((pack.coins + pack.bonus) / 30)} 輪冒險`);      // 每輪幣價取自錢包（WALLET 的 turn_cost 是 30）
+  });
+  assert.equal(env.requests.length, 1);                                // 只有載入錢包的那一個請求
+});
+
+test('an admin has no per-turn price, so the cards say nothing about how many turns a package gives', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(0, {}, { coin_exempt: true, turn_cost: { standard: 0 } }) }] });
+  assert.ok(env.page.topup.value.cards.length > 0);
+  assert.ok(env.page.topup.value.cards.every((card) => card.turnsText === ''));
+});
+
+test('the top-up tab needs no request to be shown, switching to it and back sends nothing, and there is no purchase method', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }] });
+  env.page.selectTab('topup');
+  env.page.selectTab('free');
+  env.page.selectTab('topup');
+  assert.equal(env.requests.length, 1);
+  assert.equal(env.page.tab.value, 'topup');
+  assert.deepEqual(Object.keys(env.page).filter((name) => /buy|purchase|pay|order|topup[A-Z]|checkout/i.test(name)), []);
+});
+
+test('the top-up panel has a disabled "coming soon" button per card and no click binding, link or form at all', () => {
+  const html = read(TEMPLATE);
+  const panel = html.slice(html.indexOf('id="wh-panel-topup"'), html.indexOf('<!-- ===== 紀錄'));
+  assert.ok(panel.includes('v-for="pack in topup.cards"'));
+  assert.ok(!/@click|v-on:|href=|<form|<a |<input|<select|type="submit"/.test(panel), panel);
+  const buttons = [...panel.matchAll(/<button[^>]*>/g)].map((match) => match[0]);
+  assert.equal(buttons.length, 1);                                     // 迴圈裡的一顆，每張卡片各一顆
+  assert.ok(/\sdisabled(?=[\s>])/.test(buttons[0]) && !/:disabled/.test(buttons[0]));          // 靜態的 disabled，不是會被改成可點的動態綁定
+  assert.ok(panel.includes('>即將推出</button>'));
+  assert.ok(panel.includes('{{ topup.notice }}'));                     // 分頁頂端的說明
+  const card = panel.slice(panel.indexOf('<article'), panel.indexOf('</article>'));
+  assert.ok(card.includes('示意，非正式價格'));                           // 每張卡片自己也標示
+  assert.ok(!/(?<![\w.-])\d+(?![\w.-])/.test(card.replace(/class="[^"]*"/g, '')), '樣板裡沒有幣數、贈送數與價格');
+});
+
+test('the usage guide opens in the shared modal from a top bar button, states only settled rules and never a price or a way to pay', async () => {
+  const html = read(TEMPLATE);
+  assert.ok(/<button type="button" class="wh-topbar__link wh-topbar__button" @click="openGuide">使用說明<\/button>/.test(html));
+  assert.ok(html.indexOf('href="/account">帳號</a>') < html.indexOf('@click="openGuide"'));            // 在「帳號」旁邊（它之後）
+  assert.ok(/<ui-modal v-model="guideOpen" title="使用說明" status-code="GUIDE"/.test(html));
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5, {}, { free_cap: 1000 }) }] });
+  assert.equal(env.page.guideOpen.value, false);
+  env.page.openGuide();
+  assert.equal(env.page.guideOpen.value, true);
+  const lines = plain(env.page.guide.value);
+  assert.ok(lines.includes('每一輪冒險消耗 30 遊戲幣。'));
+  assert.ok(lines.some((line) => line.includes('先扣贈送幣，再扣付費幣')));
+  assert.ok(lines.some((line) => line.includes('不會過期')));
+  assert.ok(lines.some((line) => line.includes('持有上限') && line.includes('1000')));
+  assert.ok(lines.every((line) => !/價格|付款|付費購買|退款|訂閱|儲值|NT\$|元(?![\w])|折扣/.test(line)), lines.join('\n'));
+  assert.equal(env.requests.length, 1);
+});
+
+test('the usage guide tells an admin that turns cost nothing, and states no number before the wallet is read', async () => {
+  const admin = await open({ wallets: [{ ok: true, wallet: WALLET(0, {}, { coin_exempt: true, turn_cost: { standard: 0 } }) }] });
+  const adminLines = plain(admin.page.guide.value);
+  assert.ok(adminLines.includes('管理員帳號進行冒險時不消耗遊戲幣。'));
+  assert.ok(adminLines.every((line) => !line.includes('每一輪冒險消耗')));
+  const failed = await open({ wallets: [networkError] });
+  const failedLines = plain(failed.page.guide.value);
+  assert.equal(failedLines.length, 2);                                 // 只有不依賴錢包的兩條規則
+  assert.ok(failedLines.every((line) => !/\d/.test(line)));
+});
+
+// ---- 紀錄檢視 -----------------------------------------------------------------------------------------------------
+
+test('entering the records asks for the first page once and lists it newest first with signs, both balances and Taipei time', async () => {
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    entries: [PAGE([
+      ROW(5, '冒險回合', -30, 0, { pending: true }), ROW(4, '冒險回合', -30, -10), ROW(3, '每日簽到', 200, 0), ROW(2, '註冊贈送', 200, 0), ROW(1, '管理員調整', 0, 1500),
+    ])],
+  });
+  assert.equal(env.page.recordsView.value.mode, 'loading');             // 還沒進入紀錄：沒有請求，畫面上也看不到
+  assert.deepEqual(entryGets(env), []);
+  const loading = env.page.openRecords();
+  assert.equal(env.page.recordsView.value.mode, 'loading');             // 讀取中
+  await loading;
+  assert.equal(entryGets(env).length, 1);
+  assert.deepEqual(plain(entryGets(env)[0].params), {});                       // 第一頁沒有游標與筆數參數
+  const view = plain(env.page.recordsView.value);
+  assert.equal(view.mode, 'list');
+  assert.equal(view.moreMode, 'end');
+  assert.deepEqual(view.items.map((item) => [item.key, item.label, item.pending, item.parts, item.timeText]), [
+    [5, '冒險回合', true, ['贈送 −30'], '2026-11-18 11:55'],
+    [4, '冒險回合', false, ['贈送 −30', '付費 −10'], '2026-11-18 11:56'],
+    [3, '每日簽到', false, ['贈送 +200'], '2026-11-18 11:57'],
+    [2, '註冊贈送', false, ['贈送 +200'], '2026-11-18 11:58'],
+    [1, '管理員調整', false, ['付費 +1,500'], '2026-11-18 11:59'],
+  ]);
+});
+
+test('"load more" asks for the next page with the cursor, puts it after the list, and shows the end when there is no cursor', async () => {
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    entries: [PAGE([ROW(30, '冒險回合', -30, 0), ROW(29, '每日簽到', 200, 0)], 29), PAGE([ROW(28, '註冊贈送', 200, 0), ROW(29, '每日簽到', 200, 0)])],
+  });
+  await env.page.openRecords();
+  assert.equal(env.page.recordsView.value.moreMode, 'more');
+  await env.page.loadMoreRecords();
+  assert.equal(entryGets(env).length, 2);
+  assert.deepEqual(plain(entryGets(env)[1].params), { before: 29 });
+  const view = plain(env.page.recordsView.value);
+  assert.deepEqual(view.items.map((item) => item.key), [30, 29, 28]);   // 接在後面，重複的序號只留一列
+  assert.equal(view.moreMode, 'end');
+  assert.equal(await env.page.loadMoreRecords(), false);               // 沒有游標了：不送請求
+  assert.equal(entryGets(env).length, 2);
+});
+
+test('pressing "load more" twice quickly sends one request, and the button shows it is loading meanwhile', async () => {
+  let release = null;
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    entries: [PAGE([ROW(9, '冒險回合', -30, 0)], 9), () => new Promise((resolve) => { release = () => resolve({ data: PAGE([ROW(8, '每日簽到', 200, 0)]) }); })],
+  });
+  await env.page.openRecords();
+  const first = env.page.loadMoreRecords();
+  const second = env.page.loadMoreRecords();
+  assert.equal(env.page.recordsView.value.moreMode, 'loading');
+  release();
+  assert.deepEqual(await Promise.all([first, second]), [true, false]);
+  assert.equal(entryGets(env).length, 2);
+  assert.equal(env.page.recordsView.value.items.length, 2);
+  assert.equal(env.page.recordsView.value.moreMode, 'end');
+});
+
+test('an empty ledger shows the empty state and no "load more"', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [PAGE([])] });
+  await env.page.openRecords();
+  assert.deepEqual(plain(env.page.recordsView.value), { mode: 'empty', items: [], errorText: '', moreMode: 'end' });
+});
+
+test('an admin turn with a zero amount is listed with a 0 change', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(0, {}, { coin_exempt: true }) }], entries: [PAGE([ROW(2, '冒險回合', 0, 0)])] });
+  await env.page.openRecords();
+  assert.deepEqual(plain(env.page.recordsView.value.items[0].parts), ['0']);
+});
+
+test('a failed first page shows the error with a retry and no list; going back and in again does not ask by itself; retry asks again', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [networkError, PAGE([ROW(1, '註冊贈送', 200, 0)])] });
+  await env.page.openRecords();
+  let view = plain(env.page.recordsView.value);
+  assert.equal(view.mode, 'failed');
+  assert.match(view.errorText, /無法連線/);
+  assert.deepEqual(view.items, []);
+  env.page.closeRecords();
+  await env.page.openRecords();
+  assert.equal(entryGets(env).length, 1);                              // 失敗後返回再進入：等玩家按「重試」
+  assert.equal(env.page.recordsView.value.mode, 'failed');
+  await env.page.retryRecords();
+  assert.equal(entryGets(env).length, 2);
+  view = plain(env.page.recordsView.value);
+  assert.equal(view.mode, 'list');
+  assert.equal(view.errorText, '');
+});
+
+test('a timeout, a busy server and a broken answer each give their own explanation and never show a half ledger', async () => {
+  const timeout = () => Promise.reject(Object.assign(new Error('timeout'), { code: 'ECONNABORTED' }));
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    entries: [timeout, serverError(503, 'wallet_busy', 'busy'), { ok: true, entries: [ROW(2, '冒險回合', -30, 0), { seq: 1, label: '壞掉的一列' }], next_before: null }, serverError(500, 'boom', 'boom')],
+  });
+  await env.page.openRecords();
+  assert.match(env.page.recordsView.value.errorText, /逾時/);
+  await env.page.retryRecords();
+  assert.match(env.page.recordsView.value.errorText, /較忙碌/);
+  await env.page.retryRecords();
+  assert.equal(env.page.recordsView.value.mode, 'failed');             // 有一列壞掉：整頁當作失敗，不顯示少一筆的帳本
+  assert.deepEqual(plain(env.page.recordsView.value.items), []);
+  await env.page.retryRecords();
+  assert.match(env.page.recordsView.value.errorText, /暫時無法讀取/);
+});
+
+test('a failed "load more" keeps the loaded list, says so with a retry, and the retry uses the same cursor', async () => {
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    entries: [PAGE([ROW(20, '冒險回合', -30, 0)], 20), networkError, PAGE([ROW(19, '每日簽到', 200, 0)])],
+  });
+  await env.page.openRecords();
+  await env.page.loadMoreRecords();
+  let view = plain(env.page.recordsView.value);
+  assert.equal(view.mode, 'list');
+  assert.equal(view.moreMode, 'error');
+  assert.match(view.errorText, /無法連線/);
+  assert.deepEqual(view.items.map((item) => item.key), [20]);           // 已載入的清單還在
+  await env.page.retryRecords();
+  assert.deepEqual(plain(entryGets(env).map((request) => request.params)), [{}, { before: 20 }, { before: 20 }]);
+  view = plain(env.page.recordsView.value);
+  assert.deepEqual(view.items.map((item) => item.key), [20, 19]);
+  assert.equal(view.moreMode, 'end');
+  assert.equal(view.errorText, '');
+});
+
+test('going back and entering the records again does not ask the server again', async () => {
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [PAGE([ROW(1, '註冊贈送', 200, 0)])] });
+  await env.page.openRecords();
+  env.page.closeRecords();
+  await env.page.openRecords();
+  env.page.closeRecords();
+  await env.page.openRecords();
+  assert.equal(entryGets(env).length, 1);
+  assert.equal(env.page.recordsView.value.items.length, 1);
+});
+
+test('leaving while the first page is still loading and coming back does not send a second request', async () => {
+  let release = null;
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    entries: [() => new Promise((resolve) => { release = () => resolve({ data: PAGE([ROW(1, '註冊贈送', 200, 0)]) }); })],
+  });
+  const loading = env.page.openRecords();
+  env.page.closeRecords();
+  await env.page.openRecords();
+  release();
+  await loading;
+  assert.equal(entryGets(env).length, 1);
+  assert.equal(env.page.recordsView.value.mode, 'list');
+});
+
+test('a successful check-in drops the loaded ledger so the next visit shows the new entry', async () => {
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    checkins: [{ ok: true, wallet: WALLET(205, { claimable: false }) }],
+    entries: [PAGE([ROW(1, '註冊贈送', 200, 0)]), PAGE([ROW(2, '每日簽到', 200, 0), ROW(1, '註冊贈送', 200, 0)])],
+  });
+  await env.page.openRecords();
+  env.page.closeRecords();
+  await env.page.claimCheckin();
+  await env.settle();
+  await env.page.openRecords();
+  assert.equal(entryGets(env).length, 2);                              // 簽到之後再進入：重新讀
+  assert.deepEqual(plain(env.page.recordsView.value.items).map((item) => item.key), [2, 1]);
+});
+
+test('an answer that arrives after a check-in dropped the ledger is ignored, never shown as if it were current', async () => {
+  let release = null;
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    checkins: [{ ok: true, wallet: WALLET(205, { claimable: false }) }],
+    entries: [() => new Promise((resolve) => { release = () => resolve({ data: PAGE([ROW(1, '舊的一頁', 200, 0)]) }); }), PAGE([ROW(2, '每日簽到', 200, 0)])],
+  });
+  const stale = env.page.openRecords();
+  env.page.closeRecords();
+  await env.page.claimCheckin();
+  await env.settle();
+  release();
+  assert.equal(await stale, false);
+  await env.settle();
+  assert.deepEqual(plain(env.page.recordsView.value.items), []);
+  await env.page.openRecords();
+  assert.deepEqual(plain(env.page.recordsView.value.items).map((item) => item.label), ['每日簽到']);
+});
+
+test('a failure that arrives after a check-in dropped the ledger is ignored too: the next visit still reads the first page', async () => {
+  let fail = null;
+  const env = await open({
+    wallets: [{ ok: true, wallet: WALLET(5) }],
+    checkins: [{ ok: true, wallet: WALLET(205, { claimable: false }) }],
+    entries: [
+      () => new Promise((_resolve, reject) => { fail = () => reject(Object.assign(new Error('Network Error'), { code: 'ERR_NETWORK' })); }),
+      PAGE([ROW(2, '每日簽到', 200, 0)]),
+    ],
+  });
+  const stale = env.page.openRecords();
+  env.page.closeRecords();
+  await env.page.claimCheckin();
+  await env.settle();
+  fail();
+  assert.equal(await stale, false);
+  await env.settle();
+  await env.page.openRecords();                                        // 舊請求的失敗沒有把狀態弄成「失敗」：仍然會重新讀第一頁
+  assert.equal(entryGets(env).length, 2);
+  assert.deepEqual(plain(env.page.recordsView.value.items).map((item) => item.label), ['每日簽到']);
+});
+
+test('an expired login while reading the ledger goes to the login page once; a locked account gets the appeal shortcut', async () => {
+  const expired = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [serverError(401, 'unauthorized', 'login')] });
+  await expired.page.openRecords();
+  assert.deepEqual(expired.navigations, ['/login?next=%2Fwallet']);
+  const locked = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [serverError(403, 'account_locked', 'locked')] });
+  await locked.page.openRecords();
+  assert.equal(locked.page.restriction.value, 'locked');
+  assert.equal(locked.page.recordsView.value.mode, 'failed');
+});
+
+test('the records list shows ledger text as plain text only, and the template never renders markup', async () => {
+  const html = read(TEMPLATE);
+  const records = html.slice(html.indexOf('id="wh-panel-records"'), html.indexOf('<!-- ===== 使用說明'));
+  for (const field of ['item.label', 'item.timeText', 'part', 'recordsView.errorText']) { assert.ok(records.includes(`{{ ${field} }}`), field); }
+  assert.ok(!/v-html|innerHTML/.test(html));
+  const env = await open({ wallets: [{ ok: true, wallet: WALLET(5) }], entries: [PAGE([ROW(1, '<b>標記</b>', 200, 0)])] });
+  await env.page.openRecords();
+  assert.equal(env.page.recordsView.value.items[0].label, '<b>標記</b>');           // 原樣的文字，由 {{ }} 以純文字顯示
+});
+
 // ---- 整頁的守門 -----------------------------------------------------------------------------------------------------
 
 test('a whole visit writes to no browser storage, prints nothing, and the only request that is not a GET is the check-in', async () => {
@@ -530,6 +857,7 @@ test('a whole visit writes to no browser storage, prints nothing, and the only r
   const env = await open({
     wallets: [{ ok: true, wallet: WALLET(950) }, { ok: true, wallet: WALLET(1000, { claimable: false, next_reset_at: iso(START_MS + 2000) }) }],
     checkins: [overflow, { ok: true, wallet: WALLET(1000, { claimable: false, next_reset_at: iso(START_MS + 2000) }) }],
+    entries: [PAGE([ROW(2, '每日簽到', 200, 0), ROW(1, '註冊贈送', 200, 0)], 1), PAGE([ROW(0, '註冊贈送', 0, 0)])],
   });
   await env.page.claimCheckin();
   env.page.cancelOverflow();
@@ -537,8 +865,10 @@ test('a whole visit writes to no browser storage, prints nothing, and the only r
   await env.page.confirmOverflow();
   env.page.selectTab('topup');
   env.page.selectTab('free');
-  env.page.openRecords();
+  await env.page.openRecords();
+  await env.page.loadMoreRecords();
   env.page.closeRecords();
+  env.page.openGuide();
   await env.advance(5);
   await env.page.retryWallet();
   env.unmount();
@@ -546,8 +876,9 @@ test('a whole visit writes to no browser storage, prints nothing, and the only r
   assert.deepEqual(env.logs, []);
   const writes = env.requests.filter((request) => request.method !== 'get');
   assert.ok(writes.length >= 2);
-  assert.deepEqual([...new Set(writes.map((request) => `${request.method} ${request.url}`))], ['post /api/wallet/checkin']);
-  assert.ok(env.requests.every((request) => request.url === '/api/wallet' || request.url === '/api/wallet/checkin'));
+  assert.deepEqual([...new Set(writes.map((request) => `${request.method} ${request.url}`))], ['post /api/wallet/checkin']);       // 寫入請求只有簽到
+  assert.ok(env.requests.every((request) => ['/api/wallet', '/api/wallet/checkin', '/api/wallet/entries'].includes(request.url)));
+  assert.equal(entryGets(env).length, 2);                              // 紀錄只用 GET：第一頁與載入更多
 });
 
 test('the page reads nothing from the URL and sends nothing but the confirm flag', async () => {

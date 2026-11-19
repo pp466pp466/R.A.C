@@ -129,6 +129,45 @@
 .wh-countdown { margin: 0 0 0.6rem; color: var(--color-text-muted); font-size: 0.9rem; }
 .wh-countdown__value { color: var(--color-text); font-size: 1.35rem; font-weight: 500; font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
 
+/* ---- 頂欄的「使用說明」按鈕：外觀與旁邊的連結一致 ---------------------------------- */
+.wh-topbar__button { appearance: none; padding: 0; background: transparent; border: 0; font: inherit; cursor: pointer; }
+.wh-topbar__button:focus-visible { color: var(--color-accent); }
+
+/* ---- 儲值（示意）：幣包卡片；按鈕一律停用 ---------------------------------------- */
+.wh-demo-notice {
+  margin: 0 0 1rem;
+  padding: 0.5rem 0.8rem;
+  border-left: 2px solid var(--color-accent);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
+.wh-packs { grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr)); }
+.wh-pack { display: flex; flex-direction: column; gap: 0.35rem; }
+.wh-pack__tag { margin: 0; }
+.wh-pack__coins { margin: 0; font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+.wh-pack__bonus, .wh-pack__turns { margin: 0; color: var(--color-text-muted); font-size: 0.9rem; overflow-wrap: anywhere; }
+.wh-pack__price { margin: 0.4rem 0 0; font-size: 1.25rem; font-weight: 500; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.wh-pack .wh-card__actions { margin-top: auto; padding-top: 0.6rem; }
+.wh-pack .ui-btn:disabled, .wh-pack .ui-btn:disabled:hover { cursor: not-allowed; opacity: 0.55; color: var(--color-text-muted); border-color: var(--color-border); }
+
+/* ---- 紀錄清單 ---------------------------------------------------------------- */
+.wh-records { margin: 0 0 1rem; padding: 0; list-style: none; background: var(--color-surface); border: var(--border-hairline); }
+.wh-record { display: flex; flex-wrap: wrap; align-items: baseline; gap: 0.25rem 0.75rem; padding: 0.7rem 1rem; border-bottom: var(--border-hairline); }
+.wh-record:last-child { border-bottom: 0; }
+.wh-record__label { min-width: 0; overflow-wrap: anywhere; }
+.wh-record__delta { display: inline-flex; flex-wrap: wrap; gap: 0.25rem 0.75rem; margin-left: auto; font-variant-numeric: tabular-nums; }
+.wh-record__part { display: inline-block; }                  /* 「贈送 +200」不在中間斷行 */
+.wh-record__time { flex: 1 0 100%; color: var(--color-text-muted); font-size: 0.8rem; }
+.wh-records__more { margin: 0 0 1rem; }
+
+/* ---- 使用說明（Modal 內）----------------------------------------------------- */
+.wh-guide { margin: 0; padding-left: 1.2rem; font-size: 0.95rem; line-height: 1.9; }
+.wh-guide li { overflow-wrap: anywhere; }
+
 /* ---- 手機 -------------------------------------------------------------------- */
 @media (max-width: 575.98px) {
   .wh-balance__number { font-size: 1.9rem; }

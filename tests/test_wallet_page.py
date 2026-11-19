@@ -154,7 +154,7 @@ def test_the_scripts_load_in_dependency_order_and_the_page_script_comes_last(app
     names = [ref.rsplit("/", 1)[-1] for ref in collect(client.get("/wallet").get_data(as_text=True)).refs if ref.endswith(".js")]
     expected = [
         "vue.global.prod.js", "axios.min.js", "wallet-api.js", "wallet-store.js", "ui-components.js",       # base.html：全站共用
-        "auth-common.js", "game-labels.js", "game-state.js", "wallet-checkin.js", "wallet-hub-state.js", "wallet-hub.js",
+        "auth-common.js", "game-labels.js", "game-state.js", "wallet-checkin.js", "wallet-demo-packages.js", "wallet-hub-state.js", "wallet-hub.js",
     ]
     positions = [names.index(name) for name in expected]
     assert positions == sorted(positions), names

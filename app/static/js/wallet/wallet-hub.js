@@ -10,6 +10,10 @@
  * - **倒數**：今天已簽到時，簽到卡每秒以「下次可簽到時間減目前時間」重算（不是每秒減一），只在看得到倒數時才有計時器（離開免費分頁、進入紀錄、卸載與 `pagehide` 都停止）。
  *   歸零時重讀一次錢包（`load({ force: true })`），若重讀後仍不能簽到（本機時鐘不準），兩次重讀至少相隔 60 秒。
  * - **分頁與檢視**由 Vue 的響應式變數接管（`tab`、`view`）：不使用 Bootstrap 的 JavaScript 與 data-bs-*、不新增路由、不記住（不寫任何瀏覽器儲存）；`tablist` 支援方向鍵與 Home／End。
+ * - **儲值（示意）**：`topup` 由 wallet-demo-packages.js 的資料經 `Wallet.topupViewOf` 組成卡片（design D9）；沒有任何請求，樣板裡的按鈕一律停用，這裡也沒有任何購買的方法。
+ * - **紀錄**：第一次進入才讀 `GET /api/wallet/entries` 的第一頁，「載入更多」用 `next_before` 當游標；清單留在頁內記憶體，返回再進入不重新請求（失敗時等玩家按「重試」）；
+ *   這個頁面簽到成功後清單作廢（`resetRecords`，帳本多了一筆），仍在途中的舊請求回來時因世代不同被丟棄。紀錄只用 GET；整個頁面唯一的寫入請求仍是簽到。
+ * - **使用說明**：頂列「使用說明」按鈕開啟共用的 `ui-modal`（`guideOpen`，開關由 Vue 狀態接管），內容由 `Wallet.guideOf` 依錢包組成。
  * 所有文字由樣板以 {{ }} 插值顯示（純文字），這裡不輸出到主控台、不放網址、不寫瀏覽器儲存。
  */
 (function () {
@@ -19,6 +23,7 @@
   var Auth = window.Auth;
   var UI = window.UI;
   var Wallet = window.Wallet;
+  var WalletDemo = window.WalletDemo;                          // 示意幣包資料（wallet-demo-packages.js，唯一的位置）；沒載入時儲值分頁只說「尚未開放」
   var state = Auth.readInitialState(document);
   var PAGE_PATH = '/wallet';
 
@@ -62,7 +67,7 @@
           onFailure: applyFailure,
           onLogin: goLogin,
           onError: function () { checkinFailed.value = true; },       // 網路、逾時、繁忙與未知：說明用警示呈現（預覽與已簽到不是錯誤）
-          onSuccess: function (current) { UI.toast('簽到成功。' + current); }       // 不回字串：卡片內顯示預設的成功說明
+          onSuccess: function (current) { resetRecords(); UI.toast('簽到成功。' + current); }       // 不回字串：卡片內顯示預設的成功說明；帳本多了一筆，已載入的紀錄清單作廢
         }
       });
 
@@ -99,8 +104,97 @@
       function currentView() { return { tab: tab.value, view: view.value }; }
       function applyView(next) { tab.value = next.tab; view.value = next.view; }
       function selectTab(name) { applyView(Wallet.selectTab(currentView(), name)); }
-      function openRecords() { applyView(Wallet.openRecords(currentView())); }
       function closeRecords() { applyView(Wallet.closeRecords(currentView())); }
+
+      // ---- 紀錄檢視（帳本）---------------------------------------------------------------------------------
+      // 清單保留在頁內記憶體（design D10）：第一次進入才請求，返回再進入不重新請求（除非玩家按「重試」）；離開頁面就丟棄，不寫任何瀏覽器儲存。
+      // 唯一例外：這個頁面簽到成功後，帳本多了一筆，已載入的清單作廢，下次進入再讀（resetRecords）。
+      var recordItems = ref([]);                                // 已載入的列（Wallet.entryViewOf 的形狀），由新到舊
+      var recordsPhase = ref('idle');                           // 第一頁：idle｜loading｜ready｜failed
+      var recordsError = ref('');                               // 第一頁失敗的說明
+      var nextBefore = ref(null);                               // 下一頁的游標；null＝沒有更舊的了
+      var moreBusy = ref(false);                                // 正在載入更多
+      var moreError = ref('');                                  // 載入更多失敗的說明（已載入的清單保留）
+      var recordsGeneration = 0;                                // 非響應式：清單作廢後，舊請求的回應一律丟棄
+
+      /* 失敗：登入過期導向登入頁、被鎖定顯示申訴捷徑（applyFailure），回傳給玩家看的說明。 */
+      function recordFailure(info) { applyFailure(info); return Wallet.entriesFailureText(info); }
+
+      function loadFirstRecords() {
+        if (recordsPhase.value === 'loading') { return Promise.resolve(false); }
+        var generation = recordsGeneration;
+        recordsPhase.value = 'loading';
+        recordsError.value = '';
+        return UI.walletApi.entries().then(function (response) {
+          if (generation !== recordsGeneration) { return false; }
+          var page = Wallet.entriesPageOf(response, Game.formatTaipeiTime);
+          if (page === null) { throw new Error('malformed entries'); }
+          recordItems.value = page.items;
+          nextBefore.value = page.nextBefore;
+          recordsPhase.value = 'ready';
+          return true;
+        }).then(undefined, function (info) {
+          if (generation !== recordsGeneration) { return false; }
+          recordsPhase.value = 'failed';
+          recordsError.value = recordFailure(info);
+          return false;
+        });
+      }
+
+      function loadMoreRecords() {
+        if (recordsPhase.value !== 'ready' || moreBusy.value || nextBefore.value === null) { return Promise.resolve(false); }
+        var generation = recordsGeneration;
+        moreBusy.value = true;
+        moreError.value = '';
+        return UI.walletApi.entries(nextBefore.value).then(function (response) {
+          if (generation !== recordsGeneration) { return false; }
+          var page = Wallet.entriesPageOf(response, Game.formatTaipeiTime);
+          if (page === null) { throw new Error('malformed entries'); }
+          recordItems.value = Wallet.mergeEntries(recordItems.value, page.items);
+          nextBefore.value = page.nextBefore;
+          return true;
+        }).then(undefined, function (info) {
+          if (generation !== recordsGeneration) { return false; }
+          moreError.value = recordFailure(info);                // 已載入的清單保留
+          return false;
+        }).then(function (loaded) {
+          if (generation === recordsGeneration) { moreBusy.value = false; }
+          return loaded;
+        });
+      }
+
+      /* 「重試」：第一頁失敗就重讀第一頁，否則（載入更多失敗）用同一個游標再載入一次。 */
+      function retryRecords() { return recordsPhase.value === 'failed' ? loadFirstRecords() : loadMoreRecords(); }
+
+      /* 清單作廢（回到沒讀過的狀態）；進行中的請求回來時因為世代不同而被丟棄。 */
+      function resetRecords() {
+        recordsGeneration += 1;
+        recordItems.value = [];
+        recordsPhase.value = 'idle';
+        recordsError.value = '';
+        nextBefore.value = null;
+        moreBusy.value = false;
+        moreError.value = '';
+      }
+
+      function openRecords() {
+        applyView(Wallet.openRecords(currentView()));
+        return recordsPhase.value === 'idle' ? loadFirstRecords() : Promise.resolve(false);       // 讀過（或正在讀、失敗等玩家按重試）就不再請求
+      }
+
+      var recordsView = computed(function () {
+        return Wallet.recordsViewOf({
+          phase: recordsPhase.value, items: recordItems.value, error: recordsError.value,
+          hasMore: nextBefore.value !== null, moreBusy: moreBusy.value, moreError: moreError.value
+        });
+      });
+
+      // ---- 儲值（示意）與使用說明 ----------------------------------------------------------------------------
+      // 儲值分頁沒有任何請求與增加餘額的路徑：卡片的資料只來自 wallet-demo-packages.js，按鈕在樣板裡一律停用。
+      var topup = computed(function () { return Wallet.topupViewOf(WalletDemo, store.state.turnCost); });
+      var guide = computed(function () { return Wallet.guideOf(store.state); });
+      var guideOpen = ref(false);                               // 使用說明 Modal 的開關（頂列「使用說明」按鈕開啟；由 Vue 狀態接管）
+      function openGuide() { guideOpen.value = true; }
 
       /* `tablist` 的鍵盤操作：方向鍵、Home、End 切換分頁並把焦點移到新的分頁（沒有 DOM 時只切換）。 */
       function onTabKeydown(event) {
@@ -152,8 +246,9 @@
       return {
         memberText: memberText, restriction: restriction, balance: balance, view: view, tab: tab,
         checkinCard: checkinCard, checkinBusy: checkin.busy, checkinMessage: checkin.message, checkinFailed: checkinFailed,
-        countdownText: countdownText, signupGift: signupGift, capNote: capNote,
-        retryWallet: retryWallet, openRecords: openRecords, closeRecords: closeRecords, selectTab: selectTab, onTabKeydown: onTabKeydown,
+        countdownText: countdownText, signupGift: signupGift, capNote: capNote, topup: topup, guide: guide, guideOpen: guideOpen, recordsView: recordsView,
+        retryWallet: retryWallet, openGuide: openGuide, openRecords: openRecords, closeRecords: closeRecords, selectTab: selectTab, onTabKeydown: onTabKeydown,
+        loadMoreRecords: loadMoreRecords, retryRecords: retryRecords,
         claimCheckin: claimCheckin, confirmOverflow: confirmOverflow, cancelOverflow: cancelOverflow
       };
     }
