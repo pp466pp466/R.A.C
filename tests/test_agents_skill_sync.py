@@ -192,7 +192,15 @@ SYNCED_RULES = [
     (10, "RPG：輸出被擋時，前端丟棄未完成的內容並以一行劇情轉場文字取代，不顯示錯誤", "references/auth-security.md"),
     (10, "仍被擋則再顯示轉場文字並解鎖輸入，請玩家換個行動；重新生成不另外扣遊戲幣並須記錄", "references/auth-security.md"),
     (10, "玩家於重新生成時填寫的回饋（僅分類統計與理由文字，不含帳號資料，每次讀取都寫入稽核紀錄）", "references/auth-security.md"),
-    (10, "停權、刪除內容、調整會員等級與調整遊戲幣餘額等高風險操作須重新輸入密碼並寫入稽核", "references/auth-security.md"),
+    (10, "停權、刪除內容、下架與恢復劇本、調整會員等級與調整遊戲幣餘額等高風險操作須重新輸入密碼並寫入稽核；劇本的核可與退回不須重新輸入密碼，但同樣寫入稽核", "references/auth-security.md"),
+    # 2026-11-19：劇本審核、下架、公開目錄與檢舉（RC-8）；匿名保留只涵蓋「目前上架」，下架的版本一律刪除
+    (7, "劇本審核與下架（RPG）：每個送審公開的劇本由管理員在審核佇列核可或退回，核可才上架", "references/business-encoding.md"),
+    (7, "同一人對同一劇本只能檢舉一次", "references/business-encoding.md"),
+    (7, "檢舉不自動下架，只升高管理員審核佇列的優先度，是否下架由管理員決定", "references/business-encoding.md"),
+    (10, "被檢舉的劇本（全文可讀，連同檢舉的原因與自寫文字；限於使用者主動送審或被檢舉者，每次讀取都寫入稽核紀錄）", "references/auth-security.md"),
+    (11, "已下架的版本，不論作者自行下架或管理員下架，都不算上架", "references/privacy-observability.md"),
+    (11, "劇本檢舉：檢舉的原因（預設選項）與自寫文字由玩家文字構成，視為個資", "references/privacy-observability.md"),
+    (11, "絕不記錄原因與文字", "references/privacy-observability.md"),
     (10, "RPG 的用量以遊戲幣控制（見第 7 節），不適用每日對話輪數與每分鐘訊息數", "references/auth-security.md"),
     (11, "遊戲幣與帳本：錢包與帳本（每筆的種類、金額與關聯的存檔識別碼）視為個資", "references/privacy-observability.md"),
     (11, "重新生成回饋：理由由玩家文字構成，視為個資", "references/privacy-observability.md"),
@@ -269,7 +277,7 @@ def test_every_bullet_of_section_10_is_mirrored_verbatim_in_the_auth_security_re
     assert not stale, f"references/auth-security.md 沒有與 AGENTS.md 第 10 節逐字一致：{stale}"
 
 
-@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱：", "- 玩家主角：", "- 遊戲幣與帳本：", "- 重新生成回饋："])
+@pytest.mark.parametrize("key", ["- 保存期限：", "- 刪除帳號：", "- 當事人權利：", "- 排程工作", "- 玩家創作的劇本與暱稱：", "- 玩家主角：", "- 遊戲幣與帳本：", "- 重新生成回饋：", "- 劇本檢舉："])
 def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
     """第 11 節的這幾條在 reference 裡是逐字鏡像（「絕不記錄」在 reference 是摘要版，另以片段檢查）。"""
     agents_lines = [line.strip() for line in agents_section(11).split("\n") if line.strip().startswith(key)]
@@ -278,7 +286,7 @@ def test_the_section_11_retention_and_rights_bullets_are_mirrored_verbatim(key):
     assert agents_lines[0] in {line.strip() for line in mirror.split("\n")}, f"privacy-observability.md 沒有逐字鏡像：{key}"
 
 
-@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本", "- 玩家主角：", "- 開場：", "- 遊戲幣（RPG）：", "- 玩家重新生成與編輯輸入（RPG）：", "- 故事偏好：", "- 對話人設："])
+@pytest.mark.parametrize("key", ["- 內容分級：", "- 玩家創作劇本：", "- 無硬性結局", "- NPC 角色卡：", "- 原始劇本", "- 玩家主角：", "- 開場：", "- 遊戲幣（RPG）：", "- 玩家重新生成與編輯輸入（RPG）：", "- 故事偏好：", "- 對話人設：", "- 劇本審核與下架（RPG）：", "- 公開目錄與檢舉（RPG）："])
 def test_the_section_7_rpg_bullets_are_mirrored_verbatim(key):
     """第 7 節 RPG 這幾條在 reference 裡是逐字鏡像（分級、劇本創作、結局與角色卡改動頻繁，整行比對才抓得到只改一邊）。"""
     agents_lines = [line.strip() for line in agents_section(7).split("\n") if line.strip().startswith(key)]
