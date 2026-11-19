@@ -2162,6 +2162,21 @@ app.mount('#app');
 
 **未驗證**：真實模型之下「玩家輸入性內容、模型輸出被降成安全尺度」的實際觸發（假供應商只驗證流程；詞表的涵蓋範圍沿用既有的 `mentions_sexual` 與輸出審查，沒有新的詞表）、真實手機、使用者親自驗收（屬 6.3）。**設計決定（tasks 沒有明寫）**：重新生成與編輯不嘗試也不重複提示；玩家在文字完成後才斷線時補做的收尾不記錄提示（留給下一次）；`state` 事件送出前的極窄斷線可能出現「已記錄但玩家沒看到」。
 
+### 驗收紀錄（safe-mode-toggle F 批 6.1 與 6.4，2026-11-19，進行中：6.2 部署與 6.3 使用者驗收尚未）
+
+第 6 組（tasks 6.1 至 6.4）的前半：全套驗證、變異測試與設計文件。**部署到展示環境（6.2）與使用者驗收（6.3）尚未進行**，下面只記錄實際跑過的項目。
+
+| 已驗證 | 結果 |
+|---|---|
+| 全套 pytest（背景執行、輸出存檔；提交 `dc3e38e` 的狀態） | **12414 通過、4 略過、0 失敗**，1 個警告（18 分 2 秒）。4 項略過：Windows 平台限制 2、A 批守門測試的允許清單 2；警告是既有的 `test_assets_manifest` 子行程讀取執行緒的 `UnicodeDecodeError`（測試本身通過，與本 change 無關）。含真實 SQL Server `project_test` 的測試 |
+| Node 全套（`node --test "tests/js/**/*.test.js"`） | **1400 通過、0 失敗** |
+| `openspec validate safe-mode-toggle --strict` | 通過 |
+| 變異測試（29 項，逐一破壞一行程式；每項有行程逾時、結束後還原並比對雜湊、開始前確認目標檔案與 `HEAD` 一致、先跑基準） | **第一輪被抓到 28 項、存活 1 項；補測試後 29／29 全部被抓到**。涵蓋：生效模式三項取最保守 5 項（煞車不壓成 `safe`、同意失效不視為 `safe`、劇本綁定不參與、取最保守改成取最寬鬆、快照缺欄位不視為綁定）、緊急煞車 6 項（狀態的 `forced` 恆假、仍接受改成 `adult`、設定載入忽略、組裝處沒傳進 `AccessPolicy`、提示資格不排除煞車、前端忽略 `forced`）、同意版本失效 2 項、提示每存檔一次 4 項、返回位置驗證 12 項（Python 6 項、JavaScript 6 項：編碼解開、`//`、`/game/` 開頭、`..` 段落、長度、控制字元） |
+| 存活的那一項（D4） | 拿掉 `TurnRunner._hint_reason` 的資格檢查，測試全部仍通過：**真的測試缺口**——綁定的劇本與緊急煞車下，玩家關閉安全模式也不會改變尺度，但輸出被審查層因性內容擋下時會誤發提示；原本「不具資格」的案例只用輸入端觸發，輸入端的旗標在開始階段就已是假。已補 `tests/test_safe_mode_hint.py` 的 `test_an_output_blocked_for_sexual_content_gives_no_hint_when_switching_it_off_would_not_help`（綁定與煞車各一，SQLite 與 SQL Server 各跑）；重跑 D4 被抓到 |
+| 設計文件（6.4） | `docs/營運與部署-operations.md`：標頭與注意事項、`SAFE_MODE_FORCED` 取代 `ADULT_MODE_*` 的說明、事故處理新增「內容安全事故」一列、新增「緊急煞車的啟用與解除」一節（**演練狀態：尚未演練**）、上線前關卡移除「成年驗證方式」並補法務覆核範圍（八道改七道，`tests/test_launch_docs.py` 同步並新增兩項測試）；`docs/路線圖-roadmap.md`、`docs/RPG.md` 7.18、`docs/帳號與安全-auth-security.md` 的狀態更新。文件相關測試（設計文件、README、`test_agents_skill_sync`、`test_launch_docs`、`test_launch_plan`、`test_project_db_schema_doc`）**366 項通過** |
+
+**未驗證**：展示環境的部署與遷移 `0020`（6.2）、緊急煞車的啟用與解除演練（文件步驟依計畫模組與既有流程寫成，沒有在真實主機執行；Google Cloud 的步驟更是沒有可計費的專案可跑）、真實瀏覽器與手機的使用者驗收（6.3）、真實模型之下提示的實際觸發。變異測試腳本放在暫存目錄、不進版本庫。**說明**：上面的全套數字是 `dc3e38e` 的狀態；之後只新增了測試（`test_safe_mode_hint.py` 4 項、`test_launch_docs.py` 2 項）與文件，封存之前會再跑一次全套。
+
 ## 容器建置與驗收
 
 正式環境以 Docker 映像部署（見 AGENTS.md 第 9 節）。映像以 `python:3.14-slim-bookworm` 為基底（Python 版本與 `.python-version` 一致；明確指定 Debian 12，因為 Microsoft ODBC Driver 18 官方支援它），內含 `unixodbc` 與 `msodbcsql18`、前端資產與 108 個字型切片，約 277 MB。

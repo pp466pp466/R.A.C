@@ -17,7 +17,7 @@ REPORT = (PROJECT_ROOT / "docs" / "report.md").read_text(encoding="utf-8-sig")
 ROADMAP = (PROJECT_ROOT / "docs" / "路線圖-roadmap.md").read_text(encoding="utf-8-sig")
 
 STATUSES = {"未開始", "進行中", "已通過"}
-GATE_KEYWORDS = ("寄信設定", "模型供應商方案", "網域", "法務", "資料庫的成本", "負載測試", "IP 限流", "成年驗證")
+GATE_KEYWORDS = ("寄信設定", "模型供應商方案", "網域", "法務", "資料庫的成本", "負載測試", "IP 限流")
 
 
 def section(text: str, heading: str) -> str:
@@ -104,14 +104,37 @@ def gate_rows() -> list[list[str]]:
     return table_rows(section(OPS, "### 上線前關卡"))
 
 
-def test_the_gate_table_has_all_eight_gates_each_with_an_owner_and_a_valid_status():
+def test_the_gate_table_has_all_seven_gates_each_with_an_owner_and_a_valid_status():
     rows = gate_rows()
-    assert len(rows) == 8
+    assert len(rows) == 7
     assert validate_gates(rows) == []
 
 
 def test_no_gate_is_marked_passed_without_evidence_today():
     assert not [row for row in gate_rows() if row[2] == "已通過" and not re.search(r"\d{4}-\d{2}-\d{2}", row[3])]
+
+
+def test_the_gate_table_has_no_adult_verification_or_written_permission_gate_and_no_email_verification_gate():
+    """safe-mode-toggle：關閉安全模式不以書面許可、法務意見或付費模型為前提，所以沒有「成年驗證方式」關卡；玩家端也沒有信箱驗證。"""
+    table_text = " ".join(" ".join(row) for row in gate_rows())
+    names = " ".join(row[0] for row in gate_rows())
+    for forbidden in ("成年驗證", "書面許可", "信箱驗證"):
+        assert forbidden not in names, f"關卡名稱不應再列：{forbidden}"
+    assert "不以供應商書面許可、法務意見或付費模型為前提" in table_text
+
+
+def test_the_emergency_brake_section_says_when_to_use_it_how_to_turn_it_on_and_off_and_states_the_drill_status():
+    text = section(OPS, "### 緊急煞車的啟用與解除（`safe-mode-toggle`）")
+    for fragment in ("SAFE_MODE_FORCED=true", "解除", "重啟", "不是使用門檻", "不被改寫", "safe_mode_forced", "演練狀態", "ADULT_MODE_ENABLED"):
+        assert fragment in text, f"緊急煞車一節缺少：{fragment}"
+    # 步驟裡引用的指令與步驟名稱都真實存在，並提醒重放主機檔案必帶三個 --with-secret
+    assert "scripts/aws_demo.py provision" in text and "host-init-files" in text and "scripts/gcp_launch.py deploy" in text
+    for secret in ("OPENROUTER_API_KEY", "GOOGLE_OAUTH_CLIENT_SECRET", "MAIL_SMTP_PASSWORD"):
+        assert f"--with-secret {secret}" in text, f"重放主機檔案要帶：{secret}"
+    assert "SAFE_MODE_FORCED" in plan.PLAIN_VARS and "ADULT_MODE_ENABLED" in plan.OBSOLETE_VARS
+    rows = table_rows(section(OPS, "### 事故處理"))
+    incident = next(row for row in rows if "內容安全事故" in row[0])
+    assert "緊急煞車" in incident[2] and "SAFE_MODE_FORCED=true" in incident[2]
 
 
 def test_the_validator_would_catch_a_missing_gate_a_missing_owner_a_bad_status_and_unsupported_pass():

@@ -123,7 +123,7 @@ flowchart TD
 
 ### 內容模式（change `safe-mode-toggle`，取代 `rpg-data-and-script` 的三種模式）
 
-> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）並由 `safe-mode-toggle` 實作（第 1、2 組 2026-11-19、第 3 組個人頁開關同日）**：全站只限滿 18 歲；內容模式為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車 `SAFE_MODE_FORCED`。第 1 階段的**過渡相容層**（`content_access`、`effective_tier(save_tier=…)`、`author_content_cap`、`is_adult`）已於第 2 組移除，並以守門測試 `tests/architecture/test_no_legacy_tier_checks.py` 鎖住；新程式請勿使用它們。
+> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）並由 `safe-mode-toggle` 實作（2026-11-19：第 1、2 組後端核心與審查尺度、第 3 組個人頁開關、第 4 組目錄通知與創作頁綁定、第 5 組遊戲內提示；部署到展示環境與使用者驗收進行中）**：全站只限滿 18 歲；內容模式為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車 `SAFE_MODE_FORCED`。第 1 階段的**過渡相容層**（`content_access`、`effective_tier(save_tier=…)`、`author_content_cap`、`is_adult`）已於第 2 組移除，並以守門測試 `tests/architecture/test_no_legacy_tier_checks.py` 鎖住；新程式請勿使用它們。
 
 內容模式只有兩種，由保守到寬鬆：`safe`（安全模式開）、`adult`（安全模式關）；順序與「取較保守者」在 `app/services/content_tier.py`（純邏輯，無法判定視為 `safe`）。**舊值 `standard`（原一般模式）一律讀作 `adult`**（`parse_tier`），不論出現在玩家偏好、劇本內容或存檔，所以既有資料不改寫；系統不再寫入 `standard`。**生效模式 = 玩家偏好（缺少目前版本同意視為 `safe`）、劇本是否綁定安全模式、緊急煞車三者中最保守者**（`AccessPolicy.effective_mode(user, script_binding=None)`，每次現算；全站只限滿 18 歲，沒有依年齡的上限；存檔不釘住自己的模式；管理員與各會員等級都不豁免）。
 
@@ -148,7 +148,7 @@ flowchart TD
 
 **緊急煞車的環境開關**（AGENTS.md 第 7 節）：`SAFE_MODE_FORCED`（`true` 或 `false`）預設未啟用（玩家可關閉安全模式），**不能在程式裡寫死為啟用**，由組裝處依設定傳入 `AccessPolicy(safe_mode_forced=…)`。它是營運出事時全站停用「關閉安全模式」的開關，**不是使用門檻**：不需要 RPG 用途、模型清單、書面許可或法務前提；四個環境都可以設定；值不是布林啟動失敗，訊息只指出變數名稱；啟用時所有玩家與所有存檔的生效模式一律是 `safe`（保存的偏好不被改寫，解除後恢復），要求關閉安全模式回 403 `safe_mode_forced`。設定於重新啟動後生效，不需要資料庫遷移或程式改版。
 
-- 舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`、`ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 已淘汰：忽略、啟動時各警告一次（只含變數名稱，不回顯值，值不合法也不會啟動失敗），**不論值為何都不改變緊急煞車與玩家可用的模式**；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕（可含 `SAFE_MODE_FORCED`）。
+- 舊的 `SEXUAL_CONTENT_LEVEL3_ENABLED`、`SEXUAL_CONTENT_LEVEL3_MODELS`、`ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 已淘汰：忽略、啟動時各警告一次（只含變數名稱，不回顯值，值不合法也不會啟動失敗），**不論值為何都不改變緊急煞車與玩家可用的模式**；`scripts/launch_plan.py` 的部署計畫檔含有它們會被拒絕（可含 `SAFE_MODE_FORCED`）。緊急煞車的啟用與解除（含事故處理與演練狀態）見 [營運與部署-operations.md](營運與部署-operations.md) 第 7 節「緊急煞車的啟用與解除」。
 - 模型供應商與資料使用條款的評估（免費模型的輸入輸出可能被供應商留存或審閱）屬上線前關卡（`launch-gates`），隱私權政策與服務條款已揭露（`/terms` 第 5 節、`/privacy` 第 4 節，版本 `2026-11-19-draft-9`，仍為草稿）；書面許可與法務意見**不再是**關閉安全模式的前提。
 - **自家審查層已於 rpg-turn-engine 實作**：擋未成年的性內容、性暴力與非自願、以真人名義的內容，不得僅依賴模型拒絕；這四類絕對禁止項不隨模式放寬。
 

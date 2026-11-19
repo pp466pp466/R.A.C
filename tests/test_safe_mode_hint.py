@@ -145,6 +145,20 @@ def test_no_hint_for_a_bound_script_a_player_who_turned_it_off_or_the_emergency_
     assert of(events, "state")[0]["notices"] == [] and kit.fresh(save).safe_hint_at is None, case
 
 
+@pytest.mark.parametrize("case, content, forced", [
+    ("綁定的劇本", BOUND, False),
+    ("緊急煞車", UNBOUND, True),
+])
+def test_an_output_blocked_for_sexual_content_gives_no_hint_when_switching_it_off_would_not_help(member_session, case, content, forced):
+    """輸出端的觸發也要先有資格：綁定的劇本與緊急煞車下，玩家關閉安全模式也不會改變尺度，所以審查層擋下性內容時不提示
+    （變異測試 safe-mode-toggle 6.1 的 D4：拿掉 `_hint_reason` 的資格檢查時，只有輸入端的案例抓不到）。"""
+    kit = RunnerKit(member_session, safe_mode_forced=forced)
+    user, save = opened(kit, content=content)
+    plan, events = play(kit, user, save, blocked_first=True)
+    assert not plan.hint_eligible and "transition" in names(events), case          # 輸出確實被審查層擋下並自動重新生成
+    assert of(events, "state")[0]["notices"] == [] and kit.fresh(save).safe_hint_at is None, case
+
+
 # ---- 每個存檔最多一次 ------------------------------------------------------------------------------------
 
 def test_a_second_trigger_in_the_same_save_gives_no_second_hint_and_keeps_the_first_time(kit, caplog):

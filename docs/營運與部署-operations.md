@@ -1,8 +1,9 @@
 # 設定、部署、日誌與營運
 
-> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-18 ｜ 對應 change：admin-unlimited-coins（管理員不扣幣的驗收腳本與小幫手 `?admin=1`；沒有新的日誌事件、環境變數或遷移）、adult-only-signup（第 3 節：遷移 `0019`；第 8 節：缺口表第八項的更正與展示環境的部署及驗收紀錄）、aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作與驗收皆已完成並於 2026-11-17 封存，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
+> 狀態：已實作（保存期限清除與自助刪除帳號由 C-4c、資料庫可量得到的營運告警由 C-4d 實作；排程設定、平台負責的三項告警、正式部署、入口層與備份演練由 C-5 實作） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（第 5、7 節：緊急煞車 `SAFE_MODE_FORCED` 取代成人模式的部署開關 `ADULT_MODE_*`，含啟用與解除的操作、事故處理一列、上線前關卡改列〔移除「成年驗證方式」〕；遷移 `0020`〔`sessions.safe_hint_at`〕；沒有新的排程指令）、admin-unlimited-coins（管理員不扣幣的驗收腳本與小幫手 `?admin=1`；沒有新的日誌事件、環境變數或遷移）、adult-only-signup（第 3 節：遷移 `0019`；第 8 節：缺口表第八項的更正與展示環境的部署及驗收紀錄）、aws-demo-environment（第 8 節：AWS 展示環境的拓撲、計畫步驟、執行器、拆除、資料庫憑證方案與未達 production 的缺口；實作與驗收皆已完成並於 2026-11-17 封存，`build_plan` 與 `deploy_plan` 已對真實 AWS 執行，`rollback_plan`、`teardown_plan` 尚未）、rpg-turn-revision（設定鍵 `rpg.free_regenerations`、`rpg.revision_*` 日誌事件、修訂驗收腳本）、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 9、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的營運變化（新排程指令 `purge-unconfirmed-accounts`、告警改名為「帳號鎖定激增」、期限清除納入鎖定計次）與 change ② `remove-player-password-auth`：`EMAIL_VERIFICATION_REQUIRED` 已淘汰（留著只會警告一次，部署計畫檔含有它會被拒絕）；寄信設定只供營運告警信與管理員的重設密碼信使用，玩家不收任何信；部署多一個資料遷移 `0011`；載入測試、冒煙驗收與容器驗收改用在目標環境內簽出的測試玩家 cookie（`scripts/mint_test_sessions.py`）。
 > 注意（2026-11-03）：本文件已納入 change `rpg-data-and-script`：成人模式的環境變數改為 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`（舊的 `SEXUAL_CONTENT_LEVEL3_*` 已淘汰：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕；staging 與 production 不再一律禁止，須明確設定才生效）、新的人工類指令 `seed-scripts`（部署之後執行）、`purge-expired-data` 新增 RPG 存檔與回合部分內容兩類，以及遷移 `0012`。
+> 注意（2026-11-19）：本文件已納入 change `safe-mode-toggle`：上一則注意的成人模式部署開關 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS` 已**淘汰**（和 `SEXUAL_CONTENT_LEVEL3_*` 一樣：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕），改為反向的**緊急煞車 `SAFE_MODE_FORCED`**（預設未啟用，玩家可自行關閉安全模式；啟用時全站所有生效模式一律是安全模式，啟用與解除的操作見第 7 節「緊急煞車的啟用與解除」）；部署多一個遷移 `0020`（`sessions.safe_hint_at`）。
 
 本文件說明設定如何依環境載入、容器如何建置與執行、migration 的部署步驟、日誌與事件的規則、維運指令，以及測試與驗收的分層。逐項的環境變數說明在 README 的「環境變數與機密」與 `.env.example`。
 
@@ -274,7 +275,7 @@ flowchart LR
 
 **排程與第一次執行**（排程器設定屬 C-5）：`execute-account-deletions` 與 `purge-expired-data` 各每日一次、可重複執行。第一次在正式環境執行前，先備份資料庫，並各以 `--dry-run` 檢視筆數；`purge-expired-data` 以非零結束代碼回報失敗的類別，排程器應把它接到告警（C-4d）。備份最長 30 天後自然汰除；備份還原後，依 `deletion_tombstones` 與日誌取出的檔案以 `replay-deletions` 重新執行刪除（指令與腳本已實作並在本機 SQL Server 演練，見「資料庫還原與重新抹除」；預備環境的實際演練屬 C-5b）。
 
-**RPG 敘事用途的模型端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：不是 staging 與 production 的必要機密（沒有設定時 RPG 用途不可用：兩個串流端點回 503 `service_unavailable`，唯讀端點照常）；金鑰與主要模型只設一個會啟動失敗。基底網址只允許 https（development 與 testing 另允許回送位址的 http，供本機模型）。免費換付費只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`）。**推理由 `OPENROUTER_REASONING` 控制**（預設 `false`＝每個請求，含備援模型，都明確帶 `reasoning: {"enabled": false}`；推理型模型預設首字 5 至 35 秒，關閉後不到 1 秒；設為 `true` 前先用 `flask llm-probe` 量首字時間，它會顯示目前的推理設定）。劇情是串流呼叫，**每個進行中的串流多佔一條讀取執行緒**，容量估算見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 11 節。**成人模式的部署開關 `ADULT_MODE_ENABLED`**（取代已淘汰的 `SEXUAL_CONTENT_LEVEL3_ENABLED`）預設關閉，各環境規則相同：staging 與 production 須明確設為 `true` 才生效，開啟時 RPG 用途必須已設定，且 `ADULT_MODE_MODELS`（書面許可涵蓋的模型）須涵蓋主要與備援模型，否則啟動失敗（**2026-11-17 規範修訂後不再以書面許可為前提**，這個開關與清單隨 `safe-mode-toggle` 改為緊急煞車，程式尚未跟進）；這只是玩家能使用成人模式的條件之一（玩家仍須已滿 18 歲並完成成年確認）；殘留的舊變數只警告、不開啟任何東西；細節見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節與 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 10 節。換成不同模型或供應商時，也要依新方案重設下面的全站用量上限。
+**RPG 敘事用途的模型端點**（`OPENROUTER_*`，change `openai-compatible-provider`）：不是 staging 與 production 的必要機密（沒有設定時 RPG 用途不可用：兩個串流端點回 503 `service_unavailable`，唯讀端點照常）；金鑰與主要模型只設一個會啟動失敗。基底網址只允許 https（development 與 testing 另允許回送位址的 http，供本機模型）。免費換付費只改 `OPENROUTER_MODEL`（與選用的 `OPENROUTER_ZDR`）。**推理由 `OPENROUTER_REASONING` 控制**（預設 `false`＝每個請求，含備援模型，都明確帶 `reasoning: {"enabled": false}`；推理型模型預設首字 5 至 35 秒，關閉後不到 1 秒；設為 `true` 前先用 `flask llm-probe` 量首字時間，它會顯示目前的推理設定）。劇情是串流呼叫，**每個進行中的串流多佔一條讀取執行緒**，容量估算見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 11 節。**內容模式的部署層開關是緊急煞車 `SAFE_MODE_FORCED`**（`safe-mode-toggle`，取代已淘汰的 `ADULT_MODE_ENABLED` 與 `ADULT_MODE_MODELS`，兩者與舊的 `SEXUAL_CONTENT_LEVEL3_*` 一樣：忽略、啟動時各警告一次、部署計畫檔含有會被拒絕）：預設**未啟用**（玩家可在個人頁關閉安全模式），各環境規則相同，值不是布林啟動失敗（訊息只含變數名稱）；設為 `true` 時所有玩家與所有存檔的生效模式一律是安全模式、個人頁開關禁用、要求關閉的請求回 403 `safe_mode_forced`，玩家保存的偏好**不被改寫**，解除後恢復。它不是使用門檻：關閉安全模式不以供應商書面許可、法務意見、付費模型或模型清單為前提（2026-11-17 規範修訂），所以沒有模型清單與「須明確設定才生效」的限制。環境變數只在行程啟動時讀取，**啟用與解除都要重啟**；步驟與演練紀錄見第 7 節「緊急煞車的啟用與解除」；細節見 [帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節的「內容模式」與 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 第 10 節。換成不同模型或供應商時，也要依新方案重設下面的全站用量上限。
 
 全站每日用量上限由環境變數設定（逐項說明在 README 與 `.env.example`）：`USAGE_DAILY_TOKEN_LIMIT`（預設 1,000,000）與 `USAGE_DAILY_CALL_LIMIT`（預設 450）。預設值依目前使用的 `gemini-3.5-flash-lite` 免費層（15 RPM、25 萬 TPM、每日 500 次請求），**換模型或換供應商（例如正式環境改用 OpenAI）時必須重設**；部署時須確認它們與供應商的實際配額一致。
 
@@ -412,6 +413,31 @@ flowchart BT
 | **資料庫不通** | `/readyz` 失敗（`/healthz` 正常）、5xx 比率、`check-alerts` 非零結束 | 查看 Cloud SQL 狀態與連線；排程工作會失敗並由平台告警通知 | 必要時依「資料庫還原與重新抹除」還原；**還原後一定要執行 `replay-deletions` 才能開放流量** |
 | **被攻擊**（登入暴力嘗試、註冊洪水、請求洪水） | `login_lockouts`、5xx 比率、用量異常 | 帳號層級的鎖定與每分鐘訊息數已在運作；必要時用 `flask --app wsgi check-alerts --dry-run` 檢視；在平台層暫時限制流量 | **入口層沒有 IP 限流（見下方「未滿足的規範項目」）**：這是目前最大的缺口，上線前必須重新決定 |
 | **資料毀損或誤刪** | 使用者回報、資料異常 | 停止流量；依還原步驟處理 | 還原後執行 `replay-deletions`，演練見 `scripts/restore_drill.py` |
+| **內容安全事故**（需要立即讓全站回到安全模式：審查層疑似失效、關閉安全模式的內容出事、供應商條款或法規突然改變） | 玩家或管理員回報、供應商通知、日誌中被審查層擋下的回合與類別異常（日誌只有編號與類別，沒有內容） | **啟用緊急煞車**：`SAFE_MODE_FORCED=true`、換環境檔、重啟（下一節；不需要遷移、不改玩家資料、不需要等部署新版）；必要時同時下架有問題的劇本、對相關帳號停權（管理員後台） | 找出原因並修好審查層或規則，確認後解除煞車；記錄事件、啟用與解除的時間 |
+
+### 緊急煞車的啟用與解除（`safe-mode-toggle`）
+
+> **演練狀態**：本節的步驟依計畫模組與既有的部署流程寫成。**AWS 展示環境的啟用與解除尚未演練**（`safe-mode-toggle` 任務 6.2 部署之後演練，結果寫在 README 的驗收紀錄）；**Google Cloud 的步驟尚未實跑**（沒有可計費的專案，屬 `cloud-staging-run`）。演練之前不要把本節視為已驗證。
+
+`SAFE_MODE_FORCED` 是部署層的緊急煞車，**不是使用門檻**：預設未啟用，玩家可在個人頁關閉安全模式；出事時設為 `true`，全站立即（下一個回合起）停用「關閉安全模式」。啟用時：
+
+- 所有玩家與所有存檔的生效模式一律是 `safe`（生效模式每個回合現算，不依存檔記錄）；劇本綁定安全模式的存檔本來就是 `safe`，不受影響。
+- 玩家保存的偏好**不被改寫**，解除後自動恢復；已關閉安全模式的玩家不需要重新同意。
+- `GET /api/account/content-mode` 回 `forced: true`；要求改成 `adult` 回 403 `safe_mode_forced`，要求改成 `safe` 仍照常；個人頁的開關禁用並顯示「目前系統暫時只提供安全模式，無法關閉。」；目錄不再詢問是否關閉安全模式；遊戲內「可以嘗試關閉安全模式」的提示不出現。
+- 不需要遷移，不影響任何玩家資料。環境變數只在行程啟動時讀取，所以**啟用與解除都要重啟**兩個池（客服池與 RPG 池）。
+
+**AWS 展示環境（啟用）**：
+
+1. 在 `aws-demo.vars`（不進版本庫）加入 `SAFE_MODE_FORCED=true`。
+2. 重放主機檔案以更新 `plain.env`：`python scripts/aws_demo.py provision --account-id … --notify-email … --vars-file aws-demo.vars --with-secret OPENROUTER_API_KEY --with-secret GOOGLE_OAUTH_CLIENT_SECRET --with-secret MAIL_SMTP_PASSWORD --only host-init-files`，先預覽，確認第 10 步「取得全部 N 個機密」的 N 是 6（少帶 `--with-secret` 會覆蓋掉主機上取 6 個機密的腳本，兩個池會因缺少機密崩潰），再加 `--execute`。
+3. 重啟兩個池：在主機的 SSM 工作階段執行 `systemctl restart rac-cs rac-rpg`。（`deploy --only switch-release` 也會重啟，但它會把 `release.previous.env` 一併改成目前的標籤，失去 `rollback` 用的前一版，所以不用它。）
+4. 驗證：`/healthz`、`/readyz` 回 200；以測試玩家（`scripts/mint_test_sessions.py` 簽出的 cookie，或自己的帳號）呼叫 `GET /api/account/content-mode`，`forced` 為 `true` 且 `effective` 為 `safe`；瀏覽器開 `/account` 確認開關禁用；日誌沒有 ERROR。
+
+**AWS 展示環境（解除）**：把 `aws-demo.vars` 的 `SAFE_MODE_FORCED` 改為 `false`（或刪除該行），重做上面第 2 至 4 步，驗證 `forced` 為 `false`、玩家偏好與啟用前相同。
+
+**Google Cloud（啟用與解除）**：在 `--vars-file` 加入 `SAFE_MODE_FORCED=true`（解除時改為 `false` 或刪除），以 `python scripts/gcp_launch.py deploy … --image-tag <目前標籤> --vars-file … --execute` 建立新修訂（只換環境變數、不換映像），再驗證 `/healthz`、`/readyz` 與上面第 4 步。
+
+**不要做的事**：不要設定 `ADULT_MODE_ENABLED` 或 `ADULT_MODE_MODELS`（已淘汰，不影響行為，部署計畫檔含有會被拒絕）；不要直接改資料庫的玩家偏好來「關掉」安全模式（煞車不改偏好，改了反而在解除時留下不一致）；不要把煞車當成永久設定（它的目的是出事時立即停用，修好審查層後解除）。
 
 ### 上線前關卡
 
@@ -422,11 +448,10 @@ flowchart BT
 | 營運告警與管理員重設密碼的寄信設定（`ALERT_EMAIL_TO` 與 `MAIL_*` 已設定，寄信服務已選定並實際寄出過一封） | 使用者（寄信服務）、系統（staging 與 production 缺少設定時啟動失敗） | 未開始 | 寄信服務尚未選定（營運告警信目前經 Brevo SMTP 寄給使用者本人）；玩家端不寄任何信，所以不再有「信箱驗證」關卡 |
 | 模型供應商方案與資料使用條款的重新評估（客服的 Gemini 與 RPG 的 OpenRouter 各自評估，金鑰分別為 `GEMINI_API_KEY` 與 `OPENROUTER_API_KEY`） | 使用者 | 未開始 | 目前是個人測試用的免費方案，不得輸入真實個資 |
 | 網域取得，Google 登入與信件的 SPF／DKIM／DMARC 設定 | 使用者 | 未開始 | 尚未取得網域；取得後填入 `loadtest/guard.py` 的 `PRODUCTION_DOMAINS` |
-| 隱私權政策、服務條款與保存期限的法務覆核 | 使用者 | 未開始 | 政策頁已描述實際行為，尚未經法務 |
+| 隱私權政策、服務條款與保存期限的法務覆核 | 使用者 | 未開始 | 政策頁已描述實際行為，尚未經法務；覆核範圍含露骨內容（安全模式關閉時）、須年滿 18 歲、謊報年齡者自行承擔責任，以及敏感內容可能被模型供應商留存或審閱的揭露（`safe-mode-toggle` 已補入 `/terms` 與 `/privacy`，條款版本 `2026-11-19-draft-9`，仍標示草稿）。**關閉安全模式不以供應商書面許可、法務意見或付費模型為前提**（2026-11-17 規範修訂），所以這裡不再有「成年驗證方式」與「書面許可」關卡；出事時的部署層手段是緊急煞車（見上方「緊急煞車的啟用與解除」） |
 | 託管資料庫的成本評估與同意（N-9） | 使用者 | 未開始 | 本機開發使用本機 SQL Server；Cloud SQL 費用未評估；使用者目前沒有可計費的 Google Cloud 專案（2026-11-02），雲端部分屬 C-5c |
 | 負載測試達到通過標準 | 系統（腳本）、使用者（預備環境） | 進行中 | 測試與判定腳本已完成；2026-11-02 本機容器預演留下兩輪記錄（README「驗收紀錄（C-5b）」），**兩輪都不是容量依據**也都沒有通過；雲端的實測屬 C-5c（`cloud-staging-run`） |
 | 入口層 IP 限流的決定 | 使用者 | 未開始 | 2026-10-30 使用者決定先不做；上線前必須重新決定（見下方） |
-| 成年驗證方式（只有要開放成人模式時才需要） | 使用者 | 未開始 | 方式已決定為切換時勾選確認（report.md 的 U-28），尚待法務確認足夠；程式已改為三種內容模式（`rpg-data-and-script`），成人模式的部署開關 `ADULT_MODE_ENABLED` 預設關閉。**2026-11-17 規範修訂**：全站只限滿 18 歲（新使用者註冊時勾選聲明），關閉安全模式不再以書面許可或法務意見為前提，部署層開關改為緊急煞車；劇情輸出的審查層（RC-2）已實作。這一列隨 `safe-mode-toggle` 重新評估 |
 
 ### 未滿足的規範項目
 
