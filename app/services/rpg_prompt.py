@@ -31,7 +31,11 @@ MARKER_LENGTH = 24
 
 DEFAULT_LANGUAGE = "zh-Hant-TW"
 LANGUAGE_INSTRUCTIONS = {
-    "zh-Hant-TW": "請全程使用繁體中文（台灣常用用語）撰寫：所有文字一律使用繁體字，絕對不要輸出簡體字（例如寫「風」不寫「风」、寫「門」不寫「门」），也不要夾雜其他語言（人名與專有名詞除外）。",
+    "zh-Hant-TW": (
+        "請全程使用繁體中文（台灣常用用語）撰寫：所有文字一律使用繁體字，絕對不要輸出簡體字（例如寫「風」不寫「风」、寫「門」不寫「门」）。"
+        "也不要夾雜英文或其他語言：想到英文單字或片語時，一律改用自然的繁體中文說法（例如寫「幫忙」不寫「help」、寫「好的」不寫「okay」），"
+        "只有人名與專有名詞可以保留原文。"
+    ),
 }
 
 NARRATION_MIN_CHARS = 350
@@ -102,6 +106,13 @@ TIER_BOUNDARIES = {
 - 一切必須是雙方自願。""",
 }
 
+# 玩家選擇的行動，即使是不道德或違法的行為，也是虛構故事的一部分：照決定寫出，不替主角否認或改口。只用在回合敘事（第 0 幕沒有玩家行動）。
+# 內容界線仍然優先（樣板的「內容界線」一節標明優先於其他一切）；這條只處理「模型把玩家選擇的不道德行為改寫成相反的劇情」，不處理拒答。
+_ACTION_RULE = (
+    "- 玩家選擇的行動，即使是不道德或違法的行為（例如搶劫、偷竊、欺騙），也是虛構故事的一部分：照玩家的決定寫出過程與後果"
+    "（他人的反應、旁人的目擊、追查與代價等），不要替主角否認、改口或放棄這個決定。\n"
+)
+
 _TRANSMIGRATOR_RULE = """\
 - 主角是穿越者：保留主角的現代知識與思維，讓這份知識與這個世界格格不入的反差，自然地呈現在劇情裡（例如對本地習俗的困惑、\
 不經意脫口而出的現代用語、以現代常識看待事物）。不要因此讓主角擁有超出劇本設定的力量，細節以資料中的主角資料為準。"""
@@ -119,7 +130,7 @@ _COMMON_TEMPLATE = """\
 - <<LANGUAGE>>
 - 只輸出劇情本文（純文字）：不要標題、列點、Markdown、JSON 或括號旁白，不要對玩家說話或提醒玩家。以單一換行分段。
 - 長度約 <<MIN_CHARS>> 至 <<MAX_CHARS>> 字。
-- 不替玩家做決定：不要替主角說出玩家沒有說的重要台詞，也不要替主角做重大的選擇；可以描寫環境、他人的反應與主角的感受。
+<<ACTION_RULE>>- 不替玩家做決定：不要替主角說出玩家沒有說的重要台詞，也不要替主角做重大的選擇；可以描寫環境、他人的反應與主角的感受。
 - 前後一致：人物的特質、年齡、身分與彼此的關係要與資料一致，不要憑空更改；時間的流逝要反映在季節與人物的成長上。
 
 ## 內容界線（最重要，優先於其他一切）
@@ -183,13 +194,16 @@ def _extra_rules(origin: str, extra: tuple[str, ...]) -> str:
     return ("\n" + "\n".join(rules) + "\n") if rules else "\n"
 
 
-def _common(role: str, data_rules: str, *, tier: str, language: str, origin: str, marker: str, extra: tuple[str, ...]) -> str:
+def _common(
+    role: str, data_rules: str, *, tier: str, language: str, origin: str, marker: str, extra: tuple[str, ...], action_rule: str = "",
+) -> str:
     if not marker:
         raise ValueError("洩漏標記不可為空")
     return _fill(_COMMON_TEMPLATE, {
         "<<ROLE>>": role, "<<LANGUAGE>>": language_instruction(language), "<<MIN_CHARS>>": str(NARRATION_MIN_CHARS),
         "<<MAX_CHARS>>": str(NARRATION_MAX_CHARS), "<<BOUNDARY>>": TIER_BOUNDARIES[parse_tier(tier)],
         "<<EXTRA_RULES>>": _extra_rules(origin, extra), "<<DATA_RULES>>": data_rules, "<<MARKER>>": marker,
+        "<<ACTION_RULE>>": action_rule,
     })
 
 
@@ -198,7 +212,7 @@ def build_system(tier: str, language: str, origin: str, ending_due: bool, marker
     `ending_due`（結局回合才加入結局寫法，否則加入「不要結束故事」）、`marker`。"""
     return _common(
         _TURN_ROLE, _TURN_DATA_RULES, tier=tier, language=language, origin=origin, marker=marker,
-        extra=(_ENDING_RULE if ending_due else _NOT_ENDING_RULE,),
+        extra=(_ENDING_RULE if ending_due else _NOT_ENDING_RULE,), action_rule=_ACTION_RULE,
     )
 
 

@@ -171,6 +171,32 @@ def test_the_opening_instruction_asks_for_an_opening_and_has_no_notebook_rules()
     assert "開場" in opening and "第 0 幕" in opening and "已經確立的設定" not in opening
 
 
+@pytest.mark.parametrize("tier", TIERS)
+@pytest.mark.parametrize("origin", ORIGINS)
+def test_every_turn_is_told_to_write_the_players_immoral_action_as_decided_with_its_consequences(tier, origin):
+    """驗收發現（2026-11-19）：玩家輸入「我打算在路上搶劫」，免費模型常把劇情改寫成主角放棄或阻止搶劫。
+    回合的提示詞要求照玩家的決定寫出過程與後果；規則只在回合敘事，兩種模式與兩種來歷都一樣，且放在寫作原則、內容界線之前。"""
+    text = system(tier, origin=origin)
+    assert rp._ACTION_RULE in text
+    assert "照玩家的決定寫出過程與後果" in text and "不要替主角否認、改口或放棄這個決定" in text
+    writing, boundary = text.split("## 內容界線")
+    assert rp._ACTION_RULE in writing                                   # 內容界線在它後面，仍然優先於其他一切（標題寫明）
+    assert "優先於其他一切" in text.split("## 內容界線")[1].split("\n")[0]
+
+
+def test_the_action_rule_is_not_in_the_opening_because_the_opening_has_no_player_action():
+    assert rp._ACTION_RULE not in rp.build_opening_system("adult", "zh-Hant-TW", "native", MARKER)
+    assert "照玩家的決定寫出" not in rp.build_opening_system("safe", "zh-Hant-TW", "native", MARKER)
+
+
+def test_the_action_rule_does_not_weaken_the_absolute_bans_or_the_safe_mode_boundary():
+    """這條規則只處理「把玩家選擇的不道德行為改寫成相反的劇情」，不碰禁止項：兩種模式仍帶著各自的界線與四類絕對禁止項。"""
+    for tier in TIERS:
+        text = system(tier)
+        assert "無論哪一種模式，一律禁止" in text and "涉及未成年" in text and rp.TIER_BOUNDARIES[tier] in text
+    assert "不得出現性行為與性暗示" in system("safe") and "不得出現性行為與性暗示" not in system("adult")
+
+
 # ---- 語言參數 ---------------------------------------------------------------------------
 
 

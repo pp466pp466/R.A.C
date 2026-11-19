@@ -7,6 +7,8 @@ AGENTS.md 第 8 節要求全系統的內容一律是繁體中文。提示詞已�
 - **只在文字裡真的有簡體字時才轉換**：純繁體的句子原樣保留（轉換器會把繁體異體字「祕」改成「秘」、把「咸陽」改成「鹹陽」，不能動已經正確的繁體）。
   判斷用 `s2t`（只換字、不換慣用詞）：有字被換掉就是有簡體字；但「里、咸、台、余、后、于…」這類在繁體裡也是正確用字的字，單獨出現
   不算證據（見 `_BOTH_FORMS`），所以「里長」「咸陽」「台灣」不會被誤判。
+- **台灣仍在用的異體字不轉**（`_KEPT_VARIANTS`，目前只有人名常用的「杰」）：OpenCC 會把它當簡體字改成「傑」，玩家替角色取名「李杰」就會被改掉；
+  這些字不算簡體的證據，句子因其他簡體字而轉換時也只轉換其餘的片段。
 - 只改 CJK 字元；ASCII、標點、JSON 結構與標記字串不受影響，所以轉換後的 JSON 仍可解析。
 - 純函式、沒有狀態，可在多執行緒下使用。
 
@@ -27,16 +29,24 @@ _S2TWP = OpenCC("s2twp")             # 轉換用：換字加台灣慣用詞
 # 句子裡若還有別的簡體字（例如「咸阳」的「阳」），整句仍會轉換，這些字由轉換器依上下文處理。
 _BOTH_FORMS = frozenset("里咸余曲台干后于面只系范周征折谷采郁卜象松向制冲划合出复")
 
+# 台灣仍在使用的繁體異體字，OpenCC 卻會當作簡體字轉掉：一律保留原樣，單獨出現也不算簡體的證據。
+# 「杰」是「傑」的異體字，台灣人名常用（玩家替角色取名「李杰」，AI 的回覆不能被改成「李傑」）；寧可偶爾留下簡體模型輸出的「杰出」
+# （仍是可讀的異體字），也不改掉玩家取的名字。要增加字時只加在這裡。
+_KEPT_VARIANTS = frozenset("杰")
+_KEPT_SPLIT = re.compile("([" + "".join(sorted(_KEPT_VARIANTS)) + "])")
+
 
 def _has_simplified(text: str) -> bool:
     converted = _S2T.convert(text)
     if len(converted) != len(text):                          # s2t 是逐字對應；長度不同代表有詞組被改寫，保守地當作有簡體字
         return True
-    return any(old != new and old not in _BOTH_FORMS for old, new in zip(text, converted))
+    return any(old != new and old not in _BOTH_FORMS and old not in _KEPT_VARIANTS for old, new in zip(text, converted))
 
 
 def to_traditional(text: str) -> str:
-    """簡體轉台灣繁體；沒有 CJK 字元、或沒有簡體字的文字原樣回傳。"""
+    """簡體轉台灣繁體；沒有 CJK 字元、或沒有簡體字的文字原樣回傳。`_KEPT_VARIANTS` 的字（例如人名的「杰」）一律保留，其餘照常轉換。"""
     if not text or not _CJK.search(text) or not _has_simplified(text):
         return text
-    return _S2TWP.convert(text)
+    # 以保留的異體字切開、只轉換其餘的片段（切開後轉換器看不到這些字，也就不會改它們）
+    pieces = _KEPT_SPLIT.split(text)
+    return "".join(piece if not piece or piece in _KEPT_VARIANTS else _S2TWP.convert(piece) for piece in pieces)

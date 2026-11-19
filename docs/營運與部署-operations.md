@@ -417,7 +417,7 @@ flowchart BT
 
 ### 緊急煞車的啟用與解除（`safe-mode-toggle`）
 
-> **演練狀態**：本節的步驟依計畫模組與既有的部署流程寫成。**AWS 展示環境的啟用與解除尚未演練**（`safe-mode-toggle` 任務 6.2 部署之後演練，結果寫在 README 的驗收紀錄）；**Google Cloud 的步驟尚未實跑**（沒有可計費的專案，屬 `cloud-staging-run`）。演練之前不要把本節視為已驗證。
+> **演練狀態**：**AWS 展示環境的啟用與解除已於 2026-11-19 實際演練各一次**（結果與發現見第 8 節「safe-mode-toggle 的部署與緊急煞車演練」），驗證到應用程式層（容器環境變數、`load_config()` 讀到的值、`/readyz`、日誌）。**未驗證**：玩家層的結果（登入玩家的 `GET /api/account/content-mode` 回 `forced: true`、`/account` 開關禁用、目錄不再詢問、遊戲內提示不出現），留給 `safe-mode-toggle` 的使用者驗收；**Google Cloud 的步驟尚未實跑**（沒有可計費的專案，屬 `cloud-staging-run`）。
 
 `SAFE_MODE_FORCED` 是部署層的緊急煞車，**不是使用門檻**：預設未啟用，玩家可在個人頁關閉安全模式；出事時設為 `true`，全站立即（下一個回合起）停用「關閉安全模式」。啟用時：
 
@@ -429,9 +429,9 @@ flowchart BT
 **AWS 展示環境（啟用）**：
 
 1. 在 `aws-demo.vars`（不進版本庫）加入 `SAFE_MODE_FORCED=true`。
-2. 重放主機檔案以更新 `plain.env`：`python scripts/aws_demo.py provision --account-id … --notify-email … --vars-file aws-demo.vars --with-secret OPENROUTER_API_KEY --with-secret GOOGLE_OAUTH_CLIENT_SECRET --with-secret MAIL_SMTP_PASSWORD --only host-init-files`，先預覽，確認第 10 步「取得全部 N 個機密」的 N 是 6（少帶 `--with-secret` 會覆蓋掉主機上取 6 個機密的腳本，兩個池會因缺少機密崩潰），再加 `--execute`。
-3. 重啟兩個池：在主機的 SSM 工作階段執行 `systemctl restart rac-cs rac-rpg`。（`deploy --only switch-release` 也會重啟，但它會把 `release.previous.env` 一併改成目前的標籤，失去 `rollback` 用的前一版，所以不用它。）
-4. 驗證：`/healthz`、`/readyz` 回 200；以測試玩家（`scripts/mint_test_sessions.py` 簽出的 cookie，或自己的帳號）呼叫 `GET /api/account/content-mode`，`forced` 為 `true` 且 `effective` 為 `safe`；瀏覽器開 `/account` 確認開關禁用；日誌沒有 ERROR。
+2. 重放主機檔案以更新 `plain.env`：`python scripts/aws_demo.py provision --account-id … --notify-email … --vars-file aws-demo.vars --with-secret OPENROUTER_API_KEY --with-secret GOOGLE_OAUTH_CLIENT_SECRET --with-secret MAIL_SMTP_PASSWORD --only host-init-files`，`--notify-email` 是必填參數（這個單步用不到，給任何有效位址即可，不要用個人信箱）。先不加 `--execute` 預覽（只有一步：放置 17 個主機檔案），再加 `--execute --yes`（`--yes` 只能和 `--only` 一起用）。**少帶 `--with-secret` 會覆蓋掉主機上取 6 個機密的腳本，兩個池會因缺少機密崩潰**；執行後確認主機上 `/usr/local/sbin/rac-render-env-app` 的機密名稱還是 6 個，`/etc/rac/plain.env` 只多（或少）`SAFE_MODE_FORCED` 那一行。
+3. 重啟兩個池：在主機上執行 `systemctl restart rac-cs rac-rpg`（SSM 的 `AWS-RunShellScript` 即可；兩個池一起約 7 秒）。重放會把 17 個檔案的修改時間都更新，所以 systemd 會印出「單元檔在磁碟上有變動，需要 `daemon-reload`」的警告：內容沒有改，可以忽略，不必為了煞車執行 `daemon-reload`。（`deploy --only switch-release` 以目前標籤執行也能重啟，且同標籤不會覆蓋 `release.previous.env`；演練用的是 `systemctl`。）
+4. 驗證：應用程式層——兩個容器的 `SAFE_MODE_FORCED` 環境變數是 `true`、在容器內 `load_config()` 讀到 `safe_mode_forced` 為真、兩個池本機與公開網址的 `/readyz` 回 200、重啟後的日誌沒有 ERROR（演練做了這些）。玩家層——以登入的玩家（自己的帳號，或 `scripts/mint_test_sessions.py` 簽出的測試玩家）呼叫 `GET /api/account/content-mode`，`forced` 為 `true` 且 `effective` 為 `safe`；瀏覽器開 `/account` 確認開關禁用（演練沒有做，由使用者驗收做）。
 
 **AWS 展示環境（解除）**：把 `aws-demo.vars` 的 `SAFE_MODE_FORCED` 改為 `false`（或刪除該行），重做上面第 2 至 4 步，驗證 `forced` 為 `false`、玩家偏好與啟用前相同。
 
@@ -855,9 +855,28 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 
 **驗收帳號的清除**：專案沒有「立即抹除單一已確認帳號」的 flask 指令（既有的清除都有條件：寬限期滿、閒置、逾時未確認、未滿 18 歲），所以用一支**不進版本庫的一次性腳本**在主機的一次性容器執行，只呼叫既有的 `UserRepository.request_deletion` 與 `AccountErasureService.erase_pending_due`（兩段都排除管理員、都寫刪除紀錄），並要求「非管理員帳號恰好 1 個、編號相符、`active`、已聲明並確認、當天建立」才動手；先在本機 SQLite 以假帳號實測（錯誤編號、時間不符、兩個玩家都被拒絕），再於主機預覽與執行，事後只剩管理員。**沒有獨立查證**刪除紀錄（`deletion_tombstones`）與 `account.deleted_by_request` 事件。是否補成正式的維運指令（須經 OpenSpec、測試與稽核）尚未決定，排在後面。
 
-**對展示的影響**（2026-11-24、11-25 的展示前要知道）：①展示環境現在**沒有玩家帳號**，要自己用 Google 登入新註冊；②新玩家一律預設**安全模式**（先前成年玩家預設一般模式），安全模式看不到宣告為一般或成人模式的劇本；③目前**沒有任何前端畫面能切換內容模式**（`PUT /api/account/content-mode` 沒有前端呼叫，帳號頁沒有切換），新玩家無法從介面離開安全模式；④展示環境沒有開成人模式（部署計畫與 `aws-demo.vars` 都沒設 `ADULT_MODE_ENABLED`，預設關閉）。②至④要靠 `safe-mode-toggle` 才能改善，是否為展示提前做最小的切換由使用者決定。
+**對展示的影響**（2026-11-24、11-25 的展示前要知道）：①展示環境現在**沒有玩家帳號**，要自己用 Google 登入新註冊；②新玩家一律預設**安全模式**（先前成年玩家預設一般模式），安全模式看不到宣告為一般或成人模式的劇本；③目前**沒有任何前端畫面能切換內容模式**（`PUT /api/account/content-mode` 沒有前端呼叫，帳號頁沒有切換），新玩家無法從介面離開安全模式；④展示環境沒有開成人模式（部署計畫與 `aws-demo.vars` 都沒設 `ADULT_MODE_ENABLED`，預設關閉）。②至④要靠 `safe-mode-toggle` 才能改善，是否為展示提前做最小的切換由使用者決定。（**2026-11-19 後續**：`safe-mode-toggle` 已部署到展示環境〔映像 `e59ac28`、遷移 `0020`〕，②③的修正（個人頁的安全模式開關）已隨之部署、**尚待使用者在展示環境驗收**，④的 `ADULT_MODE_ENABLED` 已淘汰、不再有意義；細節見「safe-mode-toggle 的部署與緊急煞車演練」。）
 
 **未驗證**：登入頁在 360 px 手機寬度的版面；客服提示詞改過之後用真實 Gemini 問「怎麼註冊」；容器驗收只用 SQLite、沒有連 SQL Server（SQL Server 由本節的真實部署涵蓋）；情境②沒有專屬日誌事件，只靠使用者目視；刪除紀錄的獨立查證如上。費用的證實數字見 README「驗收紀錄（aws-demo-environment）」的每日費用觀察。
+
+### safe-mode-toggle 的部署與緊急煞車演練（2026-11-19，映像 `e59ac28`）
+
+**部署**：使用者授權「全部執行」；我以一次例行 `aws_demo.py deploy --account-id <帳號> --tag e59ac28 --execute` 完成（21 步全部通過、結束代碼 0；每步確認以管線回覆，輸出存在我的暫存目錄、不進版本庫）。
+
+- 快照 `rac-demo-staging-db-pre-e59ac28`（遷移之前的還原點）available；映像 `rac-app:e59ac28` 建成，`check-image` 通過。
+- 遷移：`alembic` 日誌 `Running upgrade 0019_adult_declaration -> 0020_safe_mode_hint`；`check-migration-head` 輸出 `1`。`0020` 只新增 `sessions.safe_hint_at`（可為空、不回填），是 expand-only，**回復只換回前一版標籤，不降級資料庫**。
+- `seed-scripts`：建立 0、更新 1、沒有變動 0（內建劇本 `xianxia-qingyun` 新增一個版本，`content_tier` 為 `adult`＝未綁定；舊存檔使用複製進存檔的舊內容，不受影響）。
+- `release.env` ＝ `RAC_IMAGE_TAG=e59ac28`、`release.previous.env` ＝ `RAC_IMAGE_TAG=13288ac`（**回復點仍在**）；`check-pools`、`check-pool-hardening` 通過。
+- 部署後的唯讀確認：兩個池都跑 `rac-app:e59ac28`、重啟次數 0；`plain.env` 沒有 `SAFE_MODE_FORCED`，也沒有 `ADULT_MODE_*`；10 分鐘內兩個池的日誌 ERROR／Traceback 行數都是 0；公開網址的 `/healthz` 與 `/readyz` 都回 200。
+
+**緊急煞車演練**（同日，啟用與解除各一次，步驟就是上一節寫的）：
+
+- 演練前先確認：由 `aws-demo.vars` 產生的 `plain.env` 內容雜湊與主機上現有的完全相同，所以重放只會多（或少）那一行。
+- 啟用：`aws-demo.vars` 加 `SAFE_MODE_FORCED=true`（先備份）→ `provision … --only host-init-files --execute --yes`（三個 `--with-secret` 都帶）→ 主機 `plain.env` 多了 `SAFE_MODE_FORCED=true`、其餘變數名稱不變，`rac-render-env-app` 仍是 6 個機密，`release.previous.env` 不變 → `systemctl restart rac-cs rac-rpg`（約 7 秒；公開網址的 `/readyz` 在重啟結束後約 3 秒內回 200）→ 兩個容器的環境變數是 `true`、容器內 `load_config()` 讀到 `safe_mode_forced=True`、兩個池本機 `/readyz` 200、日誌無 ERROR。
+- 解除：`aws-demo.vars` 還原成備份（逐位元組一致）→ 同一個重放 → `plain.env` 雜湊回到演練前的值 → 重啟（約 7 秒）→ 兩個容器沒有該環境變數、`load_config()` 讀到 `safe_mode_forced=False`、`/readyz` 200、日誌無 ERROR。**最終狀態與演練前相同。**
+- 發現（已寫回上一節的步驟）：①重放會更新 17 個檔案的修改時間，systemd 因此警告需要 `daemon-reload`，內容沒有改（`aws_demo_plan.py` 自 11/17 沒變、`plain.env` 雜湊一致）；②`--notify-email` 是必填參數；③單步預覽沒有「取得全部 N 個機密」那一行，改查主機上取機密腳本的名稱數；④`--yes` 只能和 `--only` 一起用。
+
+**未驗證**：玩家層的結果（`/account` 開關禁用、`GET /api/account/content-mode` 回 `forced: true`、目錄不再詢問、遊戲內提示不出現）沒有走一遍，演練只驗證到應用程式層；Google Cloud 的步驟沒有跑；`switch-release` 以同標籤重啟沒有實際執行（文件依既有紀錄說明，沒有演練）。
 
 ### 展示環境未達 production 的缺口（task 7.4）
 

@@ -50,6 +50,31 @@ def test_a_sentence_is_converted_when_it_has_a_clear_simplified_character_even_n
     assert to_traditional("他说：「走。」") == "他說：「走。」"                                      # 句子裡只有一個簡體字也要轉
 
 
+@pytest.mark.parametrize("sentence", [
+    "他叫李杰，是山門的弟子。", "杰哥看著她，沒有說話。", "俊杰與家杰一起走進山門。", "杰", "「杰，」她說，「過來。」",
+])
+def test_the_variant_character_jie_used_in_taiwanese_names_is_kept(sentence):
+    """「杰」是「傑」的異體字，台灣人名常用；OpenCC 會把它當簡體字改掉（玩家取名「李杰」，AI 的回覆變成「李傑」）。"""
+    assert to_traditional(sentence) == sentence
+
+
+def test_jie_is_kept_even_when_the_sentence_is_converted_for_another_simplified_character():
+    assert to_traditional("他叫李杰，我们一起走吧。") == "他叫李杰，我們一起走吧。"                        # 其餘的簡體字照轉，「杰」不動
+    assert to_traditional("杰说：「杰哥来了。」杰笑了。") == "杰說：「杰哥來了。」杰笑了。"                 # 連續出現、在句首與句尾都一樣
+    assert to_traditional(to_traditional("李杰踏进了雾气之中。")) == "李杰踏進了霧氣之中。"                  # 重複轉換不會再變
+
+
+def test_jie_alone_does_not_make_a_traditional_sentence_count_as_simplified():
+    """句子裡只有「杰」時不算簡體：整句不進轉換器，所以同一句裡正確的繁體異體字（「祕」）與「咸陽」也不會被改。"""
+    assert to_traditional("神祕的少女與李杰站在月下。") == "神祕的少女與李杰站在月下。"
+    assert to_traditional("李杰來自咸陽。") == "李杰來自咸陽。"
+
+
+def test_the_standard_form_jie_is_untouched_too():
+    assert to_traditional("他叫李傑，是山門的弟子。") == "他叫李傑，是山門的弟子。"
+    assert to_traditional("李傑与杰一起走进山门。") == "李傑與杰一起走進山門。"
+
+
 @pytest.mark.parametrize("text", ["", "abc 123 [DONE]", "a1b2c3d4e5f60718293a4b5c", "！？。，", "\n\n"])
 def test_text_without_chinese_characters_is_returned_unchanged(text):
     assert to_traditional(text) == text
@@ -97,6 +122,13 @@ def test_a_simplified_sentence_that_follows_an_earlier_one_is_still_buffered_and
     assert released == "第一句話說完了。第二句也說完了。" and hit == ()
 
 
+@pytest.mark.parametrize("chunk", CHUNKS)
+def test_the_guard_keeps_the_name_jie_whatever_way_the_chunks_are_cut(chunk):
+    """玩家替角色取名「李杰」：劇情串流釋放的文字保留「杰」，同一段裡的簡體字照轉。"""
+    released, hit, _ = release_all("李杰笑了笑。他说：「我们走吧，杰。」", chunk)
+    assert released == "李杰笑了笑。他說：「我們走吧，杰。」" and hit == ()
+
+
 # ---- RPG 用途的結構化輸出 ---------------------------------------------------------------------------------------------
 
 SIMPLIFIED_JSON = json.dumps({"reply": "他踏进了雾气之中。"}, ensure_ascii=False)
@@ -108,6 +140,14 @@ def test_structured_output_that_players_read_is_converted_before_it_is_parsed(me
     provider.script(SIMPLIFIED_JSON)
     outcome = run(build(member_session, provider), kind=kind)
     assert outcome.ok and outcome.value == {"reply": "他踏進了霧氣之中。"}
+
+
+@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN])
+def test_structured_output_keeps_the_name_jie_while_converting_the_rest(member_session, kind):
+    provider = FakeLLMProvider()
+    provider.script(json.dumps({"reply": "李杰踏进了雾气之中，杰说：「我们走。」"}, ensure_ascii=False))
+    outcome = run(build(member_session, provider), kind=kind)
+    assert outcome.ok and outcome.value == {"reply": "李杰踏進了霧氣之中，杰說：「我們走。」"}
 
 
 @pytest.mark.parametrize("kind", [KIND_CHAT, KIND_SCRIPT_REVIEW])
@@ -123,3 +163,14 @@ def test_customer_service_and_review_outputs_are_not_touched(member_session, kin
 def test_the_prompt_forbids_simplified_characters_explicitly():
     text = rpg_prompt.LANGUAGE_INSTRUCTIONS["zh-Hant-TW"]
     assert "繁體" in text and "絕對不要輸出簡體字" in text and "台灣" in text
+
+
+def test_the_prompt_tells_the_model_to_write_chinese_for_english_words_and_keeps_names_as_they_are():
+    """展示驗收發現：劇情偶爾夾雜英文單字（「我感覺你需要help」）。提示詞要明講改用中文說法，並給具體的例子；人名與專有名詞仍可保留原文。"""
+    text = rpg_prompt.LANGUAGE_INSTRUCTIONS["zh-Hant-TW"]
+    assert "不要夾雜英文" in text and "改用自然的繁體中文說法" in text
+    assert "幫忙" in text and "help" in text                                       # 具體例子：寫「幫忙」不寫「help」
+    assert "人名與專有名詞" in text
+    # 回合敘事、第 0 幕、記事簿與狀態呼叫共用同一段語言規則
+    assert text in rpg_prompt.build_system("safe", rpg_prompt.DEFAULT_LANGUAGE, "native", False, "m" * 24)
+    assert text in rpg_prompt.build_opening_system("adult", rpg_prompt.DEFAULT_LANGUAGE, "native", "m" * 24)
