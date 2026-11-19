@@ -886,6 +886,10 @@ RDS 的伺服器憑證由 AWS 的 RDS CA 簽發，不在 Debian 的系統憑證�
 
 **怎麼換的**（沒有重新部署映像，只換設定；步驟與緊急煞車的啟用相同，見第 7 節）：①`aws-demo.vars` 的兩行 `OPENROUTER_MODEL`、`OPENROUTER_FALLBACK_MODEL` 改成新值（先備份）→ ②`provision … --only host-init-files --execute --yes`（三個 `--with-secret` 都帶）重放主機檔案 → ③主機 `systemctl restart rac-cs rac-rpg`（約 7 秒）。驗證：主機 `plain.env` 的雜湊改變、其餘變數名稱不變、沒有 `SAFE_MODE_FORCED`、取機密的腳本仍是 6 個；兩個容器的環境變數是新值；容器內 `load_config()` 讀到 `primary=…ultra…`、`fallback=…super-vl…`、`json_schema=False`、`reasoning=False`；本機與公開網址的 `/healthz`、`/readyz` 回 200；重啟後日誌沒有 ERROR。**回復**：把 `aws-demo.vars` 的兩行改回舊值，重做同一組步驟。
 
+**同日補量（本機，不是展示環境）**：串流首字時間 ultra 0.8 至 2.3 秒（6 次）、super-vl 0.3 至 0.5 秒（4 次），都遠低於 20 秒的首字期限，不會因為慢而切到備援；整段耗時 ultra 18 至 48 秒、super-vl 7 至 12 秒；字數沒有伺服器端上限（使用者表示 1500 字以內都可以，輸出上限 1800 token，量到最長 1772 字仍正常結束）。
+
+**同日的第二次部署（映像 `3c234d4`，使用者要求「commit 將完整新版部屬」）**：把驗收發現的三項修正（「杰」保留、英文提示詞、不道德行動的敘事規則）部署到展示環境；例行 `deploy` 21 步全部通過，沒有新的遷移；`release.previous.env` ＝ `e59ac28`（回復點）；部署後在線上容器內載入程式確認三項修正都生效、新模型設定與關閉的緊急煞車維持原樣、日誌無 ERROR。模型設定在部署前後都是上面的 ultra 主力、super-vl 備援。
+
 **未驗證**：ultra 與 super-vl 在展示環境的**實際玩家回合**（真實登入、串流、記事簿與狀態呼叫在多輪之下的表現）；多輪一致性；免費端點被限流（429）時備援切換的實際行為。
 
 ### 展示環境未達 production 的缺口（task 7.4）

@@ -29,7 +29,7 @@
 - **THEN** 回傳的錯誤同時包含 `title` 與 `characters[2].age`
 
 ### Requirement: 目錄與設定欄位的長度與必填
-下列欄位 SHALL 依規定驗證長度（以 Unicode 字元計，標準化之後）：`title` 必填 1 至 30 字、`summary` 必填 1 至 150 字、`world_name` 必填 1 至 50 字、`background` 必填 1 至 1500 字、`opening` 選填至多 500 字、`rules` 選填至多 800 字。`tags` 選填，至多 5 個，每個 1 至 12 字，以 NFC 與不分大小寫去除重複。`content_tier` 必填，只能是 `safe`、`standard`、`adult` 之一。超過上限或缺少必填欄位 SHALL 回報該欄位的錯誤，錯誤訊息 SHALL 為繁體中文且不回顯輸入的內容。
+下列欄位 SHALL 依規定驗證長度（以 Unicode 字元計，標準化之後）：`title` 必填 1 至 30 字、`summary` 必填 1 至 150 字、`world_name` 必填 1 至 50 字、`background` 必填 1 至 1500 字、`opening` 選填至多 500 字、`rules` 選填至多 800 字。`tags` 選填，至多 5 個，每個 1 至 12 字，以 NFC 與不分大小寫去除重複。`content_tier` 必填，只能是 `safe`（綁定安全模式）或 `adult`（未綁定）；舊值 `standard` SHALL 接受並標準化為 `adult`。超過上限或缺少必填欄位 SHALL 回報該欄位的錯誤，錯誤訊息 SHALL 為繁體中文且不回顯輸入的內容。
 
 #### Scenario: 標題超過上限
 - **WHEN** 標題有 31 個字
@@ -50,6 +50,14 @@
 #### Scenario: 不合法的內容分級
 - **WHEN** `content_tier` 為 `mature`
 - **THEN** 驗證失敗，錯誤指出 `content_tier`
+
+#### Scenario: 兩種合法值
+- **WHEN** `content_tier` 為 `safe` 或 `adult`
+- **THEN** 這個欄位通過驗證
+
+#### Scenario: 舊值標準化
+- **WHEN** `content_tier` 為 `standard`
+- **THEN** 驗證通過，標準化後的內容為 `adult`
 
 ### Requirement: 文字標準化
 所有文字欄位 SHALL 先做 NFC 正規化並去除控制字元：單行欄位（標題、簡介、世界觀名稱、標籤、姓名等）SHALL 另外把換行與連續空白收斂為單一空白並去除前後空白；多行欄位（背景、初始對話、規則、結局說明、外貌等較長欄位）SHALL 保留換行但去除前後空白，且不得含歸位字元以外的控制字元。文字 SHALL NOT 含系統不公開的標記字串（驗證時由呼叫端提供清單）。全部以純文字處理，驗證 SHALL NOT 解讀任何標記語法。
@@ -166,17 +174,6 @@
 
 #### Scenario: 剛好在上限
 - **WHEN** 加總剛好 8000 字
-- **THEN** 驗證通過
-
-### Requirement: 宣告分級不得高於作者的上限
-驗證 SHALL 接受呼叫端提供的作者內容上限；宣告的 `content_tier` 高於該上限 SHALL 使驗證失敗，錯誤指出 `content_tier`。未成年作者的上限為 `safe`。
-
-#### Scenario: 未成年作者宣告一般
-- **WHEN** 作者的上限為 `safe`，內容宣告 `content_tier` 為 `standard`
-- **THEN** 驗證失敗，錯誤指出 `content_tier`
-
-#### Scenario: 成年作者宣告一般
-- **WHEN** 作者的上限為 `standard`，內容宣告 `content_tier` 為 `standard`
 - **THEN** 驗證通過
 
 ### Requirement: 錯誤格式

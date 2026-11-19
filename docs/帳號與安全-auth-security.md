@@ -123,7 +123,7 @@ flowchart TD
 
 ### 內容模式（change `safe-mode-toggle`，取代 `rpg-data-and-script` 的三種模式）
 
-> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）並由 `safe-mode-toggle` 實作（2026-11-19：第 1、2 組後端核心與審查尺度、第 3 組個人頁開關、第 4 組目錄通知與創作頁綁定、第 5 組遊戲內提示；2026-11-19 已部署到展示環境並演練緊急煞車，使用者驗收進行中）**：全站只限滿 18 歲；內容模式為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車 `SAFE_MODE_FORCED`。第 1 階段的**過渡相容層**（`content_access`、`effective_tier(save_tier=…)`、`author_content_cap`、`is_adult`）已於第 2 組移除，並以守門測試 `tests/architecture/test_no_legacy_tier_checks.py` 鎖住；新程式請勿使用它們。
+> **規範已修訂（2026-11-17，AGENTS.md 第 7 節）並由 `safe-mode-toggle` 實作（2026-11-19：第 1、2 組後端核心與審查尺度、第 3 組個人頁開關、第 4 組目錄通知與創作頁綁定、第 5 組遊戲內提示；2026-11-19 已部署到展示環境並演練緊急煞車，使用者驗收完成〔緊急煞車玩家層略過〕，已於 2026-11-19 封存）**：全站只限滿 18 歲；內容模式為「安全模式開（預設）／關」兩種；關閉安全模式不以供應商書面許可、法務意見或付費模型為前提；部署層的開關改為緊急煞車 `SAFE_MODE_FORCED`。第 1 階段的**過渡相容層**（`content_access`、`effective_tier(save_tier=…)`、`author_content_cap`、`is_adult`）已於第 2 組移除，並以守門測試 `tests/architecture/test_no_legacy_tier_checks.py` 鎖住；新程式請勿使用它們。
 
 內容模式只有兩種，由保守到寬鬆：`safe`（安全模式開）、`adult`（安全模式關）；順序與「取較保守者」在 `app/services/content_tier.py`（純邏輯，無法判定視為 `safe`）。**舊值 `standard`（原一般模式）一律讀作 `adult`**（`parse_tier`），不論出現在玩家偏好、劇本內容或存檔，所以既有資料不改寫；系統不再寫入 `standard`。**生效模式 = 玩家偏好（缺少目前版本同意視為 `safe`）、劇本是否綁定安全模式、緊急煞車三者中最保守者**（`AccessPolicy.effective_mode(user, script_binding=None)`，每次現算；全站只限滿 18 歲，沒有依年齡的上限；存檔不釘住自己的模式；管理員與各會員等級都不豁免）。
 

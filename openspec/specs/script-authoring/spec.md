@@ -39,17 +39,6 @@
 - **WHEN** 提交的內容有多個欄位不合格
 - **THEN** 一次回報全部欄位的錯誤，錯誤不回顯輸入的內容
 
-### Requirement: 宣告的內容模式不得高於作者的上限
-劇本宣告的 `content_tier` SHALL NOT 高於作者目前的年齡上限（由生日於當下計算）：未滿 18 歲的作者只能宣告 `safe`；已滿 18 歲的作者可宣告到 `adult`，不另要求作者本人開啟成人模式（誰能遊玩由玩家的生效模式決定）。超過時 SHALL 以 `content_tier` 欄位的錯誤回應。
-
-#### Scenario: 未成年作者宣告一般模式
-- **WHEN** 15 歲的作者提交宣告為 `standard` 的內容
-- **THEN** 被拒絕，錯誤在 `content_tier` 欄位
-
-#### Scenario: 成年作者宣告成人模式
-- **WHEN** 25 歲、偏好為一般模式的作者宣告 `adult`
-- **THEN** 通過驗證
-
 ### Requirement: 更新草稿以內容雜湊偵測衝突
 `PUT /api/scripts/versions/<id>` SHALL 只接受 `draft` 版本，本文帶完整內容與 `base_hash`（作者開始編輯時的內容雜湊）。`base_hash` 與目前的內容雜湊不同 SHALL 得到 409 與代碼 `draft_changed`，不覆寫；非草稿 SHALL 得到 409 與代碼 `not_draft`。成功時 SHALL 回傳新的內容雜湊。內容相同的重送 SHALL 成功且不改變資料。
 

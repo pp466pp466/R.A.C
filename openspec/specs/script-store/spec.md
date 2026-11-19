@@ -115,7 +115,7 @@
 - **THEN** 只保存一個
 
 ### Requirement: 讀取範圍與擁有者隔離
-非 `published` 的內容（`draft`、`pending_review`、`rejected`、`superseded`）SHALL 只能由擁有者讀取，所有這類讀取方法 SHALL 接收擁有者的使用者編號並以它為查詢條件；非擁有者 SHALL 得到與「不存在」相同的結果（404），不得洩漏它是否存在。`published` 的版本 SHALL 可由任何已登入且符合內容模式的使用者讀取（內建劇本亦同），但讀取方法 SHALL 只回傳上架中的版本，不提供只憑識別碼取得非公開內容的方法。管理員讀取他人的待審內容 SHALL 走專用路徑並寫入稽核，不在這個能力範圍內。
+非 `published` 的內容（`draft`、`pending_review`、`rejected`、`superseded`）SHALL 只能由擁有者讀取，所有這類讀取方法 SHALL 接收擁有者的使用者編號並以它為查詢條件；非擁有者 SHALL 得到與「不存在」相同的結果（404），不得洩漏它是否存在。`published` 的版本 SHALL 可由任何已登入的使用者讀取（內建劇本亦同），不依玩家的內容模式篩選，但讀取方法 SHALL 只回傳上架中的版本，不提供只憑識別碼取得非公開內容的方法。管理員讀取他人的待審內容 SHALL 走專用路徑並寫入稽核，不在這個能力範圍內。
 
 #### Scenario: 擁有者讀自己的草稿
 - **WHEN** 擁有者以對外識別碼讀取自己的 `draft`
@@ -134,8 +134,8 @@
 - **THEN** 得到與不存在相同的結果
 
 #### Scenario: 依內容模式篩選
-- **WHEN** 安全模式的玩家列出公開劇本，其中一個宣告為 `standard`
-- **THEN** 清單中沒有該劇本
+- **WHEN** 安全模式開的玩家列出公開劇本，其中一個未綁定安全模式（含舊值 `standard`）
+- **THEN** 清單中仍有該劇本
 
 ### Requirement: 只有草稿可以刪除
 擁有者 SHALL 只能刪除自己的 `draft` 版本；刪除唯一的版本時 SHALL 一併刪除劇本本身。`pending_review`、`published`、`rejected` 與 `superseded` 版本 SHALL NOT 被擁有者刪除（下架與歷史保留由後續的審核與發佈流程處理）。非擁有者的刪除嘗試 SHALL 得到 404。

@@ -53,4 +53,5 @@
 
 - 簡報衝突（`docs/2.0簡報.md`、六張圖解與 `build_diagrams*.py` 寫「規範兩種、程式仍三種」）依 deck-conflict-watch 只通知使用者，由使用者決定，不自行修改。
 - 使用者驗收通過後，以 `/openspec-archive-change safe-mode-toggle` 封存；封存後更新 `docs/路線圖-roadmap.md` 並複查各設計文件標頭的「對應 change」。
+- **已封存（2026-11-19）**：使用者複驗三項修正後回報「驗收都沒問題 都符合我的要求」。驗收中發現並已修正、部署的三件事（保留人名常用的「杰」、提示詞不夾雜英文、回合敘事照玩家決定寫出不道德行動）中，後兩項已併入 `rpg-turn-context` 的 delta 一起同步到主規格；「杰」屬 `zh_text`（簡轉繁），主規格沒有承載它的能力，只記在 `docs/模型呼叫層-llm-layer.md` 第 12 節，列為既有的缺口。封存時 22 份 delta 同步到 22 份主規格（新增 3 份：`account-safe-mode-setting`、`safe-mode-upgrade-hint`、`script-safe-binding`；`openspec validate --specs` 92 項通過）。
 - 之後可另立 contract change：移除 `sessions.content_tier`、`users.is_adult_at_confirmation` 等不再被讀取的欄位。
