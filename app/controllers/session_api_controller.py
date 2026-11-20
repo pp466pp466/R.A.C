@@ -7,8 +7,13 @@ Controller 只讀取請求、呼叫 Service、回應；帳號與年齡閘門、�
 `cache_headers.py` 的前綴清單內，含沒有尾端斜線的 `GET`／`POST /api/sessions`）。受限登入狀態（鎖定、等待刪除、待確認年齡）
 由 `require_login` 預設拒絕。
 
-- `GET /api/sessions/catalog`：玩家可以開存檔的上架劇本一頁（`?limit=`、`?offset=`），回 `{ok, scripts, has_more, content_mode}`。
-  **唯讀**：不呼叫模型、不碰錢包與額度；**不過年齡閘門**（尚未確認年齡的管理員也會落在 `/game`，他們讀到的是安全模式的清單）。
+- `GET /api/sessions/catalog`：公開目錄的一頁，回 `{ok, scripts, has_more, next_cursor, content_mode}`。查詢參數：`?q=`（關鍵字，只比對標題、簡介、
+  世界名稱與標籤）、`?tag=`、`?audience=`（`all`／`male`／`female`）、`?cursor=`（上一頁的 `next_cursor`）、`?limit=`；**不再讀取 `?offset=`**。
+  參數的解析與驗證都在 Service（`catalog_query`），不合法回 400 並指出欄位。**唯讀**：不呼叫模型、不碰錢包與額度；**不過年齡閘門**
+  （尚未確認年齡的管理員也會落在 `/game`，他們讀到的是安全模式的清單）。
+- `GET /api/sessions/catalog/tags`：常用標籤（上架版本中至多 30 個，含使用數），回 `{ok, tags: [{tag, count}]}`。同樣唯讀、不過年齡閘門。
+- `GET /api/sessions/catalog/<version_id>`：上架版本的公開詳情（白名單欄位，不含隱藏特質、里程碑、結局說明、規則與初始對話）；非上架的版本與不存在的
+  識別碼一律 404。同樣唯讀、不過年齡閘門。
 - `GET /api/sessions`：自己的存檔一頁（`?limit=`、`?offset=`；不含已封存者），回 `{ok, sessions, has_more}`。同樣唯讀。
 - `GET /api/sessions/setup/<version_id>`：序章與創角畫面需要的資料（背景故事、可聯繫的人物／地點／里程碑、欄位上限、今日剩餘的生成次數）。
 - `POST /api/sessions/protagonist/suggest`：AI 生成主角的預覽，本文 `{"version_id": "…", "intro": "選填的自我介紹"}`。**無狀態**：不寫存檔，
@@ -16,7 +21,7 @@ Controller 只讀取請求、呼叫 Service、回應；帳號與年齡閘門、�
 - `POST /api/sessions`：開存檔，本文 `{"version_id": "…", "protagonist": {…角色卡…}, "anchor": {kind, ref, text} 或 null, "skip_anchor": true 或省略}`。
   主角驗證與兩層審查通過才寫入；模型層審查最壞約 30 秒（劇本尚未審查過時再加一次），**前端逾時要設為 65 秒**並於離開頁面時中止。
 """
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from app.controllers.request_helpers import int_arg, read_json_object
 from app.security.session import require_login
@@ -31,8 +36,21 @@ session_api_bp = Blueprint("session_api", __name__, url_prefix="/api/sessions")
 def catalog():
     user = require_login()
     return jsonify(ok=True, **get_game_entry_service().catalog(
-        user, limit=int_arg("limit", CATALOG_DEFAULT_LIMIT), offset=int_arg("offset", 0),
+        user, q=request.args.get("q"), tag=request.args.get("tag"), audience=request.args.get("audience"),
+        cursor=request.args.get("cursor"), limit=int_arg("limit", CATALOG_DEFAULT_LIMIT),
     ))
+
+
+@session_api_bp.get("/catalog/tags")
+def catalog_tags():
+    require_login()
+    return jsonify(ok=True, **get_game_entry_service().catalog_tags())
+
+
+@session_api_bp.get("/catalog/<version_id>")
+def catalog_detail(version_id: str):
+    user = require_login()
+    return jsonify(ok=True, script=get_game_entry_service().script_detail(user, version_id))
 
 
 @session_api_bp.get("")

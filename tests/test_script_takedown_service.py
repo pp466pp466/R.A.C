@@ -75,14 +75,14 @@ def version_in(session, repo, author, status, **kwargs):
 
 def test_the_author_takes_down_a_published_version_and_it_leaves_the_public_list(member_session, service, repo, alice, clock):
     version = version_in(member_session, repo, alice, VERSION_PUBLISHED)
-    assert [v.public_id for v, _ in repo.list_published_cards()] == [version.public_id]
+    assert [v.public_id for v, _, _ in repo.list_catalog()] == [version.public_id]
     result = service.remove(current(alice), version.public_id)
     member_session.commit()
     stored = row(member_session, version)
     assert stored.status == VERSION_REMOVED and stored.removed_by == REMOVER_AUTHOR and stored.decided_at is not None
     assert stored.decision_category is None and stored.decision_note is None                  # 作者自行下架沒有類別與備註
     assert result["status"] == VERSION_REMOVED and result["removed_by"] == REMOVER_AUTHOR and result["decision_category"] is None
-    assert repo.list_published_cards() == []
+    assert repo.list_catalog() == []
 
 
 def test_taking_down_needs_no_review_no_password_and_writes_no_admin_audit(member_session, service, repo, alice):
@@ -158,7 +158,7 @@ def test_the_author_restores_their_own_takedown_without_review_and_the_content_a
     assert stored.status == VERSION_PUBLISHED and stored.published_at == published_at and stored.content_hash == content_hash
     assert (stored.removed_by, stored.decision_category, stored.decision_note, stored.decided_at) == (None, None, None, None)
     assert result["status"] == VERSION_PUBLISHED and result["removed_by"] is None
-    assert [v.public_id for v, _ in repo.list_published_cards()] == [version.public_id]
+    assert [v.public_id for v, _, _ in repo.list_catalog()] == [version.public_id]
 
 
 def test_restoring_records_an_event(member_session, service, repo, alice, caplog):
@@ -266,14 +266,14 @@ def test_when_the_new_version_is_approved_the_old_takedown_becomes_superseded_an
     repo.approve_version(draft["id"], now=at(8))
     member_session.commit()
     assert row(member_session, version).status == VERSION_SUPERSEDED
-    assert [v.public_id for v, _ in repo.list_published_cards()] == [draft["id"]]
+    assert [v.public_id for v, _, _ in repo.list_catalog()] == [draft["id"]]
 
 
 def test_a_removed_version_is_invisible_to_every_public_read(member_session, repo, alice):
     version = version_in(member_session, repo, alice, VERSION_REMOVED, removed_by=REMOVER_AUTHOR)
     assert repo.get_published(version.public_id) is None
     assert repo.get_published_by_script(script_public_id(repo, version)) is None
-    assert repo.list_published(limit=50) == [] and repo.list_published_cards() == []
+    assert repo.list_published(limit=50) == [] and repo.list_catalog() == []
 
 
 # ---- 閘門（鎖定、等待刪除等受限登入狀態由 `require_login` 在 HTTP 層擋下，見 test_script_api_takedown）-------------

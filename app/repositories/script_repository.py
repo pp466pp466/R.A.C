@@ -34,7 +34,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Iterator, Mapping, Sequence
 
-from sqlalchemy import case, delete, func, or_, select, update
+from sqlalchemy import Unicode, and_, case, delete, exists, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import util as orm_util
 
@@ -123,23 +123,59 @@ def _audience_of(content: Mapping[str, Any]) -> str:
     return value if value in (AUDIENCE_MALE, AUDIENCE_FEMALE) else AUDIENCE_ALL
 
 
-def _audience_order(preference: str | None) -> list[Any]:
-    """依故事偏好排序的鍵（空串列＝不加排序鍵）。與 `story_preference.rank` 同一規則：同頻 0、全讀者（含空值）1、另一頻 2。
+def _audience_rank(preference: str | None) -> Any | None:
+    """依故事偏好分層的 `case` 表達式，`None`＝不分層（偏好為空、`all` 或無法辨識）。與 `story_preference.rank` 同一規則：
+    同頻 0、全讀者（含空值）1、另一頻 2。
 
-    偏好為空、`all` 或無法辨識時不重排。`case` 是 ORM 表達式，空值被明確映射（不依賴 NULL 排序方向的方言差異）。
+    `case` 是 ORM 表達式，空值被明確映射（不依賴 NULL 排序方向的方言差異）。不分層時回傳 `None` 而不是常數 0：
+    SQL Server 的 `ORDER BY` 不接受常數，所以呼叫端在不分層時乾脆不加這個排序鍵與鍵集條件（常數不影響順序）。
     Repository 不得匯入 Service，所以這裡只用模型的常數；兩處規則的一致由測試守住。
     """
     if preference not in (AUDIENCE_MALE, AUDIENCE_FEMALE):
-        return []
-    return [case(
+        return None
+    return case(
         (ScriptVersion.audience == preference, 0),
         (or_(ScriptVersion.audience.is_(None), ScriptVersion.audience == AUDIENCE_ALL), 1),
         else_=2,
-    )]
+    )
+
+
+def _audience_order(preference: str | None) -> list[Any]:
+    """依故事偏好排序的鍵（空串列＝不加排序鍵），`list_published` 與 `list_published_by_tag` 使用。"""
+    rank = _audience_rank(preference)
+    return [] if rank is None else [rank]
+
+
+_LIKE_ESCAPE = "\\"
+
+
+def _keyword_filter(term: str) -> Any:
+    """一個關鍵字詞的條件：標題、簡介、世界名稱或任一標籤「包含」它（不分大小寫）。**只比對這四個一般欄位**，不碰背景、角色、
+    里程碑等長文字或 JSON 欄位（AGENTS.md 第 4 節：不得依 JSON 內容篩選）。
+
+    `term` 已由 Service 以 `casefold` 正規化；欄位以 `lower()` 比對（SQLite 的 `lower()` 只處理 ASCII、SQL Server 的預設定序不分大小寫，
+    中文與 ASCII 在兩者的結果一致）。`%`、`_`、`[` 與跳脫字元由 `_escape_like` 變成一般字元。
+    """
+    pattern = _escape_like(term)
+    return or_(
+        func.lower(ScriptVersion.title, type_=Unicode).contains(pattern, escape=_LIKE_ESCAPE),
+        func.lower(ScriptVersion.summary, type_=Unicode).contains(pattern, escape=_LIKE_ESCAPE),
+        func.lower(ScriptVersion.world_name, type_=Unicode).contains(pattern, escape=_LIKE_ESCAPE),
+        exists().where(
+            ScriptVersionTag.version_id == ScriptVersion.id,
+            func.lower(ScriptVersionTag.tag, type_=Unicode).contains(pattern, escape=_LIKE_ESCAPE),
+        ),
+    )
+
+
+def _escape_like(term: str) -> str:
+    """把 LIKE 的特殊字元變成字面字元：跳脫字元本身、`%`、`_`，以及 SQL Server 的 `[`（字元集合，SQLite 沒有這個語法，
+    跳脫它在兩邊都合法）。與 SQLAlchemy 的 `autoescape` 相同做法，只是多處理 `[`，且跳脫字元固定，行為不依方言而不同。"""
+    return "".join(f"{_LIKE_ESCAPE}{char}" if char in (_LIKE_ESCAPE, "%", "_", "[") else char for char in term)
 
 
 def _published_window(statement: Any, *, limit: int, offset: int, preference: str | None) -> Any:
-    """上架清單的條件與排序，`list_published` 與 `list_published_cards` 共用，兩者的集合與順序因此不會分歧：
+    """`list_published` 的條件與排序（公開目錄的 `list_catalog` 另有自己的版本，兩者的上架集合與偏好分層規則相同，由測試固定一致）：
     只含 `published`，**不依內容模式篩選**（所有玩家都看得到所有上架的劇本；綁定安全模式只影響生效模式）；
     先依偏好分層、再由新到舊（發佈時間，同時間依編號），最後才分頁。"""
     return (
@@ -566,16 +602,78 @@ class ScriptRepository(BaseRepository[Script]):
         statement = _published_window(select(ScriptVersion), limit=limit, offset=offset, preference=preference)
         return list(self._session.scalars(statement))
 
-    def list_published_cards(
-        self, *, limit: int = 12, offset: int = 0, preference: str | None = None,
-    ) -> list[tuple[ScriptVersion, Script]]:
-        """入口畫面的劇本卡片：與 `list_published` 完全相同的集合與順序，但**一次查詢**連同劇本（筆名與短代號）取回，
-        回傳 `(版本, 劇本)`。呼叫端要標籤時另用 `tags_of_versions` 一次取回整頁，所以整頁的查詢次數固定、不隨筆數增加。"""
-        statement = _published_window(
-            select(ScriptVersion, Script).join(Script, Script.id == ScriptVersion.script_id),
-            limit=limit, offset=offset, preference=preference,
+    def list_catalog(
+        self, *, terms: Sequence[str] = (), tag: str | None = None, audience: str | None = None,
+        after: tuple[int, datetime, int] | None = None, preference: str | None = None, limit: int = 12,
+    ) -> list[tuple[ScriptVersion, Script, int]]:
+        """公開目錄的一頁（rpg-script-catalog 規格；取代入口最小版的 `list_published_cards`）。回傳 `(版本, 劇本, 偏好層)`，**一次查詢**
+        連同劇本（筆名與短代號）取回；呼叫端要標籤時另用 `tags_of_versions` 一次取回整頁，所以整頁的查詢次數固定、不隨筆數增加。
+
+        - **集合**：只含 `published`，不依內容模式篩選（所有玩家都看得到所有上架的劇本）。`terms`（已正規化的關鍵字詞，全部要符合）
+          只比對標題、簡介、世界名稱與標籤；`tag` 是不分大小寫的完整標籤比對；`audience` 為 `male`／`female` 時只含該頻道，
+          為 `all` 時含全讀者與舊的空值。三者 AND 組合。
+        - **順序**：偏好層（`preference` 為 `male`／`female` 時才分層）、發佈時間由新到舊、版本編號由新到舊。
+        - **游標**：`after = (偏好層, 發佈時間, 版本編號)` 是上一頁最後一筆的排序鍵，這一頁只含排在它**之後**的項目；條件與排序用同三個鍵
+          （偏好層用同一個 `case` 表達式），所以分頁之間有新上架、下架或恢復時，已讀過之後的項目不重複也不遺漏（恢復不改發佈時間）。
+          不分層時（偏好為全讀者）忽略 `after` 的偏好層。
+        - 偏好層由查詢一併回傳（不在 Python 重算，兩處規則不會分歧）；不分層時一律 0。呼叫端取 `limit + 1` 筆決定有沒有下一頁。
+        """
+        rank = _audience_rank(preference)
+        columns: list[Any] = [ScriptVersion, Script]
+        if rank is not None:
+            columns.append(rank.label("catalog_rank"))
+        statement = (
+            select(*columns)
+            .join(Script, Script.id == ScriptVersion.script_id)
+            .where(ScriptVersion.status == VERSION_PUBLISHED)
         )
-        return [(version, script) for version, script in self._session.execute(statement).all()]
+        for term in terms:
+            statement = statement.where(_keyword_filter(term))
+        if tag is not None:
+            statement = statement.where(
+                exists().where(ScriptVersionTag.version_id == ScriptVersion.id, func.lower(ScriptVersionTag.tag, type_=Unicode) == tag)
+            )
+        if audience in (AUDIENCE_MALE, AUDIENCE_FEMALE):
+            statement = statement.where(ScriptVersion.audience == audience)
+        elif audience == AUDIENCE_ALL:
+            statement = statement.where(or_(ScriptVersion.audience.is_(None), ScriptVersion.audience == AUDIENCE_ALL))
+        if after is not None:
+            after_rank, after_time, after_id = after
+            later = or_(
+                ScriptVersion.published_at < after_time,
+                and_(ScriptVersion.published_at == after_time, ScriptVersion.id < after_id),
+            )
+            statement = statement.where(later if rank is None else or_(rank > after_rank, and_(rank == after_rank, later)))
+        statement = statement.order_by(*_audience_order(preference), ScriptVersion.published_at.desc(), ScriptVersion.id.desc()).limit(limit)
+        return [(row[0], row[1], row[2] if rank is not None else 0) for row in self._session.execute(statement).all()]
+
+    def get_published_card(self, version_public_id: str) -> tuple[ScriptVersion, Script] | None:
+        """上架中的版本連同它的劇本（詳情要顯示筆名與短代號），一次查詢；非上架的版本（含下架的、他人的草稿）與不存在的一樣回傳 `None`。"""
+        row = self._session.execute(
+            select(ScriptVersion, Script)
+            .join(Script, Script.id == ScriptVersion.script_id)
+            .where(ScriptVersion.public_id == version_public_id, ScriptVersion.status == VERSION_PUBLISHED)
+        ).first()
+        return None if row is None else (row[0], row[1])
+
+    def popular_tags(self, *, limit: int = 30) -> list[tuple[str, int]]:
+        """上架版本中最常用的標籤：`(小寫標籤, 使用該標籤的上架版本數)`，依數量由多到少、同數依標籤排序，至多 `limit` 筆。
+
+        只計 `published`（下架、待審、草稿、被取代與被退回的版本不計）；以 `lower()` 分組，所以只差大小寫的標籤合併成一筆。
+        同一版本內不會有只差大小寫的兩個標籤（驗證器去重），所以筆數就是版本數。同數時的標籤順序依資料庫的定序
+        （SQLite 是字碼順序、SQL Server 依其定序，只影響同數量標籤的先後）。"""
+        lowered = func.lower(ScriptVersionTag.tag, type_=Unicode)
+        used = func.count(ScriptVersionTag.id)
+        rows = self._session.execute(
+            select(lowered, used)
+            .select_from(ScriptVersionTag)
+            .join(ScriptVersion, ScriptVersion.id == ScriptVersionTag.version_id)
+            .where(ScriptVersion.status == VERSION_PUBLISHED)
+            .group_by(lowered)
+            .order_by(used.desc(), lowered.asc())
+            .limit(limit)
+        ).all()
+        return [(row[0], int(row[1])) for row in rows]
 
     def list_published_by_tag(
         self, tag: str, *, limit: int = 20, offset: int = 0, preference: str | None = None,

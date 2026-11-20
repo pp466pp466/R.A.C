@@ -9,23 +9,28 @@ from pathlib import Path
 
 import pytest
 
+from app.models.script import (
+    OFFICIAL_AUTHOR_NAME, VERSION_DRAFT, VERSION_PENDING, VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED,
+)
 from app.models.user import ROLE_ADMIN, User
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
+from app.services.catalog_query import encode_cursor
 from app.services.content_tier import SAFE_RULES_VERSION
 from app.services.current_user import CurrentUser
 from app.services.errors import NotFound, ValidationError
 from app.services.registry import get_game_entry_service
 from app.services.game_entry_service import (
-    CARD_FIELDS, CATALOG_DEFAULT_LIMIT, CATALOG_MAX_LIMIT, OFFSET_MAX, SAVE_FIELDS, SESSIONS_DEFAULT_LIMIT, SESSIONS_MAX_LIMIT,
-    SUMMARY_FIELDS, GameEntryService,
+    CARD_FIELDS, CATALOG_DEFAULT_LIMIT, CATALOG_MAX_LIMIT, DETAIL_FIELDS, OFFSET_MAX, SAVE_FIELDS, SESSIONS_DEFAULT_LIMIT,
+    SESSIONS_MAX_LIMIT, SUMMARY_FIELDS, GameEntryService,
 )
 from tests.support.age import TODAY_UTC
 from tests.support.auth import FakeClock, add_user
 from tests.support.protagonist import protagonist
 from tests.support.query_counter import count_statements
 from tests.support.script_data import validated
+from tests.support.script_review import put_in_status
 from tests.test_llm_providers_by_purpose import GEMINI_KEY, make_app, request_scope
 
 GHOST = "00000000-0000-4000-8000-000000000000"
@@ -77,8 +82,20 @@ def finish_turns(session, user, save, count, prefix="t"):
         repo.complete_turn(user.id, save.public_id, f"{prefix}-{index}", llm_raw_response=f"劇情{index}", structured_result=None, now=TODAY_UTC)
 
 
+def read_catalog(service, reader, limit, **filters):
+    """用游標依序讀完目錄的每一頁，回傳各頁串起來的卡片。"""
+    collected, cursor = [], None
+    for _ in range(50):                                                    # 有上限：被破壞成永遠 has_more 時要失敗，不要卡住
+        page = service.catalog(reader, limit=limit, cursor=cursor, **filters)
+        collected += page["scripts"]
+        if not page["has_more"]:
+            return collected
+        cursor = page["next_cursor"]
+    raise AssertionError("has_more 一直為真：分頁沒有走到盡頭")
+
+
 def read_all(fetch, limit):
-    """依序讀取每一頁直到 `has_more` 為假，回傳各頁串起來的結果。"""
+    """（我的存檔，位移分頁）依序讀取每一頁直到 `has_more` 為假，回傳各頁串起來的結果。"""
     collected, offset = [], 0
     while True:
         page = fetch(limit=limit, offset=offset)
@@ -169,7 +186,7 @@ def test_the_story_preference_never_changes_which_versions_the_catalog_holds(mem
     sets = []
     for n, preference in enumerate(("male", "female", "all"), start=1):
         reader = player(member_session, n, story_preference=preference)
-        sets.append(frozenset(card["title"] for card in read_all(lambda **page: service.catalog(reader, **page), limit=2)))
+        sets.append(frozenset(card["title"] for card in read_catalog(service, reader, limit=2)))
     assert len(set(sets)) == 1 and len(sets[0]) == 6
 
 
@@ -178,7 +195,7 @@ def test_chained_catalog_pages_equal_one_full_read(member_session, preference):
     publish_channels(member_session)
     service, reader = service_for(member_session), player(member_session, story_preference=preference)
     whole = service.catalog(reader, limit=CATALOG_MAX_LIMIT)
-    paged = read_all(lambda **page: service.catalog(reader, **page), limit=2)
+    paged = read_catalog(service, reader, limit=2)
     assert [card["id"] for card in paged] == [card["id"] for card in whole["scripts"]] and len(paged) == 6 and whole["has_more"] is False
 
 
@@ -186,9 +203,15 @@ def test_has_more_is_true_only_when_something_is_left_after_this_page(member_ses
     for index in range(3):
         publish(member_session, title=f"第{index}個", now=TODAY_UTC + timedelta(seconds=index))
     service, reader = service_for(member_session), player(member_session)
-    assert [len(p["scripts"]) for p in (service.catalog(reader, limit=3), service.catalog(reader, limit=2), service.catalog(reader, limit=2, offset=2))] == [3, 2, 1]
-    assert [service.catalog(reader, limit=3)["has_more"], service.catalog(reader, limit=2)["has_more"], service.catalog(reader, limit=2, offset=2)["has_more"]] == [False, True, False]
-    assert service.catalog(reader, offset=OFFSET_MAX) == {"scripts": [], "has_more": False, "content_mode": {"effective": "safe", "forced": False}}
+    everything, first = service.catalog(reader, limit=3), service.catalog(reader, limit=2)
+    second = service.catalog(reader, limit=2, cursor=first["next_cursor"])
+    assert [len(everything["scripts"]), len(first["scripts"]), len(second["scripts"])] == [3, 2, 1]
+    assert [everything["has_more"], first["has_more"], second["has_more"]] == [False, True, False]
+    assert isinstance(first["next_cursor"], str) and everything["next_cursor"] is None and second["next_cursor"] is None
+    past_the_end = encode_cursor(0, TODAY_UTC - timedelta(days=3650), 1)
+    assert service.catalog(reader, cursor=past_the_end) == {
+        "scripts": [], "has_more": False, "next_cursor": None, "content_mode": {"effective": "safe", "forced": False},
+    }
 
 
 def test_an_empty_catalog_is_a_normal_empty_page(member_session):
@@ -202,27 +225,27 @@ def test_the_default_and_maximum_page_sizes_are_the_documented_ones():
     assert (CATALOG_DEFAULT_LIMIT, CATALOG_MAX_LIMIT, SESSIONS_DEFAULT_LIMIT, SESSIONS_MAX_LIMIT) == (12, 24, 20, 50)
 
 
+@pytest.mark.parametrize("limit", [0, 25, -1, "abc", None, True, 1.5])
+def test_an_invalid_catalog_page_size_is_a_validation_error_that_names_the_field(member_session, limit):
+    with pytest.raises(ValidationError) as caught:
+        service_for(member_session).catalog(player(member_session), limit=limit)
+    assert set(caught.value.fields) == {"limit"}
+
+
 @pytest.mark.parametrize("limit, offset, fields", [
-    (0, 0, {"limit"}), (25, 0, {"limit"}), (-1, 0, {"limit"}), ("abc", 0, {"limit"}), (None, 0, {"limit"}), (True, 0, {"limit"}), (1.5, 0, {"limit"}),
-    (12, -1, {"offset"}), (12, OFFSET_MAX + 1, {"offset"}), (12, "0", {"offset"}), (12, False, {"offset"}),
+    (0, 0, {"limit"}), (51, 0, {"limit"}), ("x", 0, {"limit"}),
+    (20, -1, {"offset"}), (20, OFFSET_MAX + 1, {"offset"}), (20, "0", {"offset"}), (20, False, {"offset"}),
     (0, -1, {"limit", "offset"}),                                                          # 兩個都錯時一次指出
 ])
-def test_an_invalid_catalog_page_is_a_validation_error_that_names_the_fields(member_session, limit, offset, fields):
+def test_an_invalid_session_page_is_a_validation_error_that_names_the_fields(member_session, limit, offset, fields):
     with pytest.raises(ValidationError) as caught:
-        service_for(member_session).catalog(player(member_session), limit=limit, offset=offset)
+        service_for(member_session).my_sessions(player(member_session), limit=limit, offset=offset)
     assert set(caught.value.fields) == fields
-
-
-@pytest.mark.parametrize("limit", [0, 51, "x"])
-def test_an_invalid_session_page_is_a_validation_error_too(member_session, limit):
-    with pytest.raises(ValidationError) as caught:
-        service_for(member_session).my_sessions(player(member_session), limit=limit)
-    assert set(caught.value.fields) == {"limit"}
 
 
 def test_the_boundary_values_are_accepted(member_session):
     service, reader = service_for(member_session), player(member_session)
-    assert service.catalog(reader, limit=1, offset=0)["has_more"] is False and service.catalog(reader, limit=CATALOG_MAX_LIMIT, offset=OFFSET_MAX)["scripts"] == []
+    assert service.catalog(reader, limit=1)["has_more"] is False and service.catalog(reader, limit=CATALOG_MAX_LIMIT)["scripts"] == []
     assert service.my_sessions(reader, limit=1)["sessions"] == [] and service.my_sessions(reader, limit=SESSIONS_MAX_LIMIT, offset=OFFSET_MAX)["sessions"] == []
 
 
@@ -233,7 +256,7 @@ def test_a_card_has_exactly_the_whitelisted_keys_and_only_plain_public_values(me
     version = publish(member_session, author, title="青雲問道", tags=["仙俠", "成長"], audience="female")
     page = service_for(member_session).catalog(player(member_session, 2))
     card = page["scripts"][0]
-    assert set(card) == set(CARD_FIELDS) and set(page) == {"scripts", "has_more", "content_mode"}
+    assert set(card) == set(CARD_FIELDS) and set(page) == {"scripts", "has_more", "next_cursor", "content_mode"}
     assert card == {
         "id": version.public_id, "title": "青雲問道", "summary": "少年入宗門，一步步走向自己的道。", "world_name": "乾歷朝仙俠世界",
         "tags": ["仙俠", "成長"], "author_name": "甲", "author_code": "aaaaaa", "content_tier": "safe", "audience": "female",
@@ -325,6 +348,244 @@ def test_a_catalog_page_costs_the_same_number_of_queries_for_one_card_and_for_tw
         publish(member_session, player(member_session, 3 + index), title=f"劇本{index}", tags=["甲", "乙", "丙"], now=TODAY_UTC + timedelta(seconds=index + 1))
     assert len(service.catalog(reader, limit=CATALOG_MAX_LIMIT)["scripts"]) == 12
     assert one == statements_for_a_page() == 2
+
+
+# ---- 公開目錄：搜尋、篩選、游標、常用標籤與詳情（rpg-script-catalog 規格；Service 層，含 SQL Server）-----------------------------------
+
+def cards_of(page) -> list[dict]:
+    return page["scripts"]
+
+
+def test_the_keyword_tag_and_channel_filters_narrow_the_catalog_and_combine(member_session):
+    publish(member_session, title="青雲劍訣", world_name="某世界", tags=["仙俠"], audience="male", now=TODAY_UTC)
+    publish(member_session, title="都市日常", world_name="某世界", tags=["都市", "SciFi"], audience="female", now=TODAY_UTC + timedelta(seconds=1))
+    publish(member_session, title="江湖行", world_name="某世界", tags=["仙俠"], now=TODAY_UTC + timedelta(seconds=2))
+    service, reader = service_for(member_session), player(member_session)
+    assert titles(service.catalog(reader, q="青雲")) == ["青雲劍訣"]
+    assert titles(service.catalog(reader, q="  SCIFI  ")) == ["都市日常"]                    # 正規化：空白與大小寫
+    assert titles(service.catalog(reader, tag="仙俠")) == ["江湖行", "青雲劍訣"]
+    assert titles(service.catalog(reader, audience="all")) == ["江湖行"]
+    assert titles(service.catalog(reader, q="青雲", tag="仙俠", audience="male")) == ["青雲劍訣"]
+    assert titles(service.catalog(reader, q="青雲", audience="female")) == []
+    assert titles(service.catalog(reader, q="", tag="", audience="", cursor="")) == ["江湖行", "都市日常", "青雲劍訣"]
+
+
+@pytest.mark.parametrize("term", ["%", "_", "[a-z]", "\\"])
+def test_a_wildcard_keyword_matches_literally_and_finds_nothing(member_session, term):
+    publish(member_session, title="普通劇本")
+    publish(member_session, title="另一個劇本", now=TODAY_UTC + timedelta(seconds=1))
+    assert cards_of(service_for(member_session).catalog(player(member_session), q=term)) == []
+
+
+@pytest.mark.parametrize("kwargs, fields", [
+    ({"q": "一 二 三 四 五 六"}, {"q"}), ({"q": "字" * 51}, {"q"}), ({"tag": "字" * 13}, {"tag"}), ({"audience": "other"}, {"audience"}),
+    ({"cursor": "garbage"}, {"cursor"}), ({"limit": 0}, {"limit"}), ({"q": 5}, {"q"}),
+    ({"q": "一 二 三 四 五 六", "tag": "字" * 13, "audience": "x", "limit": 25, "cursor": "!"}, {"q", "tag", "audience", "limit", "cursor"}),
+])
+def test_an_invalid_catalog_query_names_every_bad_field_at_once(member_session, kwargs, fields):
+    with pytest.raises(ValidationError) as caught:
+        service_for(member_session).catalog(player(member_session), **kwargs)
+    assert set(caught.value.fields) == fields
+
+
+def test_the_catalog_does_not_accept_an_offset_any_more(member_session):
+    with pytest.raises(TypeError):
+        service_for(member_session).catalog(player(member_session), offset=2)
+
+
+@pytest.mark.parametrize("preference", ["male", "female", "all"])
+@pytest.mark.parametrize("size", [1, 2, 4])
+def test_chained_cursor_pages_equal_one_full_read_and_the_last_page_has_no_cursor(member_session, preference, size):
+    publish_channels(member_session)
+    service, reader = service_for(member_session), player(member_session, story_preference=preference)
+    whole = service.catalog(reader, limit=CATALOG_MAX_LIMIT)
+    assert whole["has_more"] is False and whole["next_cursor"] is None and len(cards_of(whole)) == 6
+    collected, cursor, last = [], None, None
+    for _ in range(10):
+        last = service.catalog(reader, limit=size, cursor=cursor)
+        collected += [card["id"] for card in cards_of(last)]
+        assert (last["next_cursor"] is not None) == last["has_more"]
+        if not last["has_more"]:
+            break
+        cursor = last["next_cursor"]
+    assert collected == [card["id"] for card in cards_of(whole)] and last["next_cursor"] is None
+
+
+def test_a_new_script_published_between_pages_does_not_repeat_and_a_taken_down_one_does_not_disturb(member_session):
+    author = player(member_session, 2)
+    for index in range(4):
+        publish(member_session, author, title=f"第{index}個", now=TODAY_UTC + timedelta(seconds=index))
+    service, reader = service_for(member_session), player(member_session)
+    first = service.catalog(reader, limit=2)
+    assert titles(first) == ["第3個", "第2個"] and first["has_more"] is True
+    publish(member_session, author, title="新上架", now=TODAY_UTC + timedelta(seconds=99))
+    second = service.catalog(reader, limit=2, cursor=first["next_cursor"])
+    assert titles(second) == ["第1個", "第0個"] and second["has_more"] is False
+
+
+def test_a_cursor_from_one_preference_still_works_after_the_preference_changed(member_session):
+    """玩家在翻頁之間改了偏好：不會 500，也不會因為游標帶著舊的偏好層而得到空頁（不分層時只看發佈時間與編號）。"""
+    publish_channels(member_session)
+    service = service_for(member_session)
+    first = service.catalog(player(member_session, 1, story_preference="female"), limit=2)
+    assert titles(first) == ["f2", "f1"] and first["has_more"] is True
+    page = service.catalog(player(member_session, 2, story_preference="all"), limit=24, cursor=first["next_cursor"])
+    assert titles(page) == ["a1", "m1"]                                                # 比 f1 更早發佈的
+
+
+def test_the_catalog_page_still_holds_the_content_mode_and_only_card_fields(member_session):
+    publish(member_session, title="一", tags=["甲"])
+    page = service_for(member_session).catalog(player(member_session), q="一")
+    assert set(page) == {"scripts", "has_more", "next_cursor", "content_mode"} and set(page["content_mode"]) == {"effective", "forced"}
+    assert set(page["scripts"][0]) == set(CARD_FIELDS)
+
+
+def test_a_filtered_catalog_page_costs_two_queries_whatever_the_size(member_session):
+    service, reader = service_for(member_session), player(member_session)
+
+    def statements_for_a_page() -> int:
+        member_session.expire_all()
+        with count_statements(member_session) as statements:
+            page = service.catalog(reader, q="劇本", tag="甲", audience="all", limit=CATALOG_MAX_LIMIT)
+        assert page["scripts"]
+        return len(statements)
+
+    publish(member_session, player(member_session, 2), title="劇本零", tags=["甲", "乙"])
+    one = statements_for_a_page()
+    for index in range(11):
+        publish(member_session, player(member_session, 3 + index), title=f"劇本{index}", tags=["甲", "乙", "丙"], now=TODAY_UTC + timedelta(seconds=index + 1))
+    assert len(service.catalog(reader, limit=CATALOG_MAX_LIMIT, q="劇本")["scripts"]) == 12
+    assert one == statements_for_a_page() == 2
+
+
+# ---- 常用標籤 -------------------------------------------------------------------------------------
+
+def test_the_popular_tags_count_published_versions_only_and_merge_case(member_session):
+    author = player(member_session, 2)
+    publish(member_session, author, title="一", tags=["仙俠", "SciFi"], now=TODAY_UTC)
+    publish(member_session, author, title="二", tags=["仙俠", "scifi"], now=TODAY_UTC + timedelta(seconds=1))
+    publish(member_session, title="三", tags=["都市"], now=TODAY_UTC + timedelta(seconds=2))
+    repo = ScriptRepository(member_session)
+    result = validated(title="草稿", tags=["仙俠", "草稿標籤"])
+    repo.create_script(author.id, author_name="甲", author_code="aaaaaa", content=result.content, content_hash=result.content_hash, total_chars=result.total_chars)
+    member_session.commit()
+    assert service_for(member_session).catalog_tags() == {"tags": [
+        {"tag": "scifi", "count": 2}, {"tag": "仙俠", "count": 2}, {"tag": "都市", "count": 1},         # 同數量時依標籤排序（字碼順序）
+    ]}
+
+
+def test_there_are_no_popular_tags_when_nothing_is_published(member_session):
+    assert service_for(member_session).catalog_tags() == {"tags": []}
+
+
+def test_the_popular_tags_are_capped_at_thirty(member_session):
+    for index in range(20):
+        publish(member_session, title=f"劇本{index}", tags=[f"標{2 * index:02d}", f"標{2 * index + 1:02d}"], now=TODAY_UTC + timedelta(seconds=index))
+    assert len(service_for(member_session).catalog_tags()["tags"]) == 30
+
+
+# ---- 詳情 ----------------------------------------------------------------------------------------
+
+def hidden_script(**changes):
+    """含有「詳情不得公開」的各種內容的劇本：隱藏特質、個性、里程碑、結局說明、規則與開場。"""
+    base = dict(
+        title="青雲問道", tags=["仙俠"], rules="規則的獨特字串", opening="開場白的獨特字串", ending_mode="custom", ending_text="結局說明的獨特字串", ending_age=80,
+        characters=[
+            {"name": "林曉", "personality": "活潑好動", "age": 16, "appearance": "身形瘦小", "occupation": "學徒"},
+            {"name": "蘇長風", "personality": "沉穩寡言", "age": 168, "appearance": "鬢髮微白", "occupation": "長老", "hidden_trait": "暗中守護青雲宗"},
+        ],
+    )
+    base.update(changes)
+    return base
+
+
+def test_the_detail_has_exactly_the_whitelisted_keys_and_the_public_values(member_session):
+    version = publish(member_session, player(member_session, 2), **hidden_script())
+    detail = service_for(member_session).script_detail(player(member_session), version.public_id)
+    assert set(detail) == set(DETAIL_FIELDS)
+    assert (detail["id"], detail["title"], detail["tags"], detail["version_no"]) == (version.public_id, "青雲問道", ["仙俠"], 1)
+    assert detail["background"].startswith("靈氣復甦") and detail["locations"] == ["古劍山莊", "青雲宗山門"] and detail["has_custom_ending"] is True
+    assert detail["characters"] == [{"name": "林曉", "occupation": "學徒"}, {"name": "蘇長風", "occupation": "長老"}]
+    assert detail["published_at"].endswith("Z") and detail["audience"] == "all" and detail["content_tier"] == "safe"
+    assert detail["author_code"] == "aaaaaa" and detail["content_mode"] == {"effective": "safe", "forced": False}
+
+
+def test_the_detail_never_carries_the_hidden_parts_of_a_script(member_session):
+    version = publish(member_session, player(member_session, 2), **hidden_script())
+    text = json.dumps(service_for(member_session).script_detail(player(member_session), version.public_id), ensure_ascii=False)
+    for forbidden in ("暗中守護青雲宗", "沉穩寡言", "鬢髮微白", "宗門大測", "結局說明的獨特字串", "規則的獨特字串", "開場白的獨特字串", "活潑好動",
+                      "hidden_trait", "personality", "milestones", "opening", "ending_text", "rules", "content_hash", "review", "creator", "user_id", "seed_key"):
+        assert forbidden not in text, forbidden
+
+
+def test_a_script_without_a_custom_ending_says_so(member_session):
+    version = publish(member_session, title="無結局")
+    assert service_for(member_session).script_detail(player(member_session), version.public_id)["has_custom_ending"] is False
+
+
+def test_the_builtin_script_detail_is_signed_as_official_and_a_legacy_channel_reads_as_everyone(member_session):
+    version = publish(member_session, title="內建")
+    version.audience = None
+    member_session.commit()
+    detail = service_for(member_session).script_detail(player(member_session), version.public_id)
+    assert (detail["author_name"], detail["author_code"], detail["audience"]) == (OFFICIAL_AUTHOR_NAME, None, "all")
+
+
+def test_the_detail_follows_the_players_effective_mode_and_the_emergency_brake(member_session):
+    version = publish(member_session, title="一")
+    agreed = {"content_tier_preference": "adult", **AGREED}
+    assert service_for(member_session).script_detail(player(member_session, **agreed), version.public_id)["content_mode"] == {"effective": "adult", "forced": False}
+    assert service_for(member_session, safe_mode_forced=True).script_detail(player(member_session, 2, **agreed), version.public_id)["content_mode"] == {"effective": "safe", "forced": True}
+
+
+@pytest.mark.parametrize("status", [VERSION_DRAFT, VERSION_PENDING, VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED])
+def test_a_script_that_is_not_published_is_not_found_even_for_its_author(member_session, status):
+    author = player(member_session, 2)
+    version = put_in_status(ScriptRepository(member_session), member_session.get(User, author.id), status, title="非上架")
+    member_session.commit()
+    service = service_for(member_session)
+    for reader in (author, player(member_session, 3)):
+        with pytest.raises(NotFound):
+            service.script_detail(reader, version.public_id)
+
+
+@pytest.mark.parametrize("bad", [GHOST, "not-a-uuid", "", None, 123, ["x"], "a" * 400])
+def test_a_missing_or_malformed_id_is_not_found(member_session, bad):
+    with pytest.raises(NotFound):
+        service_for(member_session).script_detail(player(member_session), bad)
+
+
+def test_the_detail_does_not_need_the_age_gate(member_session):
+    version = publish(member_session, title="一")
+    admin = player(member_session, 2, age=None, role=ROLE_ADMIN)
+    assert service_for(member_session).script_detail(admin, version.public_id)["title"] == "一"
+
+
+def test_a_taken_down_script_loses_its_detail_and_regains_it_when_restored(member_session):
+    author = player(member_session, 2)
+    version = publish(member_session, author, title="可下架")
+    repo, service = ScriptRepository(member_session), service_for(member_session)
+    reader = player(member_session, 3)
+    repo.remove_own(author.id, version.public_id, TODAY_UTC + timedelta(hours=1))
+    member_session.commit()
+    with pytest.raises(NotFound):
+        service.script_detail(reader, version.public_id)
+    repo.restore_own(author.id, version.public_id)
+    member_session.commit()
+    assert service.script_detail(reader, version.public_id)["title"] == "可下架"
+
+
+def test_a_detail_costs_the_same_number_of_queries_whatever_the_size_of_the_script(member_session):
+    service, reader = service_for(member_session), player(member_session)
+    small = publish(member_session, title="小", tags=["甲"], characters=[{"name": "甲", "personality": "x", "age": 1, "appearance": "y"}])
+    big = publish(member_session, now=TODAY_UTC + timedelta(seconds=1), **hidden_script(title="大", tags=["甲", "乙", "丙", "丁", "戊"]))
+    counts = []
+    for public_id in (small.public_id, big.public_id):                           # 先取出識別碼：過期的物件在迴圈裡讀屬性會多出一次重新載入
+        member_session.expire_all()
+        with count_statements(member_session) as statements:
+            service.script_detail(reader, public_id)
+        counts.append(len(statements))
+    assert counts[0] == counts[1] == 2
 
 
 # ---- 我的存檔清單 ---------------------------------------------------------------------------------

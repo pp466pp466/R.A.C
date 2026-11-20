@@ -779,48 +779,36 @@ def card_catalog(repo, member_session):
 
 
 @pytest.mark.parametrize("preference", PREFERENCES)
-def test_the_card_listing_has_exactly_the_set_and_order_of_the_plain_listing(repo, member_session, preference):
+def test_the_catalog_listing_has_exactly_the_set_and_order_of_the_plain_listing(repo, member_session, preference):
     card_catalog(repo, member_session)
     plain = repo.list_published(preference=preference)
-    cards = repo.list_published_cards(preference=preference)
-    assert plain and [version.id for version, _ in cards] == [version.id for version in plain]
-    assert all(script.id == version.script_id for version, script in cards)
+    cards = repo.list_catalog(preference=preference, limit=24)
+    assert plain and [version.id for version, _, _ in cards] == [version.id for version in plain]
+    assert all(script.id == version.script_id for version, script, _ in cards)
 
 
-def test_the_card_listing_holds_every_declared_mode_in_newest_first_order(repo, member_session):
+def test_the_catalog_listing_holds_every_declared_mode_in_newest_first_order(repo, member_session):
     made = card_catalog(repo, member_session)
     by_id = {version.id: label for label, version in made.items()}
 
     def shown(**options):
-        return [by_id[version.id] for version, _ in repo.list_published_cards(**options)]
+        return [by_id[version.id] for version, _, _ in repo.list_catalog(**{"limit": 24, **options})]
 
     assert shown() == ["a-m", "a-a", "t-n", "t-f", "t-m", "s-f", "s-a", "s-m"]            # 綁定、未綁定與舊值 standard 全部都在
-    assert shown(limit=2, offset=1) == ["a-a", "t-n"]
+    assert shown(limit=2) == ["a-m", "a-a"]
 
 
-def test_the_card_listing_puts_the_preferred_channel_first_and_never_changes_the_set(repo, member_session):
+def test_the_catalog_listing_puts_the_preferred_channel_first_and_never_changes_the_set(repo, member_session):
     made = card_catalog(repo, member_session)
     by_id = {version.id: label for label, version in made.items()}
 
     def shown(preference):
-        return [by_id[version.id] for version, _ in repo.list_published_cards(preference=preference)]
+        return [by_id[version.id] for version, _, _ in repo.list_catalog(preference=preference, limit=24)]
 
     assert shown("male") == ["a-m", "t-m", "s-m", "a-a", "t-n", "s-a", "t-f", "s-f"]
     assert shown("female") == ["t-f", "s-f", "a-a", "t-n", "s-a", "a-m", "t-m", "s-m"]
     assert shown("all") == shown(None) == ["a-m", "a-a", "t-n", "t-f", "t-m", "s-f", "s-a", "s-m"]
     assert {frozenset(shown(preference)) for preference in PREFERENCES} == {frozenset(by_id.values())}
-
-
-@pytest.mark.parametrize("preference", PREFERENCES)
-def test_chained_card_pages_equal_one_full_card_listing(repo, member_session, preference):
-    card_catalog(repo, member_session)
-    whole = [version.id for version, _ in repo.list_published_cards(preference=preference)]
-    paged = [
-        version.id
-        for offset in (0, 3, 6)
-        for version, _ in repo.list_published_cards(limit=3, offset=offset, preference=preference)
-    ]
-    assert paged == whole and len(whole) == 8
 
 
 def test_only_published_versions_appear_among_the_cards(repo, member_session):
@@ -831,10 +819,10 @@ def test_only_published_versions_appear_among_the_cards(repo, member_session):
     live = put_in_status(repo, member_session, alice, VERSION_PUBLISHED)
     superseded = put_in_status(repo, member_session, alice, VERSION_SUPERSEDED)       # 它的第 2 版是上架的
     member_session.commit()
-    cards = repo.list_published_cards()
-    shown = {version.id for version, _ in cards}
+    cards = repo.list_catalog(limit=24)
+    shown = {version.id for version, _, _ in cards}
     assert live.id in shown and not shown & {draft.id, pending.id, rejected.id, superseded.id}
-    assert len(cards) == 2 and all(version.status == VERSION_PUBLISHED for version, _ in cards)
+    assert len(cards) == 2 and all(version.status == VERSION_PUBLISHED for version, _, _ in cards)
 
 
 def test_a_card_carries_its_script_with_the_pen_name_and_code_and_a_builtin_has_no_code(repo, member_session):
@@ -843,7 +831,7 @@ def test_a_card_carries_its_script_with_the_pen_name_and_code_and_a_builtin_has_
     seed = validated(title="內建劇本")
     builtin, _ = repo.publish_builtin("card-seed", content=seed.content, content_hash=seed.content_hash, total_chars=seed.total_chars, now=NOW + timedelta(seconds=1))
     member_session.commit()
-    by_title = {version.title: script for version, script in repo.list_published_cards()}
+    by_title = {version.title: script for version, script, _ in repo.list_catalog()}
     assert (by_title["玩家劇本"].author_name, by_title["玩家劇本"].author_code) == (f"筆名{alice.id}", "a1b2c3")
     assert (by_title["內建劇本"].author_name, by_title["內建劇本"].author_code) == (OFFICIAL_AUTHOR_NAME, None)
     assert mine.id != builtin.id
@@ -884,9 +872,9 @@ def test_the_cost_of_a_card_page_is_two_queries_whether_it_holds_one_card_or_twe
     def page_statements() -> int:
         member_session.expire_all()
         with count_statements(member_session) as statements:
-            rows = repo.list_published_cards(limit=24)
-            tags = repo.tags_of_versions([version.id for version, _ in rows])
-            for version, script in rows:                                  # 卡片需要的欄位全部讀一遍：沒有任何延遲載入的查詢
+            rows = repo.list_catalog(limit=24)
+            tags = repo.tags_of_versions([version.id for version, _, _ in rows])
+            for version, script, _ in rows:                                  # 卡片需要的欄位全部讀一遍：沒有任何延遲載入的查詢
                 _ = (version.public_id, version.title, version.summary, version.world_name, version.content_tier, version.audience,
                      script.author_name, script.author_code, tags[version.id])
         return len(statements)
@@ -897,5 +885,5 @@ def test_the_cost_of_a_card_page_is_two_queries_whether_it_holds_one_card_or_twe
     for index in range(11):
         publish(repo, alice, new_script(repo, alice, title=f"另外{index}", tags=["甲", "乙", "丙"]), now=NOW + timedelta(seconds=index + 1))
     member_session.commit()
-    assert len(repo.list_published_cards(limit=24)) == 12
+    assert len(repo.list_catalog(limit=24)) == 12
     assert one == page_statements() == 2
