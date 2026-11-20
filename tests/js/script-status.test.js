@@ -152,3 +152,71 @@ test('an error code that is not about take-down gets no special message, so the 
     assert.equal(Status.actionErrorText(info), '', JSON.stringify(info));
   }
 });
+
+// ---- 重新來過：被退回（或已上架、已下架）之後的「建立新草稿」按鈕（使用者驗收時回報，2026-11-20）-------------------------------
+
+function script(versions) { return { id: 'script-1', versions }; }
+function ver(no, status) { return { id: 'v' + no, version_no: no, status }; }
+
+test('the start-over button belongs to the latest version only, once it left draft and review, and only while the script has nothing open', () => {
+  const rejected = script([ver(1, 'rejected')]);
+  assert.equal(Status.canStartOver(rejected, rejected.versions[0]), true);                         // 被退回的最新版本：最常見的情況
+  const live = script([ver(1, 'published')]);
+  assert.equal(Status.canStartOver(live, live.versions[0]), true);                                   // 已上架：要修改也是同一條路
+  const taken = script([ver(1, 'removed')]);
+  assert.equal(Status.canStartOver(taken, taken.versions[0]), true);
+  for (const status of ['draft', 'pending_review']) {                                              // 草稿直接編輯、待審先撤回
+    const open = script([ver(1, status)]);
+    assert.equal(Status.canStartOver(open, open.versions[0]), false, status);
+  }
+});
+
+test('an older version never gets the start-over button, and neither does any version while another one is open', () => {
+  const history = script([ver(1, 'rejected'), ver(2, 'published')]);
+  assert.equal(Status.canStartOver(history, history.versions[0]), false);                          // 按下去是由「最新版本」建立，放在舊版本上會誤導
+  assert.equal(Status.canStartOver(history, history.versions[1]), true);
+  const busy = script([ver(1, 'published'), ver(2, 'draft')]);                                     // 已經有進行中的草稿：後端只允許一個
+  assert.equal(Status.canStartOver(busy, busy.versions[0]), false);
+  const waiting = script([ver(1, 'rejected'), ver(2, 'pending_review')]);
+  assert.equal(Status.canStartOver(waiting, waiting.versions[0]), false);
+  assert.equal(Status.canStartOver(waiting, waiting.versions[1]), false);
+  const unordered = script([ver(2, 'rejected'), ver(1, 'superseded')]);                           // 順序不影響「最新」的判斷
+  assert.equal(Status.canStartOver(unordered, unordered.versions[0]), true);
+  assert.equal(Status.canStartOver(unordered, unordered.versions[1]), false);
+});
+
+test('missing or malformed data never shows the button and never throws', () => {
+  const ok = script([ver(1, 'rejected')]);
+  for (const bad of [null, undefined, {}, { versions: [] }, { versions: 'x' }, 5, []]) {
+    assert.equal(Status.canStartOver(bad, ok.versions[0]), false, JSON.stringify(bad));
+  }
+  for (const bad of [null, undefined, {}, { id: 'v1' }, { id: 'v1', status: '' }, 5]) {
+    assert.equal(Status.canStartOver(ok, bad), false, JSON.stringify(bad));
+  }
+  assert.equal(Status.latestVersion(null), null);
+  assert.equal(Status.latestVersion({ versions: [] }), null);
+  assert.equal(Status.hasOpenVersion(null), false);
+});
+
+test('the button says what the player wants to do: resubmit after a rejection, or submit a new version otherwise, and always that it makes a new draft', () => {
+  assert.equal(Status.startOverText(ver(1, 'rejected')), '修改後重新送審（建立新草稿）');
+  for (const status of ['published', 'removed', 'superseded', 'draft', undefined]) {
+    assert.equal(Status.startOverText(ver(1, status)), '修改並送審新版本（建立新草稿）', String(status));
+  }
+  assert.equal(Status.startOverText(null), '修改並送審新版本（建立新草稿）');                    // 不丟錯
+});
+
+test('latestVersion picks the highest version number whatever the order, and hasOpenVersion sees drafts and pending reviews', () => {
+  assert.equal(Status.latestVersion(script([ver(1, 'published'), ver(3, 'rejected'), ver(2, 'superseded')])).id, 'v3');
+  assert.equal(Status.hasOpenVersion(script([ver(1, 'published')])), false);
+  assert.equal(Status.hasOpenVersion(script([ver(1, 'published'), ver(2, 'draft')])), true);
+  assert.equal(Status.hasOpenVersion(script([ver(1, 'rejected'), ver(2, 'pending_review')])), true);
+});
+
+test('the open-version guard stands on its own, even for a version order the backend would never produce', () => {
+  // 後端同一個劇本同時只有一個進行中的版本，而且它一定是最新的；這裡刻意放一個「較舊的草稿、較新的已上架」，
+  // 只有「劇本沒有進行中的版本」這道檢查能擋下來（其餘的條件都滿足）。
+  const odd = script([ver(2, 'published'), ver(1, 'draft')]);
+  assert.equal(Status.latestVersion(odd).id, 'v2');
+  assert.equal(Status.canStartOver(odd, odd.versions[0]), false);
+});

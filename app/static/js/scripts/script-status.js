@@ -6,6 +6,9 @@
  * - `canTakedown(version)`、`canRestore(version)`：只決定要不要顯示按鈕；後端仍會逐項驗證。管理員下架的版本沒有「恢復上架」。
  * - `showsSupportLink(version)`：管理員下架的版本旁顯示「前往客服」連結（導向客服的意見回饋；申訴頁一般作者進不去）。
  * - `actionErrorText(info)`：下架與恢復的 409／403 錯誤代碼的繁體中文說明；不認得的代碼回空字串，由呼叫端用伺服器的訊息。
+ * - `latestVersion(script)`、`hasOpenVersion(script)`、`canStartOver(script, version)`、`startOverText(version)`：「重新來過」的按鈕——
+ *   被退回、已上架或被下架的版本內容凍結，要修改只能由最新版本建立新草稿；按鈕只出現在最新版本上、且劇本沒有進行中的版本（使用者驗收時回報：
+ *   被退回後在「檢視」畫面找不到出路，2026-11-20）。
  *
  * 資料來源只有版本摘要的 `status`、`decision_category`、`decided_at`、`removed_by`；**審核備註不會出現在任何一個欄位**（只有管理員看得到，
  * 後端的鍵集合測試固定了這件事），所以這裡也沒有備註可以顯示。所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。
@@ -92,6 +95,34 @@
     return notice || '這個版本已經離開草稿，內容不可修改；要修改請回到列表建立新草稿。';
   }
 
+  /* 重新來過：版本被退回（或已上架、被下架）之後內容是凍結的，作者要修改只能由「最新版本」建立新草稿（後端同一個劇本同時只允許
+     一個進行中的版本：草稿或待審）。這幾個純函式決定要不要顯示按鈕與寫什麼字；後端仍會逐項驗證。 */
+  function latestVersion(script) {
+    var versions = plain(script).versions;
+    if (!Array.isArray(versions) || !versions.length) { return null; }
+    return versions.reduce(function (best, item) { return plain(item).version_no > plain(best).version_no ? item : best; });
+  }
+
+  function hasOpenVersion(script) {
+    var versions = plain(script).versions;
+    return Array.isArray(versions) && versions.some(function (item) { var s = plain(item).status; return s === 'draft' || s === 'pending_review'; });
+  }
+
+  /* 按鈕只出現在劇本的「最新版本」上（按下去是由最新版本建立新草稿，放在較舊的版本上會讓人以為是用那個版本的內容），
+     而且該版本已離開草稿與待審（草稿直接編輯、待審先撤回），劇本也沒有進行中的版本。 */
+  function canStartOver(script, version) {
+    var v = plain(version);
+    var latest = latestVersion(script);
+    if (!latest || latest.id !== v.id || !v.id) { return false; }
+    if (v.status === 'draft' || v.status === 'pending_review' || !v.status) { return false; }
+    return !hasOpenVersion(script);
+  }
+
+  /* 被退回的用「修改後重新送審」（玩家想做的事），其餘（已上架、已下架）用「修改並送審新版本」；括號說明按下去會發生什麼。 */
+  function startOverText(version) {
+    return plain(version).status === 'rejected' ? '修改後重新送審（建立新草稿）' : '修改並送審新版本（建立新草稿）';
+  }
+
   function canTakedown(version) { return plain(version).status === 'published'; }
   function canRestore(version) { var v = plain(version); return v.status === 'removed' && v.removed_by === 'author'; }
   /* 管理員下架的版本旁才放「前往客服」連結（說明文字裡已有同樣的引導；連結只是讓人不必自己找路徑）。 */
@@ -112,6 +143,7 @@
   return {
     REMOVER_LABELS: REMOVER_LABELS, ACTION_ERRORS: ACTION_ERRORS,
     timeText: timeText, statusText: statusText, versionNotice: versionNotice, readOnlyNotice: readOnlyNotice,
-    canTakedown: canTakedown, canRestore: canRestore, showsSupportLink: showsSupportLink, actionErrorText: actionErrorText
+    canTakedown: canTakedown, canRestore: canRestore, showsSupportLink: showsSupportLink, actionErrorText: actionErrorText,
+    latestVersion: latestVersion, hasOpenVersion: hasOpenVersion, canStartOver: canStartOver, startOverText: startOverText
   };
 });

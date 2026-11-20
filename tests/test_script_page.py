@@ -315,6 +315,44 @@ def test_the_detail_view_has_the_same_two_buttons_and_the_banner_comes_from_the_
     assert "離開草稿，內容不可修改" not in html                                                   # 舊的二分法橫幅文案已移到純函式
 
 
+def test_the_detail_view_of_a_frozen_version_offers_the_start_over_button():
+    """被退回（或已上架、已下架）的版本內容凍結；使用者驗收時回報在「檢視」畫面找不到出路（只有一行字叫人回列表），所以檢視畫面本身要有按鈕。"""
+    html = read(TEMPLATE)
+    block = re.search(r'<div v-if="canStartOverHere" class="sw-startover">(.*?)</div>', html, re.S)
+    assert block, "檢視畫面沒有重新來過的區塊"
+    button = re.search(r"<button [^>]*>[^<]*\{\{ startOverText\(editor\.version\) \}\}</button>", block.group(1))
+    assert button and 'class="ui-btn ui-btn--primary sw-btn-touch"' in button.group(0)
+    assert '@click="newVersion(editor.version.script.id)"' in button.group(0)
+    assert ':disabled="busy || locked"' in button.group(0)                                       # 處理中與帳號鎖定時不能按；被暫停發佈的作者仍可修改
+    assert html.index('class="sw-banner"') < html.index('class="sw-startover"')                  # 說明在前、按鈕緊接其後
+
+
+def test_the_list_buttons_are_prominent_and_say_what_the_player_wants_to_do():
+    row, html = version_row(), read(TEMPLATE)
+    open_button = re.search(r'<button type="button" class="([^"]*)" :disabled="busy" @click="openVersion\(version\.id\)">', row)
+    assert open_button and "ui-btn--primary" in open_button.group(1) and "sw-btn-touch" in open_button.group(1)
+    start_over = re.search(r'<button v-if="!hasOpenVersion\(script\)" type="button"\s+class="([^"]*)" :disabled="busy \|\| locked" @click="newVersion\(script\.id\)">'
+                           r"\{\{ startOverText\(latestVersion\(script\)\) \}\}</button>", html)
+    assert start_over and "ui-btn--primary" in start_over.group(1) and "sw-btn-touch" in start_over.group(1)
+    assert "由最新版本建立新草稿</button>" not in html                                            # 舊的技術性文案不再當按鈕文字
+
+
+def test_the_workshop_script_decides_the_start_over_button_through_the_pure_functions():
+    script = strip_js_comments(read(JS_DIR / "script-workshop.js"))
+    assert "Scripts.canStartOver(currentScript.value, editor.version)" in script
+    assert "canStartOverHere: canStartOverHere" in script and "startOverText: Scripts.startOverText" in script and "latestVersion: Scripts.latestVersion" in script
+    assert "function hasOpenVersion(script) { return Scripts.hasOpenVersion(script); }" in script   # 規則只有一份，在 script-status.js
+    assert "item.id === head.id" in script                                                         # 目前檢視的版本所屬的劇本取自列表
+
+
+def test_the_primary_next_step_buttons_have_a_touch_sized_target():
+    """原本列表上的按鈕只有約 25px 高（`.sw-btn-sm`），手機上找不到也不好點；主要的下一步要有約 44px 的觸控範圍。"""
+    css = read(STATIC / "css" / "scripts.css")
+    rule = css.split(".sw-btn-touch {", 1)[1].split("}", 1)[0]
+    assert "min-height: 2.75rem" in rule
+    assert ".sw-startover {" in css
+
+
 def test_the_take_down_and_restore_confirmations_are_vue_controlled_modals():
     html = read(TEMPLATE)
     takedown = re.search(r'<ui-modal v-model="modal\.takedown"[^>]*@confirm="confirmTakedown">(.*?)</ui-modal>', html, re.S)

@@ -315,9 +315,17 @@
       function removeMilestone(index) { editor.draft.milestones.splice(index, 1); }
       function toggle(name) { open[name] = !open[name]; }
       // 劇本已有進行中的版本（草稿或待審）時不能再建立新草稿
-      function hasOpenVersion(script) {
-        return script.versions.some(function (version) { return version.status === 'draft' || version.status === 'pending_review'; });
-      }
+      function hasOpenVersion(script) { return Scripts.hasOpenVersion(script); }
+
+      // 詳細檢視（內容凍結的版本）的「重新來過」按鈕：目前檢視的版本所屬的劇本取自列表；規則在 `script-status.js` 的 `canStartOver`
+      var currentScript = Vue.computed(function () {
+        var head = editor.version && editor.version.script;
+        if (!head) { return null; }
+        return scripts.value.filter(function (item) { return item.id === head.id; })[0] || null;
+      });
+      var canStartOverHere = Vue.computed(function () {
+        return !!editor.version && Scripts.canStartOver(currentScript.value, editor.version);
+      });
 
       // ---- 生命週期 ---------------------------------------------------------------------------------------------
       window.addEventListener('beforeunload', function (event) {
@@ -333,6 +341,7 @@
         errorList: errorList, preview: preview, bound: bound, total: total, scriptsLeft: scriptsLeft, submitsLeft: submitsLeft, penName: penName,
         tierLabels: Scripts.TIER_LABELS, count: Scripts.charCount, err: err,
         statusText: Scripts.statusText, versionNotice: Scripts.versionNotice, readOnlyNotice: Scripts.readOnlyNotice,
+        canStartOverHere: canStartOverHere, startOverText: Scripts.startOverText, latestVersion: Scripts.latestVersion,
         canTakedown: Scripts.canTakedown, canRestore: Scripts.canRestore, showsSupportLink: Scripts.showsSupportLink,
         startNew: startNew, openVersion: openVersion, backToList: backToList, confirmLeave: confirmLeave, reloadFromServer: reloadFromServer,
         askExample: askExample, loadExample: loadExample, save: save, askSubmit: askSubmit, confirmSubmit: confirmSubmit,

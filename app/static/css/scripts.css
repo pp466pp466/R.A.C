@@ -104,6 +104,12 @@
 
 .sw-btn-sm { padding: 0.2rem 0.7rem; font-size: 0.85rem; }
 
+/* 主要的下一步按鈕：手機上觸控範圍至少約 44px（原本的小按鈕只有 25px 高，找不到也不好點） */
+.sw-btn-touch { min-height: 2.75rem; }
+
+.sw-startover { margin: 0.75rem 0 1rem; }
+.sw-startover .sw-hint { margin: 0.5rem 0 0; }
+
 /* ---- 編輯器 ------------------------------------------------------------------ */
 .sw-section { margin-bottom: 1rem; background: var(--color-surface); border: var(--border-hairline); }
 

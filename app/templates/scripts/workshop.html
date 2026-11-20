@@ -46,7 +46,7 @@
             <span v-if="tierLabels[version.content_tier]" class="sw-chip">{{ tierLabels[version.content_tier] }}</span>
             <span class="sw-version__muted">{{ version.total_chars }} 字</span>
             <span class="sw-version__actions">
-              <button type="button" class="ui-btn sw-btn-sm" :disabled="busy" @click="openVersion(version.id)">{{ version.status === 'draft' ? '編輯' : '檢視' }}</button>
+              <button type="button" class="ui-btn ui-btn--primary sw-btn-sm sw-btn-touch" :disabled="busy" @click="openVersion(version.id)">{{ version.status === 'draft' ? '編輯' : '檢視' }}</button>
               <button v-if="version.status === 'draft'" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askRemove(version)">刪除</button>
               <button v-if="version.status === 'pending_review'" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="withdraw(version.id)">撤回</button>
               <button v-if="canTakedown(version)" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askTakedown(version)">下架</button>
@@ -58,7 +58,7 @@
         </ul>
         <p class="sw-script__actions">
           <button v-if="!hasOpenVersion(script)" type="button"
-                  class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="newVersion(script.id)">由最新版本建立新草稿</button>
+                  class="ui-btn ui-btn--primary sw-btn-touch" :disabled="busy || locked" @click="newVersion(script.id)">{{ startOverText(latestVersion(script)) }}</button>
           <button v-if="!script.author_locked" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="refreshAuthorName(script.id)">改用目前的暱稱作為筆名</button>
         </p>
       </li>
@@ -77,6 +77,11 @@
     </div>
 
     <p v-if="readOnly" class="sw-banner" role="status">{{ readOnlyNotice(editor.version) }}<a v-if="showsSupportLink(editor.version)" class="sw-version__link" href="/cs">前往客服</a></p>
+    <!-- 內容凍結的最新版本（被退回、已上架、已下架）：直接在這裡重新來過，不必回列表找按鈕（使用者驗收時回報，2026-11-20） -->
+    <div v-if="canStartOverHere" class="sw-startover">
+      <button type="button" class="ui-btn ui-btn--primary sw-btn-touch" :disabled="busy || locked" @click="newVersion(editor.version.script.id)">{{ startOverText(editor.version) }}</button>
+      <p class="sw-hint">內容會沿用這個版本，建立新草稿後就可以修改，改完再按「送審」。</p>
+    </div>
     <p v-if="editor.general" class="sw-error sw-error--block" role="alert">{{ editor.general }}</p>
     <ul v-if="errorList.length" class="sw-errors" role="alert">
       <li v-for="item in errorList" :key="item.path"><strong>{{ item.label }}</strong>：{{ item.message }}</li>
