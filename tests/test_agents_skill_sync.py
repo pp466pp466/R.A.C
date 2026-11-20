@@ -195,8 +195,13 @@ SYNCED_RULES = [
     (10, "停權、刪除內容、下架與恢復劇本、調整會員等級與調整遊戲幣餘額等高風險操作須重新輸入密碼並寫入稽核；劇本的核可與退回不須重新輸入密碼，但同樣寫入稽核", "references/auth-security.md"),
     # 2026-11-19：劇本審核、下架、公開目錄與檢舉（RC-8）；匿名保留只涵蓋「目前上架」，下架的版本一律刪除
     (7, "劇本審核與下架（RPG）：每個送審公開的劇本由管理員在審核佇列核可或退回，核可才上架", "references/business-encoding.md"),
-    (7, "同一人對同一劇本只能檢舉一次", "references/business-encoding.md"),
-    (7, "檢舉不自動下架，只升高管理員審核佇列的優先度，是否下架由管理員決定", "references/business-encoding.md"),
+    # 2026-11-20：8b 探索——檢舉掛在版本、優先度規則、系統結案、內建劇本以種子鍵辨識（匿名保留的劇本沒有作者關聯）
+    (7, "同一人對同一版本只能檢舉一次（新版本經核可上架後可再檢舉）", "references/business-encoding.md"),
+    (7, "內建劇本不可檢舉", "references/business-encoding.md"),
+    (7, "檢舉不自動下架，只升高管理員審核佇列的優先度（有人勾選涉及未成年的性內容、性暴力或非自願情節、以真人名義的性內容任一項者排最前，其次依未結案的檢舉人數由多到少，再其次依最早的檢舉時間），是否下架由管理員決定", "references/business-encoding.md"),
+    (7, "因被取代者結為系統專用的「被取代」", "references/business-encoding.md"),
+    (7, "每人每日（台灣時間 0 點刷新）的檢舉上限初始值為 5", "references/business-encoding.md"),
+    (7, "內建劇本（種子劇本）以種子鍵辨識，管理員不能下架；不得以作者關聯是否為空來判斷", "references/business-encoding.md"),
     (10, "被檢舉的劇本（全文可讀，連同檢舉的原因與自寫文字；限於使用者主動送審或被檢舉者，每次讀取都寫入稽核紀錄）", "references/auth-security.md"),
     (11, "已下架的版本，不論作者自行下架或管理員下架，都不算上架", "references/privacy-observability.md"),
     (11, "劇本檢舉：檢舉的原因（預設選項）與自寫文字由玩家文字構成，視為個資", "references/privacy-observability.md"),
