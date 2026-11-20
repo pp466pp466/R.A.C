@@ -55,7 +55,7 @@
 - **THEN** 回應 409 與代碼 `not_draft`
 
 ### Requirement: 由既有版本建立新草稿
-`POST /api/scripts/<id>/versions` SHALL 以劇本最新一個非草稿版本（已發佈、被退回或被取代）的內容建立下一個草稿版本，並沿用里程碑的 `id`。劇本已有進行中的版本（草稿或待審）SHALL 得到 409 與代碼 `open_version_exists`。已發佈的版本 SHALL 保持不變。
+`POST /api/scripts/<id>/versions` SHALL 以劇本最新一個非草稿版本（已發佈、被退回、被取代或已下架）的內容建立下一個草稿版本，並沿用里程碑的 `id`。劇本已有進行中的版本（草稿或待審）SHALL 得到 409 與代碼 `open_version_exists`。已發佈的版本 SHALL 保持不變。
 
 #### Scenario: 由被退回的版本修改
 - **WHEN** 作者對最新版被退回的劇本建立新草稿
@@ -64,6 +64,10 @@
 #### Scenario: 已有進行中的版本
 - **WHEN** 劇本已有一個草稿時再建立新草稿
 - **THEN** 回應 409 與代碼 `open_version_exists`
+
+#### Scenario: 由已下架的版本修改
+- **WHEN** 作者對最新版已被下架的劇本建立新草稿
+- **THEN** 新草稿的內容等於被下架版本，版本編號加 1，被下架的版本不變
 
 ### Requirement: 只有草稿可以刪除，待審可以撤回
 `DELETE /api/scripts/versions/<id>` SHALL 只刪除自己的草稿版本（那是劇本唯一的版本時連劇本一起刪除），非草稿 SHALL 得到 409。`POST /api/scripts/versions/<id>/withdraw` SHALL 把自己的 `pending_review` 版本退回 `draft`。已被別人的存檔參照的版本被刪除時，存檔 SHALL 保留。
