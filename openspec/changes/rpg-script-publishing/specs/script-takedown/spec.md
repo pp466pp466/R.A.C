@@ -97,7 +97,7 @@
 - **THEN** 下架的舊版為 `superseded`
 
 ### Requirement: 作者看得到審核結果與下架狀態
-`GET /api/scripts` 與版本詳情的每個版本摘要 SHALL 含 `decision_category`（被退回或被管理員下架時為固定類別列舉，否則為空）、`decided_at` 與 `removed_by`（`author`、`admin` 或空），SHALL NOT 含審核備註。`/scripts` SHALL 以繁體中文顯示：「已退回」附類別說明與時間、「已下架」附下架者（管理員下架時含類別說明與「如有疑問請至申訴頁或修改後重新送審」之類的引導）；`published` 版本有「下架」按鈕、作者自行下架的版本有「恢復上架」按鈕，兩者以自製 Modal 確認；管理員下架的版本不顯示恢復按鈕。不寄信。
+`GET /api/scripts` 與版本詳情的每個版本摘要 SHALL 含 `decision_category`（被退回或被管理員下架時為固定類別列舉，否則為空）、`decided_at` 與 `removed_by`（`author`、`admin` 或空），SHALL NOT 含審核備註。`/scripts` SHALL 以繁體中文顯示：「已退回」附類別說明與時間、「已下架」附下架者（管理員下架時含類別說明與「如有疑問，可到客服（/cs）以意見回饋留下紀錄，或修改後重新送審」之類的引導，**不導向申訴頁**（申訴頁只開放被鎖定或被暫停發佈的帳號））；`published` 版本有「下架」按鈕、作者自行下架的版本有「恢復上架」按鈕，兩者以自製 Modal 確認；管理員下架的版本不顯示恢復按鈕。不寄信。
 
 #### Scenario: 被退回的顯示
 - **WHEN** 作者的版本被人工以 `other_policy` 退回

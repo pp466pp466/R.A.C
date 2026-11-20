@@ -175,6 +175,8 @@ def test_an_admin_takedown_cannot_be_restored_by_the_author_and_stays_removed(me
     with pytest.raises(RemovalLocked) as caught:
         service.restore(current(alice), version.public_id)
     assert caught.value.code == "removal_locked"
+    # 申訴頁只開放被鎖定或被暫停發佈的帳號，一般作者進不去；預設訊息導向客服的意見回饋，不提申訴頁
+    assert "客服" in caught.value.message and "意見回饋" in caught.value.message and "申訴" not in caught.value.message
     after = row(member_session, version)
     assert (after.status, after.removed_by, after.decision_category, after.decision_note, after.decided_at) == snapshot
 

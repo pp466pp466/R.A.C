@@ -4,6 +4,7 @@
  * - `versionNotice(version)`：版本列下方的說明——被退回附類別與時間；下架附下架者，管理員下架時附類別與「無法自行恢復」的引導。
  * - `readOnlyNotice(version)`：詳細檢視（內容唯讀）的橫幅文案。
  * - `canTakedown(version)`、`canRestore(version)`：只決定要不要顯示按鈕；後端仍會逐項驗證。管理員下架的版本沒有「恢復上架」。
+ * - `showsSupportLink(version)`：管理員下架的版本旁顯示「前往客服」連結（導向客服的意見回饋；申訴頁一般作者進不去）。
  * - `actionErrorText(info)`：下架與恢復的 409／403 錯誤代碼的繁體中文說明；不認得的代碼回空字串，由呼叫端用伺服器的訊息。
  *
  * 資料來源只有版本摘要的 `status`、`decision_category`、`decided_at`、`removed_by`；**審核備註不會出現在任何一個欄位**（只有管理員看得到，
@@ -62,7 +63,9 @@
     return has(Labels.STATUS_LABELS, v.status) ? Labels.STATUS_LABELS[v.status] : String(v.status || '');
   }
 
-  var REUSE_HINT = '如有疑問，可以由最新版本建立新草稿，修改內容後重新送審。';
+  /* 管理員下架的引導：申訴頁只開放給被鎖定或被暫停發佈的帳號（AGENTS.md 第 10 節），一般作者進不去，所以導向客服的意見回饋
+     （使用者 2026-11-20 決定）：客服會引導留下紀錄，管理員在後台看得到；不承諾處理結果。 */
+  var REUSE_HINT = '如有疑問，可以到客服（/cs）以意見回饋留下紀錄，管理員會在後台看到；也可以由最新版本建立新草稿，修改內容後重新送審。';
 
   function versionNotice(version) {
     var v = plain(version);
@@ -91,6 +94,8 @@
 
   function canTakedown(version) { return plain(version).status === 'published'; }
   function canRestore(version) { var v = plain(version); return v.status === 'removed' && v.removed_by === 'author'; }
+  /* 管理員下架的版本旁才放「前往客服」連結（說明文字裡已有同樣的引導；連結只是讓人不必自己找路徑）。 */
+  function showsSupportLink(version) { var v = plain(version); return v.status === 'removed' && v.removed_by === 'admin'; }
 
   var ACTION_ERRORS = {
     not_published: '這個版本已經不是上架中，無法下架。列表已重新載入。',
@@ -107,6 +112,6 @@
   return {
     REMOVER_LABELS: REMOVER_LABELS, ACTION_ERRORS: ACTION_ERRORS,
     timeText: timeText, statusText: statusText, versionNotice: versionNotice, readOnlyNotice: readOnlyNotice,
-    canTakedown: canTakedown, canRestore: canRestore, actionErrorText: actionErrorText
+    canTakedown: canTakedown, canRestore: canRestore, showsSupportLink: showsSupportLink, actionErrorText: actionErrorText
   };
 });

@@ -333,7 +333,7 @@
         errorList: errorList, preview: preview, bound: bound, total: total, scriptsLeft: scriptsLeft, submitsLeft: submitsLeft, penName: penName,
         tierLabels: Scripts.TIER_LABELS, count: Scripts.charCount, err: err,
         statusText: Scripts.statusText, versionNotice: Scripts.versionNotice, readOnlyNotice: Scripts.readOnlyNotice,
-        canTakedown: Scripts.canTakedown, canRestore: Scripts.canRestore,
+        canTakedown: Scripts.canTakedown, canRestore: Scripts.canRestore, showsSupportLink: Scripts.showsSupportLink,
         startNew: startNew, openVersion: openVersion, backToList: backToList, confirmLeave: confirmLeave, reloadFromServer: reloadFromServer,
         askExample: askExample, loadExample: loadExample, save: save, askSubmit: askSubmit, confirmSubmit: confirmSubmit,
         withdraw: withdraw, askRemove: askRemove, confirmRemove: confirmRemove, newVersion: newVersion, refreshAuthorName: refreshAuthorName,

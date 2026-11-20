@@ -289,7 +289,7 @@ def version_row() -> str:
 def test_the_version_row_shows_the_status_text_and_the_notice_from_the_pure_functions():
     row = version_row()
     assert '<span class="sw-chip" :class="\'sw-chip--\' + version.status">{{ statusText(version) }}</span>' in row
-    assert re.search(r'<p v-if="versionNotice\(version\)" class="sw-version__notice" role="status">\{\{ versionNotice\(version\) \}\}</p>', row)
+    assert re.search(r'<p v-if="versionNotice\(version\)" class="sw-version__notice" role="status">\{\{ versionNotice\(version\) \}\}<a [^>]*>[^<]*</a></p>', row)
     assert "statusLabels" not in read(TEMPLATE)                                                  # 不再直接查標籤表（拿不到「下架者」）
     assert "|| version.status" not in row                                                       # 不把原始狀態代碼顯示給作者
 
@@ -311,7 +311,7 @@ def test_the_detail_view_has_the_same_two_buttons_and_the_banner_comes_from_the_
     html = read(TEMPLATE)
     assert '<button v-if="canTakedown(editor.version)"' in html and '@click="askTakedown(editor.version)"' in html
     assert '<button v-if="canRestore(editor.version)"' in html and '@click="askRestore(editor.version)"' in html
-    assert '<p v-if="readOnly" class="sw-banner" role="status">{{ readOnlyNotice(editor.version) }}</p>' in html
+    assert re.search(r'<p v-if="readOnly" class="sw-banner" role="status">\{\{ readOnlyNotice\(editor\.version\) \}\}<a [^>]*>[^<]*</a></p>', html)
     assert "離開草稿，內容不可修改" not in html                                                   # 舊的二分法橫幅文案已移到純函式
 
 
@@ -337,6 +337,17 @@ def test_the_workshop_script_calls_the_two_endpoints_and_always_restores_the_but
         assert "editor.working = true" in body and "editor.working = false" in body and ".finally(" in body, name
     assert "Scripts.actionErrorText(info)" in js and "refreshList()" in js
     assert "modal.takedownTarget = null" in js and "modal.restoreTarget = null" in js            # 關閉後不留著上一個版本
+
+
+def test_an_administrator_take_down_links_to_customer_service_and_nothing_links_to_the_appeal_page():
+    """申訴頁只開放被鎖定或被暫停發佈的帳號，一般作者進不去；管理員下架的說明改導向客服的意見回饋（使用者 2026-11-20 決定）。"""
+    html = read(TEMPLATE)
+    links = re.findall(r'<a v-if="showsSupportLink\(([^)]*)\)"[^>]*>([^<]*)</a>', html)
+    assert [arg for arg, _ in links] == ["version", "editor.version"] and all(text == "前往客服" for _, text in links)
+    assert all('href="/cs"' in tag for tag in re.findall(r'<a v-if="showsSupportLink[^>]*>', html))
+    assert "/appeal" not in html and "申訴" not in html
+    js = "\n".join(strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js")))
+    assert "申訴" not in js and "/appeal" not in js
 
 
 def test_no_review_note_field_is_read_anywhere_on_the_page():

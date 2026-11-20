@@ -72,6 +72,26 @@ test('a version an administrator took down names the category, cannot be restore
   assert.ok(!text.includes('可以隨時恢復上架'), text);
 });
 
+test('the guidance for a disputed take-down points to the customer-service feedback, never to the appeal page an ordinary author cannot open', () => {
+  const text = Status.versionNotice(version({ status: 'removed', removed_by: 'admin', decision_category: 'other_policy', decided_at: NOW }));
+  assert.ok(text.includes('客服（/cs）') && text.includes('意見回饋') && text.includes('管理員會在後台看到'), text);
+  assert.ok(!/保證|一定|改善|處理結果/.test(text), text);                                                         // 不承諾處理結果
+  const everything = [Status.versionNotice(version({ status: 'rejected', decision_category: 'other_policy', decided_at: NOW })), text,
+    Status.versionNotice(version({ status: 'removed', removed_by: 'author', decided_at: NOW })),
+    Status.readOnlyNotice(version({ status: 'removed', removed_by: 'admin', decided_at: NOW })), ...Object.values(Status.ACTION_ERRORS)];
+  for (const item of everything) { assert.ok(!item.includes('申訴'), item); }
+});
+
+test('the customer-service link shows only beside an administrator take-down', () => {
+  assert.equal(Status.showsSupportLink(version({ status: 'removed', removed_by: 'admin' })), true);
+  for (const fields of [{ status: 'removed', removed_by: 'author' }, { status: 'removed' }, { status: 'published' }, { status: 'rejected' },
+    { status: 'draft' }, { status: 'pending_review' }, { status: 'superseded' }]) {
+    assert.equal(Status.showsSupportLink(version(fields)), false, JSON.stringify(fields));
+  }
+  assert.equal(Status.showsSupportLink(null), false);
+  assert.equal(Status.showsSupportLink(undefined), false);
+});
+
 test('there is no notice for the statuses that need none', () => {
   for (const status of ['draft', 'pending_review', 'published', 'superseded']) { assert.equal(Status.versionNotice(version({ status })), '', status); }
   assert.equal(Status.versionNotice(null), '');
@@ -122,6 +142,7 @@ test('the server error codes of take-down and restore each get their own Traditi
   }
   assert.equal(seen.size, codes.length);                                                                // 四個代碼的說明各不相同
   assert.ok(Status.actionErrorText({ code: 'removal_locked' }).includes('管理員下架'));
+  assert.ok(Status.actionErrorText({ code: 'removal_locked' }).includes('客服（/cs）'));
   assert.ok(Status.actionErrorText({ code: 'live_exists' }).includes('另一個上架中的版本'));
   assert.deepEqual(Object.keys(Status.ACTION_ERRORS).sort(), codes.slice().sort());
 });

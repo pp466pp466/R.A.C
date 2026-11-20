@@ -53,7 +53,7 @@
               <button v-if="canRestore(version)" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askRestore(version)">恢復上架</button>
             </span>
             <!-- 被退回與下架的說明：只有固定列舉的類別、時間與下架者，沒有審核備註（備註只有管理員看得到） -->
-            <p v-if="versionNotice(version)" class="sw-version__notice" role="status">{{ versionNotice(version) }}</p>
+            <p v-if="versionNotice(version)" class="sw-version__notice" role="status">{{ versionNotice(version) }}<a v-if="showsSupportLink(version)" class="sw-version__link" href="/cs">前往客服</a></p>
           </li>
         </ul>
         <p class="sw-script__actions">
@@ -76,7 +76,7 @@
       <span v-if="dirty && !readOnly" class="sw-chip sw-chip--dirty" role="status">尚未儲存</span>
     </div>
 
-    <p v-if="readOnly" class="sw-banner" role="status">{{ readOnlyNotice(editor.version) }}</p>
+    <p v-if="readOnly" class="sw-banner" role="status">{{ readOnlyNotice(editor.version) }}<a v-if="showsSupportLink(editor.version)" class="sw-version__link" href="/cs">前往客服</a></p>
     <p v-if="editor.general" class="sw-error sw-error--block" role="alert">{{ editor.general }}</p>
     <ul v-if="errorList.length" class="sw-errors" role="alert">
       <li v-for="item in errorList" :key="item.path"><strong>{{ item.label }}</strong>：{{ item.message }}</li>

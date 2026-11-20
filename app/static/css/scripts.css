@@ -99,6 +99,8 @@
   line-height: 1.6;
   overflow-wrap: anywhere;
 }
+.sw-version__link { margin-left: 0.6em; color: var(--color-accent); white-space: nowrap; }
+.sw-version__link:hover { text-decoration: underline; }
 
 .sw-btn-sm { padding: 0.2rem 0.7rem; font-size: 0.85rem; }
 

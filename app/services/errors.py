@@ -365,7 +365,7 @@ class RemovalLocked(Forbidden):
     """版本是管理員下架的（403）：作者不能自行恢復，只有管理員能恢復（作者看得到狀態，所以不用 404）。"""
 
     code = "removal_locked"
-    default_message = "這個版本是管理員下架的，無法自行恢復上架。如有疑問請前往申訴頁，或修改內容後重新送審。"
+    default_message = "這個版本是管理員下架的，無法自行恢復上架。如有疑問，可以到客服（/cs）以意見回饋留下紀錄，或修改內容後重新送審。"
 
 
 class LiveExists(Conflict):
