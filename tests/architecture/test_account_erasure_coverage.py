@@ -18,6 +18,7 @@ CASCADED_FROM_USERS = {
     "scripts.creator_id", "sessions.user_id",           # rpg-data-and-script：劇本與存檔（玩家文字，隨帳號刪除；失敗時偏向刪除）
     "script_submissions.user_id",                       # rpg-script-authoring：送審紀錄（只有結果、類別與時間，隨帳號刪除）
     "wallets.user_id", "wallet_entries.user_id",        # game-wallet：錢包與帳本（個資，隨帳號刪除；不匿名化保留）
+    "script_reports.reporter_id",                       # rpg-script-reports：檢舉人刪帳號時其檢舉一併刪除（自寫文字是個資，漏處理時偏向刪除）
 }
 CASCADED_FROM_CONVERSATIONS = {"chat_messages.conversation_id"}
 # rpg-data-and-script：往下的串聯層。每一層都要登記，新增的子表才不會變成沒人負責的個資
@@ -26,7 +27,9 @@ CASCADED_FROM_SCRIPTS = {"script_versions.script_id"}
 CASCADED_FROM_VERSIONS = {"script_version_tags.version_id"}
 # 無動作的外鍵（不是 SET NULL 也不是串聯）：SQL Server 不允許刪除使用者時有多重串聯路徑（錯誤 1785），
 # 所以刪除者必須先把參照清為空值；漏掉時刪除會失敗，而不是留下懸空的編號。
-NO_ACTION_REFERENCES = {"sessions.source_version_id"}
+# rpg-script-reports：`script_reports.version_id` 同理——檢舉人與被檢舉版本的作者各有一條路徑到達這張表，只有檢舉人那一條可以串聯；
+# 抹除流程在刪除版本之前先清除檢舉（`ScriptReportRepository.delete_for_versions`），漏掉時刪除作者會直接失敗。
+NO_ACTION_REFERENCES = {"sessions.source_version_id", "script_reports.version_id"}
 ANONYMISED_WITH_SET_NULL = {"llm_call_logs.user_id", "admin_audit_logs.admin_user_id"}
 UNLINKED_REFERENCES = {"llm_call_logs.conversation_id", "deletion_tombstones.user_id"}
 CASCADE_PARENTS = {"chat_conversations", "sessions", "scripts", "script_versions"}      # 除了 users 以外，有子表串聯的父表
@@ -98,7 +101,9 @@ def test_the_erasure_service_clears_every_no_action_reference_before_deleting_th
 
     source = inspect.getsource(AccountErasureService.erase)
     assert source.index("clear_script_version_refs") < source.index("delete(user_id)")
-    assert {"sessions.source_version_id"} == set(NO_ACTION_REFERENCES), "新增無動作的外鍵時，抹除流程要有對應的清空方法並更新這個測試"
+    assert {"sessions.source_version_id", "script_reports.version_id"} == set(NO_ACTION_REFERENCES), (
+        "新增無動作的外鍵時，抹除流程要有對應的清空方法並更新這個測試"
+    )
 
 
 # ---- 自我驗證：用暫時的 metadata 證明分類真的偵測得到 ----------------------------------------

@@ -24,7 +24,7 @@ DOMAIN_ORDER: dict[str, tuple[str, ...]] = {
     "鎖定與申訴": ("lock_strikes", "lock_appeals"),
     "客服對話": ("chat_conversations", "chat_messages"),
     "模型用量與營運": ("llm_call_logs", "admin_audit_logs", "alert_states", "runtime_limits"),
-    "RPG 劇本": ("scripts", "script_versions", "script_version_tags", "script_submissions"),
+    "RPG 劇本": ("scripts", "script_versions", "script_version_tags", "script_submissions", "script_reports"),
     "RPG 存檔": ("sessions", "memory_logs", "turn_regenerations"),
     "遊戲幣": ("wallets", "wallet_entries"),
 }
@@ -158,8 +158,8 @@ def enumerations() -> dict[str, tuple[str, ...]]:
     from app.llm.gemini import GeminiProvider
     from app.llm.openai_compatible import PROVIDER_NAME
     from app.models import (
-        admin_audit_log, alert_state, chat, deletion_tombstone, llm_call_log, lock_strike, rpg_session, script, script_submission, user,
-        wallet,
+        admin_audit_log, alert_state, chat, deletion_tombstone, llm_call_log, lock_strike, rpg_session, script, script_report,
+        script_submission, user, wallet,
     )
     from app.services import cs_intents
     from app.services.age_policy import DEFAULT_AGE_POLICY
@@ -203,6 +203,8 @@ def enumerations() -> dict[str, tuple[str, ...]]:
         "script_versions.review_categories_json": script.REVIEW_CATEGORIES,
         "script_submissions.outcome": script_submission.SUBMISSION_OUTCOMES,
         "script_submissions.categories_json": script.REVIEW_CATEGORIES,
+        "script_reports.reasons_json": script_report.REPORT_REASONS,
+        "script_reports.closed_result": script_report.CLOSED_RESULTS,
         "sessions.content_tier": STORED_CONTENT_TIERS,
         "sessions.status": rpg_session.SESSION_STATUSES,
         "sessions.opening_state": rpg_session.OPENING_STATES,

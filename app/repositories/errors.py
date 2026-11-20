@@ -52,6 +52,11 @@ class BuiltinNotRemovableError(Exception):
     """內建劇本（沒有作者）不可下架：它由種子與部署流程管理。Service 轉成 409 `builtin_not_removable`。版本不變。"""
 
 
+class AlreadyReportedError(Exception):
+    """這位使用者已檢舉過這個版本（`(reporter_id, version_id)` 的唯一約束擋下，包含並行的兩個請求同時寫入）。
+    Service 轉成 409 `already_reported`；只回復這一筆（SAVEPOINT），呼叫者交易中的其他變更不受影響。"""
+
+
 class DraftChangedError(Exception):
     """草稿在這次編輯開始之後已被更新（條件式更新沒有命中，而版本仍是草稿）：不覆寫，Service 轉成 `DraftChanged`（409）。"""
 

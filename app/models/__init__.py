@@ -13,6 +13,7 @@ from app.models.lock_strike import LockStrike
 from app.models.rpg_session import MemoryLog, RpgSession, TurnRegeneration
 from app.models.runtime_limit import RuntimeLimit
 from app.models.script import Script, ScriptVersion, ScriptVersionTag
+from app.models.script_report import ScriptReport
 from app.models.script_submission import ScriptSubmission
 from app.models.user import AuthToken, User, UserIdentity
 from app.models.wallet import Wallet, WalletEntry
@@ -20,5 +21,5 @@ from app.models.wallet import Wallet, WalletEntry
 __all__ = [
     "Base", "User", "UserIdentity", "AuthToken", "DeletionTombstone", "ChatConversation", "ChatMessage", "LlmCallLog",
     "AdminAuditLog", "AlertState", "LockStrike", "LockAppeal", "Script", "ScriptVersion", "ScriptVersionTag",
-    "RpgSession", "MemoryLog", "TurnRegeneration", "ScriptSubmission", "RuntimeLimit", "Wallet", "WalletEntry",
+    "RpgSession", "MemoryLog", "TurnRegeneration", "ScriptSubmission", "ScriptReport", "RuntimeLimit", "Wallet", "WalletEntry",
 ]

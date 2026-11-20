@@ -4,7 +4,9 @@
 - `scripts` 是劇本的身分（作者、種子鍵、筆名快照），`script_versions` 是每個版本的內容與狀態：已發佈的版本不可變，
   修改一律產生新版本，所以內容放在版本上而不是劇本上。
 - 作者與使用者的外鍵是 `ON DELETE CASCADE`，版本與標籤也串聯：失敗時偏向刪除，不會因為漏掉處理而留下作者的內容。
-  `creator_id` 可為空（內建劇本沒有作者），空值不受串聯影響。
+  `creator_id` 可為空，空值不受串聯影響。兩種情況沒有作者：①內建劇本（`seed_key` 非空）；②**匿名保留**（rpg-script-reports）：
+  作者選擇「匿名保留我已發佈的劇本」，帳號被刪除時目前上架的版本保留，作者關聯解除、筆名改為 `RETIRED_AUTHOR_NAME`、短代號清空。
+  **所以「沒有作者」不等於「內建劇本」**：判斷內建一律用 `seed_key`，不得用 `creator_id` 是否為空（否則保留的劇本會變得不可下架、不可檢舉）。
 - 「每個劇本至多一個上架版本、至多一個進行中的版本」由資料庫保證：`live_script_id`、`open_script_id` 是輔助欄位，
   只在版本分別處於 `published`、`draft／pending_review` 時等於 `script_id`，其餘為空；各自以「只涵蓋非 NULL 列」的
   部分唯一索引（SQL Server 的 UNIQUE 只容許一個 NULL，所以不能直接對 `(script_id, status)` 設唯一）。
@@ -50,6 +52,7 @@ ENDING_CUSTOM = "custom"
 ENDING_MODES = (ENDING_NONE, ENDING_CUSTOM)
 
 OFFICIAL_AUTHOR_NAME = "官方"               # 內建劇本的筆名（沒有作者）
+RETIRED_AUTHOR_NAME = "已註銷的作者"         # 匿名保留的劇本的筆名（作者已刪除帳號；rpg-script-reports）
 
 # 審查結果（script-review 規格）：`pass` 通過、`flag` 有疑慮（進人工並標示類別）、`reject` 明確違反（直接拒絕）
 REVIEW_PASS = "pass"

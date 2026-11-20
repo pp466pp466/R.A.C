@@ -132,6 +132,10 @@ class User(Base, PublicIdMixin, TimestampMixin):
     # 只是稽核紀錄，**不是年齡判斷的依據**（年齡一律由 `birth_date` 於當下計算）；管理員與升級前的帳號沒有，維持空值，任何閘門都不讀它。
     adult_declared_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     adult_declaration_version: Mapped[str | None] = mapped_column(Unicode(40), nullable=True)
+    # 匿名保留我已發佈的劇本（rpg-script-reports）：帳號偏好，預設關閉。只有「使用者自己申請刪除」與「連續 12 個月未登入」兩種原因的
+    # 刪除會在**執行刪除當下**讀它（不是申請當下）：開啟時保留目前上架的版本（作者關聯解除、筆名改為「已註銷的作者」），其餘一律刪除。
+    # 未滿 18 歲抹除與逾時未確認年齡的刪除不看偏好、一律全刪。模型 `default` 加資料庫 `server_default`：舊版程式的 INSERT（不含此欄）取得關閉。
+    keep_published_scripts: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
 
 
 class UserIdentity(Base):

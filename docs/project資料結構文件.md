@@ -1,8 +1,8 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-20 ｜ 對應 change：rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`；版本狀態新增 `removed`；稽核動作新增 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0021_script_publishing`（實際的 `project` 已於 2026-11-20 由 `0017_story_preference` 升級到 `0021_script_publishing`，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-21 ｜ 對應 change：rpg-script-reports（新增資料表 `script_reports`；`users` 新增 `keep_published_scripts`；設定鍵 `script_report_daily`）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`；版本狀態新增 `removed`；稽核動作新增 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0022_script_reports`（實際的 `project` 目前在 `0021_script_publishing`，**尚未套用 `0022`**；`0021` 已於 2026-11-20 由 `0017_story_preference` 升級，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
-本文件是 SQL Server `project` 資料庫的**結構參考**：共 **21 張資料表、257 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
+本文件是 SQL Server `project` 資料庫的**結構參考**：共 **22 張資料表、268 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
 流程與資料表的對應（登入與註冊、客服對話各碰到哪些資料表）見第 10.1 節；簡報 [1.0簡報.md](1.0簡報.md) 摘要了本文件。
 
@@ -16,11 +16,13 @@
 | 資料庫名稱 | `project`＝本機開發；`project_test`＝整合測試專用（名稱必須以 `_test` 結尾，測試會自行建立與刪除資料表，**絕不可指向 `project`**）；正式環境規劃使用 Cloud SQL for SQL Server（尚未建立） |
 | 排序規則 | `Chinese_Taiwan_Stroke_CI_AS`（**不分大小寫**；本機開發的 `project` 實測）。程式不依賴排序規則：具唯一約束的字串（如 email）一律先在 Service 層正規化（轉小寫）再寫入與查詢，讓 SQLite 與 SQL Server 行為一致 |
 | 連線 | SQLAlchemy 2.x 加 pyodbc 與 ODBC Driver 18；連線字串只存在環境變數 `DATABASE_URL`（`.env` 或平台機密）。本機可設定 `TrustServerCertificate=yes`；正式環境須驗證伺服器憑證，且不得使用 `sa` 帳號 |
-| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0021_script_publishing`；實際的 `project` 目前也是 `0021_script_publishing`（`alembic_version` 只有一列；2026-11-20 由 0017 依序套用 0018、0019、0020、0021，見第 14 節） |
-| 資料表與欄位 | 21 張業務資料表、257 個欄位、52 個索引與唯一約束、18 個外鍵 |
+| 結構管理 | Alembic（`render_as_batch`）；**結構只能透過 migration 變更**，應用程式啟動時不建立資料表、不自動執行 migration。程式的最新版本 `0022_script_reports`；實際的 `project` 目前是 `0021_script_publishing`（`alembic_version` 只有一列；尚未套用 0022；2026-11-20 由 0017 依序套用 0018、0019、0020、0021，見第 14 節） |
+| 資料表與欄位 | 22 張業務資料表、268 個欄位、56 個索引與唯一約束、20 個外鍵 |
 | 字元 | 文字欄位一律 Unicode（`NVARCHAR`），繁體中文不亂碼 |
 | 時間 | 一律存 UTC（`DATETIME2(6)`）；日界與年齡以 Asia/Taipei 計 |
 | 主鍵 | 全部是 `INTEGER IDENTITY(1,1)`；對外（網址與 API）只使用 `public_id`（UUID 字串），內部整數編號不外露 |
+
+**`0022_script_reports`（`script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`）尚未套用到實際的 `project`**：目前只在程式與 `project_test` 驗證（遷移測試的升級、降級、再升級，SQLite 與 SQL Server 各一次）；套用時先備份（`COPY_ONLY`、`CHECKSUM`，`RESTORE VERIFYONLY`）再 `alembic upgrade head`，之後以 `alembic current` 與 `alembic check` 確認，並把「套用」列追加到第 14 節。**回復到舊版程式之前須確認 `script_reports` 為空**（舊版的抹除流程不認識這張表，刪除含檢舉的作者會被無動作外鍵擋下）。
 
 **`0018_rpg_turn_revision`、`0019_adult_declaration`、`0020_safe_mode_hint` 與 `0021_script_publishing` 已於 2026-11-20 一併套用到實際的 `project`**（原在 `0017_story_preference`）：先備份（`COPY_ONLY`、`CHECKSUM`，`RESTORE VERIFYONLY` 通過）再 `alembic upgrade head`；`alembic current` 為 `0021_script_publishing (head)`，`alembic check` 回報 `No new upgrade operations detected.`；唯讀查詢確認 21 張資料表、257 個欄位、18 個外鍵、`runtime_limits` 17 列，`users`、`scripts`、`script_versions` 的列數升級前後相同；並實跑 `0021` 的 downgrade（欄位 257 → 252、索引移除、列數不變）再 upgrade 回 head，細節見第 14 節的「套用」列。以下各段是更早的逐項比對紀錄。
 
@@ -38,7 +40,7 @@ flowchart LR
     L["鎖定與申訴<br/>lock_strikes、lock_appeals"]
     C["客服對話<br/>chat_conversations<br/>chat_messages"]
     O["模型用量與營運<br/>llm_call_logs、admin_audit_logs<br/>alert_states、runtime_limits"]
-    S["RPG 劇本<br/>scripts、script_versions<br/>script_version_tags、script_submissions"]
+    S["RPG 劇本<br/>scripts、script_versions<br/>script_version_tags、script_submissions<br/>script_reports"]
     G["RPG 存檔<br/>sessions、memory_logs<br/>turn_regenerations"]
     W["遊戲幣<br/>wallets、wallet_entries"]
     U -->|"擁有 CASCADE"| L
@@ -55,7 +57,7 @@ flowchart LR
 
 | 資料表 | 中文名稱 | 領域 | 用途 | 主要寫入者 | 保存與刪除 | 欄位 |
 |---|---|---|---|---|---|---|
-| `users` | 會員 | 帳號與身分 | 玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱、故事偏好。 | UserRepository（條件式更新）；後台操作走 AdminRepository | 連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口 | 38 |
+| `users` | 會員 | 帳號與身分 | 玩家與管理員的帳號主表：身分、年齡確認、內容模式、帳號鎖定與暫停發佈、暱稱、故事偏好、匿名保留已發佈劇本的偏好。 | UserRepository（條件式更新）；後台操作走 AdminRepository | 連續 12 個月未登入刪除（管理員不納入）；申請刪除後 7 天寬限；建立後 24 小時未完成年齡確認即刪除；一律經 AccountErasureService 單一出口 | 39 |
 | `user_identities` | 第三方登入身分 | 帳號與身分 | Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分，一個 Google 身分只屬於一個帳號。 | UserIdentityRepository | 隨帳號刪除（CASCADE） | 5 |
 | `auth_tokens` | 管理員重設密碼權杖 | 帳號與身分 | 管理員「忘記密碼」寄出的一次性權杖；只存 SHA-256 雜湊，原值只出現在信件中。 | AuthTokenRepository | 到期後 7 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 7 |
 | `deletion_tombstones` | 帳號刪除紀錄 | 帳號與身分 | 記錄「哪個內部編號在何時、因何原因被抹除」，備份還原後據此重新執行刪除；不含任何個資。 | DeletionTombstoneRepository（隨抹除流程同一交易寫入） | 不設期限、不納入期限清除（還原後要靠它重播刪除） | 4 |
@@ -66,11 +68,12 @@ flowchart LR
 | `llm_call_logs` | 模型呼叫用量帳本 | 模型用量與營運 | 每次模型呼叫一筆（含重試與備援）：用量、額度、斷路與全站每日 token 的唯一來源；不含對話全文。 | LlmCallLogRepository（與回覆同一交易） | 建立後 365 天刪除；失敗原文（error_detail）14 天清為空值；帳號刪除時 user_id 變空值（匿名化） | 17 |
 | `admin_audit_logs` | 管理稽核紀錄 | 模型用量與營運 | 管理員操作與系統自動動作（鎖定、暫停發佈、修改營運限制）的稽核；只新增、不可修改。 | AdminAuditRepository（只有新增與讀取） | 建立後 730 天由 purge-expired-data 刪除（唯一的清除途徑在 RetentionRepository） | 8 |
 | `alert_states` | 營運告警狀態 | 模型用量與營運 | 五項營運告警各一列（至多 5 列）：目前是否告警中、嚴重度與最近一次通知。 | AlertStateRepository（條件式更新搶佔通知） | 不設期限；不指向使用者，不含個資 | 8 |
-| `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻、遊戲幣的五個設定，以及 RPG 回合引擎的每回合月數上限、每個回合前幾次重新生成免費）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入 | 4 |
+| `runtime_limits` | 營運限制 | 模型用量與營運 | 存放在資料庫的營運限制（劇本數量、每日送審次數、每日主角生成次數、連續被拒門檻、遊戲幣的五個設定，以及 RPG 回合引擎的每回合月數上限、每個回合前幾次重新生成免費）；程式每次使用時現讀。 | RuntimeLimitRepository；只能以 flask set-script-limit 修改 | 不設期限；不指向使用者，不含個資；初始十列由遷移 0013（七列）與 0014（三列）寫入；0022 另寫入每人每日檢舉上限 `script_report_daily` | 4 |
 | `scripts` | 劇本 | RPG 劇本 | 劇本的身分：作者、內建劇本的種子鍵、筆名與短代號的快照；內容與狀態在 script_versions。 | ScriptRepository | 隨作者的帳號抹除（CASCADE）；內建劇本沒有作者，不隨帳號刪除 | 9 |
 | `script_versions` | 劇本版本 | RPG 劇本 | 劇本的每個版本：固定規格的全部欄位、狀態、內容雜湊、審查結果，以及送審、退回與下架的決定（中繼資料，不進內容雜湊）。已發佈的版本不可變，修改一律新增版本。 | ScriptRepository（狀態只在此寫入，有架構測試擋住別處） | 隨劇本刪除（CASCADE）；刪除草稿時直接刪除 | 38 |
 | `script_version_tags` | 劇本版本標籤 | RPG 劇本 | 版本的標籤（以顯示形式儲存，查詢以小寫比對），讓目錄日後可以篩選。 | ScriptRepository | 隨版本刪除（CASCADE） | 3 |
 | `script_submissions` | 劇本送審紀錄 | RPG 劇本 | 每次成功送審、被自動拒絕與管理員解除暫停各一筆，用來算每日送審次數與連續被拒；不含任何劇本文字。 | ScriptSubmissionRepository | 建立後 365 天由 purge-expired-data 刪除；隨帳號刪除（CASCADE） | 5 |
+| `script_reports` | 劇本檢舉 | RPG 劇本 | 玩家對「已上架的劇本版本」的檢舉：預設原因（可多選）加選填的自寫文字；不自動下架，只升高管理員審核佇列的優先度；結案分下架、不成立與系統專用的被取代。 | ScriptReportRepository（建立與結案；結案欄位只有它寫入，架構測試守住） | 結案後 365 天由 purge-expired-data 刪除（未結案者與所屬版本相同）；隨檢舉人的帳號抹除（CASCADE）；被檢舉版本的作者抹除時由抹除流程先刪除（無動作外鍵） | 10 |
 | `sessions` | RPG 存檔 | RPG 存檔 | 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。 | SessionRepository | 最後活動後 365 天由 purge-expired-data 刪除（回合、記事簿與主角一併消失）；隨帳號刪除（CASCADE） | 30 |
 | `memory_logs` | RPG 回合紀錄 | RPG 存檔 | 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出；最後一輪可被重新生成或編輯（修訂版本、免費次數、認領時間與回合前快照）。 | SessionRepository | 隨存檔刪除（CASCADE）；中斷或被擋回合的劇情內容超過 14 天清為空字串；回合前快照在下一輪完成時清為空值 | 16 |
 | `turn_regenerations` | 重新生成與編輯的回饋 | RPG 存檔 | 玩家重新生成時選的分類與填的理由（供營運檢視），與每次修訂的結果；不存被取代的行動與劇情。 | TurnRegenerationRepository | 隨存檔刪除（CASCADE），隨存檔與帳號一併抹除；視為個資，納入個人資料匯出 | 11 |
@@ -97,6 +100,8 @@ erDiagram
     scripts ||--o{ script_versions : "script_id CASCADE"
     script_versions ||--o{ script_version_tags : "version_id CASCADE"
     users ||--o{ script_submissions : "user_id CASCADE"
+    users ||--o{ script_reports : "reporter_id CASCADE"
+    script_versions ||--o{ script_reports : "version_id NO ACTION"
     users ||--o{ sessions : "user_id CASCADE"
     script_versions |o--o{ sessions : "source_version_id NO ACTION"
     sessions ||--o{ memory_logs : "session_id CASCADE"
@@ -168,6 +173,11 @@ erDiagram
         int id PK
         int user_id FK
     }
+    script_reports {
+        int id PK
+        int version_id FK
+        int reporter_id FK
+    }
     sessions {
         int id PK
         int user_id FK
@@ -237,6 +247,7 @@ erDiagram
         string story_preference "故事偏好"
         datetime adult_declared_at "註冊時年滿 18 歲聲明的時間"
         string adult_declaration_version "聲明當時的年齡政策版本"
+        bool keep_published_scripts "匿名保留我已發佈的劇本（偏好）"
         string public_id UK "對外識別碼"
         datetime created_at "建立時間"
         datetime updated_at "最後更新時間"
@@ -348,6 +359,8 @@ erDiagram
     scripts ||--o{ script_versions : "script_id CASCADE"
     script_versions ||--o{ script_version_tags : "version_id CASCADE"
     users ||--o{ script_submissions : "user_id CASCADE"
+    users ||--o{ script_reports : "reporter_id CASCADE"
+    script_versions ||--o{ script_reports : "version_id NO ACTION"
     users ||--o{ sessions : "user_id CASCADE"
     script_versions |o--o{ sessions : "source_version_id NO ACTION"
     sessions ||--o{ memory_logs : "session_id CASCADE"
@@ -415,6 +428,18 @@ erDiagram
         string outcome "結果"
         json categories_json "拒絕或有疑慮的類別"
         datetime created_at "紀錄時間"
+    }
+    script_reports {
+        int id PK "內部主鍵"
+        int version_id FK "被檢舉的版本（無動作外鍵）"
+        int reporter_id FK "檢舉人"
+        json reasons_json "預設原因（固定列舉的陣列）"
+        bool red_line "是否含紅線理由（建立時算出，不變）"
+        string note "自寫文字（選填）"
+        datetime closed_at "結案時間（空值＝未結案）"
+        string closed_result "結案結果"
+        datetime created_at "檢舉時間"
+        datetime updated_at "最後更新時間"
     }
     sessions {
         int id PK "內部主鍵"
@@ -584,6 +609,8 @@ erDiagram
 | `script_versions.script_id` | `scripts.id` | CASCADE | 否 |  |
 | `script_version_tags.version_id` | `script_versions.id` | CASCADE | 否 |  |
 | `script_submissions.user_id` | `users.id` | CASCADE | 否 | 刻意不連到版本，避免 users→script_versions→script_submissions 的第二條串聯路徑。 |
+| `script_reports.version_id` | `script_versions.id` | NO ACTION | 否 | 無動作：刪除使用者有兩條路徑到達 script_reports（users→script_reports 的檢舉人，與 users→scripts→script_versions→script_reports 的被檢舉版本的作者），SQL Server 不允許多重串聯路徑（錯誤 1785）。抹除流程必須在刪除版本之前先刪除該作者版本的檢舉（`ScriptReportRepository.delete_for_versions`），忘了刪除時刪除會直接失敗，不會留下懸空的編號。 |
+| `script_reports.reporter_id` | `users.id` | CASCADE | 否 | 檢舉人刪帳號時其檢舉一併刪除（自寫文字是玩家文字，視為個資，漏處理時偏向刪除）；已做出的下架決定與稽核紀錄不受影響。 |
 | `sessions.user_id` | `users.id` | CASCADE | 否 |  |
 | `sessions.source_version_id` | `script_versions.id` | NO ACTION | 是 | 無動作：刪除使用者有兩條路徑到達 sessions（users→sessions 與 users→scripts→script_versions→sessions），SQL Server 不允許多重串聯路徑（錯誤 1785）。刪除版本與抹除帳號的流程先把參照清為空值，忘了清除時刪除會直接失敗。 |
 | `memory_logs.session_id` | `sessions.id` | CASCADE | 否 |  |
@@ -596,13 +623,14 @@ erDiagram
 ```mermaid
 flowchart TD
     U["刪除 users 一列<br/>（AccountErasureService 單一出口）"]
-    A["user_identities、auth_tokens<br/>lock_strikes、lock_appeals<br/>script_submissions"]
+    A["user_identities、auth_tokens<br/>lock_strikes、lock_appeals<br/>script_submissions<br/>script_reports（檢舉人的檢舉）"]
     B["chat_conversations → chat_messages"]
     C["scripts → script_versions<br/>→ script_version_tags"]
     D["sessions → memory_logs<br/>→ turn_regenerations"]
     W["wallets、wallet_entries"]
     E["llm_call_logs.user_id<br/>admin_audit_logs.admin_user_id<br/>變空值，紀錄保留"]
     F["deletion_tombstones<br/>新增一列（不含個資）"]
+    R["script_reports<br/>（被檢舉版本的檢舉）"]
     U -->|"CASCADE"| A
     U -->|"CASCADE"| B
     U -->|"CASCADE"| C
@@ -611,9 +639,10 @@ flowchart TD
     U -->|"SET NULL"| E
     U -.->|"同一交易寫入"| F
     C -.->|"別人存檔的來源參照<br/>抹除前先清為空值"| D
+    C -.->|"無動作外鍵<br/>刪除版本前先刪除"| R
 ```
 
-抹除的順序不能反過來：先清別人存檔對這位作者的版本參照、再清帳本的對話編號、最後條件式刪除並寫入刪除紀錄；條件不成立時整個交易回復。細節見 [資料模型-data-model.md](資料模型-data-model.md) 第 4 節。
+抹除的順序不能反過來：先清別人存檔對這位作者的版本參照（並刪除這些版本的檢舉，`script_reports.version_id` 是無動作外鍵）、再清帳本的對話編號、最後條件式刪除並寫入刪除紀錄；條件不成立時整個交易回復。細節見 [資料模型-data-model.md](資料模型-data-model.md) 第 4 節。
 
 ### 4.3 沒有外鍵的參照
 
@@ -682,9 +711,10 @@ flowchart TD
 | 33 | `story_preference` | NVARCHAR(10) | 否 | `'all'` | — | 故事偏好：all（全讀者，預設）｜male（男頻）｜female（女頻）；**只影響劇本清單的排序**，不影響內容分級、敘事與權限；系統從不自動改變它。資料庫預設 'all'，讓舊版程式的 INSERT 在新結構上仍有效；既有帳號全部為 all。0017 新增。 |
 | 34 | `adult_declared_at` | DATETIME2(6) | 是 | — | — | 註冊時年滿 18 歲聲明的時間（UTC）：新使用者在登入頁勾選「我確認已滿 18 歲」的時間。只是稽核紀錄，**不參與任何判斷**（年齡一律由 `birth_date` 於當下計算）；管理員與升級前的帳號沒有，維持空值；不回填、不建索引。0019 新增。 |
 | 35 | `adult_declaration_version` | NVARCHAR(40) | 是 | — | — | 聲明當時的年齡政策版本（`AgePolicy.version`），由伺服器決定、不接受前端傳入；空值同上。0019 新增。 |
-| 36 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
-| 37 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
-| 38 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
+| 36 | `keep_published_scripts` | BIT | 否 | `'0'` | — | 帳號偏好「匿名保留我已發佈的劇本」，預設關閉（0）；既有帳號全部為關閉。只有「使用者自己申請刪除」與「連續 12 個月未登入」兩種原因的刪除會在**執行刪除當下**讀它（不是申請當下）：開啟時保留目前上架的版本（作者關聯解除、筆名改為「已註銷的作者」），其餘一律刪除；未滿 18 歲抹除與逾時未確認年齡的刪除不看偏好、一律全刪。資料庫預設讓舊版程式的 INSERT 在新結構上仍有效。0022 新增。 |
+| 37 | `public_id` | NVARCHAR(36) | 否 | — | UK | 對外識別碼（UUID 字串）；網址與 API 只使用它，內部整數編號不外露；唯一。 |
+| 38 | `created_at` | DATETIME2(6) | 否 | — | — | 建立時間（UTC）。 |
+| 39 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；每次更新時由程式寫入。 |
 
 索引與約束：
 
@@ -1083,7 +1113,35 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 |---|---|---|---|---|
 | `ix_script_submissions_user_id_created_at` | 索引 | `user_id`、`created_at` | — | 每日送審次數與「連續被自動拒絕」的判斷。 |
 
-### 5.17 `sessions`（RPG 存檔）
+### 5.17 `script_reports`（劇本檢舉）
+
+玩家對「已上架的劇本版本」的檢舉：預設原因（可多選的固定列舉）加選填的自寫文字。檢舉不自動下架，只升高管理員審核佇列的優先度；是否下架由管理員決定，結案分「下架」「不成立」與系統專用的「被取代」。
+
+- 領域：RPG 劇本　｜　主要寫入者：ScriptReportRepository（建立與結案；結案欄位只有它寫入，架構測試守住）　｜　保存與刪除：結案後 365 天由 purge-expired-data 刪除（未結案者與所屬版本相同）；隨檢舉人的帳號抹除（CASCADE）；被檢舉版本的作者抹除時，由抹除流程在刪除版本之前先刪除（版本外鍵是無動作）
+
+| # | 欄位 | 型別 | 可空 | 資料庫預設 | 鍵 | 說明 |
+|---|---|---|---|---|---|---|
+| 1 | `id` | INTEGER IDENTITY(1,1) | 否 | — | PK | 內部主鍵（自動遞增）；不對外暴露。檢舉沒有 `public_id`：不被個別定址，管理員結案是對版本整批做。 |
+| 2 | `version_id` | INTEGER | 否 | — | FK→script_versions.id | 被檢舉的版本（檢舉當下的上架版本）。**無動作外鍵**：避免 SQL Server 的多重串聯路徑（錯誤 1785），抹除流程在刪除版本之前先刪除其檢舉；同一人對同一版本只能檢舉一次，新版本核可上架後可再檢舉。 |
+| 3 | `reporter_id` | INTEGER | 否 | — | FK→users.id | 檢舉人；CASCADE：檢舉人刪帳號時其檢舉一併刪除。作者與管理員的畫面都拿不到它（管理員的讀取查詢根本不選取這個欄位）。 |
+| 4 | `reasons_json` | NVARCHAR(max)（JSON） | 否 | — | — | 預設原因：一至七個不重複的固定列舉（見第 6 節），只用來顯示；排序與聚合只讀 `red_line`，不得依 JSON 內容篩選或排序。 |
+| 5 | `red_line` | BIT | 否 | — | — | 是否含任一紅線理由（`minor_sexual`、`sexual_violence`、`real_person_sexual`）；建立時由 Service 依理由算出、之後不變；管理員佇列優先度的第一層依據（另存是因為不得依 JSON 欄位內容排序）。 |
+| 6 | `note` | NVARCHAR(max) | 是 | — | — | 自寫文字（選填，上限 200 字，NFC 正規化後計）；純文字、不送入模型、不進日誌；玩家文字，視為個資。 |
+| 7 | `closed_at` | DATETIME2(6) | 是 | — | — | 結案時間（UTC）；空值＝未結案。只由 `ScriptReportRepository.close_open` 寫入（條件式更新 `closed_at IS NULL`，已結案的不被改寫；恢復上架不重開）；也是結案後 12 個月期限清除的依據。 |
+| 8 | `closed_result` | NVARCHAR(12) | 是 | — | — | 結案結果（見第 6 節）：removed（版本被下架，作者自行下架或管理員下架）｜dismissed（管理員判定不成立）｜superseded（版本被新版本取代，系統專用）；空值＝未結案。檢舉人不會被通知，個人資料匯出也不含。 |
+| 9 | `created_at` | DATETIME2(6) | 否 | — | — | 檢舉時間（UTC）；每人每個台灣日的檢舉次數（每日上限，營運限制）以它彙總；管理員佇列「最早檢舉時間」的依據。 |
+| 10 | `updated_at` | DATETIME2(6) | 否 | — | — | 最後更新時間（UTC）；結案時一併更新。 |
+
+索引與約束：
+
+| 名稱 | 種類 | 欄位 | 篩選條件 | 用途 |
+|---|---|---|---|---|
+| `uq_script_reports_reporter_id` | 唯一約束 | `reporter_id`、`version_id` | — | 同一人對同一版本只能檢舉一次（唯一性按版本，所以新版本核可上架後可再檢舉）；並行的兩個請求只有一個寫入成功。 |
+| `ix_script_reports_closed_at` | 索引 | `closed_at` | — | 結案後 12 個月的期限清除。 |
+| `ix_script_reports_reporter_id_created_at` | 索引 | `reporter_id`、`created_at` | — | 每人每個台灣日的檢舉次數（每日上限）。 |
+| `ix_script_reports_version_id_closed_at` | 索引 | `version_id`、`closed_at` | — | 管理員被檢舉佇列的聚合，與版本離開上架時未結案檢舉的自動結案。 |
+
+### 5.18 `sessions`（RPG 存檔）
 
 玩家的一個遊戲存檔：開局時複製的劇本內容、主角、世界狀態、記事簿與內容模式。
 
@@ -1130,7 +1188,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `ix_sessions_last_active_at` | 索引 | `last_active_at` | — | 期限清除：全表找出最後活動超過 365 天的存檔。 |
 | `ix_sessions_user_id_last_active_at` | 索引 | `user_id`、`last_active_at` | — | 某位玩家的存檔清單（由新到舊）。 |
 
-### 5.18 `memory_logs`（RPG 回合紀錄）
+### 5.19 `memory_logs`（RPG 回合紀錄）
 
 存檔中的每一個回合：玩家行動、劇情原文與結構化輸出。最後一輪可被重新生成或編輯（rpg-turn-revision）：期間回合仍是 complete（舊內容一直可讀），以 `revising_started_at` 表示有人在修訂；成功時 `revision` 加 1，序號與輪數不變。
 
@@ -1164,7 +1222,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `ix_memory_logs_session_id_turn_number` | 索引 | `session_id`、`turn_number` | — | 依輪數讀取存檔的回合（上下文取最近 10 輪原文）。 |
 | `ix_memory_logs_turn_status_updated_at` | 索引 | `turn_status`、`updated_at` | — | 期限清除：找出超過 14 天的中斷或被擋回合。 |
 
-### 5.19 `turn_regenerations`（重新生成與編輯的回饋）
+### 5.20 `turn_regenerations`（重新生成與編輯的回饋）
 
 玩家對最後一輪重新生成或編輯時留下的回饋：重新生成要選分類並填理由（5 至 50 字，只供營運檢視）；每次認領都在同一個交易內新增一列（結果為 pending），收尾時標為 applied、failed 或 blocked，被接手的舊認領標為 failed。**不存**被取代的行動與劇情（資料最小化）；管理員的檢視頁不在 rpg-turn-revision 範圍，因此目前沒有任何管理員讀取路徑。
 
@@ -1190,7 +1248,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 |---|---|---|---|---|
 | `uq_turn_regenerations_session_turn_attempt` | 唯一約束 | `session_id`、`turn_seq`、`attempt` | — | 同一存檔的同一回合，每個嘗試序號至多一列回饋；認領是互斥的，同一嘗試不會寫兩次。 |
 
-### 5.20 `wallets`（遊戲幣錢包）
+### 5.21 `wallets`（遊戲幣錢包）
 
 每位玩家至多一個錢包：免費與付費兩個餘額，以及每次餘額異動加 1 的版本號。所有異動都以版本做條件式更新並重試，不使用資料庫專屬的鎖。
 
@@ -1214,7 +1272,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 
 另有一個 `CHECK` 約束 `ck_wallets_balances_non_negative`：`free_balance` 與 `paid_balance` 任何時候都不小於 0。
 
-### 5.21 `wallet_entries`（遊戲幣帳本）
+### 5.22 `wallet_entries`（遊戲幣帳本）
 
 只增不改的帳本：每次餘額異動在同一個交易寫一筆。**唯一的例外**：預扣列的 `resolution` 從空值被條件式更新一次為 settled 或 refunded（結算與退回因此互斥）。只放固定列舉與整數，不放任何玩家輸入的文字。
 
@@ -1283,6 +1341,8 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `script_versions.review_categories_json` | `minor_sexual`｜`sexual_violence`｜`non_consensual`｜`real_person_sexual`｜`minor_suspected`｜`real_person_suspected`｜`tier_mismatch`｜`other_concern` | 見下方「審查類別」。 |
 | `script_submissions.outcome` | `sent`｜`auto_rejected`｜`lifted` | sent＝成功送審（進入待審）；auto_rejected＝規則層或模型層明確拒絕；lifted＝管理員解除暫停發佈（使連續被拒中斷，不計入每日送審次數）。 |
 | `script_submissions.categories_json` | `minor_sexual`｜`sexual_violence`｜`non_consensual`｜`real_person_sexual`｜`minor_suspected`｜`real_person_suspected`｜`tier_mismatch`｜`other_concern` | 與 script_versions.review_categories_json 相同的類別列舉。 |
+| `script_reports.reasons_json` | `minor_sexual`｜`sexual_violence`｜`real_person_sexual`｜`tier_mismatch`｜`plagiarism`｜`privacy_harassment`｜`other` | 檢舉的預設原因（可多選，一至七個不重複）：minor_sexual＝涉及未成年的性內容；sexual_violence＝性暴力或非自願情節；real_person_sexual＝以真人名義的性內容；tier_mismatch＝內容分級不符；plagiarism＝抄襲或侵權；privacy_harassment＝洩漏個資或騷擾；other＝其他。前三項是紅線理由，有人勾選任一項時檢舉在管理員佇列排最前。 |
+| `script_reports.closed_result` | `removed`｜`dismissed`｜`superseded` | removed＝版本被下架（作者自行下架或管理員下架，系統自動結案）；dismissed＝管理員判定不成立；superseded＝版本被新版本取代（系統專用）。空值＝未結案。 |
 | `sessions.content_tier` | `safe`｜`adult`（舊值 `standard` 讀作 `adult`） | 開存檔當下的生效內容模式；新版程式只寫入、不讀取（存檔的生效模式一律現算）。 |
 | `sessions.status` | `active`｜`ended` | active＝進行中；ended＝已完結（歷史可讀，不得再新增回合，不可恢復）。 |
 | `wallet_entries.kind` | `signup_grant`｜`daily_checkin`｜`turn_hold`｜`turn_refund`｜`admin_adjust` | signup_grant＝首次註冊贈幣；daily_checkin＝每日簽到；turn_hold＝冒險回合的預扣（結算後即為消耗）；turn_refund＝預扣的退回；admin_adjust＝管理員調整。 |
@@ -1434,6 +1494,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 | `script_versions.milestones_json` | `[{id, title, note, trigger: {kind, value}}, …]` | 最多 8 個；`trigger.kind` 為 `age`（玩家年齡到達）或 `year`（遊戲內年份到達），`value` 為整數；觸發由 Service 判斷，不由模型宣告；未帶 `id` 時由伺服器產生。原始劇本唯讀，LLM 延伸的目標另存於存檔。 |
 | `script_versions.review_categories_json` | `["類別", …]` | 審查類別的固定列舉（見第 6 節），不含任何內容；`pass` 時為空。 |
 | `script_submissions.categories_json` | `["類別", …]` | 同上；成功送審時帶有疑慮的類別，自動拒絕時帶拒絕的類別，其餘為空。 |
+| `script_reports.reasons_json` | `["原因", …]` | 檢舉的預設原因（固定列舉，見第 6 節），一至七個不重複；只用來顯示，排序與聚合只讀 `red_line`；不含自寫文字（文字在 `note`）。 |
 | `sessions.script_snapshot_json` | 標準化的劇本內容（固定規格的全部欄位）加 `spec_version` | 開存檔當時的完整複本；存檔之後不再讀取劇本。 |
 | `sessions.protagonist_json` | `{"character": {name, personality, age, appearance, occupation, speech_style, hidden_trait, image, origin}, "anchor": {kind, ref, text} 或 null}` | 玩家主角；角色卡沿用劇本角色規格（`image` 恆為 null），另有主角專有的來歷 `origin`（`native` 本地人｜`transmigrator` 穿越者；列舉，不經文字審查；缺值視為 `native`，遷移之前建立的存檔沒有這個鍵，讀取時視為本地人）。`anchor.kind` 為 `character`｜`location`｜`milestone`，`ref` 指向開存檔當時劇本複本中的人物姓名、地點名稱或里程碑編號，`text` 至多 60 字；聯繫不得是性的關係或性奴等禁斷關係（戀愛、婚姻與婚約不論年齡開放）；略過錨定事實時 `anchor` 為 null。個資。 |
 | `sessions.entities_json` | `{"v": 1, "npcs": {"<NFC 小寫名>": {name, traits: [{label, layer}], stage, age, age_at_month, anchor_fact, last_seen_turn, origin}}, "protagonist": {age, age_at_month}, "locations": […]}` | 世界狀態 v1。`npcs` 的鍵是 NFC 正規化後的小寫姓名；`traits[].layer` 為 `surface`｜`hidden`；`stage` 為 `surface`｜`cracking`｜`revealed`，由模型提議、Service 驗證轉移；`origin` 為 `script`（劇本角色）｜`story`（故事中新增）。目前年齡 ＝ `age` ＋ (經過月數 − `age_at_month`) ÷ 12（取整）。`protagonist` 在第一次更正主角年齡時才建立，原始角色卡與 `character_age` 不動；`locations` 是故事中新增的地點。個資（玩家文字衍生），不依內容篩選查詢。 |
@@ -1495,6 +1556,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 | `sessions.notebook_text`、`protagonist_json`、`opening_text`、`entities_json`、`memory_logs.user_action`、`llm_raw_response`、`script_snapshot_json` | RPG 的記事簿、玩家主角（角色卡與錨定事實）、第 0 幕的文字、NPC 與地點的世界狀態、玩家行動、劇情原文與劇本複本；不在管理員預設可檢視的範圍 |
 | `turn_regenerations.reason`、`memory_logs.state_before_json` | 玩家重新生成時填的理由（只供營運檢視，不進模型呼叫與日誌）與回合前的世界快照（玩家文字衍生）；隨存檔與帳號刪除，理由納入個人資料匯出；目前沒有任何管理員讀取路徑 |
 | `script_versions` 的文字欄位與 JSON 欄位 | 玩家創作的劇本設定（含草稿、待審與舊版本）；只有送審公開或被檢舉的劇本例外 |
+| `script_reports.reasons_json`、`note` | 玩家的檢舉原因與自寫文字（玩家文字，視為個資）；不送入模型、不進日誌；只有管理員能在被檢舉的劇本下檢視，作者看不到檢舉人與檢舉內容；隨檢舉人的帳號刪除並納入其個人資料匯出（匯出不含結案結果） |
 | `llm_call_logs.error_detail` | 驗證失敗的模型原文（截斷 2000 字）；僅管理員可讀，14 天後清為空值 |
 
 ## 9. 資料生命週期
@@ -1519,6 +1581,7 @@ flowchart TD
 | 管理員重設權杖 | 到期後 7 天 | purge-expired-data | 不論是否已使用 |
 | 帳號鎖定計次 | 建立後 7 天 | purge-expired-data | 計次視窗只有 15 分鐘 |
 | 劇本送審紀錄 | 建立後 365 天 | purge-expired-data | 只刪紀錄，帳號的暫停發佈旗標不受影響 |
+| 劇本檢舉 | 結案後 365 天（未結案者與所屬版本相同） | purge-expired-data；AccountErasureService | 版本下架或被新版本取代時，未結案的檢舉由系統自動結案；檢舉人刪帳號時其檢舉一併刪除（已做出的下架決定與稽核紀錄不受影響）；被檢舉版本的作者抹除時先刪除其版本的檢舉；納入檢舉人的個人資料匯出 |
 | 劇本（含草稿、待審、被退回與舊版本） | 隨作者的帳號抹除 | AccountErasureService | 別的玩家用該作者的劇本開過的存檔保留（有自己的複本），來源參照先清為空值 |
 | 遊戲幣錢包與帳本 | 與所屬帳號相同 | AccountErasureService | CASCADE，不匿名化保留；幣不過期，帳本不設期限清除；納入個人資料匯出；付款紀錄的法定保存期限待金流規範（W2） |
 | 申訴 | 與所屬帳號相同 | AccountErasureService | 不由期限清除；納入個人資料匯出 |
@@ -1640,6 +1703,7 @@ flowchart LR
 | `0019_adult_declaration` | 2026-11-17 | 全站只限滿 18 歲（adult-only-signup）：users 新增 adult_declared_at（DATETIME2(6)）與 adult_declaration_version（NVARCHAR(40)），皆可為空、不回填、不建索引；`is_adult_at_confirmation` 保留但不再寫入 | 新增欄位 |
 | `0020_safe_mode_hint` | 2026-11-19 | 安全模式開關（safe-mode-toggle）：sessions 新增 safe_hint_at（DATETIME2(6)），可為空、不回填、不建索引；遊戲內提示每個存檔只出現一次的記錄。沒有資料改寫：舊值 `standard` 於讀取時讀作 `adult` | 新增欄位 |
 | `0021_script_publishing` | 2026-11-20 | 劇本審核、下架與目錄（rpg-script-publishing）：script_versions 新增 submitted_at、removed_by（NVARCHAR(8)）、decision_category（NVARCHAR(24)）、decision_note（NVARCHAR(max)）、decided_at（DATETIME2(6)），皆可為空、不回填；新增索引 ix_script_versions_status_published_at（status、published_at）；版本狀態新增值 `removed`（值域的新增，不加 CHECK）。回復前須確認沒有 `removed` 版本 | 新增欄位與索引 |
+| `0022_script_reports` | 2026-11-21 | 劇本檢舉與匿名保留（rpg-script-reports）：新增 script_reports（10 欄；版本外鍵無動作、檢舉人外鍵 CASCADE；唯一約束 `(reporter_id, version_id)`；三個索引）；users 新增 keep_published_scripts（BIT，NOT NULL、預設 0）；runtime_limits 補 script_report_daily（只插入缺少的）。回復前須確認 script_reports 為空（舊版的抹除流程不認識它） | 新增資料表與欄位，寫入初始資料 |
 
 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束；任何版本的程式碼都必須能在「目前結構」與「下一版結構」上運作。migration 是部署流程中獨立的步驟（升級前先備份），不在應用程式啟動時自動執行。完整的 migration 設計見 [資料模型-data-model.md](資料模型-data-model.md) 第 3 節。
 
@@ -1748,3 +1812,6 @@ flowchart TD
 | 2026-11-19 | 文件 | 本文件 | 同步 safe-mode-toggle 第 2 組的規則修訂（內容模式只有 safe／adult 兩種）：修訂 `users.content_tier_preference`、`script_versions.content_tier`、`sessions.content_tier` 三處的固定值與欄位說明（第 5、6 節與 ERD）——舊值 `standard` 讀取時讀作 `adult`、不改寫既有資料；劇本的模式只影響生效模式（所有上架劇本都可開存檔）；`sessions.content_tier` 新版程式只寫入、不讀取（存檔的生效模式現算）。**只是語意說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：欄位型別、預設值與 `0020_safe_mode_hint` 的內容都不變 | 本文件 |
 | 2026-11-20 | 新增 | 欄位 `script_versions.submitted_at`（DATETIME2(6)）、`removed_by`（NVARCHAR(8)）、`decision_category`（NVARCHAR(24)）、`decision_note`（NVARCHAR(max)）、`decided_at`（DATETIME2(6)），皆可為空；索引 `ix_script_versions_status_published_at`（`status`、`published_at`） | 劇本審核與下架：送審時間（審核佇列排序）、下架者（誰下架誰恢復）、退回與管理員下架的固定類別、只供管理員的審核備註與決定時間；索引供目錄的游標查詢與上架清單。不回填、全部是中繼資料（不進內容雜湊）；`script_versions` 由 33 欄變 38 欄、全庫欄位共 257 個、索引與唯一約束 52 個。版本狀態新增值 `removed`（值域，不是結構變更，不加 CHECK）；稽核動作新增 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`（值域）。 | `0021_script_publishing` |
 | 2026-11-20 | 套用 | 實際資料庫 `project` | 先備份（`COPY_ONLY`、`CHECKSUM`，`project_pre_0021_20261120_091518.bak`，`RESTORE VERIFYONLY` 通過，`RESTORE HEADERONLY` 確認為 `project` 的完整備份、含 CHECKSUM，伺服器確認檔案存在）後，由 `0017_story_preference` 依序套用 `0018_rpg_turn_revision`、`0019_adult_declaration`、`0020_safe_mode_hint`、`0021_script_publishing`（使用者 2026-11-20 同意升級到 0021）；`alembic current` 為 `0021_script_publishing (head)`，`alembic check` 沒有差異；唯讀查詢確認 21 張資料表、257 個欄位（升級前 20 張、234 個；不含 `alembic_version`）、18 個外鍵、`runtime_limits` 17 列（升級前 16 列，`rpg.free_regenerations` 由 `0018` 寫入）；`users`、`scripts`、`script_versions`、`script_version_tags` 的列數升級前後相同（1、1、1、5）；`script_versions` 的五個新欄位皆可為空且既有版本為空值、索引 `ix_script_versions_status_published_at` 存在。**實跑 downgrade 驗證**：`alembic downgrade 0020_safe_mode_hint` 後欄位 257 → 252、索引移除、既有列數不變，再 `alembic upgrade head` 回到 `0021_script_publishing (head)`、`alembic check` 沒有差異。`flask seed-scripts --dry-run` 顯示 `xianxia-qingyun` 有一個新版本待建立（開發資料庫自 safe-mode-toggle 之後沒有執行過 `seed-scripts`，內建劇本的內容已與資料庫中的版本不同；本次沒有執行，也不屬於這次的範圍）。由 Claude 依使用者要求執行 | `0018_rpg_turn_revision`、`0019_adult_declaration`、`0020_safe_mode_hint`、`0021_script_publishing` |
+| 2026-11-21 | 新增 | 資料表 `script_reports`（10 欄；唯一約束 `uq_script_reports_reporter_id`；索引 `ix_script_reports_version_id_closed_at`、`ix_script_reports_reporter_id_created_at`、`ix_script_reports_closed_at`；外鍵 `version_id`→`script_versions.id` NO ACTION、`reporter_id`→`users.id` CASCADE） | 劇本檢舉：玩家對已上架版本的檢舉（預設原因與選填的自寫文字，玩家文字視為個資）；版本外鍵刻意無動作（`users` 到這張表有兩條路徑，SQL Server 不允許多重串聯路徑，錯誤 1785），由抹除流程在刪除版本之前先刪除；`red_line` 另存（優先度不得依 JSON 內容排序）；結案欄位只由 Repository 寫入；全庫 22 張資料表、欄位共 268 個、56 個索引與唯一約束、20 個外鍵。**這一批只有結構、模型與 Repository**：自動結案、抹除流程、保存期限清除與匯出的程式在同一個 change 的後續批次完成。**尚未套用到實際的 `project`** | `0022_script_reports` |
+| 2026-11-21 | 新增 | 欄位 `users.keep_published_scripts`（BIT，NOT NULL，資料庫預設 0） | 帳號偏好「匿名保留我已發佈的劇本」，預設關閉；既有帳號全部為關閉；只有「使用者自己申請刪除」與「連續 12 個月未登入」兩種原因的刪除會在執行刪除當下讀它；`users` 由 38 欄變 39 欄。遷移的預設值寫成字串 `"0"`、不用運算式：運算式預設值會讓 Alembic 在 SQLite 以「重建資料表」處理，而重建 `users` 會串聯清掉劇本與存檔（遷移測試固定） | `0022_script_reports` |
+| 2026-11-21 | 新增 | `runtime_limits` 的一列初始資料（`script_report_daily` = 5） | 每人每個台灣日的檢舉上限；只插入資料庫還沒有的鍵，部署者調整過的值不被覆蓋；`runtime_limits` 由 17 列變 18 列。程式端的保底預設與固定值字典（第 6、6.5 節）在同一個 change 的後續批次補上 | `0022_script_reports` |

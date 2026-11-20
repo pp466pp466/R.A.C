@@ -32,6 +32,7 @@ CONTENT_MODE_COLUMNS = ("content_tier_preference", "adult_confirmed_at", "adult_
 AUTHORING_TABLES = ("script_submissions", "runtime_limits")
 WALLET_TABLES = ("wallets", "wallet_entries")
 REVISION_TABLES = ("turn_regenerations",)
+REPORT_TABLES = ("script_reports",)                                                                   # 0022（rpg-script-reports）
 REVISION_COLUMNS = ("revision", "regen_count", "revising_started_at", "state_before_json")
 AUTHORING_USER_COLUMNS = ("nickname", "nickname_code", "publish_suspended_at")
 REVIEW_COLUMNS = ("review_hash", "review_verdict", "review_categories_json", "reviewed_at")
@@ -49,7 +50,9 @@ WALLET_LIMITS = (
 )
 RPG_LIMITS = (("rpg.max_months_per_turn", 24),)
 REVISION_LIMITS = (("rpg.free_regenerations", 2),)
-HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS + REVISION_LIMITS
+REPORT_LIMITS = (("script_report_daily", 5),)                                                    # 0022（rpg-script-reports）
+HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS + REVISION_LIMITS + REPORT_LIMITS
+REVISION_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS + REVISION_LIMITS       # 0018～0021 當時的十七個
 TURN_ENGINE_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS + RPG_LIMITS       # 0016、0017 當時的十六個
 WALLET_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS + WALLET_LIMITS       # 0015 當時的十五個
 CHARACTER_HEAD_LIMITS = INITIAL_LIMITS + CHARACTER_LIMITS       # 0014 當時的十個
@@ -74,7 +77,7 @@ def test_upgrade_then_downgrade_on_a_fresh_file_database(tmp_path):
     command.upgrade(cfg, "head")
     engine = create_engine_for(url)
     assert current_revision(engine) == head
-    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES, *REVISION_TABLES}
+    assert set(inspect(engine).get_table_names()) == {"alembic_version", *MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES, *REVISION_TABLES, *REPORT_TABLES}
 
     command.downgrade(cfg, "base")
     assert current_revision(engine) is None
@@ -982,7 +985,7 @@ def test_the_schema_comparison_really_reports_differences(migrated_database):
         context = MigrationContext.configure(conn, opts={"compare_type": True})
         differences = compare_metadata(context, MetaData())
     removed = {d[1].name for d in differences if d[0] == "remove_table"}
-    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES, *REVISION_TABLES} <= removed
+    assert {*MEMBER_TABLES, TOMBSTONE_TABLE, *CHAT_TABLES, *ADMIN_TABLES, *ALERT_TABLES, *LOCK_TABLES, *RPG_TABLES, *AUTHORING_TABLES, *WALLET_TABLES, *REVISION_TABLES, *REPORT_TABLES} <= removed
 
 
 def test_migrated_tables_enforce_the_documented_constraints(migrated_database):
@@ -1264,7 +1267,7 @@ def test_0018_adds_the_revision_columns_the_feedback_table_and_the_free_regenera
     added = {c["name"]: c for c in inspector.get_columns("memory_logs") if c["name"] not in before_columns}
     assert set(added) == set(REVISION_COLUMNS)
     assert {name for name, c in added.items() if c["nullable"]} == {"revising_started_at", "state_before_json"}         # 另外兩欄有預設值，NOT NULL
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}                    # 新增一個，調整過的值沒被蓋掉
+    assert limits_now() == {**dict(REVISION_HEAD_LIMITS), "script_limit.free": 9}                    # 新增一個，調整過的值沒被蓋掉
     with engine.connect() as conn:                                                           # 既有回合不變，新欄位的預設值正確，沒有快照
         turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
     assert (turn["user_action"], turn["llm_raw_response"], turn["turn_number"], turn["attempt"]) == ("舊行動", "舊劇情", 1, 1)
@@ -1286,7 +1289,7 @@ def test_0018_adds_the_revision_columns_the_feedback_table_and_the_free_regenera
             assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 1, name
 
     command.upgrade(cfg, "0018_rpg_turn_revision")                                          # 再升級一次，不重複
-    assert limits_now() == {**dict(HEAD_LIMITS), "script_limit.free": 9}
+    assert limits_now() == {**dict(REVISION_HEAD_LIMITS), "script_limit.free": 9}
     with engine.connect() as conn:
         turn = conn.execute(select(Table("memory_logs", MetaData(), autoload_with=conn))).mappings().one()
     assert (turn["revision"], turn["regen_count"]) == (1, 0)
@@ -1530,3 +1533,161 @@ def test_migrated_revision_columns_and_feedback_table_work_on_both_databases(mig
         assert conn.execute(select(func.count()).select_from(feedback)).scalar_one() == 2
         conn.execute(Table("sessions", MetaData(), autoload_with=conn).delete())             # 刪除存檔：回饋串聯刪除
         assert conn.execute(select(func.count()).select_from(feedback)).scalar_one() == 0
+
+
+# ---- 0022 rpg-script-reports ---------------------------------------------------------
+
+def _index_columns(inspector, table: str) -> dict[str, tuple[list[str], bool]]:
+    return {i["name"]: (i["column_names"], bool(i["unique"])) for i in inspector.get_indexes(table)}
+
+
+def test_0022_adds_the_report_table_one_user_column_and_one_limit_and_keeps_every_row(tmp_path):
+    """rpg-script-reports：新表 script_reports（欄位、可空性、唯一約束、三個索引、兩個外鍵）、users.keep_published_scripts（NOT NULL，既有帳號為假）、
+    runtime_limits 補 script_report_daily（5）；既有資料一列不少、不改寫；回復移除新表、新欄位與那一列設定、不串聯刪除任何資料；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'script_reports.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0022_script_reports")
+    assert revision.down_revision == "0021_script_publishing" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0021_script_publishing")
+    with engine.begin() as conn:
+        _insert_old_script_version(conn)
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.update().where(limits.c.key == "script_limit.free").values(int_value=9))       # 部署者調整過的值
+    before_tables = set(inspect(engine).get_table_names())
+    before_user_columns = {c["name"] for c in inspect(engine).get_columns("users")}
+
+    command.upgrade(cfg, "0022_script_reports")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables | {"script_reports"}
+    columns = {c["name"]: c for c in inspector.get_columns("script_reports")}
+    assert set(columns) == {
+        "id", "version_id", "reporter_id", "reasons_json", "red_line", "note", "created_at", "updated_at", "closed_at", "closed_result",
+    }
+    assert {name for name, column in columns.items() if column["nullable"]} == {"note", "closed_at", "closed_result"}     # 其餘都不可為空
+    assert str(columns["closed_result"]["type"]).upper().startswith(("VARCHAR(12)", "NVARCHAR(12)"))
+    assert [c["column_names"] for c in inspector.get_unique_constraints("script_reports")] == [["reporter_id", "version_id"]]
+    assert inspector.get_unique_constraints("script_reports")[0]["name"] == "uq_script_reports_reporter_id"
+    indexes = _index_columns(inspector, "script_reports")
+    assert indexes == {
+        "ix_script_reports_version_id_closed_at": (["version_id", "closed_at"], False),
+        "ix_script_reports_reporter_id_created_at": (["reporter_id", "created_at"], False),
+        "ix_script_reports_closed_at": (["closed_at"], False),
+    }
+    foreign_keys = {fk["name"]: fk for fk in inspector.get_foreign_keys("script_reports")}
+    assert set(foreign_keys) == {"fk_script_reports_version_id_script_versions", "fk_script_reports_reporter_id_users"}
+    version_fk = foreign_keys["fk_script_reports_version_id_script_versions"]
+    reporter_fk = foreign_keys["fk_script_reports_reporter_id_users"]
+    assert (version_fk["referred_table"], version_fk["constrained_columns"]) == ("script_versions", ["version_id"])
+    assert not (version_fk.get("options") or {}).get("ondelete")                                  # 版本外鍵是無動作：避免多重串聯路徑
+    assert (reporter_fk["referred_table"], (reporter_fk.get("options") or {}).get("ondelete")) == ("users", "CASCADE")
+
+    added = {c["name"]: c for c in inspector.get_columns("users") if c["name"] not in before_user_columns}
+    assert set(added) == {"keep_published_scripts"} and added["keep_published_scripts"]["nullable"] is False
+    with engine.connect() as conn:                                                                # 既有資料不變
+        users = conn.execute(select(Table("users", MetaData(), autoload_with=conn))).mappings().all()
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        stored = {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()}
+    assert len(users) == 1 and not users[0]["keep_published_scripts"]                             # 既有帳號視為關閉
+    assert stored == {**dict(REVISION_HEAD_LIMITS), "script_limit.free": 9, "script_report_daily": 5}   # 新增一個，調整過的值沒被蓋掉
+    with engine.connect() as conn:                                                                # 升級本身不能重建 users：重建會串聯清掉劇本與版本
+        for name in ("scripts", "script_versions"):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 1, name
+
+    command.downgrade(cfg, "0021_script_publishing")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    assert {c["name"] for c in inspector.get_columns("users")} == before_user_columns
+    with engine.connect() as conn:                                                                # 回復不串聯刪除既有的帳號、劇本與版本
+        for name, expected in (("users", 1), ("scripts", 1), ("script_versions", 1)):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == expected, name
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        stored = {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()}
+    assert stored == {**dict(REVISION_HEAD_LIMITS), "script_limit.free": 9}                       # 那一列設定一併移除
+
+    command.upgrade(cfg, "0022_script_reports")                                                   # 再升級一次，不重複
+    assert set(inspect(engine).get_table_names()) == before_tables | {"script_reports"}
+    assert {c["name"] for c in inspect(engine).get_columns("users")} == before_user_columns | {"keep_published_scripts"}
+    engine.dispose()
+
+
+def test_0022_does_not_overwrite_or_duplicate_a_report_limit_that_already_exists(tmp_path):
+    """資料庫在升級前已經有這個鍵（例如部署者先手動寫入）：保留原值，不產生重複；回復時仍會移除它（它屬於這個 change 的設定）。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'script_reports_existing.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    command.upgrade(cfg, "0021_script_publishing")
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        conn.execute(limits.insert().values(key="script_report_daily", int_value=2, updated_at=utcnow().replace(tzinfo=None)))
+    command.upgrade(cfg, "0022_script_reports")
+    with engine.connect() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        rows = conn.execute(select(limits.c.key, limits.c.int_value).where(limits.c.key == "script_report_daily")).all()
+    assert rows == [("script_report_daily", 2)]
+    command.downgrade(cfg, "0021_script_publishing")
+    with engine.connect() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        assert conn.execute(select(func.count()).select_from(limits).where(limits.c.key == "script_report_daily")).scalar_one() == 0
+    engine.dispose()
+
+
+def _insert_report(conn, *, reporter_id: int, version_id: int, **values) -> None:
+    now = utcnow().replace(tzinfo=None)
+    as_json = (lambda value: json.dumps(value, ensure_ascii=False)) if conn.dialect.name == "mssql" else (lambda value: value)
+    row = dict(
+        version_id=version_id, reporter_id=reporter_id, reasons_json=as_json(["minor_sexual", "other"]), red_line=True,
+        note="自寫文字：中文與 emoji 😀", created_at=now, updated_at=now,
+    )
+    row.update(values)
+    conn.execute(Table("script_reports", MetaData(), autoload_with=conn).insert().values(**row))
+
+
+def test_migrated_report_table_and_retention_column_behave_correctly_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：升級後有十八個設定（鍵唯一）；舊版程式形狀的帳號 INSERT（不含新欄位）取得 keep_published_scripts 為假；
+    檢舉的 (檢舉人, 版本) 唯一；中文與 emoji 的自寫文字不亂碼、未結案時結案欄位為空；刪除檢舉人時其檢舉串聯刪除；
+    **刪除被檢舉版本的作者會被無動作的版本外鍵擋下**（不留下懸空的編號；SQL Server 不能多重串聯，由抹除流程在刪除之前清除）；
+    清掉檢舉之後作者才刪得掉。"""
+    engine = migrated_database
+    with engine.begin() as conn:
+        limits = Table("runtime_limits", MetaData(), autoload_with=conn)
+        assert {row["key"]: row["int_value"] for row in conn.execute(select(limits)).mappings()} == dict(HEAD_LIMITS)
+        _insert_old_script_version(conn)                                                         # 作者是 1 號帳號
+        users = Table("users", MetaData(), autoload_with=conn)
+        _insert_user(conn, users, 2)                                                             # 檢舉人
+        _insert_user(conn, users, 3)
+        rows = {row["email"]: row for row in conn.execute(select(users)).mappings()}
+        assert all(row["keep_published_scripts"] in (False, 0) for row in rows.values())          # 沒有帶新欄位的 INSERT 取得預設的假
+        author_id, reporter_id, other_id = rows["u1@example.com"]["id"], rows["u2@example.com"]["id"], rows["u3@example.com"]["id"]
+        version_id = conn.execute(select(Table("script_versions", MetaData(), autoload_with=conn).c.id)).scalar_one()
+
+    reports = Table("script_reports", MetaData(), autoload_with=engine)
+    with engine.begin() as conn:
+        _insert_report(conn, reporter_id=reporter_id, version_id=version_id)
+        _insert_report(conn, reporter_id=other_id, version_id=version_id, red_line=False, reasons_json=["other"], note=None)
+    with engine.connect() as conn:
+        row = conn.execute(select(reports).where(reports.c.reporter_id == reporter_id)).mappings().one()
+    assert row["note"] == "自寫文字：中文與 emoji 😀" and row["red_line"] in (True, 1)
+    assert row["closed_at"] is None and row["closed_result"] is None
+    with pytest.raises(IntegrityError):                                                          # (檢舉人, 版本) 唯一
+        with engine.begin() as conn:
+            _insert_report(conn, reporter_id=reporter_id, version_id=version_id)
+
+    users_table = Table("users", MetaData(), autoload_with=engine)
+    with engine.begin() as conn:                                                                 # 刪除檢舉人：其檢舉串聯刪除，別人的不受影響
+        conn.execute(users_table.delete().where(users_table.c.id == other_id))
+        assert conn.execute(select(func.count()).select_from(reports)).scalar_one() == 1
+
+    with pytest.raises(IntegrityError):                                                          # 刪除作者：串聯到版本時被無動作的外鍵擋下
+        with engine.begin() as conn:
+            conn.execute(users_table.delete().where(users_table.c.id == author_id))
+    with engine.connect() as conn:                                                               # 失敗後沒有半套資料：作者、劇本、版本、檢舉都還在
+        for name, expected in (("scripts", 1), ("script_versions", 1), ("script_reports", 1)):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == expected, name
+    with engine.begin() as conn:                                                                 # 抹除流程的做法：先清除檢舉，作者才刪得掉
+        conn.execute(reports.delete())
+        conn.execute(users_table.delete().where(users_table.c.id == author_id))
+    with engine.connect() as conn:
+        for name in ("scripts", "script_versions", "script_reports"):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 0, name
