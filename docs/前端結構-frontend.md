@@ -200,7 +200,7 @@ flowchart LR
 - **點選未綁定劇本時的詢問**（safe-mode-toggle，`entry.js` 的 `start`、`needsModeAsk`）：玩家目前是安全模式開（`content_mode.effective === 'safe'`）、緊急煞車未啟用（`forced !== true`），而卡片的 `content_tier` 為 `adult`（未綁定）時，「開始」只開啟自製 Modal（`askCard` 有值就是開啟，由 Vue 狀態接管，沒有 Bootstrap 的 JavaScript）、不導向。Modal 有三個回答（`actions` 插槽，窄螢幕直向堆疊、主要動作在最上面）：「前往設定」導向 `/account?return=/game/start/<版本識別碼>`（`Game.accountLink`，只接受 `/game/` 開頭的站內路徑；帳號頁改完會回到該劇本的精靈頁）、「維持安全模式繼續」直接進精靈頁且不改任何設定、「取消」；Esc 與遮罩視同取消，留在目錄、沒有導向。綁定的劇本、已關閉安全模式、緊急煞車、沒有拿到模式資料或卡片值不認得時都不詢問（真正的生效模式永遠由伺服器現算，詢問只是提醒，不改變任何模式）。卡片只有綁定的劇本有「綁定安全模式」標籤；「我的存檔」的標籤是現算的生效模式（安全模式開／關）。精靈頁不再有「內容模式高於目前模式」的失敗，`wizard-state.js` 與 `game-state.js` 的 403 對照表已移除 `content_tier_restricted` 與 `content_mode_restricted`（收到不認得的代碼時用通用的閘門文字，失敗時關閉）。
 - **只讀與個資**：入口頁只呼叫兩個 GET 端點，不碰遊戲幣；作者與玩家的文字一律以 `{{ }}` 純文字顯示；不寫入 `localStorage`、`sessionStorage`、IndexedDB 或 cookie，也沒有 `console.log`（`tests/test_game_pages.py` 掃描）。
 - **版面**：`game.css` 預設單欄，768px 以上兩欄；沒有固定寬度，長文字以 `overflow-wrap` 折行，360px 不橫向溢出；沿用深色琥珀配色，沒有純白。
-- **導覽**：`/game` 頂列有「客服」「創作」「帳號」；`/scripts` 與 `/cs` 的頁首、`/account`（卡片頂端的小導覽；等待刪除者的版本沒有）各有一個回 `/game` 的「冒險」連結，都是一般站內連結、沒有 `data-bs-*`（各頁的測試與 `tests/test_game_pages.py` 檢查）。
+- **導覽**：`/game` 頂列有「客服」「創作」「帳號」；`/scripts` 與 `/cs` 的頁首、`/account`（卡片頂端的導覽；等待刪除者的版本沒有）各有一個回 `/game` 的「冒險」連結，都是一般站內連結、沒有 `data-bs-*`（各頁的測試與 `tests/test_game_pages.py` 檢查）。**帳號頁的「冒險」是有邊框、至少約 44px 高的按鈕樣式**（`.account-nav__link`；原本是與欄位標籤同色的灰字、28×21 像素，手機上看不出能點），且「暱稱與劇本創作」區塊的按鈕列有「前往冒險」，排在「前往劇本創作」前面（`tests/test_account_page.py` 固定）；年齡確認頁（`age.js`）補填成功後的備援目的地與 `DEFAULT_AFTER_LOGIN` 一致（`/game`，`tests/test_age_page.py` 固定）。
 
 ### 開存檔精靈（`/game/start/<版本識別碼>`，rpg-entry-ui）
 

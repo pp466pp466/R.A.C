@@ -180,3 +180,11 @@ def test_the_script_validates_sends_and_follows_the_flow_module_and_keeps_nothin
         assert storage not in script, storage                                           # 生日不寫進任何瀏覽器儲存體
     template = _asset("template", "auth/age.html")
     assert template.index("auth-flows.js") < template.index("age.js")                   # 判斷邏輯先載入
+
+
+def test_the_fallback_after_a_successful_age_check_is_the_default_landing_page_not_the_chat():
+    """伺服器一定會給 `next`（預設就是 `DEFAULT_AFTER_LOGIN`），腳本的備援只在初始狀態壞掉時才用；它曾停在改版之前的 `/cs`（客服），
+    與「登入後的預設頁面是 /game」不一致。備援要跟常數一致，之後預設頁面再改時這裡會提醒。"""
+    script = _asset("script", "auth/age.js")
+    assert f"Auth.safeDestination(state.next, '{DEFAULT_AFTER_LOGIN}')" in script
+    assert "'/cs'" not in script

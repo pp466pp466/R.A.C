@@ -235,6 +235,25 @@ def test_the_account_page_links_to_the_adventure_home_as_a_plain_site_link(app):
     assert re.findall(r"data-bs-[\w-]+", html) == ["data-bs-theme"]            # 只有深色模式開關；連結不靠 Bootstrap 的互動屬性
 
 
+def test_the_nickname_section_offers_the_adventure_next_to_the_script_workshop(app):
+    """設定完暱稱之後，玩家眼前的下一步要同時看得到「前往冒險」與「前往劇本創作」；曾經只有後者，冒險的入口只剩頁首一個小小的灰字。"""
+    html = page_for(app).get_data(as_text=True)
+    form = html.split('id="account_nickname"', 1)[1].split("</form>", 1)[0]
+    assert '<a class="ui-btn" href="/game">前往冒險</a>' in form
+    assert '<a class="ui-btn" href="/scripts">前往劇本創作</a>' in form
+    assert form.index("前往冒險") < form.index("前往劇本創作")                        # 冒險是主要的下一步，排在創作前面
+
+
+def test_the_header_adventure_link_is_a_touch_sized_button_and_not_a_muted_label():
+    """頁首的「冒險」曾是 28×21 像素、與欄位標籤同色的灰字，手機上看不出能點也不好點；現在要有邊框、至少約 44px 高，且不是標籤的灰色。"""
+    css = (PROJECT_ROOT / "app" / "static" / "css" / "auth.css").read_text(encoding="utf-8-sig")
+    rule = css.split(".account-nav__link {", 1)[1].split("}", 1)[0]
+    assert "min-height: 2.75rem" in rule and "border: var(--border-hairline)" in rule
+    assert "var(--color-text-muted)" not in rule
+    hover = css.split(".account-nav__link:hover,", 1)[1].split("}", 1)[0]
+    assert ".account-nav__link:focus-visible" in css and "var(--color-accent)" in hover      # 鍵盤與滑鼠的焦點樣式一致
+
+
 def test_a_member_awaiting_deletion_gets_no_adventure_link_since_only_cancel_and_logout_are_possible(app):
     html = page_for(app, status=STATUS_DELETION_PENDING, deletion_requested_at=START, status_before_deletion="active").get_data(as_text=True)
     assert "account-nav" not in html and 'href="/game"' not in html

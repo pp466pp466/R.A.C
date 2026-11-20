@@ -28,7 +28,7 @@
         }
         return form.run(function () {
           return axios.post('/api/auth/verify-age', Auth.ageBody(form.values)).then(function () {
-            window.location.assign(Auth.safeDestination(state.next, '/cs'));
+            window.location.assign(Auth.safeDestination(state.next, '/game'));
           });
         }, { onError: function (info) { applyOutcome(Auth.ageOutcome(info)); } });
       }

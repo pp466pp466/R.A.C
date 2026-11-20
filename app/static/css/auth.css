@@ -221,13 +221,23 @@ a.ui-btn {
   font-size: 0.875rem;
 }
 
+/* 頁首的「冒險」：長得像按鈕、觸控範圍至少約 44px，手機上才不會被當成欄位標籤、也點得到 */
 .account-nav__link {
-  color: var(--color-text-muted);
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  padding: 0 1.125rem;
+  font-size: 0.9375rem;
+  color: var(--color-text);
+  border: var(--border-hairline);
   text-decoration: none;
+  transition: color 0.15s ease, border-color 0.15s ease;
 }
 
-.account-nav__link:hover {
+.account-nav__link:hover,
+.account-nav__link:focus-visible {
   color: var(--color-accent);
+  border-color: var(--color-accent);
 }
 
 .account-list {

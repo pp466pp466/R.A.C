@@ -138,6 +138,7 @@
         <button type="submit" class="ui-btn ui-btn--primary" :disabled="nicknameForm.state.submitting" :aria-busy="nicknameForm.state.submitting ? 'true' : 'false'">
           {{ nicknameForm.state.submitting ? '儲存中…' : (nickname ? '更改暱稱' : '設定暱稱') }}
         </button>
+        <a class="ui-btn" href="/game">前往冒險</a>
         <a class="ui-btn" href="/scripts">前往劇本創作</a>
       </div>
     </form>
