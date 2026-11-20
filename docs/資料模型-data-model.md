@@ -332,6 +332,7 @@ erDiagram
 | 生日是個資 | `birth_date`、`age_range` 不進 API 回應、日誌與模型 | AGENTS.md 第 10、11 節；是否成年一律由生日於當下計算 |
 | 劇本與版本分開（`0012`） | `scripts` 是身分（作者、種子鍵、筆名快照），內容與狀態在 `script_versions`；已發佈的版本不可變，修改一律新增版本 | 「核可前舊版持續有效」需要同一劇本同時存在多列內容；只在單一列上覆寫做不到不可變 |
 | 狀態由資料庫保證唯一 | `script_versions.live_script_id`、`open_script_id` 只在狀態為 `published`、`draft` 或 `pending_review` 時等於 `script_id`，各自一個「只涵蓋非 NULL 列」的部分唯一索引；兩者與狀態只由 `ScriptRepository` 寫入（架構測試擋住別處） | 每個劇本至多一個上架版本與一個進行中的版本；SQL Server 的 UNIQUE 只容許一個 NULL，不能直接對 `(script_id, status)` 設唯一，且並行請求只靠程式檢查會同時通過 |
+| 版本狀態與固定的轉移（`0021` 新增 `removed`） | `status` 只有 `draft`、`pending_review`、`published`、`rejected`、`superseded`、`removed` 六個值（字串欄位，不用資料庫列舉，新增值不改結構）；轉移只有八組：送審、撤回、核可、退回、被新版本取代、下架、恢復、下架後被新版本取代，白名單在 `ScriptRepository._ALLOWED_TRANSITIONS`；`removed` 與 `superseded` 的輔助欄位 `live_script_id`、`open_script_id` 都為空，所以下架會讓出「上架」的位置，恢復時若同劇本已有另一個上架版本由部分唯一索引擋下 | 下架是可逆的暫時狀態（誰下架誰恢復），與被取代（不可逆）分開；狀態圖見 [系統架構-architecture.md](系統架構-architecture.md)「劇本審核與下架」 |
 | 種子鍵可為空且唯一 | `scripts.seed_key` 用 `unique_when_not_null()`（`sqlite_where` 與 `mssql_where`） | 玩家劇本沒有種子鍵，多個 NULL 並存；兩種資料庫行為一致 |
 | 存檔複製劇本 | `sessions.script_snapshot_json` 存開存檔當時的完整標準化內容，`source_version_id` 只是可為空的參照 | 作者改版、下架或刪帳號都不影響存檔；也讓「作者被抹除時別人的存檔保留」成立 |
 | 來源參照是無動作的外鍵 | `sessions.source_version_id → script_versions.id` 沒有 `ON DELETE`；刪除版本與抹除帳號的流程先把參照清為空值 | 刪除使用者有兩條路徑到達 `sessions`（`users → sessions`，與 `users → scripts → script_versions → sessions`），SQL Server 不允許多重串聯路徑（錯誤 1785）；有外鍵才不會出現指向已刪除編號的懸空參照，忘了清空時刪除會直接失敗 |

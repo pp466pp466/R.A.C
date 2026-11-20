@@ -1,6 +1,6 @@
 # 帳號、年齡與存取控制
 
-> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（兩種內容模式、生效模式現算、緊急煞車、內容模式 API，第 5 節「內容模式」）、wallet-hub（錢包頁 `/wallet` 的存取規則，第 7f 節）、admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
+> 狀態：已實作（管理員後台由 C-4b 實作；使用者自助刪除帳號與受限登入狀態由 C-4c 實作） ｜ 最後更新：2026-11-20 ｜ 對應 change：rpg-script-publishing（管理員審核與下架的權限與稽核：第 7 節的可讀範圍、核可與退回不需密碼、下架與恢復須密碼、只有下架者能恢復、備註不外洩、`script.*` 五個稽核動作）、safe-mode-toggle（兩種內容模式、生效模式現算、緊急煞車、內容模式 API，第 5 節「內容模式」）、wallet-hub（錢包頁 `/wallet` 的存取規則，第 7f 節）、admin-unlimited-coins（管理員帳號不消耗遊戲幣、`is_active_admin`）、adult-only-signup（全站只限滿 18 歲、登入頁年滿 18 歲聲明、未滿 18 歲抹除）、rpg-turn-revision（修訂端點的存取規則、政策頁與條款版本）、rpg-entry-ui（入口清單端點的存取規則）、story-preference（故事偏好端點的存取規則）、rpg-notebook（記事簿端點的存取規則）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、google-first-login、member-auth、age-gate、age-verification-birthdate、cs-chat-core（`chat_gate`）、admin-console（管理員檢查、重新輸入密碼）、openai-compatible-provider（等級 3 的環境開關，已由 rpg-data-and-script 的三種內容模式取代）、privacy-lifecycle（自助刪除帳號、受限登入狀態）、staging-deployment（開發用通道的 TRUST_PROXY_HEADERS） ｜ 規範依據：AGENTS.md 第 10、11 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（玩家首次 Google 登入即建立帳號、登入後才做年齡確認、登入有效期閒置 30 天續期、帳號鎖定與申訴、管理員 Google 加密碼二階段登入）與 change ② `remove-player-password-auth`（移除玩家端的密碼註冊、密碼登入、忘記密碼與信箱驗證，以及 `EMAIL_VERIFICATION_REQUIRED`；玩家不設密碼、不收任何信）。決定見 [report.md](report.md) 的 U-12 至 U-19。
 > 注意（2026-11-03）：AGENTS.md 第 10 節新增「暱稱與筆名」（初次設定頁與生日一起填、公開顯示於劇本、第一次發佈時鎖定），並把管理員預設可讀範圍擴大到使用者送審公開的劇本與被檢舉的劇本；其中**內容模式與劇本、存檔的資料基礎已實作**（change `rpg-data-and-script`，見第 5 節），暱稱的欄位、年齡確認頁的暱稱、帳號設定頁的更改，以及連續被拒的暫停發佈與申訴範圍已由 change `rpg-script-authoring`（RC-7）實作（見第 7d 節）；筆名的鎖定（第一次發佈時）、審核流程及管理員讀取待審劇本的專用路徑（RC-8）**尚未實作**，本文件描述目前的實作。
 > 注意（2026-11-04）：AGENTS.md 第 5、6、7、10、11 節新增「玩家主角」與開場的「第 0 幕」（玩家依劇本角色規格自創主角，可請 AI 生成角色卡加一個錨定事實；自我介紹不存；第 0 幕不是一輪）。**規範已修訂，並已由 change `rpg-character-creation`（RC-9）實作 API 與資料**（三個畫面屬 RC-3，開場的第 0 幕屬 RC-2）；本文在第 6 節的端點表、第 7e 節與第 8 節記錄與帳號安全有關的規則。
@@ -222,8 +222,9 @@ flowchart TD
     Login -->|"是"| Admin{"require_admin<br/>角色 admin 且帳號 active？"}
     Admin -->|"否"| N404["404（與不存在的路徑逐字相同）<br/>記錄 admin.access_denied（只有內部編號）"]
     Admin -->|"是"| Kind{"操作種類"}
-    Kind -->|"讀取：總覽、清單、查詢、對話全文、失敗原文"| Read["先寫稽核再回傳內容<br/>稽核寫入失敗就不回傳"]
-    Kind -->|"危險：停權、解除、調整等級、調整遊戲幣、刪除對話"| Pw["confirm_password<br/>管理員自己的密碼"]
+    Kind -->|"讀取：總覽、清單、查詢、對話與劇本全文、失敗原文"| Read["先寫稽核再回傳內容<br/>稽核寫入失敗就不回傳"]
+    Kind -->|"核可、退回劇本"| Plain["不需密碼 但寫稽核<br/>備註不進稽核"]
+    Kind -->|"危險：停權、解除、調整等級、調整遊戲幣、刪除對話、下架與恢復劇本"| Pw["confirm_password<br/>管理員自己的密碼"]
     Pw -->|"錯誤或鎖定"| Fail["400，欄位 password<br/>寫 reauth.failed 並保存"]
     Pw -->|"通過"| Do["條件式 UPDATE 或刪除<br/>稽核與動作同一個交易"]
 ```
@@ -231,11 +232,12 @@ flowchart TD
 | 規則 | 行為 |
 |---|---|
 | 非管理員 | 一律 404，不是 403（否則會告訴一般使用者後台存在）；順序是「登入 → 管理員檢查 → 才解析請求本文」，所以格式錯誤的本文也只得到 404 |
-| 可讀範圍 | 清單沒有訊息內容；只有「意見回饋」（助理回覆的意圖是 `complaint_feedback` 或 `human_handoff`）與「被內容安全過濾標記」兩類對話可讀全文，不符資格與不存在得到同一個 404；使用者資料沒有任何個別的年齡資料，年齡只有總覽的區間人數 |
+| 可讀範圍 | 清單沒有訊息內容；只有「意見回饋」（助理回覆的意圖是 `complaint_feedback` 或 `human_handoff`）與「被內容安全過濾標記」兩類對話可讀全文，不符資格與不存在得到同一個 404；**劇本全文只限使用者送審過的版本**（`pending_review`、`published`、`removed`、`rejected` 與被取代者；草稿與不存在得到同一個 404），**每次讀取都先寫 `script.read` 稽核**；使用者資料沒有任何個別的年齡資料，年齡只有總覽的區間人數 |
+| 劇本審核與下架（rpg-script-publishing） | 核可與人工退回**不需要重新輸入密碼**，但寫稽核（`script.approve`、`script.reject`）；管理員下架與恢復是高風險操作：須重新輸入密碼並寫稽核（`script.remove`、`script.restore`）。**只有下架者能恢復**：作者自行下架的，管理員不能恢復（那是作者自己的決定）；管理員下架的，作者不能自行恢復；內建劇本（沒有作者）不可下架。審核備註只有管理員看得到：不進稽核細節、日誌與事件，不出現在作者端的任何回應與個人資料匯出；稽核細節只有版本與劇本的對外識別碼、狀態與固定類別。核可、退回與下架的結果只顯示在作者的 `/scripts` 頁面，**不寄信**；管理員下架的說明導向客服的意見回饋（申訴頁只開放被鎖定或被暫停發佈的帳號） |
 | 找使用者 | 主要入口是警告（總覽的今日警告 → 被標記對話 → 看使用者）；信箱精確查詢是次要入口、供客服反應時使用；沒有使用者清單與模糊搜尋 |
 | 重新輸入密碼 | `AuthService.confirm_password`：與登入共用失敗計數與鎖定（連續 5 次鎖定 15 分鐘），鎖定中即使正確也拒絕且訊息相同；成功不重設計數；沒有設定密碼的管理員不能執行（`no_password`） |
 | 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
-| 稽核 | `admin_audit_logs`：16 個固定動作，只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
+| 稽核 | `admin_audit_logs`：21 個固定動作（含劇本審核的 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`），只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
 | 回應 | `/admin` 與 `/api/admin/` 一律 `Cache-Control: no-store`；非 GET 須通過 CSRF |
 
 `/api/admin/*` 端點（全部需要登入且是管理員；`POST` 另需 CSRF）：

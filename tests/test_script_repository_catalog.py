@@ -36,16 +36,20 @@ def titles_of(rows) -> list[str]:
 
 def read_pages(repo, *, size, preference=None, **filters):
     """依序用游標讀完每一頁（與 Service 同一做法：取 `size + 1` 筆，以當頁最後一筆的排序鍵作為下一頁的起點），回傳 `(各頁串起來的列, 頁數)`。"""
-    collected, after, pages = [], None, 0
-    while True:
+    collected, after, pages, seen = [], None, 0, set()
+    for _ in range(100):                                                   # 有上限：游標被破壞成重複同一筆時要失敗，不要卡住
         page = repo.list_catalog(after=after, preference=preference, limit=size + 1, **filters)
         shown = page[:size]
+        repeated = [version.title for version, _script, _rank in shown if version.id in seen]
+        assert not repeated, f"同一個版本出現在兩頁：{repeated}"
+        seen.update(version.id for version, _script, _rank in shown)
         collected += shown
         pages += 1
         if len(page) <= size:
             return collected, pages
         version, _script, rank = shown[-1]
         after = (rank, version.published_at, version.id)
+    raise AssertionError("游標一直給出下一頁：分頁沒有走到盡頭")
 
 
 def six_channels(repo, author, member_session):
@@ -166,6 +170,20 @@ def test_a_keyword_never_matches_the_body_characters_locations_milestones_openin
     member_session.commit()
     assert repo.list_catalog(terms=["青雲"]) == []
     assert titles_of(repo.list_catalog(terms=["無關"])) == ["無關標題"]                # 同一份劇本，一般欄位的詞當然找得到
+
+
+def test_a_keyword_never_matches_json_columns_even_when_the_text_is_plain_ascii(repo, author, member_session):
+    """JSON 欄位把中文存成 `\\uXXXX` 跳脫字串，所以上一個測試的中文詞即使有人把 JSON 欄位加進比對也找不到（會漏判）；
+    這裡在角色、地點與里程碑放 ASCII 標記字串，才看得出「比對了 JSON 欄位」。"""
+    live(
+        repo, author, 0, title="無關標題", summary="無關簡介", world_name="無關世界", tags=["無關"],
+        locations=["zzjsonmarker place"],
+        characters=[{"name": "zzjsonmarker name", "personality": "zzjsonmarker", "age": 30, "appearance": "zzjsonmarker look"}],
+        milestones=[{"title": "zzjsonmarker milestone", "trigger": {"kind": "age", "value": 20}}],
+    )
+    live(repo, author, 1, title="zzjsonmarker 在標題", summary="無關簡介", world_name="無關世界", tags=["無關"])
+    member_session.commit()
+    assert titles_of(repo.list_catalog(terms=["zzjsonmarker"])) == ["zzjsonmarker 在標題"]          # 只有一般欄位（標題）找得到
 
 
 def test_every_term_has_to_match_and_the_fields_may_differ_between_terms(repo, author, member_session):

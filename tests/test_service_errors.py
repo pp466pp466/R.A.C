@@ -173,6 +173,9 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "HoldAlreadyRefunded": 409, "WalletBusy": 503,
         # rpg-turn-revision
         "RevisionConflict": 409, "NotRevisable": 409, "RevisionInvalid": 422,
+        # rpg-script-publishing（script-takedown 規格：狀態不符與衝突回 409，作者不能恢復管理員下架的版本回 403）
+        "NotPublished": 409, "NotRemoved": 409, "RemovedByAuthor": 409, "RemovalLocked": 403, "LiveExists": 409,
+        "BuiltinNotRemovable": 409,
     }
     needs_arguments = {
         errors.VersionConflict: ({"id": "x"},), errors.InsufficientCoins: (20, 30), errors.CheckinOverflow: (100, 100),

@@ -1,12 +1,14 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-20 ｜ 對應 change：rpg-script-publishing（RC-8 的 8a：管理員審核佇列與下架、完整公開目錄與游標分頁、詳情頁 `/game/script/<版本>`；遷移 `0021`）、safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
 > 注意（2026-11-04）：change `rpg-character-creation`（RC-9）加入玩家主角與開存檔 API：`ProtagonistService`（創角資料與 AI 生成預覽）、`ProtagonistReviewService`（開存檔時主角的模型層審查）、`StartableVersions`（開存檔、創角資料與生成預覽共用的版本可見性與內容模式判定），以及純運算的 `protagonist`、`protagonist_prompt`；`SessionService.start_session` 改為接收主角角色卡與錨定事實（見下方「玩家主角與開存檔」）。
 > 注意（2026-11-11）：change `rpg-entry-ui`（RC-3a）的後端部分（批次 A、B）加入 RPG 入口的唯讀資料：`GameEntryService`（可玩劇本清單、我的存檔清單、存檔摘要）、`ScriptRepository.list_published_cards`／`tags_of_versions`、`SessionRepository.complete_turn_counts`，以及 `GET /api/sessions/catalog`、`GET /api/sessions` 兩個端點（見下方「RPG 入口清單」）。批次 C 加入頁面外殼：`game_page_controller.py` 的 `/game`（入口）、`/game/<存檔>`（存檔頁空殼）與 `/game/start/<版本>`（開存檔精靈）。批次 D 加入精靈的純函式（`wizard-state.js`）、`game-api.js` 的創角呼叫（`setup`、`suggest`、`start`）與精靈樣板，並讓 `/game/start/<版本>` 的初始狀態帶入兩個請求逾時；批次 E 加入 Vue 掛載的 `wizard.js`（精靈至此完整，尚未在瀏覽器驗收）、`/scripts`、`/cs`、`/account` 回 `/game` 的「冒險」導覽連結與後端對前端契約的整合測試。
 > 注意（2026-11-11）：change `rpg-game-ui`（RC-3b）**不改任何後端端點、資料表、遷移與設定**，只改頁面控制器 `game_page_controller.game_session_page` 的初始狀態：`/game/<存檔>` 由空殼換成遊戲主畫面的外殼，初始狀態多了 `session`（存檔摘要）、`user`（`public_id` 與會員等級）、`content_mode`、`stream`（兩個串流逾時）與 `limits`（`action_max` 引用 `game_service.ACTION_MAX`），仍然**沒有任何劇情、第 0 幕、記事簿與世界狀態**（見下方「RPG 入口清單」的頁面控制器一條）。前端模組見 [前端結構](前端結構-frontend.md) 第 3e 節。
+
+> 注意（2026-11-20）：change `rpg-script-publishing`（RC-8 的 8a）完成「先審後發」的另一半：`AdminService` 新增劇本審核的六個方法（`script_queue`、`read_script`、`approve_script`、`reject_script`、`remove_script`、`restore_script`，見下方「劇本審核與下架」一節）、後台專用的 `AdminScriptRepository`（只讀）、`ScriptRepository` 的下架與恢復轉移；公開目錄改由 `ScriptRepository.list_catalog`（取代 `list_published_cards`）與純函式模組 `catalog_query.py` 以游標分頁，新增 `GET /api/sessions/catalog/tags` 與 `/catalog/<版本>`，頁面控制器新增 `GET /game/script/<版本識別碼>`（見「RPG 入口清單」一節）。檢舉與匿名保留屬 8b（`rpg-script-reports`），尚未實作。
 
 本文件說明系統由哪些部分組成、後端如何分層、一個請求怎麼走完、外部依賴如何注入。其他設計文件（資料模型、帳號與安全、客服流程、模型呼叫層、前端、營運）都以這裡的分層為準。
 
@@ -97,7 +99,37 @@ flowchart TD
 | `AdminAuditRepository` 只有 `add` 與 `list`，沒有更新與刪除 | `tests/test_admin_audit_repository.py` 以反射檢查公開方法 |
 | `AdminScriptRepository` 只讀（劇本審核的清單、全文與參照；版本狀態只在 `ScriptRepository` 轉移） | `tests/architecture/test_admin_boundaries.py` 以 AST 檢查沒有寫入呼叫、`tests/test_admin_script_repository.py` 以反射檢查公開方法 |
 
-`AdminService` 依賴 `AccessPolicy`、兩個後台 Repository、`UsageService`（用量快照）、`AgeStatsService`（年齡區間人數）與兩個注入的可呼叫物件：`AuthService.confirm_password`（重新輸入密碼）與 `keep_changes_on_error`（失敗的重新驗證也要保存稽核），由 `registry.get_admin_service()` 組裝。回傳的資料一律是明確組出來的字典，不是 ORM 物件，所以內部編號、密碼雜湊與 `token_version` 不可能意外外露。
+`AdminService` 依賴 `AccessPolicy`、三個後台 Repository（`AdminRepository`、`AdminAuditRepository`、`AdminScriptRepository`）、`ScriptRepository`（只用於劇本版本的狀態轉移）、`UsageService`（用量快照）、`AgeStatsService`（年齡區間人數）與兩個注入的可呼叫物件：`AuthService.confirm_password`（重新輸入密碼）與 `keep_changes_on_error`（失敗的重新驗證也要保存稽核），由 `registry.get_admin_service()` 組裝。回傳的資料一律是明確組出來的字典，不是 ORM 物件，所以內部編號、密碼雜湊與 `token_version` 不可能意外外露。
+
+### 劇本審核與下架（rpg-script-publishing）
+
+版本狀態的轉移**全部**在 `ScriptRepository`（固定的轉移白名單 `_ALLOWED_TRANSITIONS`，條件式 UPDATE，並行時只有一個請求成功；`tests/architecture/test_script_state_writes.py` 守住「別處不得寫狀態與新欄位」）。管理員與作者各自呼叫不同的入口，但落在同一組轉移：
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> pending_review: "送審（作者）"
+    pending_review --> draft: "撤回（作者）"
+    pending_review --> published: "核可（管理員，不需密碼）"
+    pending_review --> rejected: "退回（管理員，附類別與備註）"
+    published --> removed: "下架（作者，或管理員須重新輸入密碼）"
+    removed --> published: "恢復（只有下架者；不重審）"
+    published --> superseded: "新版本核可"
+    removed --> superseded: "新版本核可，舊的下架版不可再恢復"
+```
+
+| 元件 | 責任 |
+|---|---|
+| `AdminService.script_queue`、`read_script` | 清單（待審、上架中、已下架）不含劇本內文，所以不寫稽核；全文只限送審過的版本，**先寫 `script.read` 稽核再回傳**，稽核寫入失敗就不回傳；草稿與不存在的識別碼得到逐字相同的 404 |
+| `AdminService.approve_script`、`reject_script` | 不需重新輸入密碼，但寫稽核（`script.approve`、`script.reject`）；退回的類別是固定列舉，備註（至多 500 字）只隨版本保存 |
+| `AdminService.remove_script`、`restore_script` | 高風險：重新輸入密碼（沿用 `AuthService.confirm_password` 的失敗計數與鎖定）、寫稽核（`script.remove`、`script.restore`）；內建劇本不可下架，只有管理員能恢復管理員下架的版本 |
+| `AdminScriptRepository` | 只讀：清單、可審核版本的全文、版本參照（狀態與下架者），沒有任何寫入方法；全文的還原用 `ScriptRepository.content_of`（與開存檔時複製內容同一個函式，兩處不會分歧） |
+| `ScriptRepository.approve_version`、`reject_version`、`remove_own`、`remove_by_admin`、`restore_own`、`restore_by_admin` | 轉移本體；核可時在同一個 SAVEPOINT 內把同劇本原本上架與下架的版本改為被取代、第一次核可時鎖定筆名；恢復的唯一性衝突（同劇本已有另一個上架版本）轉成 `LiveVersionExistsError` |
+| `ScriptRepository.get_startable` | 開存檔的可見性：上架中的任何版本，或呼叫者自己的版本；**下架的版本不能開新存檔**（含作者自己），已開局的存檔不受影響（開局時已複製內容） |
+
+- **備註不外洩**：稽核細節只有版本與劇本的對外識別碼、狀態與類別列舉；日誌事件（`script_events`）只有內部編號與固定列舉；作者端的版本摘要與個人資料匯出都沒有審核備註（`tests/test_admin_script_flow.py` 以掃描比對整條流程的日誌、稽核與回應）。
+- **不寄信**：核可、退回與下架的結果只顯示在作者的 `/scripts` 頁面；管理員下架的說明導向客服的意見回饋（申訴頁只開放給被鎖定或被暫停發佈的帳號）。
+- 前端的畫面與模組見 [前端結構](前端結構-frontend.md)，權限與稽核規則見 [帳號與安全](帳號與安全-auth-security.md)，資料表欄位見 [資料模型](資料模型-data-model.md)。
 
 ### 帳號鎖定、申訴與受限登入狀態（google-first-login）
 
@@ -209,36 +241,39 @@ flowchart TD
 - **依賴方向**：`SessionService` 依賴 `ProtagonistReviewGate`（Protocol）與 `ReviewGate`，測試以替身注入；`ProtagonistService`、`SessionService` 的公開方法第一個陳述式都是 `self._policy.require_chat_access(<呼叫者>)`（`tests/architecture/test_protagonist_boundaries.py` 以 AST 守住，附反向驗證）。主角姓名、角色年齡與主角資料只由 `SessionRepository.create` 寫入（`test_protagonist_writes.py`）。
 - 組裝在 `registry.py`（`get_protagonist_service()`、`get_protagonist_review_service()`、`get_session_service()`）；兩個主角服務與開存檔共用同一個標記字串（`protagonist_marker`，由 `SECRET_KEY` 導出）。
 
-### RPG 入口清單（rpg-entry-ui）
+### RPG 入口清單與公開目錄（rpg-entry-ui、rpg-script-publishing）
 
 ```mermaid
 flowchart TD
-    Ctl["session_api_controller<br/>GET catalog 與 GET 我的存檔"] --> GSvc["GameEntryService<br/>唯讀 不呼叫模型 不碰錢包"]
+    Ctl["session_api_controller<br/>GET catalog、catalog/tags、catalog/版本、我的存檔"] --> GSvc["GameEntryService<br/>唯讀 不呼叫模型 不碰錢包"]
     GSvc --> Pol["AccessPolicy.mode_state／save_mode<br/>生效模式 不過年齡閘門"]
-    GSvc --> SR["ScriptRepository<br/>list_published_cards 與 tags_of_versions"]
+    GSvc --> CQ["catalog_query（純函式）<br/>解析 q、tag、audience、limit<br/>游標編碼與解碼"]
+    GSvc --> SR["ScriptRepository<br/>list_catalog、get_published_card<br/>popular_tags、tags_of_versions"]
     GSvc --> SessR["SessionRepository<br/>list_owned 與 complete_turn_counts"]
     GSvc --> Pref["story_preference<br/>normalize_audience"]
-    SR --> Win["_published_window<br/>上架 內容模式上限 偏好分層 由新到舊 分頁"]
+    SR --> Win["list_catalog<br/>只含上架 不依內容模式篩選<br/>偏好分層 由新到舊 鍵集游標"]
     Ctl --> Cur["require_login<br/>受限登入狀態 403"]
-    Page["game_page_controller<br/>/game、/game/存檔、/game/start/版本"] -->|"session_summary"| GSvc
+    Page["game_page_controller<br/>/game、/game/script/版本、/game/存檔、/game/start/版本"] -->|"session_summary"| GSvc
     Page --> Gate["AccessPolicy.chat_gate<br/>初始狀態的 gate 只讀"]
     Page --> Mode["AccessPolicy.mode_state<br/>遊戲頁初始狀態的 content_mode 只讀"]
 ```
 
 | 元件 | 責任 |
 |---|---|
-| `GameEntryService.catalog` | 上架中的版本，宣告的內容模式不高於玩家**生效**的模式；依玩家的故事偏好排序（只影響順序，不增減集合）；`limit + 1` 取回，多出的一筆只決定 `has_more`；回應含 `content_mode`（生效模式與是否已滿成年門檻，不含生日與年齡）。卡片只有白名單欄位 `CARD_FIELDS`，沒有劇本內文、內容雜湊、審查結果與內部編號 |
+| `GameEntryService.catalog` | 上架中的**全部**版本（不依內容模式篩選：所有玩家都看得到所有上架的劇本，綁定安全模式只影響生效模式）；關鍵字 `q`（只比對標題、簡介、世界名稱與標籤，詞在 Service 以 NFC 與不分大小寫正規化）、標籤 `tag` 與讀者頻道 `audience` 三者 AND 組合；依玩家的故事偏好排序（只影響順序，不增減集合）；以**游標**分頁（`next_cursor`，鍵為偏好層、發佈時間、版本編號），`limit + 1` 取回，多出的一筆只決定 `has_more`；回應含 `content_mode`（生效模式與緊急煞車是否啟用，不含生日與年齡）。卡片只有白名單欄位 `CARD_FIELDS`，沒有劇本內文、內容雜湊、審查結果與內部編號 |
+| `GameEntryService.catalog_tags`、`script_detail` | 常用標籤（上架版本中最常用的至多 30 個與使用數，不依使用者）；劇本詳情只對上架中的版本回傳白名單欄位 `DETAIL_FIELDS`（角色只有姓名與職業，沒有隱藏特質、里程碑、結局說明、規則與初始對話）；非上架的版本（含自己的草稿與下架的版本）與不存在的識別碼得到逐字相同的 `NotFound` |
 | `GameEntryService.my_sessions` | 只有呼叫者自己的存檔、不含已封存者，由新到舊；每筆只有白名單欄位 `SAVE_FIELDS`；已完成輪數只計完整的回合，由 `complete_turn_counts` 一次取回 |
 | `GameEntryService.session_summary` | 遊戲頁外殼的存檔摘要（`id`、標題、內容模式、主角姓名、是否完結）；非擁有者、不存在與格式不對的識別碼得到相同的 `NotFound`（`/game/<存檔>` 頁面用） |
-| `ScriptRepository.list_published_cards` | 一次 `select(ScriptVersion, Script)` 加 join 取回一頁；與 `list_published` 共用 `_published_window`，兩者的條件與排序逐項相同；`tags_of_versions` 以一次 `IN` 取回整頁的標籤 |
+| `ScriptRepository.list_catalog` | 一次 `select(ScriptVersion, Script)` 加 join 取回一頁（取代 `list_published_cards`）；關鍵字用 `LIKE` 比對四個一般欄位，特殊字元（含 SQL Server 的 `[`）由 `_escape_like` 自己跳脫，不依方言；游標的鍵集條件與排序用同一組三個鍵（恢復上架不改發佈時間，所以分頁之間有上下架也不重複、不遺漏）；`tags_of_versions` 以一次 `IN` 取回整頁的標籤；`get_published_card`、`popular_tags` 各一次查詢 |
+| `catalog_query`（`app/services/catalog_query.py`） | 純函式、沒有 I/O：`parse_catalog_query` 一次指出所有不合法的參數；游標是 URL-safe base64 的 JSON，不簽章、嚴格驗證且要求重新編碼後逐字相同（損毀的游標回 400） |
 | `SessionRepository.complete_turn_counts` | ORM `GROUP BY` 加 outer join `memory_logs`（只計 `complete`），以 `sessions.user_id` 為條件，所以別人的存檔編號不會有鍵；第 0 幕存在 `sessions.opening_text`，天然不計 |
 
 - **不過年齡閘門**：端點用 `require_login()`（受限登入狀態各回自己的 403），不呼叫 `require_chat_access`——`/game` 是登入後的預設頁面，未確認年齡的管理員也會落在那裡，清單不花成本，內容模式對他們本來就是安全模式。開存檔、生成與回合仍由既有的閘門擋下。理由與矩陣見 [帳號與安全](帳號與安全-auth-security.md) 第 7b 節。
 - **固定的查詢次數**：一頁劇本是 2 次（版本與劇本一次、標籤一次），一頁存檔是 2 次（存檔一次、輪數一次），不隨筆數增加（`tests/test_game_entry_service.py` 以 `tests/support/query_counter.py` 比對 1 筆與 12 筆）。
-- **分頁**：`limit`（劇本預設 12、至多 24；存檔預設 20、至多 50）與 `offset`（至多 10000）在 Service 驗證，Controller 只把查詢字串轉成整數（不是整數回 400 並指出欄位）；不合法時一次回報所有不合法的欄位。
+- **分頁**：劇本目錄以**游標**（`cursor`／`next_cursor`）分頁，`offset` 不再被讀取；「我的存檔」仍是 `limit`（預設 20、至多 50）與 `offset`（至多 10000）。參數在 Service 驗證，Controller 只把查詢字串轉成整數（不是整數回 400 並指出欄位）；不合法時一次回報所有不合法的欄位。
 - **沒有寫入也沒有日誌**：標題、筆名與主角姓名都是玩家文字衍生的內容，Service 連日誌都不寫；兩個端點呼叫前後遊戲幣餘額、帳本與模型呼叫帳本都不變（`tests/test_session_api.py`）。
 - 組裝在 `registry.py` 的 `get_game_entry_service()`（只注入兩個 Repository 與 `AccessPolicy`，沒有任何模型供應商）。
-- **頁面控制器**（`app/controllers/game_page_controller.py`，MVC，只回 HTML）：`/game` 以 `login_required_page` 保護，初始狀態只有 `user`（會員等級與故事偏好）與 `gate`（`AccessPolicy.chat_gate` 的結果），**沒有清單內容**，由前端呼叫上面兩個端點取得；`/game/<存檔識別碼>` 是**遊戲主畫面**（rpg-game-ui）的外殼：呼叫 `GameEntryService.session_summary`，非擁有者與不存在得到逐字相同的 404 頁面，權限判斷全在 Service、Controller 不寫；初始狀態（`tojson` 已跳脫）只有 `session`（`id`、`title`、`content_tier`、`ended`、`player_name`）、`user`（`public_id` 供本機暫存的資料庫名稱用，加會員等級）、`gate`（`chat_gate`）、`content_mode`（`AccessPolicy.mode_state` 的生效模式與緊急煞車是否啟用 `{effective, forced}`，與 `/api/sessions/catalog` 同一個來源與形狀，供畫面顯示目前模式與緊急煞車的說明，不含生日與年齡、也沒有 `is_adult`）、`stream`（前端逾時：閒置 `STREAM_IDLE_TIMEOUT_MS` ＝ 45000、總計 `STREAM_TOTAL_TIMEOUT_MS` ＝ 180000，具名常數，依據見 `docs/RPG.md` 7.15、7.17.3）`limits`（`action_max` ＝ `game_service.ACTION_MAX`，後端調整時前端一起變）與 `revision_limits`（`reason_min`、`reason_max` 與五個回饋分類的識別字串，直接引用 `game_service` 的 `REASON_MIN`、`REASON_MAX`、`CATEGORIES`，前端不寫死；rpg-turn-revision），**沒有回合內容、第 0 幕、記事簿、世界狀態、email、生日與年齡**——這些由前端依序呼叫既有端點（快照、第 0 幕串流、回合、錢包）取得，所以頁面外殼永遠沒有劇情，返回上一頁或頁面快取也不會看到舊內容，本頁不改任何端點；`/game/start/<版本識別碼>` 是開存檔精靈的頁面：初始狀態只有 `member_tier`、`gate` 與兩個請求逾時（`suggest_timeout_ms` = 後端單次請求總預算 + 5 秒，`start_timeout_ms` = `2 × 預算 + 5 秒`，都由設定算出），**沒有劇本內容**，版本識別碼不出現在頁面內容（前端自己從網址讀取並呼叫 `setup` 端點；Vue 掛載的 `wizard.js` 已實作）。三條都只接受 GET；路徑段數不同（`/game/start/<x>` 兩段、`/game/<x>` 一段），所以不會互相吃掉，`/game/start` 單獨一段會被當成存檔識別碼而得到 404（`tests/test_game_pages.py`）。受限登入狀態由 `login_required_page` 導向各自的頁面，`tests/test_restricted_session.py` 的全路由掃描把三條都列為「必須被掃到」。前端模組見 [前端結構](前端結構-frontend.md) 第 3d 節。
+- **頁面控制器**（`app/controllers/game_page_controller.py`，MVC，只回 HTML）：`/game` 以 `login_required_page` 保護，初始狀態只有 `user`（會員等級與故事偏好）與 `gate`（`AccessPolicy.chat_gate` 的結果），**沒有清單內容**，由前端呼叫上面兩個端點取得；`/game/<存檔識別碼>` 是**遊戲主畫面**（rpg-game-ui）的外殼：呼叫 `GameEntryService.session_summary`，非擁有者與不存在得到逐字相同的 404 頁面，權限判斷全在 Service、Controller 不寫；初始狀態（`tojson` 已跳脫）只有 `session`（`id`、`title`、`content_tier`、`ended`、`player_name`）、`user`（`public_id` 供本機暫存的資料庫名稱用，加會員等級）、`gate`（`chat_gate`）、`content_mode`（`AccessPolicy.mode_state` 的生效模式與緊急煞車是否啟用 `{effective, forced}`，與 `/api/sessions/catalog` 同一個來源與形狀，供畫面顯示目前模式與緊急煞車的說明，不含生日與年齡、也沒有 `is_adult`）、`stream`（前端逾時：閒置 `STREAM_IDLE_TIMEOUT_MS` ＝ 45000、總計 `STREAM_TOTAL_TIMEOUT_MS` ＝ 180000，具名常數，依據見 `docs/RPG.md` 7.15、7.17.3）`limits`（`action_max` ＝ `game_service.ACTION_MAX`，後端調整時前端一起變）與 `revision_limits`（`reason_min`、`reason_max` 與五個回饋分類的識別字串，直接引用 `game_service` 的 `REASON_MIN`、`REASON_MAX`、`CATEGORIES`，前端不寫死；rpg-turn-revision），**沒有回合內容、第 0 幕、記事簿、世界狀態、email、生日與年齡**——這些由前端依序呼叫既有端點（快照、第 0 幕串流、回合、錢包）取得，所以頁面外殼永遠沒有劇情，返回上一頁或頁面快取也不會看到舊內容，本頁不改任何端點；`/game/start/<版本識別碼>` 是開存檔精靈的頁面：初始狀態只有 `member_tier`、`gate` 與兩個請求逾時（`suggest_timeout_ms` = 後端單次請求總預算 + 5 秒，`start_timeout_ms` = `2 × 預算 + 5 秒`，都由設定算出），**沒有劇本內容**，版本識別碼不出現在頁面內容（前端自己從網址讀取並呼叫 `setup` 端點；Vue 掛載的 `wizard.js` 已實作）。`/game/script/<版本識別碼>` 是**劇本詳情頁**（rpg-script-publishing）的外殼：以 `login_required_page` 保護，初始狀態只有 `user`（會員等級）與 `gate`，**不查詢版本、不含劇本內容與版本識別碼**，所以存在與不存在的版本得到逐字相同的頁面（前端自己從網址讀取識別碼並呼叫 `GET /api/sessions/catalog/<版本>`，404 時顯示「找不到這個劇本」）。四條都只接受 GET；路徑段數不同（`/game/script/<x>` 與 `/game/start/<x>` 兩段、`/game/<x>` 一段），所以不會互相吃掉，`/game/start` 或 `/game/script` 單獨一段會被當成存檔識別碼而得到 404（`tests/test_game_pages.py`）。受限登入狀態由 `login_required_page` 導向各自的頁面，`tests/test_restricted_session.py` 的全路由掃描把四條都列為「必須被掃到」。前端模組見 [前端結構](前端結構-frontend.md) 第 3d 節。
 
 ### 遊戲幣錢包（game-wallet）
 
@@ -427,13 +462,14 @@ flowchart LR
 | story-preference | `app/services/story_preference.py`、`story_preference_service.py`、`script_spec.py`（`audience`）、`current_user.py`、`app/repositories/user_repository.py`（`set_story_preference`）、`script_repository.py`（`preference` 排序）、`app/controllers/account_api_controller.py`、`personal_export_service.py`、`app/observability/security_events.py` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) 7.10、7.17 |
 | content-tier-modes、script-fixed-spec、script-store、rpg-sessions、builtin-script-seed | `app/services/content_tier.py`、`script_spec.py`、`content_mode_service.py`、`session_service.py`、`script_seed_service.py`、`app/repositories/script_repository.py`、`session_repository.py`、`app/data/scripts/` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 第 5 節、[RPG.md](RPG.md) |
 | script-authoring、script-review、script-submission、runtime-limits、player-nickname、appeal-shortcut | `app/services/script_authoring_service.py`、`script_submission_service.py`、`script_review_service.py`、`script_review_prompt.py`、`script_rules.py`、`runtime_limits.py`、`nickname.py`、`nickname_service.py`、`app/repositories/script_submission_repository.py`、`runtime_limit_repository.py`、`app/controllers/script_api_controller.py`、`script_page_controller.py`、`app/data/review/lexicon.json` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)、[前端結構-frontend.md](前端結構-frontend.md)、[營運與部署-operations.md](營運與部署-operations.md) |
-| rpg-entry-api、rpg-entry-pages、rpg-game-screen | `app/services/game_entry_service.py`、`app/repositories/script_repository.py`（`list_published_cards`、`tags_of_versions`）、`session_repository.py`（`complete_turn_counts`）、`app/controllers/session_api_controller.py`（清單端點）、`game_page_controller.py`、`app/templates/game/`、`app/static/js/game/`、`app/static/css/game.css` | 本文「RPG 入口清單」、[前端結構-frontend.md](前端結構-frontend.md) 第 3d 節、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 7b |
+| rpg-entry-api、rpg-entry-pages、rpg-game-screen | `app/services/game_entry_service.py`、`app/repositories/script_repository.py`（`list_catalog`、`get_published_card`、`popular_tags`、`tags_of_versions`）、`session_repository.py`（`complete_turn_counts`）、`app/controllers/session_api_controller.py`（清單端點）、`game_page_controller.py`、`app/templates/game/`、`app/static/js/game/`、`app/static/css/game.css` | 本文「RPG 入口清單」、[前端結構-frontend.md](前端結構-frontend.md) 第 3d 節、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) 7b |
 | rpg-protagonist、protagonist-suggestion | `app/services/protagonist.py`、`protagonist_prompt.py`、`protagonist_service.py`、`protagonist_review_service.py`、`startable.py`、`session_service.py`、`app/controllers/session_api_controller.py` | [系統架構-architecture.md](系統架構-architecture.md)（本文）、[資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | rpg-notebook、rpg-notebook-capture | `app/services/notebook_policy.py`、`notebook_service.py`、`rpg_notebook_prompt.py`、`rpg_notebook_capture.py`、`rpg_turn_runner.py`（`capture_target`）、`app/controllers/game_api_controller.py`（`call_on_close`、記事簿端點）、`app/repositories/session_repository.py`（記事簿方法）、`app/observability/rpg_events.py` | 本文、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 6c、[RPG.md](RPG.md) 7.16 |
 | rpg-turn-revision | `app/services/rpg_revision_runner.py`、`rpg_state_phase.py`、`rpg_turn_runner.py`、`game_service.py`（`begin_revision`、`RevisionPlan`）、`app/repositories/session_repository.py`（修訂的方法）、`turn_regeneration_repository.py`、`app/controllers/game_api_controller.py`（兩個修訂端點）、`game_page_controller.py`（`revision_limits`）、`personal_export_service.py`、`app/observability/rpg_events.py` | 本文「RPG 修訂」、[資料模型-data-model.md](資料模型-data-model.md)、[RPG.md](RPG.md) 7.8 |
 | admin-unlimited-coins | `app/services/current_user.py`（`is_active_admin`）、`access_policy.py`（`is_admin` 委派）、`wallet_service.py`（`hold`、`WalletView.coin_exempt`）、`game_service.py`（`_last_turn_view`）；前端 `app/static/js/game/` 的 `game-wallet.js`、`game-labels.js`、`game-revision.js`；沒有 migration | 本文「遊戲幣錢包」與「RPG 修訂」、[RPG.md](RPG.md) 7.7.1、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[前端結構-frontend.md](前端結構-frontend.md) |
 | game-wallet、wallet-api | `app/models/wallet.py`、`app/repositories/wallet_repository.py`、`app/services/wallet_service.py`、`wallet_messages.py`、`app/controllers/wallet_api_controller.py`、`app/observability/wallet_events.py` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | wallet-hub、shared-wallet-balance、wallet-hub-page | `app/controllers/wallet_page_controller.py`、`app/templates/wallet/hub.html`；前端 `app/static/js/ui/` 的 `wallet-api.js`、`wallet-store.js`、`wallet-checkin.js`、`ui-components.js`（`<ui-wallet-balance>`）、`app/static/js/wallet/`、`app/static/css/wallet.css`、`game/game-wallet.js`（改從共用狀態庫衍生）；沒有 migration、資料表、設定鍵與 API 異動 | 本文「遊戲幣錢包」、[前端結構-frontend.md](前端結構-frontend.md) 2 與 3f、[RPG.md](RPG.md) 7.7.2、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
+| rpg-script-publishing（RC-8 的 8a） | `app/services/admin_service.py`（劇本審核六個方法）、`admin_script_views.py`、`catalog_query.py`、`game_entry_service.py`；`app/repositories/admin_script_repository.py`、`script_repository.py`（核可、退回、下架、恢復、`list_catalog`）；`app/controllers/admin_api_controller.py`（`/api/admin/scripts*`）、`script_api_controller.py`（下架與恢復）、`session_api_controller.py`（目錄三個端點）、`game_page_controller.py`（`/game/script/<版本>`）；遷移 `0021`；前端 `app/static/js/admin/`、`scripts/`、`game/` | 本文「劇本審核與下架」「RPG 入口清單與公開目錄」、[前端結構-frontend.md](前端結構-frontend.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md) |
 | account-deletion、personal-data-export、data-retention                                                                                               | `app/services/account_deletion_service.py`、`account_erasure_service.py`、`account_deletion_executor.py`、`personal_export_service.py`、`data_retention_service.py`、`app/repositories/retention_repository.py`、`app/controllers/account_api_controller.py` | [帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[資料模型-data-model.md](資料模型-data-model.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | llm-provider、llm-structured-calls                                                                                                                   | `app/llm/`、`app/services/llm_service.py`、`llm_output.py`                                                   | [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md)                                                          |
 | offline-frontend-assets、shared-ui-components、auth-pages、cs-chat-ui                                                                                | `app/static/`、`app/templates/`                                                                                | [前端結構-frontend.md](前端結構-frontend.md)                                                                |
