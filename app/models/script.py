@@ -9,6 +9,8 @@
   只在版本分別處於 `published`、`draft／pending_review` 時等於 `script_id`，其餘為空；各自以「只涵蓋非 NULL 列」的
   部分唯一索引（SQL Server 的 UNIQUE 只容許一個 NULL，所以不能直接對 `(script_id, status)` 設唯一）。
   這兩個欄位只由 `ScriptRepository` 的狀態轉移方法寫入。
+- 下架（`removed`，rpg-script-publishing）：版本的狀態之一，兩個輔助欄位皆為空（所以下架同時讓出「上架」的位置，作者可以立刻建立新草稿）；
+  下架者、決定類別、審核備註、決定時間與送審時間是可為空的中繼資料（不進內容雜湊），同樣只由 `ScriptRepository` 的轉移方法寫入。
 - 文字欄位用 `Unicode`／`UnicodeText`（SQL Server 對應 NVARCHAR）；角色、地點、里程碑是 JSON，由 Repository 序列化，
   **不得依其內容做篩選查詢**。需要瀏覽與篩選的欄位（標題、世界觀名稱、宣告的內容模式、標籤）都是真正的欄位或獨立的表。
 - 值域（狀態、結局模式）由本檔的常數與 Service 驗證，不加資料庫 CHECK 約束。
@@ -31,8 +33,17 @@ VERSION_PENDING = "pending_review"         # 已送審，內容凍結
 VERSION_PUBLISHED = "published"            # 上架中（每個劇本至多一個）
 VERSION_REJECTED = "rejected"              # 審核退回，內容保留
 VERSION_SUPERSEDED = "superseded"          # 被較新的上架版本取代，內容保留
-VERSION_STATUSES = (VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED)
+VERSION_REMOVED = "removed"                # 下架（rpg-script-publishing）：不在目錄、不能開新存檔；可由下架者恢復，內容保留
+VERSION_STATUSES = (
+    VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED, VERSION_REMOVED,
+)
 OPEN_VERSION_STATUSES = (VERSION_DRAFT, VERSION_PENDING)     # 「進行中」：每個劇本至多一個
+
+# 下架者：決定誰能恢復（作者自行下架的可自行恢復；管理員下架的只有管理員能恢復）
+REMOVER_AUTHOR = "author"
+REMOVER_ADMIN = "admin"
+REMOVERS = (REMOVER_AUTHOR, REMOVER_ADMIN)
+MAX_DECISION_NOTE_CHARS = 500               # 審核備註上限（Unicode 字元，NFC 正規化後計）
 
 ENDING_NONE = "none"
 ENDING_CUSTOM = "custom"
@@ -64,6 +75,10 @@ FLAG_CATEGORIES = (
     CATEGORY_MINOR_SUSPECTED, CATEGORY_REAL_PERSON_SUSPECTED, CATEGORY_TIER_MISMATCH, CATEGORY_OTHER_CONCERN,
 )
 REVIEW_CATEGORIES = REJECT_CATEGORIES + FLAG_CATEGORIES
+# 人工決定（管理員退回與下架）的類別（rpg-script-publishing）：審查類別加上人工專用的 `other_policy`（其他違反平台規範）。
+# 作者與管理員的回應、稽核與日誌都只有這些固定值；管理員另可寫只有管理員看得到的審核備註（`decision_note`）。
+CATEGORY_OTHER_POLICY = "other_policy"
+DECISION_CATEGORIES = REVIEW_CATEGORIES + (CATEGORY_OTHER_POLICY,)
 
 
 class Script(Base, PublicIdMixin, TimestampMixin):
@@ -91,6 +106,8 @@ class ScriptVersion(Base, PublicIdMixin, TimestampMixin):
         unique_when_not_null("uq_script_versions_open_script", "open_script_id"),
         # 公開目錄：只看上架中的版本，依宣告的內容模式篩選
         Index("ix_script_versions_status_content_tier", "status", "content_tier"),
+        # 目錄的游標查詢與上架清單：只掃上架中的版本，依發佈時間排序（rpg-script-publishing）
+        Index("ix_script_versions_status_published_at", "status", "published_at"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -137,6 +154,18 @@ class ScriptVersion(Base, PublicIdMixin, TimestampMixin):
     review_verdict: Mapped[str | None] = mapped_column(Unicode(8), nullable=True)
     review_categories_json: Mapped[list[str] | None] = mapped_column(JSON, nullable=True)
     reviewed_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+
+    # 送審、退回與下架的決定（rpg-script-publishing）：同樣是**中繼資料，不是內容**，不進 `content_hash`，也不受「非草稿的內容
+    # 不可變」限制；只由 `ScriptRepository` 的狀態轉移方法寫入（`tests/architecture` 擋住別處）。全部可為空、不回填。
+    # `submitted_at`：送審時間（審核佇列由舊到新排序；撤回時清除，為空時以 `created_at` 代替）。
+    # `removed_by`：下架者（`author`／`admin`），決定誰能恢復；`decision_category`：退回或管理員下架的固定類別（`DECISION_CATEGORIES`）；
+    # `decision_note`：管理員的審核備註，**只供管理員**（不進作者的回應、匯出、稽核、日誌與事件）；`decided_at`：決定時間。
+    # 恢復上架時四個決定欄位（下架者、類別、備註、決定時間）清為空；下架的版本被新的上架版本取代（`superseded`）時保留，作為紀錄。
+    submitted_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    removed_by: Mapped[str | None] = mapped_column(Unicode(8), nullable=True)
+    decision_category: Mapped[str | None] = mapped_column(Unicode(24), nullable=True)
+    decision_note: Mapped[str | None] = mapped_column(UnicodeText, nullable=True)
+    decided_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
 
 
 class ScriptVersionTag(Base):

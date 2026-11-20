@@ -1385,6 +1385,104 @@ def test_0020_adds_one_nullable_hint_column_to_sessions_and_keeps_every_row(tmp_
     engine.dispose()
 
 
+def _insert_old_pending_version(conn) -> None:
+    """已有一個上架版本（`_insert_old_script_version`）的劇本之下，再加一個待審的第 2 版（欄位只含 0021 之前存在的）。"""
+    now = utcnow().replace(tzinfo=None)
+    script_id = conn.execute(select(Table("scripts", MetaData(), autoload_with=conn).c.id)).scalar_one()
+    as_json = (lambda value: json.dumps(value, ensure_ascii=False)) if conn.dialect.name == "mssql" else (lambda value: value)
+    conn.execute(Table("script_versions", MetaData(), autoload_with=conn).insert().values(
+        public_id="00000000-0000-4000-8000-0000000000d3", script_id=script_id, version_no=2, status="pending_review", spec_version=1,
+        content_hash="b" * 64, total_chars=12, title="待審版本", summary="簡介", world_name="世界", content_tier="safe", background="背景",
+        ending_mode="none", characters_json=as_json([]), locations_json=as_json([]), milestones_json=as_json([]),
+        open_script_id=script_id, created_at=now, updated_at=now,
+    ))
+
+
+def test_0021_adds_five_nullable_columns_and_one_index_to_script_versions_and_keeps_every_row(tmp_path):
+    """rpg-script-publishing：script_versions 新增 submitted_at、removed_by、decision_category、decision_note、decided_at（都可為空、不回填）
+    與索引 (status, published_at)；沒有新資料表；既有版本一列不少、內容與狀態不變；回復移除索引與五個欄位、不串聯刪除任何資料；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'script_publishing.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0021_script_publishing")
+    assert revision.down_revision == "0020_safe_mode_hint" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0020_safe_mode_hint")
+    with engine.begin() as conn:
+        _insert_old_script_version(conn)
+        _insert_old_pending_version(conn)
+    before_columns = {c["name"] for c in inspect(engine).get_columns("script_versions")}
+    before_indexes = {i["name"] for i in inspect(engine).get_indexes("script_versions")}
+    before_tables = set(inspect(engine).get_table_names())
+
+    command.upgrade(cfg, "0021_script_publishing")
+    inspector = inspect(engine)
+    assert set(inspector.get_table_names()) == before_tables
+    added = {c["name"]: c for c in inspector.get_columns("script_versions") if c["name"] not in before_columns}
+    assert set(added) == {"submitted_at", "removed_by", "decision_category", "decision_note", "decided_at"}
+    assert all(column["nullable"] is True for column in added.values())                        # 可為空：舊版程式不認識它們也照常運作
+    assert str(added["removed_by"]["type"]).upper().startswith(("VARCHAR(8)", "NVARCHAR(8)"))
+    assert str(added["decision_category"]["type"]).upper().startswith(("VARCHAR(24)", "NVARCHAR(24)"))
+    new_indexes = {i["name"]: i for i in inspector.get_indexes("script_versions") if i["name"] not in before_indexes}
+    assert set(new_indexes) == {"ix_script_versions_status_published_at"}
+    assert new_indexes["ix_script_versions_status_published_at"]["column_names"] == ["status", "published_at"]
+    assert not new_indexes["ix_script_versions_status_published_at"]["unique"]
+    with engine.connect() as conn:                                                             # 既有資料不變、不回填
+        versions = {
+            row["version_no"]: row for row in conn.execute(select(Table("script_versions", MetaData(), autoload_with=conn))).mappings()
+        }
+    assert [(v["title"], v["status"]) for v in versions.values()] == [("舊劇本", "published"), ("待審版本", "pending_review")]
+    for row in versions.values():
+        assert all(row[name] is None for name in added), row["version_no"]
+    assert versions[1]["live_script_id"] is not None and versions[2]["open_script_id"] is not None
+
+    command.downgrade(cfg, "0020_safe_mode_hint")
+    inspector = inspect(engine)
+    assert {c["name"] for c in inspector.get_columns("script_versions")} == before_columns
+    assert {i["name"] for i in inspector.get_indexes("script_versions")} == before_indexes
+    with engine.connect() as conn:                                                             # 回復不串聯刪除既有的劇本、版本與帳號
+        for name, expected in (("users", 1), ("scripts", 1), ("script_versions", 2)):
+            assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == expected, name
+
+    command.upgrade(cfg, "0021_script_publishing")                                             # 再升級一次，不重複
+    assert {c["name"] for c in inspect(engine).get_columns("script_versions")} == before_columns | set(added)
+    engine.dispose()
+
+
+def test_a_version_inserted_the_way_the_old_program_does_has_empty_decision_columns_and_a_removed_one_can_be_stored_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：舊版程式形狀的版本 INSERT（不含新欄位）成功、新欄位為空；索引存在；
+    新狀態 removed（兩個輔助欄位皆為空）可寫入；恢復的條件式更新（狀態與下架者）第一次 1 列、第二次 0 列。"""
+    engine = migrated_database
+    with engine.begin() as conn:
+        _insert_old_script_version(conn)
+    versions = Table("script_versions", MetaData(), autoload_with=engine)
+    for name in ("submitted_at", "removed_by", "decision_category", "decision_note", "decided_at"):
+        assert name in versions.c and versions.c[name].nullable, name
+    assert "ix_script_versions_status_published_at" in {i["name"] for i in inspect(engine).get_indexes("script_versions")}
+    with engine.connect() as conn:
+        row = conn.execute(select(versions)).mappings().one()
+    assert all(row[name] is None for name in ("submitted_at", "removed_by", "decision_category", "decision_note", "decided_at"))
+    now = utcnow().replace(tzinfo=None)
+    with engine.begin() as conn:                                                               # 下架：狀態改 removed、讓出上架位置、記錄決定
+        conn.execute(versions.update().values(
+            status="removed", live_script_id=None, removed_by="author", decision_category="other_policy",
+            decision_note="管理員備註：只有管理員看得到", decided_at=now,
+        ))
+    with engine.connect() as conn:
+        row = conn.execute(select(versions)).mappings().one()
+    assert (row["status"], row["live_script_id"], row["open_script_id"], row["removed_by"]) == ("removed", None, None, "author")
+    assert row["decision_note"] == "管理員備註：只有管理員看得到"                                  # 中文備註在兩種資料庫都不亂碼
+    restore = (
+        versions.update().where(versions.c.status == "removed", versions.c.removed_by == "author")
+        .values(status="published", live_script_id=row["script_id"], removed_by=None, decision_category=None, decision_note=None, decided_at=None)
+    )
+    with engine.begin() as conn:
+        first = conn.execute(restore).rowcount
+    with engine.begin() as conn:
+        second = conn.execute(restore).rowcount
+    assert (first, second) == (1, 0)
+
+
 def test_a_save_inserted_the_way_the_old_program_does_gets_an_empty_hint_on_both_databases(migrated_database):
     """SQLite 與 SQL Server 兩軌：舊版程式形狀的存檔 INSERT（不含 safe_hint_at）成功，新欄位為空；
     條件式更新「為空才寫入」第一次更新 1 列、第二次 0 列（提示每個存檔只出現一次的資料庫保證）。"""

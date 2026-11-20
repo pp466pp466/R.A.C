@@ -124,7 +124,7 @@ def test_versions_in_every_state_are_exported(member_session, status):
     version, _ = make_script(s, me, publish_first=False)
     scripts.submit_for_review(me.id, version.public_id)
     if status == "rejected":
-        scripts.reject_version(version.public_id)
+        scripts.reject_version(version.public_id, "other_policy", None, START)
     elif status == "superseded":
         scripts.approve_version(version.public_id, now=START)
         newer = validated(title="取代它的新版本")

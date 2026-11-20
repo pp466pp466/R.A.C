@@ -197,6 +197,8 @@ def enumerations() -> dict[str, tuple[str, ...]]:
         "script_versions.content_tier": STORED_CONTENT_TIERS,
         "script_versions.audience": user.AUDIENCES,
         "script_versions.ending_mode": script.ENDING_MODES,
+        "script_versions.removed_by": script.REMOVERS,
+        "script_versions.decision_category": script.DECISION_CATEGORIES,
         "script_versions.review_verdict": script.REVIEW_VERDICTS,
         "script_versions.review_categories_json": script.REVIEW_CATEGORIES,
         "script_submissions.outcome": script_submission.SUBMISSION_OUTCOMES,

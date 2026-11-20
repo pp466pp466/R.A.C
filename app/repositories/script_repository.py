@@ -10,13 +10,18 @@
 
 **狀態與不可變**
 - 版本的狀態與兩個輔助欄位（`live_script_id`、`open_script_id`）**只在這個檔案裡被寫入**（`tests/architecture` 有測試擋住別處）：
-  建立版本與下面的轉移方法。轉移集合固定，每次轉移是單一條件式 UPDATE（`WHERE status IN (允許的來源)`），
-  並行的兩個請求只有一個成功。輔助欄位在狀態為 `published` 時等於 `script_id`、為 `draft` 或 `pending_review` 時
-  等於 `script_id`（另一個欄位），其餘為空；兩者各有部分唯一索引，所以「每個劇本至多一個上架版本與一個進行中的版本」
-  由資料庫保證，不是靠程式檢查。
+  建立版本與下面的轉移方法。轉移集合固定（`_ALLOWED_TRANSITIONS`，(來源, 目標) 配對的白名單，由呼叫端明確指定來源），
+  每次轉移是單一條件式 UPDATE（`WHERE status IN (指定的來源)`），並行的兩個請求只有一個成功。輔助欄位在狀態為 `published` 時等於
+  `script_id`、為 `draft` 或 `pending_review` 時等於 `script_id`（另一個欄位），其餘（含 `removed`）為空；兩者各有部分唯一索引，
+  所以「每個劇本至多一個上架版本與一個進行中的版本」由資料庫保證，不是靠程式檢查。
+- 送審時間、下架者、決定類別、審核備註與決定時間（rpg-script-publishing）是版本的中繼資料，同樣只由這裡的轉移方法在同一個 UPDATE
+  內寫入（`tests/architecture` 擋住別處）；備註只供管理員，作者路徑的回應由 Service 以固定的鍵集合組裝，不含備註。
 - 只有 `draft` 的內容可以修改或刪除（條件式 UPDATE／DELETE）；其餘狀態的內容與標籤不可變。
-- 核可（`approve_version`）把同一劇本原本上架的版本改為 `superseded` 並上架新版本，在同一個 SAVEPOINT 內完成，
+- 核可（`approve_version`）把同一劇本原本上架的版本與下架的版本改為 `superseded` 並上架新版本，在同一個 SAVEPOINT 內完成，
   失敗時兩者都保持原狀態；第一次核可時鎖定筆名。
+- 下架與恢復：誰下架誰恢復（`remove_own`／`restore_own`、`remove_by_admin`／`restore_by_admin`）；恢復是條件式 UPDATE
+  （`status = 'removed'` 且 `removed_by` 等於恢復者），在 SAVEPOINT 內執行，同劇本已有另一個上架版本時由部分唯一索引擋下。
+  `get_startable` 排除下架的版本（任何人，包含作者自己）。
 
 **標籤**以顯示形式儲存（保留原本的大小寫，這樣版本內容可以由欄位完整還原、雜湊不變）；驗證器已經以 NFC 與不分大小寫
 去除重複，所以同一版本內不會有只差大小寫的兩個標籤。依標籤查詢時以小寫比對（`func.lower`，ORM 表達式，雙軌一致）。
@@ -33,26 +38,49 @@ from sqlalchemy import case, delete, func, or_, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import util as orm_util
 
+from app.models.base import utcnow
 from app.models.rpg_session import RpgSession
 from app.models.script import (
-    ENDING_NONE, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING,
-    VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
+    DECISION_CATEGORIES, ENDING_NONE, MAX_DECISION_NOTE_CHARS, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, REMOVER_ADMIN,
+    REMOVER_AUTHOR, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED,
+    VERSION_REMOVED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
 )
 from app.models.user import AUDIENCE_ALL, AUDIENCE_FEMALE, AUDIENCE_MALE
 from app.repositories.base import BaseRepository
 from app.repositories.errors import (
-    AuthorNameLockedError, DraftChangedError, DuplicateSeedKeyError, InvalidVersionTransitionError, OpenVersionExistsError,
-    VersionNotDraftError,
+    AuthorNameLockedError, BuiltinNotRemovableError, DraftChangedError, DuplicateSeedKeyError, InvalidVersionTransitionError,
+    LiveVersionExistsError, OpenVersionExistsError, RemovalLockedError, RemovedByAuthorError, VersionNotDraftError,
 )
 
-# 目標狀態 → 允許的來源狀態（固定的轉移集合，見 script-store 規格「版本的狀態與轉移」）
-_ALLOWED_SOURCES: dict[str, tuple[str, ...]] = {
-    VERSION_PENDING: (VERSION_DRAFT,),            # 送審
-    VERSION_DRAFT: (VERSION_PENDING,),            # 撤回
-    VERSION_PUBLISHED: (VERSION_PENDING,),        # 核可
-    VERSION_REJECTED: (VERSION_PENDING,),         # 退回
-    VERSION_SUPERSEDED: (VERSION_PUBLISHED,),     # 被新的上架版本取代
-}
+# 允許的 (來源狀態, 目標狀態) 配對（固定的轉移集合，見 script-store 規格「版本的狀態與轉移」與 script-takedown 規格）。
+# 呼叫端明確傳入來源（核可只來自 `pending_review`、恢復只來自 `removed`），再對照這張白名單：白名單之外的組合在程式層就拒絕，
+# 而不是只靠 UPDATE 的 WHERE。目標相同、來源不同的轉移（核可與恢復都是 → `published`）因此不會互相借用來源。
+_ALLOWED_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
+    (VERSION_DRAFT, VERSION_PENDING),             # 送審
+    (VERSION_PENDING, VERSION_DRAFT),             # 撤回
+    (VERSION_PENDING, VERSION_PUBLISHED),         # 核可
+    (VERSION_PENDING, VERSION_REJECTED),          # 退回
+    (VERSION_PUBLISHED, VERSION_SUPERSEDED),      # 被新的上架版本取代
+    (VERSION_PUBLISHED, VERSION_REMOVED),         # 下架（作者或管理員）
+    (VERSION_REMOVED, VERSION_PUBLISHED),         # 恢復上架（只有下架者）
+    (VERSION_REMOVED, VERSION_SUPERSEDED),        # 下架之後出了新的上架版本：舊的下架版不可再恢復
+})
+
+
+def _check_pairs(sources: Sequence[str], to_status: str) -> None:
+    """來源與目標的每個配對都必須在白名單內；程式錯誤時在送出 UPDATE 之前拋出，版本不受影響。"""
+    if not sources or any((source, to_status) not in _ALLOWED_TRANSITIONS for source in sources):
+        raise InvalidVersionTransitionError
+
+
+def _checked_decision(category: str, note: str | None) -> tuple[str, str | None]:
+    """退回與管理員下架的決定：類別必須是固定列舉、備註至多 500 字（NFC 與控制字元由 Service 處理）；空備註存為空值。
+    列舉之外是呼叫端的程式錯誤，拋出 `ValueError`。"""
+    if category not in DECISION_CATEGORIES:
+        raise ValueError("決定的類別必須是固定列舉。")
+    if note is not None and (not isinstance(note, str) or len(note) > MAX_DECISION_NOTE_CHARS):
+        raise ValueError(f"審核備註至多 {MAX_DECISION_NOTE_CHARS} 字。")
+    return category, (note or None)
 
 
 def _helper_columns(script_id: int, status: str) -> dict[str, int | None]:
@@ -156,11 +184,17 @@ class ScriptRepository(BaseRepository[Script]):
         self._add_tags(version.id, content.get("tags") or [])
         return version
 
-    def _transition(self, version: ScriptVersion, to_status: str, **extra: Any) -> None:
-        """唯一寫入版本狀態（與輔助欄位）的地方：條件式 UPDATE，來源狀態不符時不改任何東西。"""
+    def _transition(
+        self, version: ScriptVersion, to_status: str, *, sources: Sequence[str], where: Sequence[Any] = (), **extra: Any
+    ) -> None:
+        """唯一寫入版本狀態（與輔助欄位）的地方：條件式 UPDATE，來源狀態不符時不改任何東西。
+
+        `sources` 由呼叫端明確指定，並須全部落在 `_ALLOWED_TRANSITIONS` 內；`where` 是額外的條件（恢復比對下架者）；
+        `extra` 是同一個 UPDATE 一併寫入的中繼資料（送審時間、下架者、決定…）。"""
+        _check_pairs(sources, to_status)
         result = self._session.execute(
             update(ScriptVersion)
-            .where(ScriptVersion.id == version.id, ScriptVersion.status.in_(_ALLOWED_SOURCES[to_status]))
+            .where(ScriptVersion.id == version.id, ScriptVersion.status.in_(tuple(sources)), *where)
             .values(status=to_status, **_helper_columns(version.script_id, to_status), **extra)
             .execution_options(synchronize_session=False)
         )
@@ -239,13 +273,13 @@ class ScriptRepository(BaseRepository[Script]):
         )
 
     def latest_closed_version(self, user_id: int, script_public_id: str) -> ScriptVersion | None:
-        """自己劇本最新的非進行中版本（已發佈、被退回或被取代）：由它的內容建立下一個草稿。"""
+        """自己劇本最新的非進行中版本（已發佈、被退回、被取代或已下架）：由它的內容建立下一個草稿。"""
         return self._session.scalar(
             select(ScriptVersion)
             .join(Script, Script.id == ScriptVersion.script_id)
             .where(
                 Script.public_id == script_public_id, Script.creator_id == user_id,
-                ScriptVersion.status.in_((VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED)),
+                ScriptVersion.status.in_((VERSION_PUBLISHED, VERSION_REJECTED, VERSION_SUPERSEDED, VERSION_REMOVED)),
             )
             .order_by(ScriptVersion.version_no.desc())
             .limit(1)
@@ -338,48 +372,126 @@ class ScriptRepository(BaseRepository[Script]):
 
     # ---- 狀態轉移（唯一寫入版本狀態的方法）-------------------------------------------------
 
-    def submit_for_review(self, user_id: int, version_public_id: str) -> ScriptVersion | None:
-        """擁有者送審：`draft` → `pending_review`（內容從此凍結）。不是自己的回傳 `None`。"""
+    def submit_for_review(self, user_id: int, version_public_id: str, *, now: datetime | None = None) -> ScriptVersion | None:
+        """擁有者送審：`draft` → `pending_review`（內容從此凍結），同時記錄送審時間（審核佇列由舊到新排序用；
+        沒有傳入時間時取目前的 UTC 時間，正式路徑由 Service 傳入自己的時鐘）。不是自己的回傳 `None`。"""
         version = self._owned_version(user_id, version_public_id)
         if version is None:
             return None
-        self._transition(version, VERSION_PENDING)
+        self._transition(version, VERSION_PENDING, sources=(VERSION_DRAFT,), submitted_at=now if now is not None else utcnow())
         return version
 
     def withdraw(self, user_id: int, version_public_id: str) -> ScriptVersion | None:
-        """擁有者撤回：`pending_review` → `draft`（要修改須先撤回）。不是自己的回傳 `None`。"""
+        """擁有者撤回：`pending_review` → `draft`（要修改須先撤回），清除送審時間。不是自己的回傳 `None`。"""
         version = self._owned_version(user_id, version_public_id)
         if version is None:
             return None
-        self._transition(version, VERSION_DRAFT)
+        self._transition(version, VERSION_DRAFT, sources=(VERSION_PENDING,), submitted_at=None)
         return version
 
     def approve_version(self, version_public_id: str, *, now: datetime) -> ScriptVersion | None:
-        """核可（審核流程專用，不是玩家路徑）：`pending_review` → `published`，同一劇本原本上架的版本在同一個 SAVEPOINT 內
-        改為 `superseded`；第一次核可時鎖定筆名。失敗時兩者都保持原狀態。找不到版本回傳 `None`。"""
+        """核可（審核流程專用，不是玩家路徑）：`pending_review` → `published`；同一劇本原本上架的版本（與下架的版本）在同一個
+        SAVEPOINT 內改為 `superseded`（下架之後出了新的上架版本，舊的下架版就不可再恢復）；第一次核可時鎖定筆名。
+        失敗時兩者都保持原狀態。找不到版本回傳 `None`。"""
         version = self._session.scalar(select(ScriptVersion).where(ScriptVersion.public_id == version_public_id))
         if version is None:
             return None
         script_id = version.script_id
+        replaced = (VERSION_PUBLISHED, VERSION_REMOVED)
+        _check_pairs(replaced, VERSION_SUPERSEDED)
         with self._session.begin_nested():
             self._session.execute(                      # 先讓出上架的位置（部分唯一索引：同一劇本至多一個上架版本）
                 update(ScriptVersion)
-                .where(ScriptVersion.script_id == script_id, ScriptVersion.status == VERSION_PUBLISHED)
+                .where(ScriptVersion.script_id == script_id, ScriptVersion.status.in_(replaced))
                 .values(status=VERSION_SUPERSEDED, **_helper_columns(script_id, VERSION_SUPERSEDED))
                 .execution_options(synchronize_session=False)
             )
-            self._transition(version, VERSION_PUBLISHED, published_at=now)     # 不是待審就拋出，上面的取代一併回復
+            self._transition(version, VERSION_PUBLISHED, sources=(VERSION_PENDING,), published_at=now)   # 不是待審就拋出，上面的取代一併回復
             self._lock_author_name(script_id, now)
         self._session.expire_all()
         return version
 
-    def reject_version(self, version_public_id: str) -> ScriptVersion | None:
-        """退回（審核流程專用）：`pending_review` → `rejected`，內容保留。找不到版本回傳 `None`。"""
+    def reject_version(self, version_public_id: str, category: str, note: str | None, now: datetime) -> ScriptVersion | None:
+        """退回（審核流程專用）：`pending_review` → `rejected`，內容保留；記錄固定類別（`DECISION_CATEGORIES`）、
+        只供管理員的審核備註（至多 500 字，可為空）與決定時間。類別不是列舉值或備註過長拋出 `ValueError`（版本不變）。
+        找不到版本回傳 `None`；不是待審拋出 `InvalidVersionTransitionError`。"""
+        category, note = _checked_decision(category, note)
         version = self._session.scalar(select(ScriptVersion).where(ScriptVersion.public_id == version_public_id))
         if version is None:
             return None
-        self._transition(version, VERSION_REJECTED)
+        self._transition(
+            version, VERSION_REJECTED, sources=(VERSION_PENDING,),
+            decision_category=category, decision_note=note, decided_at=now,
+        )
         return version
+
+    # ---- 下架與恢復（script-takedown 規格；誰下架誰恢復）--------------------------------------------
+
+    def remove_own(self, user_id: int, version_public_id: str, now: datetime) -> ScriptVersion | None:
+        """作者自行下架：`published` → `removed`，下架者為 `author`，不填類別與備註。不是自己的回傳 `None`；
+        不是上架中拋出 `InvalidVersionTransitionError`。下架同時讓出「上架」的位置（輔助欄位為空）。"""
+        version = self._owned_version(user_id, version_public_id)
+        if version is None:
+            return None
+        self._remove(version, REMOVER_AUTHOR, None, None, now)
+        return version
+
+    def remove_by_admin(self, version_public_id: str, category: str, note: str | None, now: datetime) -> ScriptVersion | None:
+        """管理員下架（審核流程專用）：`published` → `removed`，下架者為 `admin`，記錄固定類別與只供管理員的備註。
+        內建劇本（沒有作者）拋出 `BuiltinNotRemovableError`；類別或備註不合拋出 `ValueError`；找不到回傳 `None`；
+        不是上架中拋出 `InvalidVersionTransitionError`。"""
+        category, note = _checked_decision(category, note)
+        version = self._session.scalar(select(ScriptVersion).where(ScriptVersion.public_id == version_public_id))
+        if version is None:
+            return None
+        if self.get_script_of(version).creator_id is None:
+            raise BuiltinNotRemovableError
+        self._remove(version, REMOVER_ADMIN, category, note, now)
+        return version
+
+    def restore_own(self, user_id: int, version_public_id: str) -> ScriptVersion | None:
+        """作者恢復自己下架的版本：`removed` → `published`（不重審，內容與 `published_at` 不變），清除四個決定欄位。
+        不是自己的回傳 `None`；管理員下架的拋出 `RemovalLockedError`；不是下架狀態拋出 `InvalidVersionTransitionError`；
+        同劇本已有另一個上架版本拋出 `LiveVersionExistsError`（版本保持 `removed`）。"""
+        version = self._owned_version(user_id, version_public_id)
+        if version is None:
+            return None
+        self._restore(version, REMOVER_AUTHOR)
+        return version
+
+    def restore_by_admin(self, version_public_id: str) -> ScriptVersion | None:
+        """管理員恢復自己下架的版本（只限下架者為 `admin`）。找不到回傳 `None`；作者自行下架的拋出 `RemovedByAuthorError`；
+        其餘例外同 `restore_own`。"""
+        version = self._session.scalar(select(ScriptVersion).where(ScriptVersion.public_id == version_public_id))
+        if version is None:
+            return None
+        self._restore(version, REMOVER_ADMIN)
+        return version
+
+    def _remove(self, version: ScriptVersion, remover: str, category: str | None, note: str | None, now: datetime) -> None:
+        self._transition(
+            version, VERSION_REMOVED, sources=(VERSION_PUBLISHED,),
+            removed_by=remover, decision_category=category, decision_note=note, decided_at=now,
+        )
+
+    def _restore(self, version: ScriptVersion, remover: str) -> None:
+        """恢復：條件式 UPDATE（`status = 'removed'` 且 `removed_by` 等於恢復者）在 SAVEPOINT 內執行。沒有命中時讀回現況，
+        區分「不是下架狀態」與「下架者不同」；唯一索引衝突（同劇本已有另一個上架版本）轉成 `LiveVersionExistsError`。"""
+        try:
+            with self._session.begin_nested():
+                self._transition(
+                    version, VERSION_PUBLISHED, sources=(VERSION_REMOVED,), where=(ScriptVersion.removed_by == remover,),
+                    removed_by=None, decision_category=None, decision_note=None, decided_at=None,
+                )
+        except IntegrityError as exc:
+            raise LiveVersionExistsError from exc
+        except InvalidVersionTransitionError:
+            current = self._session.execute(
+                select(ScriptVersion.status, ScriptVersion.removed_by).where(ScriptVersion.id == version.id)
+            ).one_or_none()
+            if current is not None and current.status == VERSION_REMOVED:
+                raise (RemovalLockedError if remover == REMOVER_AUTHOR else RemovedByAuthorError) from None
+            raise
 
     def _lock_author_name(self, script_id: int, now: datetime) -> None:
         """第一次發佈時鎖定筆名；已鎖定的不改動（新版本沿用原筆名）。"""
@@ -483,12 +595,14 @@ class ScriptRepository(BaseRepository[Script]):
         return list(self._session.scalars(statement))
 
     def get_startable(self, user_id: int, version_public_id: str) -> ScriptVersion | None:
-        """可以拿來開存檔的版本：上架中的任何版本，或呼叫者自己的任何狀態的版本；別人的非上架版本與不存在的一樣回傳 `None`。"""
+        """可以拿來開存檔的版本：上架中的任何版本，或呼叫者自己的任何狀態的版本（**下架的除外**，包含作者自己）；
+        別人的非上架版本、下架的版本與不存在的一樣回傳 `None`。"""
         return self._session.scalar(
             select(ScriptVersion)
             .join(Script, Script.id == ScriptVersion.script_id)
             .where(
                 ScriptVersion.public_id == version_public_id,
+                ScriptVersion.status != VERSION_REMOVED,
                 (ScriptVersion.status == VERSION_PUBLISHED) | (Script.creator_id == user_id),
             )
         )

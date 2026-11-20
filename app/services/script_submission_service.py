@@ -105,7 +105,7 @@ class ScriptSubmissionService:
         if not self._scripts.record_review(version.id, version.content_hash, merged, flags, now):
             raise DraftChanged()                                      # 內容在這之間被改了：舊結果不蓋在新內容上
         try:
-            self._scripts.submit_for_review(user.id, version_public_id)
+            self._scripts.submit_for_review(user.id, version_public_id, now=now)
         except InvalidVersionTransitionError:
             raise NotDraft() from None                                # 並行的另一個請求已送審（或撤回）
         self._submissions.record(user.id, SUBMISSION_SENT, flags, now)

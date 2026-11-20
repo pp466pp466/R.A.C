@@ -8,7 +8,8 @@ const Format = require('../../app/static/js/admin/admin-format.js');
 const STATUSES = ['active', 'suspended', 'deletion_pending'];
 const TIERS = ['free', 'plus', 'vip'];
 const ACTIONS = ['user.lookup', 'user.suspend', 'user.unsuspend', 'user.change_tier', 'conversation.read', 'conversation.delete', 'failures.read', 'reauth.failed',
-  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock', 'limit.set', 'publish.suspend', 'publish.lift', 'wallet.adjust'];
+  'account.lock', 'appeal.submit', 'appeal.read', 'account.unlock', 'limit.set', 'publish.suspend', 'publish.lift', 'wallet.adjust',
+  'script.read', 'script.approve', 'script.reject', 'script.remove', 'script.restore'];
 
 test('every status, tier, role, action, kind and message value has a Chinese label', () => {
   for (const value of STATUSES) { assert.notEqual(Format.statusLabel(value), value, value); }

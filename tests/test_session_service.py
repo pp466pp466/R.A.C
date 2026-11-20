@@ -114,7 +114,7 @@ def test_another_player_cannot_start_from_any_non_published_version(member_sessi
         repo.submit_for_review(author.id, version.public_id)
     elif status_label == "rejected":
         repo.submit_for_review(author.id, version.public_id)
-        repo.reject_version(version.public_id)
+        repo.reject_version(version.public_id, "other_policy", None, TODAY_UTC)
     else:
         repo.submit_for_review(author.id, version.public_id)
         repo.approve_version(version.public_id, now=TODAY_UTC)

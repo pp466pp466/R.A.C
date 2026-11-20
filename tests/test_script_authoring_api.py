@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.models import Base, RuntimeLimit, Script, ScriptSubmission, ScriptVersion, User
+from app.models.base import utcnow
 from app.repositories.script_repository import ScriptRepository
 from app.services.age_policy import AgePolicy
 from app.services.script_seed_service import SEED_DIRECTORY, ScriptSeedService
@@ -97,7 +98,7 @@ def set_status(app, version_public_id: str, owner_n: int, to: str) -> None:
         scripts = ScriptRepository(s)
         scripts.submit_for_review(owner.id, version_public_id)
         if to == "rejected":
-            scripts.reject_version(version_public_id)
+            scripts.reject_version(version_public_id, "other_policy", None, utcnow())
         s.commit()
 
 

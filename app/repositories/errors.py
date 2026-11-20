@@ -31,7 +31,25 @@ class OpenVersionExistsError(Exception):
 
 class InvalidVersionTransitionError(Exception):
     """版本的狀態不允許這個轉移（只允許 `draft`→`pending_review`、`pending_review`→`draft`、`pending_review`→`published`
-    或 `rejected`、`published`→`superseded`）。版本保持原狀態。"""
+    或 `rejected`、`published`→`superseded` 或 `removed`、`removed`→`published` 或 `superseded`）。版本保持原狀態。
+    白名單之外的（來源，目標）組合在送出 UPDATE 之前就拋出，不是只靠 `WHERE` 的條件。"""
+
+
+class RemovalLockedError(Exception):
+    """版本是被管理員下架的：作者不能自行恢復，只有管理員能恢復（rpg-script-publishing）。Service 轉成 403 `removal_locked`。版本不變。"""
+
+
+class RemovedByAuthorError(Exception):
+    """版本是作者自行下架的：管理員不恢復它（那是作者自己的決定）。Service 轉成 409 `removed_by_author`。版本不變。"""
+
+
+class LiveVersionExistsError(Exception):
+    """恢復上架時，同一劇本已有另一個上架版本（`live_script_id` 的部分唯一索引擋下，包含並行的情況）。
+    Service 轉成 409 `live_exists`；版本保持 `removed`，沒有留下半套資料。"""
+
+
+class BuiltinNotRemovableError(Exception):
+    """內建劇本（沒有作者）不可下架：它由種子與部署流程管理。Service 轉成 409 `builtin_not_removable`。版本不變。"""
 
 
 class DraftChangedError(Exception):

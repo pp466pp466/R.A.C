@@ -100,7 +100,7 @@ def test_the_catalog_lists_only_published_versions_never_drafts_pending_rejected
         if title != "草稿版":
             repo.submit_for_review(author.id, version.public_id)
         if title == "退回版":
-            repo.reject_version(version.public_id)
+            repo.reject_version(version.public_id, "other_policy", None, TODAY_UTC)
     old = publish(member_session, author, title="舊版")                     # 第二個劇本的舊版：被同一劇本的新版取代
     newer = validated(title="新版")
     draft = repo.create_draft_version(author.id, repo.get_script_of(old).public_id, content=newer.content, content_hash=newer.content_hash, total_chars=newer.total_chars)

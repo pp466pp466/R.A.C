@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 from app.models import Base, RpgSession, Script, ScriptVersion, ScriptVersionTag, User
 from app.models.base import utcnow
 from app.models.script import (
-    OFFICIAL_AUTHOR_NAME, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_STATUSES, VERSION_SUPERSEDED,
+    OFFICIAL_AUTHOR_NAME, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_REMOVED, VERSION_STATUSES, VERSION_SUPERSEDED,
 )
 from app.repositories.errors import (
     AuthorNameLockedError, InvalidVersionTransitionError, OpenVersionExistsError, VersionNotDraftError,
@@ -135,7 +135,7 @@ def test_a_rejected_version_cannot_become_published_and_keeps_its_content(repo, 
     alice = make_user(member_session)
     version = new_script(repo, alice)
     repo.submit_for_review(alice.id, version.public_id)
-    assert repo.reject_version(version.public_id).status == VERSION_REJECTED
+    assert repo.reject_version(version.public_id, "other_policy", None, NOW).status == VERSION_REJECTED
     with pytest.raises(InvalidVersionTransitionError):
         repo.approve_version(version.public_id, now=NOW)
     assert status_of(member_session, version) == VERSION_REJECTED
@@ -154,10 +154,13 @@ def put_in_status(repo, session, user, status):
     if status == VERSION_PENDING:
         return version
     if status == VERSION_REJECTED:
-        repo.reject_version(version.public_id)
+        repo.reject_version(version.public_id, "other_policy", None, NOW)
         return version
     repo.approve_version(version.public_id, now=NOW)
     if status == VERSION_PUBLISHED:
+        return version
+    if status == VERSION_REMOVED:
+        repo.remove_own(user.id, version.public_id, NOW)
         return version
     successor = new_draft(repo, user, pid)
     publish(repo, user, successor)
@@ -179,7 +182,7 @@ def attempt(repo, user, version, name):
         return repo.withdraw(user.id, version.public_id)
     if name == "approve":
         return repo.approve_version(version.public_id, now=NOW)
-    return repo.reject_version(version.public_id)
+    return repo.reject_version(version.public_id, "other_policy", None, NOW)
 
 
 @pytest.mark.parametrize("name", sorted(TRANSITIONS))

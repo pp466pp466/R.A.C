@@ -11,6 +11,10 @@
 審查結果欄位（`review_hash`、`review_verdict`、`review_categories_json`、`reviewed_at`，rpg-script-authoring）是審查的中繼資料，
 只能由 `ScriptRepository.record_review` 寫入（它條件式比對內容雜湊，內容被改動時舊結果不會蓋在新內容上）。讀取不受限制（審查服務要讀）；
 這裡只抓「寫入」：對這些屬性賦值，或在任何呼叫中以同名的關鍵字傳入（`update(...).values(review_hash=...)`、`ScriptVersion(review_hash=...)`）。
+
+決定欄位（`submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at`，rpg-script-publishing）是送審、退回與下架的中繼資料，
+同樣只能由 `ScriptRepository` 的轉移方法寫入（與狀態在同一個條件式 UPDATE 內，狀態與決定不會各寫各的）；其中 `decision_note` 是只供
+管理員看的審核備註。讀取不受限制；掃描規則與審查欄位相同，並另外釘住「哪些方法可以寫入」（見最後幾個測試）。
 """
 import ast
 
@@ -20,6 +24,7 @@ APP = PROJECT_ROOT / "app"
 ALLOWED = {"app/models/script.py", "app/repositories/script_repository.py"}
 HELPER_COLUMNS = {"live_script_id", "open_script_id"}
 REVIEW_COLUMNS = {"review_hash", "review_verdict", "review_categories_json", "reviewed_at"}
+DECISION_COLUMNS = {"submitted_at", "removed_by", "decision_category", "decision_note", "decided_at"}
 
 
 def violations_in(source: str) -> list[str]:
@@ -32,6 +37,13 @@ def violations_in(source: str) -> list[str]:
             problems.append(f"第 {node.lineno} 行：以關鍵字寫入輔助欄位 {node.arg}")
         elif isinstance(node, ast.keyword) and node.arg in REVIEW_COLUMNS:
             problems.append(f"第 {node.lineno} 行：以關鍵字寫入審查欄位 {node.arg}")
+        elif isinstance(node, ast.keyword) and node.arg in DECISION_COLUMNS:
+            problems.append(f"第 {node.lineno} 行：以關鍵字寫入決定欄位 {node.arg}")
+        elif isinstance(node, (ast.Assign, ast.AugAssign)) and any(
+            isinstance(target, ast.Attribute) and target.attr in DECISION_COLUMNS
+            for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
+        ):
+            problems.append(f"第 {node.lineno} 行：對決定欄位賦值")
         elif isinstance(node, (ast.Assign, ast.AugAssign)) and any(
             isinstance(target, ast.Attribute) and target.attr in REVIEW_COLUMNS
             for target in (node.targets if isinstance(node, ast.Assign) else [node.target])
@@ -104,3 +116,43 @@ def test_the_scan_leaves_innocent_code_alone():
     assert violations_in("def f(session):\n    return session.scalar(select(ScriptVersion).where(ScriptVersion.status == 'published'))\n") == []
     assert violations_in("def f(user):\n    user.status = 'active'\n") == []
     assert violations_in("def f(save):\n    save.status = 'ended'\n") == []
+
+
+def test_the_scan_flags_writes_to_the_decision_columns_but_not_reads():
+    assert violations_in("def f(v):\n    v.decision_note = 'x'\n")
+    assert violations_in("def f(v):\n    v.removed_by = 'admin'\n")
+    assert violations_in("from sqlalchemy import update\nupdate(Other).values(decision_category='other_policy')\n")
+    assert violations_in("def f(now):\n    return Other(submitted_at=now)\n")
+    assert violations_in("def f(now):\n    return Other(decided_at=now)\n")
+    assert violations_in("def f(v):\n    v.decision_note += 'x'\n")
+    assert any("決定欄位" in p for p in violations_in("def f(v):\n    v.decided_at = 1\n"))
+    assert violations_in("def f(v):\n    return v.decision_note, v.removed_by, v.decision_category\n") == []
+    assert violations_in("def f(v):\n    return v.submitted_at or v.created_at, v.decided_at\n") == []
+
+
+def _functions_writing(source: str, columns: set[str]) -> dict[str, set[str]]:
+    """每個決定欄位以關鍵字寫入的位置：欄位 → 包含該寫入的函式名稱。"""
+    found: dict[str, set[str]] = {column: set() for column in columns}
+    for function in ast.walk(ast.parse(source)):
+        if isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            for node in ast.walk(function):
+                if isinstance(node, ast.keyword) and node.arg in columns:
+                    found[node.arg].add(function.name)
+    return found
+
+
+def test_the_decision_columns_are_written_only_by_the_named_transition_methods():
+    """送審與撤回寫 `submitted_at`；退回、下架與恢復寫其餘四個：寫入點固定，新增的寫入點必須先修改這個測試（並檢討規格）。"""
+    repository = (APP / "repositories" / "script_repository.py").read_text(encoding="utf-8-sig")
+    assert any("決定欄位" in p for p in violations_in(repository))
+    written = _functions_writing(repository, DECISION_COLUMNS)
+    assert written["submitted_at"] == {"submit_for_review", "withdraw"}
+    assert written["removed_by"] == {"_remove", "_restore"}
+    assert written["decision_category"] == {"reject_version", "_remove", "_restore"}
+    assert written["decision_note"] == {"reject_version", "_remove", "_restore"}
+    assert written["decided_at"] == {"reject_version", "_remove", "_restore"}
+
+
+def test_no_other_application_file_writes_the_decision_columns():
+    found = {path: [p for p in problems if "決定欄位" in p] for path, problems in offending_files().items()}
+    assert {path: problems for path, problems in found.items() if problems} == {}
