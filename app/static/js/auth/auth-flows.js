@@ -21,7 +21,7 @@
   'use strict';
 
   var LOGIN_PATH = '/login';
-  var DEFAULT_PAGE = '/cs';
+  var DEFAULT_PAGE = '/game';           // 與伺服器的 DEFAULT_AFTER_LOGIN 一致（app/security/redirects.py；tests/test_auth_pages.py 比對）
   var APPEAL_PATH = '/appeal';
 
   var TEXT = {

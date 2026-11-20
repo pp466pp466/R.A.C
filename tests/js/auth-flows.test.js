@@ -16,7 +16,7 @@ test('only same-site paths are ever used as a destination', () => {
   assert.equal(Flows.safeDestination('/cs'), '/cs');
   assert.equal(Flows.safeDestination('/account?tab=security'), '/account?tab=security');
   for (const bad of ['https://evil.example/', '//evil.example', 'javascript:alert(1)', '/\\evil', '', null, undefined, 5, {}, ['/cs']]) {
-    assert.equal(Flows.safeDestination(bad), '/cs', String(bad));
+    assert.equal(Flows.safeDestination(bad), '/game', String(bad));              // 預設頁面是 /game（與伺服器的 DEFAULT_AFTER_LOGIN 一致），不是客服
   }
   assert.equal(Flows.safeDestination('//x', '/age'), '/age');                    // 自訂後備
 });
@@ -25,12 +25,12 @@ test('only same-site paths are ever used as a destination', () => {
 
 test('the Google start request carries only the two flags and a safe next', () => {
   assert.deepEqual(Flows.googleStartBody(true, true, '/account'), { accept_terms: true, declare_adult: true, next: '/account' });
-  assert.deepEqual(Flows.googleStartBody(false, false, undefined), { accept_terms: false, declare_adult: false, next: '/cs' });
+  assert.deepEqual(Flows.googleStartBody(false, false, undefined), { accept_terms: false, declare_adult: false, next: '/game' });
   for (const notTrue of [false, 0, '', null, undefined, 'true', 1]) {
     assert.equal(Flows.googleStartBody(notTrue, true, '/cs').accept_terms, false, String(notTrue));    // 只有明確的 true 才算勾選
     assert.equal(Flows.googleStartBody(true, notTrue, '/cs').declare_adult, false, String(notTrue));
   }
-  assert.deepEqual(Flows.googleStartBody(true, true, 'https://evil.example/'), { accept_terms: true, declare_adult: true, next: '/cs' });
+  assert.deepEqual(Flows.googleStartBody(true, true, 'https://evil.example/'), { accept_terms: true, declare_adult: true, next: '/game' });
   // 沒有生日、區間、時間、版本或任何個資：時間與版本由伺服器決定
   assert.deepEqual(Object.keys(Flows.googleStartBody(true, true, '/cs')).sort(), ['accept_terms', 'declare_adult', 'next']);
 });
@@ -162,7 +162,7 @@ test('the appeal status labels cover both states and fall back to a dash', () =>
 });
 
 test('appeal errors: not locked any more goes to the default page, 409 and 429 show the server message, 401 goes to login', () => {
-  assert.deepEqual(Flows.appealOutcome(server(404, 'not_found', '找不到')), { action: 'redirect', to: '/cs' });
+  assert.deepEqual(Flows.appealOutcome(server(404, 'not_found', '找不到')), { action: 'redirect', to: '/game' });     // 預設頁面是 /game；原本寫 /cs 是 DEFAULT_AFTER_LOGIN 改成 /game 時漏改的
   assert.deepEqual(Flows.appealOutcome(server(401, 'unauthorized', '請先登入。')), { action: 'redirect', to: '/login?next=%2Fappeal' });
   assert.deepEqual(Flows.appealOutcome(server(409, 'appeal_pending', '您已有一則申訴正在等待管理員處理，請耐心等候。')),
     { action: 'message', message: '您已有一則申訴正在等待管理員處理，請耐心等候。' });

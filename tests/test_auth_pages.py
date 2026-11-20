@@ -289,6 +289,22 @@ def test_the_google_button_stays_clickable_when_nothing_is_ticked_and_only_the_f
     assert "birth" not in body and "version" not in body and "_at" not in body         # 時間與版本由伺服器決定，不從前端送
 
 
+def test_the_default_destinations_in_the_auth_scripts_are_the_servers_default_landing_page_not_the_chat():
+    """前端的備援頁面曾停在改版之前的 `/cs`（客服）：`DEFAULT_AFTER_LOGIN` 改成 `/game` 時只改了伺服器。伺服器平常一定會給 `next`，
+    但申訴頁收到 404（管理員剛解除鎖定）時會導向「預設頁面」，那條路是走得到的。三個備援都要與伺服器的常數一致。"""
+    from app.config import PROJECT_ROOT
+
+    js = PROJECT_ROOT / "app" / "static" / "js" / "auth"
+    flows = (js / "auth-flows.js").read_text(encoding="utf-8")
+    assert f"var DEFAULT_PAGE = '{DEFAULT_AFTER_LOGIN}';" in flows
+    password = (js / "login-password.js").read_text(encoding="utf-8")
+    assert f"Auth.safeDestination(response.data && response.data.next, '{DEFAULT_AFTER_LOGIN}')" in password
+    age = (js / "age.js").read_text(encoding="utf-8")
+    assert f"Auth.safeDestination(state.next, '{DEFAULT_AFTER_LOGIN}')" in age
+    for name, source in (("auth-flows.js", flows), ("login-password.js", password), ("age.js", age)):
+        assert "'/cs'" not in source, f"{name} 還有寫死的 /cs 備援"
+
+
 def test_the_account_page_shows_the_age_row_and_the_form_for_an_admin_without_age_data(full_app):
     client = logged_in_admin_without_age(full_app)                                    # 管理員由指令建立，沒有年齡資料
     page = client.get("/account")
