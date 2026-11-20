@@ -1,0 +1,61 @@
+# Tasks
+
+> 批次（**待使用者在 apply 前確認**；使用者說「開始 apply」才動程式）：① 1.1–1.4（資料與 Repository 核心：遷移、模型、轉移表、守門）　② 2.1–2.4（管理員後端：審核與下架的 Service、端點、稽核、事件）　③ 3.1–3.4（作者後端：下架與恢復、開存檔排除、匯出、摘要欄位）　④ 4.1–4.5（目錄後端：查詢模組、游標、搜尋、標籤、詳情、詳情頁路由）　⑤ 5.1–5.2（`/admin`「劇本審核」分頁）　⑥ 6.1–6.2（`/scripts` 的狀態與下架畫面）　⑦ 7.1–7.4（入口目錄畫面、共用 Modal、詳情頁）　⑧ 8.1–8.6（變異驗證、全套測試、瀏覽器實測、簡報通知、設計文件）。每批結束先跑該批的 pytest 與 Node、對照簡報（`deck-conflict-watch`，只通知）、更新 `HANDOFF.md`，**一批一個 commit（只加該批的檔案，不用 `git add -A`），commit 後停止，不自行開始下一批**；propose 的 artifact 先單獨一個 commit。遷移（1.1）在開發 SQL Server 與 SQLite 都要實跑一次（升到 `0021`）。
+> 測試約定：pytest 用 `.venv\Scripts\python.exe -m pytest`，連真實 SQL Server `project_test` 的測試同時只能有一個 pytest 行程；背景跑全套時輸出存檔、不接 `tail`；Node 測試以 `node --test "tests/js/**/*.test.js"`（`--test-concurrency=2`），Windows 主控台是 cp950，輸出導到 scratchpad 檔案再讀。用資料庫的測試在 SQLite 與 SQL Server 各跑一次（既有的雙軌參數化）。
+> 約定：前端遵守 AGENTS.md 第 1、2 節（離線資源、`url_for`、Vue 全域變數模式、無 `.vue`、無 `v-html`、無 `data-bs-*`、無純白文字、Modal／Toast 由 Vue 狀態控制）；所有文字繁體中文；`app/` 內不得出現 Raw SQL；改檔後用 Python 數 lone-CR（LF／CRLF 混用）；Bash 命令裡的雙反斜線會被折成單個，寫檔用 Write／Edit；修改 `templates` 後須請使用者重啟驗收伺服器（JS 直接生效）。日誌、稽核、事件、匯出與作者的回應**絕不含審核備註與劇本文字**。
+> 本 change 有 migration（`0021`），須同步 `docs/project資料結構文件.md` 並在其第 14 節追加異動紀錄（有測試守門與列骨架工具）；AGENTS.md 已於 `67ef67b` 修訂，不需再改。
+
+## 1. 資料與 Repository 核心
+
+- [ ] 1.1 遷移 `migrations/versions/20261120_0021_script_publishing.py`（`down_revision = "0020_safe_mode_hint"`；docstring 寫 expand 階段、不回填、回復的 `recreate="never"` 說明與「回復前須確認沒有 `removed` 版本」，檔頭註解風格同 0020；`batch_alter_table`，不含原生 SQL）：`script_versions` 新增可為空的 `submitted_at`（UTC 時間，SQL Server 為 `DATETIME2(6)`）、`removed_by`（`Unicode(8)`）、`decision_category`（`Unicode(24)`）、`decision_note`（`UnicodeText`）、`decided_at`（UTC 時間），並建索引 `ix_script_versions_status_published_at`（`status`, `published_at`）。驗證：`flask db upgrade`／降級在 SQLite 與開發 SQL Server 都實跑；`tests/test_migrations*`（沿用既有遷移測試的做法）涵蓋「新欄位可為空、舊資料不變、索引存在、downgrade 後欄位消失」。
+- [ ] 1.2 `app/models/script.py`：新增 `VERSION_REMOVED`（加入 `VERSION_STATUSES`）、`REMOVER_AUTHOR`／`REMOVER_ADMIN`、`CATEGORY_OTHER_POLICY` 與 `DECISION_CATEGORIES = REVIEW_CATEGORIES + (other_policy,)`、五個欄位（含註解：中繼資料、不進內容雜湊、只由 `ScriptRepository` 轉移方法寫入、備註只供管理員）；更新檔頭註解與 `app/models/admin_audit_log.py`（新增 `ACTION_SCRIPT_READ/APPROVE/REJECT/REMOVE/RESTORE` 加入 `AUDIT_ACTIONS`，註解「細節只放列舉值、整數與對外識別碼」）。驗證：模型測試（列舉內容、欄位型別與可為空）、稽核動作列舉測試（既有 `admin-audit-log` 的「列舉以外被拒絕」仍通過）。
+- [ ] 1.3 `app/repositories/script_repository.py`：①`_transition` 改為 `(來源, 目標)` 白名單並由呼叫端指定來源（`_ALLOWED_TRANSITIONS`），輔助欄位規則不變（`removed` 兩個皆為空）；送審設 `submitted_at`、撤回清除；②`approve_version` 只來自 `pending_review`、取代範圍 `published` 與 `removed`（同一 SAVEPOINT）；③`reject_version(public_id, category, note, now)`；④`remove_own`／`restore_own`（擁有者範圍，非擁有者回 `None`；恢復條件式 `WHERE status='removed' AND removed_by='author'`，不符時區分 `RemovalLockedError`（管理員下架）與 `InvalidVersionTransitionError`，唯一索引衝突在 SAVEPOINT 內轉 `LiveVersionExistsError`）；⑤`remove_by_admin(public_id, category, note, now)`（內建劇本拋 `BuiltinNotRemovableError`）、`restore_by_admin(public_id)`（只限 `removed_by='admin'`，否則 `RemovedByAuthorError`）；⑥類別與備註長度驗證（列舉外拋 `ValueError`）；⑦`latest_closed_version` 納入 `removed`；`get_startable` 排除 `removed`；恢復時清除四個決定欄位；`app/repositories/errors.py` 新增三個例外。驗證：新增 `tests/test_script_repository_publishing.py`（轉移全表含非法組合、核可取代 `removed`、恢復的權限與衝突、並行恢復與核可、內容雜湊不變、決定欄位寫入與清除、`get_startable` 與 `latest_closed_version`）。
+- [ ] 1.4 架構守門：`tests/architecture/test_script_state_writes.py` 新增 `DECISION_COLUMNS = {submitted_at, removed_by, decision_category, decision_note, decided_at}`，擋「以關鍵字寫入」與「對屬性賦值」（反向驗證保留）；同步 `docs/project資料結構文件.md`（`script_versions` 新欄位與索引、`status` 新值、第 14 節異動紀錄；用既有的列骨架工具）並讓其守門測試通過。驗證：`tests/architecture`、資料結構文件測試通過。
+
+## 2. 管理員後端（審核、下架、恢復）
+
+- [ ] 2.1 `app/repositories/admin_script_repository.py`（唯讀）：`list_by_status(status, limit, offset)`（`pending_review` 先排有疑慮〔`review_verdict = flag` 且 `review_hash = content_hash`〕再依 `coalesce(submitted_at, created_at)` 由舊到新、編號；`published` 依 `published_at` 由新到舊；`removed` 依 `decided_at` 由新到舊）、`get_reviewable(public_id)`（`status != draft`）、取得作者對外識別碼與標籤；純函式模組 `app/services/admin_script_views.py`（清單項目與詳情的欄位白名單：沒有內部編號與 email；清單沒有內文與備註全文，只有 `has_note`）。驗證：`tests/test_admin_script_repository.py`、`tests/test_admin_script_views.py`（鍵集合固定、排序規則、草稿不可取得）。
+- [ ] 2.2 `AdminService` 新增 `script_queue`、`read_script`、`approve_script`、`reject_script`、`remove_script`、`restore_script`（每個第一行 `require_admin`）；核可與退回不重新輸入密碼、下架與恢復用 `_confirm`；`read` 先寫 `script.read` 稽核再回傳；稽核細節只有版本與劇本的對外識別碼、狀態與類別；備註驗證（NFC、去控制字元、至多 500 字）與類別驗證（400，一次指出所有欄位）；例外轉換：`not_pending`、`not_published`、`not_removed`、`removed_by_author`、`live_exists`、`builtin_not_removable`（新增對應的 `ServiceError` 子類別與預設繁體中文訊息）；`registry.get_admin_service` 組裝新 Repository；`app/observability/script_events.py` 新增核可、退回、下架、恢復事件（只有內部編號與固定列舉，函式沒有備註參數）。驗證：`tests/test_admin_service_scripts.py`（每個情境對照 `admin-script-review` 與 `script-takedown` 規格；並行的核可／退回；稽核與動作同交易；錯誤密碼寫 `reauth.failed` 且版本不變；備註不在稽核與事件）；`tests/architecture/test_admin_boundaries.py` 通過（新方法第一行 `require_admin`）。
+- [ ] 2.3 `app/controllers/admin_api_controller.py` 新增端點：`GET /api/admin/scripts`、`GET /api/admin/scripts/versions/<id>`、`POST …/approve`、`…/reject`、`…/remove`、`…/restore`（先 `_admin()` 再解析本文；查詢參數 `status`、`limit`、`offset` 驗證；`/api/admin/` 回應既有的禁止快取）。驗證：`tests/test_admin_api_scripts.py`（一般使用者一律 404 含格式錯誤的本文、CSRF、400／409／403 的代碼、回應沒有內部編號與備註之外的不該有欄位）。
+- [ ] 2.4 日誌與稽核整合測試：`tests/test_admin_script_flow.py`——玩家建立並送審（假模型）→ 管理員讀取、退回（含備註）→ 作者修改再送審 → 核可 → 管理員下架 → 恢復，全程收集日誌、稽核與回應，**找不到備註與劇本文字**；`service-observability` 與 `admin-audit-log` 規格的情境逐一對到測試。驗證：測試通過（SQLite 與 SQL Server）。
+
+## 3. 作者後端（下架、恢復、開存檔、匯出）
+
+- [ ] 3.1 `ScriptAuthoringService` 新增 `remove`、`restore`（帳號與年齡閘門、非擁有者 404、`not_published`、`not_removed`、`removal_locked`（403）、`live_exists`；被暫停發佈者仍可操作）；版本摘要新增 `decision_category`、`decided_at`、`removed_by`（**不含備註**，以鍵集合測試固定）；`script_api_controller` 新增 `POST /api/scripts/versions/<id>/remove`、`/restore`；事件記錄。驗證：`tests/test_script_takedown_service.py`、`tests/test_script_api_takedown.py`（對照 `script-takedown` 規格每個情境）。
+- [ ] 3.2 開存檔與創角資料：確認 `StartableVersions.resolve`（開存檔、`/api/sessions/setup/<id>`、`/api/sessions/protagonist/suggest`）對 `removed` 版本（含作者自己）一律 `NotFound` 且不呼叫模型；既有存檔不受影響。驗證：`tests/test_startable_removed.py`（三個入口、作者與他人、恢復後可開、已開存檔仍可繼續遊玩）。
+- [ ] 3.3 個人資料匯出：`export_scripts` 與 `personal_export_service` 的 JSON 與 CSV 納入 `status`（含 `removed`）、`decision_category`、`decided_at`、`removed_by`，**不含備註**。驗證：擴充既有匯出測試（`tests/test_account_export_api.py` 或其所屬檔案）：兩種格式都含、備註文字不出現；`test_account_erasure_*` 仍通過（作者被刪除時含 `removed` 與有備註的版本一併消失）。
+- [ ] 3.4 盤點所有「依版本狀態分支」的程式（`grep` `VERSION_` 與 `status ==`）：`list_owned` 的呈現、刪除版本（`removed` 不可刪）、`script_seed_service`、`script_submission_service`、`game_entry_service`，確認 `removed` 被正確處理；補缺少的測試。驗證：盤點結果寫進 tasks 完成註記，相關測試通過。
+
+## 4. 目錄後端（搜尋、篩選、游標、標籤、詳情）
+
+- [ ] 4.1 純函式模組 `app/services/catalog_query.py`：解析與驗證 `q`、`tag`、`audience`、`limit`、`cursor`（一次回報全部不合法欄位）；游標的編碼與解碼（URL-safe base64 的 JSON，嚴格驗證型別與範圍，損毀一律 `ValidationError(fields={"cursor": …})`）；常數 `Q_MAX_TOKENS=5`、`Q_MAX_CHARS=50`。驗證：`tests/test_catalog_query.py`（正規化、`%`／`_` 不在此處理而在 Repository、損毀與竄改的游標、位移不再被讀取）。
+- [ ] 4.2 `ScriptRepository.list_catalog(query, *, preference, limit)`：只含 `published`；偏好層 `case` 欄位一併回傳；關鍵字（每詞 `or_` 標題、簡介、世界名稱、標籤 `contains(autoescape=True)`，多詞 AND）、`tag`（`exists`）、`audience`；鍵集條件 `(rank, published_at, id)`；排序鍵與條件鍵一致；取代 `list_published_cards`（舊方法與其測試一併調整）。新增 `popular_tags(limit=30)`（`group by lower(tag)`，只計上架版本）。驗證：`tests/test_script_repository_catalog.py`（SQLite 與 SQL Server：大小寫、萬用字元字面比對、多詞、不比對內文、頻道 `all` 含空值、分頁串起來等於一次取得、分頁期間上架／下架／恢復、偏好分層下的游標、標籤計數只含上架與不分大小寫合併、上限 30）。
+- [ ] 4.3 `GameEntryService.catalog` 改用查詢模組與游標（回應 `scripts`、`has_more`、`next_cursor`、`content_mode`；`CARD_FIELDS` 不變）；新增 `catalog_tags` 與 `script_detail`（白名單組裝；非 `published` 一律 `NotFound`；欄位：`id`、標題、簡介、世界名稱、標籤、筆名與短代號、內容模式標示、讀者頻道、版本編號、發佈時間、背景、角色姓名與職業、地點、是否有自訂結局、`content_mode`；**不含**隱藏特質、個性、里程碑、結局說明、規則、初始對話、雜湊與內部編號）。驗證：擴充 `tests/test_game_entry_service.py`（詳情鍵集合固定、已下架與他人草稿 404、不過年齡閘門、標籤端點、查詢次數固定不隨筆數增加）。
+- [ ] 4.4 `session_api_controller`：`GET /api/sessions/catalog` 讀 `q`、`tag`、`audience`、`cursor`、`limit`（不再讀 `offset`），新增 `GET /api/sessions/catalog/tags`、`GET /api/sessions/catalog/<id>`；更新檔頭說明；`/api/sessions/` 的禁止快取不變。驗證：擴充 `tests/test_game_api.py`／`tests/test_game_entry_flow.py`（400 的欄位、舊的 `offset` 被忽略、不改動錢包也沒有模型呼叫）。
+- [ ] 4.5 `game_page_controller` 新增 `GET /game/script/<version_public_id>`（`login_required_page`；初始狀態只有 `member_tier`、`gate`、`user`，不含劇本內容與版本識別碼）與樣板骨架 `app/templates/game/script_detail.html`（先放外殼，畫面在 7.4）。驗證：擴充 `tests/test_game_pages.py`（路由存在、受限狀態導向、頁面沒有劇本文字、與 `/game/<存檔>` 路由不互相吃掉、前端規則架構測試通過）。
+
+## 5. `/admin` 的「劇本審核」分頁
+
+- [ ] 5.1 `app/static/js/admin/admin.js` 與 `admin-format.js`：新增 `tabs` 項目「劇本審核」與載入表（待審、上架中、已下架三個清單，`paged`）；狀態、類別與下架者的繁體中文文案與格式化函式（純函式，Node 可測）；待審數量顯示在分頁標籤；操作函式（核可、退回、下架、恢復）與 409／400 的錯誤處理（`not_pending` 重新載入清單）。驗證：`tests/js/admin-format*.test.js` 擴充（文案與格式化、類別列舉與後端常數對照）、既有 `test_admin_format_labels.py` 同步。
+- [ ] 5.2 `app/templates/admin/console.html` 與 `admin.css`：分頁區塊、清單表格（手機寬度可用）、全文 Modal（純文字，標題與內文含 `<b>`、`<script>` 的情境）、退回 Modal（類別下拉與備註、字數）、下架與恢復 Modal（含密碼欄位）、成功 Toast；全部由 Vue 狀態接管。驗證：`tests/test_admin_page.py` 擴充（頁面有分頁、外殼沒有劇本內容）、前端規則架構測試通過、360 px 版面量測無橫向溢出。
+
+## 6. `/scripts` 的狀態與下架
+
+- [ ] 6.1 `app/static/js/scripts/script-workshop.js`、`script-api.js`：`statusLabels` 加 `removed`；類別說明與下架者文案（純函式，Node 可測，涵蓋 `other_policy` 與既有列舉）；`remove`、`restore` 的 API 與按鈕邏輯（依後端欄位決定顯示）；409／403 錯誤訊息（`not_published`、`not_removed`、`removal_locked`、`live_exists`）。驗證：`tests/js/script-workshop*.test.js` 擴充。
+- [ ] 6.2 `app/templates/scripts/workshop.html` 與 `scripts.css`：版本列顯示「已退回（類別、時間）」「已下架（作者）」「已被管理員下架（類別）」；「下架」「恢復上架」按鈕與自製確認 Modal；管理員下架的版本不顯示恢復按鈕、顯示說明；詳細檢視的橫幅文案更新。驗證：`tests/test_script_pages*.py` 擴充（樣板內容、沒有 `v-html`／`data-bs-*`）、前端規則架構測試通過。
+
+## 7. 入口目錄畫面與詳情頁
+
+- [ ] 7.1 抽出「詢問修改安全模式」的共用 Modal：樣板片段 `app/templates/game/_mode_prompt.html` 與 `app/static/js/game/mode-prompt.js`（狀態機＋文案，Node 可測；`Game.modePromptCopy` 保留為薄轉接，既有測試不變），入口頁改用共用版，行為不變。驗證：既有入口頁測試與 Node 測試不改而通過；新增 `tests/js/mode-prompt.test.js`。
+- [ ] 7.2 `app/static/js/game/game-api.js` 與新模組 `catalog-state.js`（純函式，Node 可測）：目錄請求帶 `q`、`tag`、`audience`、`cursor`；篩選條件狀態（條件改變即清空並從第一頁重載、請求序號避免過時回應覆蓋、`next_cursor` 接續）；常用標籤載入；不碰任何瀏覽器儲存。驗證：`tests/js/catalog-state.test.js`（序號、重設、載入更多沿用條件、失敗保留已載入內容）、`game-api` 測試擴充。
+- [ ] 7.3 `app/templates/game/index.html`、`entry.js` 與 `game.css`：搜尋框（Enter 或按鈕送出）、標籤晶片（選取狀態）、讀者頻道選單、「清除篩選」、卡片標籤可點、卡片標題連到 `/game/script/<id>`、無結果的說明、載入更多沿用 `next_cursor`；手機寬度可用。驗證：`tests/test_game_pages.py` 擴充（樣板元素、無 `v-html`、無 `data-bs-*`）、前端規則架構測試通過、360 px 版面量測。
+- [ ] 7.4 詳情頁畫面：`script_detail.html` 與新模組 `script-detail.js`（讀取詳情端點、404 顯示「找不到這個劇本」、純文字渲染、「開始冒險」與共用詢問 Modal、返回目錄）、樣式；頁面載入順序與 `base.html` 的資產清單同步（`app/static/MANIFEST.json` 與其測試）。驗證：`tests/js/script-detail*.test.js`、`tests/test_assets_manifest.py`、前端規則架構測試通過。
+
+## 8. 驗證、實測與文件
+
+- [ ] 8.1 變異驗證（正式破壞測試，腳本放 scratchpad、設行程逾時與 `--test-timeout`，結束後比對還原）：①核可不取代 `removed` 舊版 ②恢復不檢查 `removed_by` ③恢復不檢查唯一性衝突 ④管理員下架不要求密碼 ⑤詳情白名單多回 `hidden_trait` ⑥備註寫進稽核細節 ⑦`get_startable` 不排除 `removed` ⑧游標鍵集條件拿掉 `id` 比較 ⑨關鍵字比對加入 JSON 欄位／不跳脫 `%` ⑩作者摘要多回 `decision_note`。每項都要被測試抓到；存活者補測試。
+- [ ] 8.2 全套 pytest（含 SQL Server，背景執行輸出存檔）與 Node 全套；`openspec validate rpg-script-publishing --strict`；`git diff` 確認沒有誤改 `AGENTS.md` 與無關檔案。
+- [ ] 8.3 本機整合冒煙（拋棄式資料庫、自己的埠，不碰使用者的 5000 埠與驗收環境的 5012 以外的實例）：玩家建立劇本 → 送審 → 管理員核可 → 目錄出現 → 搜尋與標籤篩選 → 詳情 → 下架 → 目錄消失 → 恢復；以 Playwright 驗證畫面（回合與模型以假供應商，只驗證流程）。
+- [ ] 8.4 使用者驗收（展示環境或本機，請使用者以真實瀏覽器含手機操作一次）：管理員審核佇列的核可／退回、作者看到結果、作者自行下架與恢復、管理員下架與恢復（含密碼）、目錄搜尋與篩選與詳情、安全模式詢問在詳情頁的行為；結果只記實際回報的項目到 README 驗收紀錄。
+- [ ] 8.5 簡報衝突（`deck-conflict-watch`）：檢查 `docs/2.0簡報.md` 與六張圖解產生器（RC-8 的「規劃中」描述、頁面路由數、遷移版本 `0021`、主規格數、管理員後台分頁）；**只記錄快照到 `HANDOFF.md`，不修改簡報、圖解、PDF**。
+- [ ] 8.6 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`）：`資料模型-data-model.md`（版本狀態圖加 `removed`、新欄位）、`系統架構-architecture.md`（新端點、頁面路由 `/game/script/<id>`、`AdminService` 新方法與 `AdminScriptRepository`）、`前端結構-frontend.md`（目錄畫面、共用詢問 Modal、詳情頁、管理員分頁）、`帳號與安全-auth-security.md`（管理員審核與下架的權限與稽核）、`docs/RPG.md`（RC-8 章節標示 8a 已實作與取捨）、`路線圖-roadmap.md`（RC-8 拆成 8a 已實作／8b 規劃、狀態與日期）；讓 `tests/test_design_docs.py` 與 `tests/test_readme.py` 通過；README 補「RPG 劇本審核與目錄（rpg-script-publishing）」一節。
