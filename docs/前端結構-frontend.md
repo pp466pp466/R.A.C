@@ -4,6 +4,7 @@
 > 注意（2026-11-18）：本文件已納入 change `adult-only-signup` 的前端變化（登入頁第二個勾選框「我確認已滿 18 歲」、請求多一個 `declare_adult`、年齡確認頁的僅限滿 18 歲提示、帳號頁移除未成年的安全模式提示），以及 change `admin-unlimited-coins` 的前端變化（錢包回應的 `coin_exempt`：`game-wallet.js` 暴露 `exempt`、`game-labels.js` 與 `game-revision.js` 的「不消耗遊戲幣」文字，見第 3e 節）。
 > 注意（2026-11-19）：本文件已納入 change `wallet-hub` 的前端變化（全站共用的餘額標籤與錢包狀態庫、簽到狀態機抽成 `ui/wallet-checkin.js`、新頁面 `/wallet` 的免費簽到、儲值示意與紀錄；**沒有後端 API、資料表與 migration 異動**），見第 2 節的 `wallet-*.js` 列、第 1 節的載入順序與第 3f 節。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
+> 注意（2026-11-20）：本文件已納入 change `rpg-script-publishing` 第 ⑥ 批的前端變化（`/scripts` 的審核結果與下架畫面、新增 `script-status.js`）；`/admin` 的「劇本審核」分頁、入口目錄的搜尋與詳情頁待該 change 的文件任務（8.6）一併補。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
@@ -20,7 +21,7 @@ flowchart TD
     Page -->|"/（未登入）"| Home["沒有腳本：home.html 純伺服器端渲染（另載入 home.css）"]
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
-    Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
+    Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → script-status.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
     Page -->|"/game"| Gm["auth-common.js → game-labels.js → game-api.js → entry.js（另載入 game.css）"]
     Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js"]
     Page -->|"/wallet"| Wlt["auth-common.js → game-labels.js → game-state.js → wallet-checkin.js → wallet-demo-packages.js → wallet-hub-state.js → wallet-hub.js（另載入 wallet.css）"]
@@ -152,6 +153,7 @@ flowchart LR
 flowchart LR
     Html["templates/scripts/workshop.html<br/>外殼加初始狀態：user、gate、submit_timeout_ms"] --> Ws
     Ws["script-workshop.js<br/>Vue 3 應用：劇本與版本列表、分區編輯器、Modal"] --> Draft["script-draft.js<br/>表單資料與送出內容互轉、字數、欄位路徑的中文名稱、讀者頻道的值域（純函式）"]
+    Ws --> Stat["script-status.js<br/>版本狀態文字、退回與下架的說明、下架與恢復的按鈕規則與錯誤文案（純函式，沿用 script-draft.js 的標籤表）"]
     Ws --> Prev["milestone-preview.js<br/>里程碑預覽：依觸發排序 純前端（純函式）"]
     Ws --> Api["script-api.js<br/>axios 封裝 /api/scripts/*"]
     Ws --> Ui["ui-components.js<br/>Modal、Toast、UiRestrictionNotice"]
@@ -163,6 +165,7 @@ flowchart LR
 - **草稿衝突**：儲存帶開始編輯時的 `base_hash`，別處已更新時伺服器回 `draft_changed`，頁面以自製 Modal 讓作者選擇重新載入或保留自己的修改。
 - **送審**：自製確認 Modal；axios 逾時取自初始狀態的 `submit_timeout_ms`（伺服器總預算加 5 秒，前端不寫死數字），以 `AbortController` 於離開頁面時中止，無論成功、失敗或中斷，`finally` 恢復按鈕。
 - **被暫停發佈**：頁面載入時由初始狀態判定，送審被拒（403 `publish_suspended`）時即時判定；顯示 `UiRestrictionNotice` 並停用送審按鈕，編輯與儲存照常。
+- **審核結果與下架**（rpg-script-publishing，script-takedown）：版本列的標籤與說明由 `script-status.js` 的純函式產生，不在樣板裡判斷。`statusText` 區分「已下架（作者）」與「已被管理員下架」；`versionNotice` 在列下方說明被退回（類別、台灣時間）與下架（作者下架說明已開始的存檔不受影響、可隨時恢復；管理員下架附類別並說明無法自行恢復）；類別與狀態的標籤表在 `script-draft.js`（九個類別，與後端 `DECISION_CATEGORIES` 一致，`tests/test_script_status_labels.py` 比對，並要求與 `/admin` 的類別文案相同）。「下架」只給上架中的版本、「恢復上架」只給**作者自己下架**的版本（`canTakedown`、`canRestore`），管理員下架的沒有恢復按鈕；列表與詳細檢視各有一組，皆以自製確認 Modal 確認、不需要密碼，被暫停發佈的作者仍可操作。`script-api.js` 的 `takedown`／`restore` 打 `/versions/<id>/remove`、`/restore`（`remove` 仍是刪除草稿）。409 與 403 的四個代碼（`not_published`、`not_removed`、`removal_locked`、`live_exists`）以前端自己的文案 Toast 顯示並重新載入列表，說明不導向申訴頁（申訴頁只開放給被鎖定或被暫停發佈的帳號）。畫面不讀取審核備註（後端版本摘要不含）。
 - **欄位說明與範例**：每個區塊最上方有一句用途說明，每個文字欄位都有範例（`placeholder`）；「狀態轉移規則」對玩家顯示為「世界規則（狀態轉移規則，選填）」並附白話說明。人工驗收發現原本玩家看不懂，所以 `tests/test_script_page.py` 要求任何文字欄位都必須有範例。
 - **讀者頻道**（story-preference）：編輯器最下方（結局之後、字數統計之前）的可摺疊區塊，`open.audience` 預設展開；男頻、女頻、全讀者三選一，`fieldset` 隨 `canEdit` 禁用，所以待審與已發佈的版本顯示但不可改。`script-draft.js` 的 `toDraft` 與 `toContent` 共用 `audienceOf`：非三個列舉值的輸入（含舊版本沒有這個鍵）一律為全讀者，`toContent` 永遠送出 `audience`，全讀者時由伺服器決定不保存該鍵（雜湊相容）；帶入範例就是整份草稿換成範例的 `toDraft`，所以頻道回到全讀者。頻道不計入字數，伺服器的 `audience` 欄位錯誤顯示在單選旁。
 - **綁定安全模式**（safe-mode-toggle）：目錄資訊區塊以**單一勾選框**取代原本的三選一內容模式下拉（`#sw-bound`，`v-model="bound"`，唯讀版本與忙碌時禁用）：勾選＝`content_tier` 為 `safe`（綁定），未勾選＝`adult`（未綁定，新草稿預設）。`script-draft.js` 的 `tierOf` 把舊值 `standard` 與缺值讀作 `adult`（所以舊草稿顯示為未勾、不會因轉換而變成「尚未儲存」，儲存時送 `adult`），不認得的值取較保守的 `safe`；沒有依作者年齡的上限，`GET /api/scripts/limits` 不再回 `max_content_tier`，範例帶入也不再依上限調整。勾選框旁說明：綁定後不論玩家設定一律以安全模式遊玩、內容須符合安全模式界線、不適合露骨或性暗示的情節；未勾選跟隨玩家設定；無論有沒有勾選，四類絕對禁止項一律擋下。版本清單只有綁定的版本有「綁定安全模式」標籤。

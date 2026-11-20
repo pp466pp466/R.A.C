@@ -42,14 +42,18 @@
         <ul class="sw-versions">
           <li v-for="version in script.versions" :key="version.id" class="sw-version">
             <span class="sw-version__no">第 {{ version.version_no }} 版</span>
-            <span class="sw-chip" :class="'sw-chip--' + version.status">{{ statusLabels[version.status] || version.status }}</span>
+            <span class="sw-chip" :class="'sw-chip--' + version.status">{{ statusText(version) }}</span>
             <span v-if="tierLabels[version.content_tier]" class="sw-chip">{{ tierLabels[version.content_tier] }}</span>
             <span class="sw-version__muted">{{ version.total_chars }} 字</span>
             <span class="sw-version__actions">
               <button type="button" class="ui-btn sw-btn-sm" :disabled="busy" @click="openVersion(version.id)">{{ version.status === 'draft' ? '編輯' : '檢視' }}</button>
               <button v-if="version.status === 'draft'" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askRemove(version)">刪除</button>
               <button v-if="version.status === 'pending_review'" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="withdraw(version.id)">撤回</button>
+              <button v-if="canTakedown(version)" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askTakedown(version)">下架</button>
+              <button v-if="canRestore(version)" type="button" class="ui-btn sw-btn-sm" :disabled="busy || locked" @click="askRestore(version)">恢復上架</button>
             </span>
+            <!-- 被退回與下架的說明：只有固定列舉的類別、時間與下架者，沒有審核備註（備註只有管理員看得到） -->
+            <p v-if="versionNotice(version)" class="sw-version__notice" role="status">{{ versionNotice(version) }}</p>
           </li>
         </ul>
         <p class="sw-script__actions">
@@ -59,7 +63,7 @@
         </p>
       </li>
     </ul>
-    <p class="sw-hint">送審之後內容會被凍結，由管理員審核；審核期間可以撤回再修改。審核與公開目錄的功能之後才會開放，送審的劇本會先停在「待審」。</p>
+    <p class="sw-hint">送審之後內容會被凍結，由管理員審核；審核期間可以撤回再修改。核可後劇本上架到公開目錄；上架中的版本可以自行下架（新玩家不能再用它開存檔，已開始的存檔不受影響），也可以隨時恢復上架，不需要重新審核。</p>
   </main>
 
   <!-- ===== 編輯器 ===== -->
@@ -67,12 +71,12 @@
     <div class="sw-head">
       <button type="button" class="ui-btn sw-btn-sm" :disabled="busy" @click="backToList">← 回到列表</button>
       <h2 class="sw-head__title">{{ editor.version ? '第 ' + editor.version.version_no + ' 版' : '新的劇本' }}</h2>
-      <span v-if="editor.version" class="sw-chip" :class="'sw-chip--' + editor.version.status">{{ statusLabels[editor.version.status] }}</span>
+      <span v-if="editor.version" class="sw-chip" :class="'sw-chip--' + editor.version.status">{{ statusText(editor.version) }}</span>
       <span v-if="penName" class="sw-chip">筆名：{{ penName }}</span>
       <span v-if="dirty && !readOnly" class="sw-chip sw-chip--dirty" role="status">尚未儲存</span>
     </div>
 
-    <p v-if="readOnly" class="sw-banner" role="status">這個版本已經{{ editor.version.status === 'pending_review' ? '送審，內容凍結中；要修改請先撤回' : '離開草稿，內容不可修改；要修改請回到列表建立新草稿' }}。</p>
+    <p v-if="readOnly" class="sw-banner" role="status">{{ readOnlyNotice(editor.version) }}</p>
     <p v-if="editor.general" class="sw-error sw-error--block" role="alert">{{ editor.general }}</p>
     <ul v-if="errorList.length" class="sw-errors" role="alert">
       <li v-for="item in errorList" :key="item.path"><strong>{{ item.label }}</strong>：{{ item.message }}</li>
@@ -339,6 +343,8 @@
           {{ editor.submitting ? '審查中，請稍候…' : '送審' }}
         </button>
         <button v-if="editor.version && editor.version.status === 'pending_review'" type="button" class="ui-btn" :disabled="busy || locked" @click="withdraw(editor.version.id)">撤回送審</button>
+        <button v-if="canTakedown(editor.version)" type="button" class="ui-btn" :disabled="busy || locked" @click="askTakedown(editor.version)">下架</button>
+        <button v-if="canRestore(editor.version)" type="button" class="ui-btn" :disabled="busy || locked" @click="askRestore(editor.version)">恢復上架</button>
       </div>
     </form>
   </main>
@@ -349,6 +355,13 @@
   </ui-modal>
   <ui-modal v-model="modal.remove" title="刪除這份草稿？" status-code="DELETE_DRAFT" confirm-text="刪除" @confirm="confirmRemove">
     <p>這份草稿會被永久刪除，無法復原。{{ modal.removeTarget && modal.removeTarget.version_no === 1 ? '這是劇本唯一的版本，整個劇本也會一併刪除。' : '' }}</p>
+  </ui-modal>
+  <ui-modal v-model="modal.takedown" title="下架這個版本？" status-code="TAKEDOWN_SCRIPT" confirm-text="下架" @confirm="confirmTakedown">
+    <p>下架之後，這個版本不再出現在公開目錄，新玩家也不能用它開新存檔；已經開始的存檔不受影響。</p>
+    <p class="sw-hint">你可以隨時在列表按「恢復上架」，內容不變、不需要重新審核。</p>
+  </ui-modal>
+  <ui-modal v-model="modal.restore" title="恢復上架這個版本？" status-code="RESTORE_SCRIPT" confirm-text="恢復上架" @confirm="confirmRestore">
+    <p>這個版本會回到公開目錄，新玩家可以再用它開新存檔。內容不變，不需要重新審核。</p>
   </ui-modal>
   <ui-modal v-model="modal.leave" title="離開之前" status-code="UNSAVED_CHANGES" confirm-text="放棄修改並離開" @confirm="confirmLeave">
     <p>目前的修改還沒有儲存，離開之後會遺失。</p>
@@ -372,6 +385,7 @@
 {% block scripts %}
   <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
   <script src="{{ url_for('static', filename='js/scripts/script-draft.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/scripts/script-status.js') }}"></script>
   <script src="{{ url_for('static', filename='js/scripts/milestone-preview.js') }}"></script>
   <script src="{{ url_for('static', filename='js/scripts/script-api.js') }}"></script>
   <script src="{{ url_for('static', filename='js/scripts/script-workshop.js') }}"></script>

@@ -190,7 +190,7 @@ test('a rejection names only the fixed categories and never anything from the co
 });
 
 test('status and tier labels cover every value the server can send', () => {
-  for (const status of ['draft', 'pending_review', 'published', 'rejected', 'superseded']) { assert.ok(Draft.STATUS_LABELS[status], status); }
+  for (const status of ['draft', 'pending_review', 'published', 'rejected', 'removed', 'superseded']) { assert.ok(Draft.STATUS_LABELS[status], status); }
   assert.deepEqual(Object.keys(Draft.TIER_LABELS), ['safe']);                    // 只有綁定有標籤；adult 與舊值 standard 是未綁定、沒有標籤
   assert.equal(Draft.TIER_LABELS.safe, '綁定安全模式');
   for (const old of ['一般模式', '成人模式']) { assert.ok(!JSON.stringify(Draft.TIER_LABELS).includes(old), old); }

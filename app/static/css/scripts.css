@@ -69,6 +69,7 @@
 .sw-chip--draft { color: var(--color-text); }
 .sw-chip--pending_review, .sw-chip--dirty { color: var(--color-accent); border-color: var(--color-accent); }
 .sw-chip--published { color: var(--color-text); border-color: var(--color-text-muted); }
+.sw-chip--rejected, .sw-chip--removed { color: var(--color-accent); border-color: var(--color-accent); }   /* 需要作者留意的狀態：被退回、下架 */
 
 /* ---- 列表 -------------------------------------------------------------------- */
 .sw-main { padding-top: 1.25rem; }
@@ -86,7 +87,18 @@
 .sw-version { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem 0.6rem; padding: 0.4rem 0; border-top: var(--border-hairline); }
 .sw-version__no { min-width: 4.5rem; }
 .sw-version__muted { color: var(--color-text-muted); font-size: 0.85rem; }
-.sw-version__actions { display: flex; gap: 0.4rem; margin-left: auto; }
+.sw-version__actions { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-left: auto; }
+/* 退回與下架的說明：獨佔一整列（版本列是可換行的 flex），長文字自動換行，不撐出橫向捲動 */
+.sw-version__notice {
+  flex: 1 0 100%;
+  margin: 0.1rem 0 0;
+  padding: 0.35rem 0.7rem;
+  border-left: 2px solid var(--color-accent);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
 
 .sw-btn-sm { padding: 0.2rem 0.7rem; font-size: 0.85rem; }
 

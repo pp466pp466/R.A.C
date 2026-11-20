@@ -25,10 +25,14 @@
   /* 版本清單的標示：只有綁定安全模式的版本有標籤；`adult` 與舊值 `standard` 是未綁定，沒有標籤。 */
   var TIER_LABELS = { safe: '綁定安全模式' };
   var STATUS_LABELS = {
-    draft: '草稿', pending_review: '待審', published: '已上架', rejected: '已被退回', superseded: '已被取代'
+    draft: '草稿', pending_review: '待審', published: '已上架', rejected: '已被退回', removed: '已下架', superseded: '已被取代'
   };
+  /* 類別說明：前四項是自動審查會直接拒絕的紅線，後五項只會出現在人工的退回與下架（`other_policy` 是人工專用）。
+     與 `app/models/script.py` 的 `DECISION_CATEGORIES` 一一對應（tests/test_script_status_labels.py）；只有固定列舉，不含內容。 */
   var CATEGORY_LABELS = {
-    minor_sexual: '涉及未成年角色的性內容', sexual_violence: '性暴力', non_consensual: '非自願的性情節', real_person_sexual: '以真人名義的性內容'
+    minor_sexual: '涉及未成年角色的性內容', sexual_violence: '性暴力', non_consensual: '非自願的性情節', real_person_sexual: '以真人名義的性內容',
+    minor_suspected: '疑似涉及未成年角色', real_person_suspected: '疑似涉及真人', tier_mismatch: '內容不符合綁定的安全模式', other_concern: '其他疑慮',
+    other_policy: '其他違反平台規範'
   };
   var FIELD_LABELS = {
     content: '劇本內容', title: '標題', summary: '簡介', world_name: '世界觀名稱', content_tier: '內容模式', background: '背景與體系',

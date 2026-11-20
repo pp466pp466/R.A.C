@@ -130,11 +130,12 @@ def test_the_rendered_page_loads_only_local_resources_and_the_workshop_script_co
     assert not [ref for ref in collector.refs if re.match(r"(https?:)?//", ref)]
     assert collector.data_bs == [("data-bs-theme", "dark")]
     names = [ref.rsplit("/", 1)[-1] for ref in collector.refs if ref.endswith(".js")]
-    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "script-draft.js",
+    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "script-draft.js", "script-status.js",
                    "milestone-preview.js", "script-api.js", "script-workshop.js"):
         assert needed in names, needed
     assert names[-1] == "script-workshop.js"
     assert names.index("script-draft.js") < names.index("script-workshop.js") and names.index("script-api.js") < names.index("script-workshop.js")
+    assert names.index("script-draft.js") < names.index("script-status.js") < names.index("script-workshop.js")      # 狀態說明沿用草稿模組的標籤表
     assert any(ref.endswith("css/scripts.css") for ref in collector.refs)
     assert 'id="script-app"' in html and "v-cloak" in html
 
@@ -273,6 +274,75 @@ def test_the_limits_endpoint_no_longer_reports_a_content_tier_cap(app):
         s.expunge(user)
     limits = logged_in_client(app, user).get("/api/scripts/limits").get_json()["limits"]
     assert "max_content_tier" not in limits
+
+
+# ---- 審核結果與下架（rpg-script-publishing：script-takedown 的「作者看得到審核結果與下架狀態」）---------------------------------
+
+
+def version_row() -> str:
+    """列表裡的一個版本列（`<li class="sw-version">` 到它的結尾）。"""
+    html = read(TEMPLATE)
+    start = html.index('<li v-for="version in script.versions"')
+    return html[start:html.index("</li>", start)]
+
+
+def test_the_version_row_shows_the_status_text_and_the_notice_from_the_pure_functions():
+    row = version_row()
+    assert '<span class="sw-chip" :class="\'sw-chip--\' + version.status">{{ statusText(version) }}</span>' in row
+    assert re.search(r'<p v-if="versionNotice\(version\)" class="sw-version__notice" role="status">\{\{ versionNotice\(version\) \}\}</p>', row)
+    assert "statusLabels" not in read(TEMPLATE)                                                  # 不再直接查標籤表（拿不到「下架者」）
+    assert "|| version.status" not in row                                                       # 不把原始狀態代碼顯示給作者
+
+
+def test_the_take_down_and_restore_buttons_follow_the_pure_rules_and_are_disabled_while_busy_or_locked():
+    row = version_row()
+    takedown = re.search(r'<button v-if="canTakedown\(version\)"[^>]*>', row)
+    restore = re.search(r'<button v-if="canRestore\(version\)"[^>]*>', row)
+    assert takedown and restore
+    assert '@click="askTakedown(version)"' in takedown.group(0) and ">下架</button>" in row
+    assert '@click="askRestore(version)"' in restore.group(0) and ">恢復上架</button>" in row
+    for button in (takedown.group(0), restore.group(0)):
+        assert ':disabled="busy || locked"' in button                                            # 被暫停發佈的作者仍可下架，所以不看 suspended
+        assert "suspended" not in button
+    assert "removed_by" not in row                                                              # 誰能恢復只由純函式決定，樣板不自己判斷
+
+
+def test_the_detail_view_has_the_same_two_buttons_and_the_banner_comes_from_the_pure_function():
+    html = read(TEMPLATE)
+    assert '<button v-if="canTakedown(editor.version)"' in html and '@click="askTakedown(editor.version)"' in html
+    assert '<button v-if="canRestore(editor.version)"' in html and '@click="askRestore(editor.version)"' in html
+    assert '<p v-if="readOnly" class="sw-banner" role="status">{{ readOnlyNotice(editor.version) }}</p>' in html
+    assert "離開草稿，內容不可修改" not in html                                                   # 舊的二分法橫幅文案已移到純函式
+
+
+def test_the_take_down_and_restore_confirmations_are_vue_controlled_modals():
+    html = read(TEMPLATE)
+    takedown = re.search(r'<ui-modal v-model="modal\.takedown"[^>]*@confirm="confirmTakedown">(.*?)</ui-modal>', html, re.S)
+    restore = re.search(r'<ui-modal v-model="modal\.restore"[^>]*@confirm="confirmRestore">(.*?)</ui-modal>', html, re.S)
+    assert takedown and restore
+    assert "新玩家也不能用它開新存檔" in takedown.group(1) and "已經開始的存檔不受影響" in takedown.group(1)
+    assert "不需要重新審核" in takedown.group(1) and "不需要重新審核" in restore.group(1)
+    assert 'status-code="TAKEDOWN_SCRIPT"' in html and 'status-code="RESTORE_SCRIPT"' in html
+    assert "type=\"password\"" not in html                                                      # 作者的下架與恢復不需要密碼
+
+
+def test_the_workshop_script_calls_the_two_endpoints_and_always_restores_the_buttons():
+    js = strip_js_comments(read(JS_DIR / "script-workshop.js"))
+    api = strip_js_comments(read(JS_DIR / "script-api.js"))
+    assert "/remove')" in api and "/restore')" in api and "takedown:" in api and "restore:" in api
+    assert re.search(r"remove: function \(versionId\) \{ return call\('delete', '/versions/'", api)     # 刪除草稿仍是 DELETE，沒有被新端點蓋掉
+    for name in ("confirmTakedown", "confirmRestore"):
+        body = js[js.index(f"function {name}()"):]
+        body = body[: body.index("\n      }\n") + 1]
+        assert "editor.working = true" in body and "editor.working = false" in body and ".finally(" in body, name
+    assert "Scripts.actionErrorText(info)" in js and "refreshList()" in js
+    assert "modal.takedownTarget = null" in js and "modal.restoreTarget = null" in js            # 關閉後不留著上一個版本
+
+
+def test_no_review_note_field_is_read_anywhere_on_the_page():
+    """備註只有管理員看得到；後端不送，前端也不該有任何讀取它的地方。"""
+    source = read(TEMPLATE) + "\n".join(strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js")))
+    assert "decision_note" not in source and "review_note" not in source
 
 
 # ---- 導覽 ------------------------------------------------------------------------------------------------------

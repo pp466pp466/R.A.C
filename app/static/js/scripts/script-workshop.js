@@ -4,6 +4,8 @@
  * 所有使用者文字以 {{ }} 插值顯示（純文字），不使用 v-html。伺服器是唯一的驗證者：這裡只顯示字數與伺服器回傳的逐欄位錯誤。
  * 無論成功、失敗或中斷，一定在 finally 恢復按鈕；送審（會呼叫審查的模型層，最長約 30 秒）用 AbortController 於離開頁面時中止。
  * 草稿以內容雜湊偵測衝突：儲存帶開始編輯時的雜湊，別處已更新就不覆寫（`draft_changed`），由作者決定重新載入。
+ * 上架中的版本可自行下架、自己下架的可恢復上架（不需密碼與重新審核；管理員下架的不能自行恢復）：按鈕規則、說明與錯誤文案是
+ * `script-status.js` 的純函式，這裡只負責呼叫 API、確認用的 Modal 與失敗後重新載入（見 script-takedown 規格）。
  */
 (function () {
   'use strict';
@@ -29,7 +31,10 @@
         version: null, draft: Scripts.blankDraft(), baseline: '', saving: false, submitting: false, working: false, errors: {}, general: ''
       });
       var open = Vue.reactive({ catalog: true, background: true, characters: true, locations: false, milestones: true, ending: false, audience: true });
-      var modal = Vue.reactive({ submit: false, conflict: false, leave: false, example: false, remove: false, removeTarget: null });
+      var modal = Vue.reactive({
+        submit: false, conflict: false, leave: false, example: false, remove: false, removeTarget: null,
+        takedown: false, takedownTarget: null, restore: false, restoreTarget: null
+      });
       var controller = null;
       var pendingLeave = null;
 
@@ -241,6 +246,51 @@
         }, applyFailure).finally(function () { editor.working = false; modal.removeTarget = null; });
       }
 
+      // ---- 下架與恢復上架（作者自己的版本；不需密碼、不需重新審核，見 script-takedown 規格）-----------------------------------
+      /* 失敗的處理：已知的狀態錯誤（版本已被別處改變）以 Toast 說明並重新載入；其餘交給共用的 applyFailure。
+         列表畫面沒有顯示 `editor.general` 的位置，所以那裡改以 Toast 顯示。 */
+      function takedownFailure(info, target) {
+        var specific = Scripts.actionErrorText(info);
+        if (specific) {
+          UI.toast(specific, { type: 'error' });
+          var reload = editor.version && target && editor.version.id === target.id ? openVersion(target.id) : Promise.resolve();
+          return Promise.all([refreshList(), reload]);
+        }
+        applyFailure(info);
+        if (view.value === 'list' && editor.general) { UI.toast(editor.general, { type: 'error' }); editor.general = ''; }
+        return Promise.resolve();
+      }
+
+      function takedownDone(target, data, message) {
+        UI.toast(message);
+        if (editor.version && editor.version.id === target.id) { showVersion(data.version); }      // 詳細檢視：就地換成新的狀態
+        return refreshList();
+      }
+
+      function askTakedown(version) { if (Scripts.canTakedown(version)) { modal.takedownTarget = version; modal.takedown = true; } }
+
+      function confirmTakedown() {
+        var target = modal.takedownTarget;
+        modal.takedown = false;
+        if (!target) { return Promise.resolve(); }
+        editor.working = true;
+        return Scripts.api.takedown(target.id).then(function (data) {
+          return takedownDone(target, data, '已下架。這個版本不再出現在公開目錄，隨時可以恢復上架。');
+        }, function (info) { return takedownFailure(info, target); }).finally(function () { editor.working = false; modal.takedownTarget = null; });
+      }
+
+      function askRestore(version) { if (Scripts.canRestore(version)) { modal.restoreTarget = version; modal.restore = true; } }
+
+      function confirmRestore() {
+        var target = modal.restoreTarget;
+        modal.restore = false;
+        if (!target) { return Promise.resolve(); }
+        editor.working = true;
+        return Scripts.api.restore(target.id).then(function (data) {
+          return takedownDone(target, data, '已恢復上架。這個版本回到公開目錄了。');
+        }, function (info) { return takedownFailure(info, target); }).finally(function () { editor.working = false; modal.restoreTarget = null; });
+      }
+
       function newVersion(scriptId) {
         editor.working = true;
         return Scripts.api.newVersion(scriptId).then(function (data) { showVersion(data.version); refreshList(); }, applyFailure)
@@ -281,10 +331,13 @@
         restriction: restriction, editor: editor, open: open, modal: modal,
         dirty: dirty, readOnly: readOnly, locked: locked, suspended: suspended, busy: busy, canEdit: canEdit, canSubmit: canSubmit,
         errorList: errorList, preview: preview, bound: bound, total: total, scriptsLeft: scriptsLeft, submitsLeft: submitsLeft, penName: penName,
-        tierLabels: Scripts.TIER_LABELS, statusLabels: Scripts.STATUS_LABELS, count: Scripts.charCount, err: err,
+        tierLabels: Scripts.TIER_LABELS, count: Scripts.charCount, err: err,
+        statusText: Scripts.statusText, versionNotice: Scripts.versionNotice, readOnlyNotice: Scripts.readOnlyNotice,
+        canTakedown: Scripts.canTakedown, canRestore: Scripts.canRestore,
         startNew: startNew, openVersion: openVersion, backToList: backToList, confirmLeave: confirmLeave, reloadFromServer: reloadFromServer,
         askExample: askExample, loadExample: loadExample, save: save, askSubmit: askSubmit, confirmSubmit: confirmSubmit,
         withdraw: withdraw, askRemove: askRemove, confirmRemove: confirmRemove, newVersion: newVersion, refreshAuthorName: refreshAuthorName,
+        askTakedown: askTakedown, confirmTakedown: confirmTakedown, askRestore: askRestore, confirmRestore: confirmRestore,
         addCharacter: addCharacter, removeCharacter: removeCharacter, addLocation: addLocation, removeLocation: removeLocation,
         addMilestone: addMilestone, removeMilestone: removeMilestone, toggle: toggle, hasOpenVersion: hasOpenVersion
       };

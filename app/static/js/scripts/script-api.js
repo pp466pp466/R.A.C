@@ -38,6 +38,9 @@
     save: function (versionId, content, baseHash) { return call('put', '/versions/' + id(versionId), { content: content, base_hash: baseHash }); },
     remove: function (versionId) { return call('delete', '/versions/' + id(versionId)); },
     withdraw: function (versionId) { return call('post', '/versions/' + id(versionId) + '/withdraw'); },
+    // 下架與恢復上架（作者自己的上架版本；不需密碼、不需重新審核）。`remove` 是刪除草稿，兩者不同，所以下架另取名 `takedown`。
+    takedown: function (versionId) { return call('post', '/versions/' + id(versionId) + '/remove'); },
+    restore: function (versionId) { return call('post', '/versions/' + id(versionId) + '/restore'); },
     submit: function (versionId, options) {
       options = options || {};
       return call('post', '/versions/' + id(versionId) + '/submit', undefined, { timeout: options.timeout, signal: options.signal });
