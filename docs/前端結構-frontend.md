@@ -4,7 +4,7 @@
 > 注意（2026-11-18）：本文件已納入 change `adult-only-signup` 的前端變化（登入頁第二個勾選框「我確認已滿 18 歲」、請求多一個 `declare_adult`、年齡確認頁的僅限滿 18 歲提示、帳號頁移除未成年的安全模式提示），以及 change `admin-unlimited-coins` 的前端變化（錢包回應的 `coin_exempt`：`game-wallet.js` 暴露 `exempt`、`game-labels.js` 與 `game-revision.js` 的「不消耗遊戲幣」文字，見第 3e 節）。
 > 注意（2026-11-19）：本文件已納入 change `wallet-hub` 的前端變化（全站共用的餘額標籤與錢包狀態庫、簽到狀態機抽成 `ui/wallet-checkin.js`、新頁面 `/wallet` 的免費簽到、儲值示意與紀錄；**沒有後端 API、資料表與 migration 異動**），見第 2 節的 `wallet-*.js` 列、第 1 節的載入順序與第 3f 節。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
-> 注意（2026-11-20）：本文件已納入 change `rpg-script-publishing` 第 ⑥ 批的前端變化（`/scripts` 的審核結果與下架畫面、新增 `script-status.js`）；`/admin` 的「劇本審核」分頁、入口目錄的搜尋與詳情頁待該 change 的文件任務（8.6）一併補。
+> 注意（2026-11-20）：本文件已納入 change `rpg-script-publishing` 第 ⑥ 批的前端變化（`/scripts` 的審核結果與下架畫面、新增 `script-status.js`）與第 ⑦ 批的載入順序（`/game` 新增 `mode-prompt.js`、`catalog-state.js`；新頁面 `/game/script/<版本>` 載入 `script-detail.js`）；入口目錄的搜尋與篩選、共用的安全模式詢問 Modal 與詳情頁的模組關係說明、`/admin` 的「劇本審核」分頁待該 change 的文件任務（8.6）一併補。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
@@ -22,7 +22,8 @@ flowchart TD
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
     Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → script-status.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
-    Page -->|"/game"| Gm["auth-common.js → game-labels.js → game-api.js → entry.js（另載入 game.css）"]
+    Page -->|"/game"| Gm["auth-common.js → game-labels.js → mode-prompt.js → catalog-state.js → game-api.js → entry.js（另載入 game.css）"]
+    Page -->|"/game/script/版本"| Sdt["auth-common.js → game-labels.js → mode-prompt.js → game-api.js → script-detail.js（另載入 game.css）"]
     Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js"]
     Page -->|"/wallet"| Wlt["auth-common.js → game-labels.js → game-state.js → wallet-checkin.js → wallet-demo-packages.js → wallet-hub-state.js → wallet-hub.js（另載入 wallet.css）"]
     Page -->|"/game/存檔"| Gsv["auth-common.js → game-labels.js → sse-parser.js → turn-stream.js → game-state.js → game-store.js → game-sync.js → game-api.js → wallet-checkin.js → game-wallet.js → game-notebook.js → game-revision.js → game-session.js → game.js（另載入 game.css）"]

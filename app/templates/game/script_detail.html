@@ -1,0 +1,108 @@
+{% extends "base.html" %}
+{# 劇本詳情頁：Vue 3 全域變數模式。階段（載入中、找不到、失敗、內容）、按鈕的禁用與詢問 Modal 的顯示完全由 Vue 的響應式變數接管（v-if／v-show），
+   所有來自作者的文字以雙大括號插值顯示（純文字），不解析任何標記語言。Vue 的範本放在 raw 區塊內，避免被 Jinja 處理。
+   劇本內容不在初始狀態裡，由詳情端點（GET /api/sessions/catalog/ 加版本識別碼）取得；版本識別碼只在網址裡，頁面內容不含它。
+
+   與 script-detail.js（由 setup() 回傳）的約定——這份樣板用到的名稱：
+   - 狀態：user、restriction、phase（'loading'｜'ready'｜'notfound'｜'failed'）、detail（整理過的詳情）、failureText、gateNotice（{ text, link, linkText }｜null）。
+   - 計算：canStart、memberText、publishedText。
+   - 方法：loadDetail、start；Game.tierLabel 與 Game.audienceLabel（tierLabel、audienceLabel）。
+   - 詢問 Modal（共用片段 game/_mode_prompt.html）：askOpen、modePrompt、cancelAsk、keepSafe、goToSettings。 #}
+{% block title %}劇本詳情{% endblock %}
+{% block head_assets %}
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
+{% endblock %}
+{% block content %}
+<div id="script-app" class="ge-shell" v-cloak>
+{% raw %}
+  <header class="ge-topbar">
+    <h1 class="ge-topbar__title">劇本詳情</h1>
+    <span class="ge-chip" :title="'會員等級：' + memberText">{{ memberText }}會員</span>
+    <a class="ge-topbar__link" href="/game">回到目錄</a>
+  </header>
+
+  <ui-restriction-notice :kind="restriction"></ui-restriction-notice>
+  <p v-if="gateNotice" class="ge-banner" role="alert">
+    {{ gateNotice.text }}
+    <a v-if="gateNotice.link" :href="gateNotice.link">{{ gateNotice.linkText }}</a>
+  </p>
+
+  <main class="ge-main">
+    <p v-if="phase === 'loading'" class="ge-hint" role="status">載入中…</p>
+
+    <!-- ===== 找不到：下架、他人的草稿與不存在都是同一個 404 ===== -->
+    <section v-else-if="phase === 'notfound'" class="ge-panel">
+      <p class="ge-banner" role="alert">找不到這個劇本。它可能已經下架，或這個連結不正確。</p>
+      <p class="ge-more"><a class="ui-btn ui-btn--primary" href="/game">回到目錄</a></p>
+    </section>
+
+    <!-- ===== 暫時失敗：附重試，不清除任何內容 ===== -->
+    <section v-else-if="phase === 'failed'" class="ge-panel">
+      <p class="ge-error" role="alert">{{ failureText }}</p>
+      <p class="ge-more">
+        <button type="button" class="ui-btn" @click="loadDetail">重試</button>
+        <a class="ui-btn" href="/game">回到目錄</a>
+      </p>
+    </section>
+
+    <!-- ===== 詳情：只有公開的欄位（沒有隱藏特質、里程碑、結局說明與初始對話） ===== -->
+    <article v-else-if="phase === 'ready'" class="sd-detail">
+      <h2 class="sd-title">{{ detail.title }}</h2>
+      <p v-if="detail.summary" class="sd-summary">{{ detail.summary }}</p>
+      <p class="ge-card__meta">
+        <span v-if="tierLabel(detail.content_tier)" class="ge-chip">{{ tierLabel(detail.content_tier) }}</span>
+        <span class="ge-chip">{{ audienceLabel(detail.audience) }}</span>
+        <span v-if="detail.has_custom_ending" class="ge-chip">有自訂結局</span>
+        <span v-for="(tag, index) in detail.tags" :key="index" class="ge-chip ge-chip--tag">{{ tag }}</span>
+      </p>
+      <p class="ge-card__by">
+        <span v-if="detail.world_name">{{ detail.world_name }}</span>
+        <span v-if="detail.author_name">作者：{{ detail.author_name }}<template v-if="detail.author_code">#{{ detail.author_code }}</template></span>
+        <span v-if="publishedText">發佈：{{ publishedText }}</span>
+        <span v-if="detail.version_no">第 {{ detail.version_no }} 版</span>
+      </p>
+
+      <section v-if="detail.background" class="sd-section">
+        <h3 class="gw-subtitle">背景</h3>
+        <p class="gw-story">{{ detail.background }}</p>
+      </section>
+      <section v-if="detail.characters.length" class="sd-section">
+        <h3 class="gw-subtitle">主要角色</h3>
+        <ul class="sd-list">
+          <li v-for="(character, index) in detail.characters" :key="index" class="sd-list__item">
+            <span class="sd-list__name">{{ character.name }}</span>
+            <span v-if="character.occupation" class="sd-list__note">{{ character.occupation }}</span>
+          </li>
+        </ul>
+      </section>
+      <section v-if="detail.locations.length" class="sd-section">
+        <h3 class="gw-subtitle">地點</h3>
+        <ul class="sd-list">
+          <li v-for="(place, index) in detail.locations" :key="index" class="sd-list__item"><span class="sd-list__name">{{ place }}</span></li>
+        </ul>
+      </section>
+
+      <p class="gw-actions">
+        <a class="ui-btn" href="/game">返回目錄</a>
+        <button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start">開始冒險</button>
+      </p>
+    </article>
+  </main>
+
+  <!-- 點選未綁定安全模式的劇本時的詢問（共用片段，與入口頁同一份）：顯示完全由 Vue 狀態接管；Esc 與遮罩視同取消，留在本頁 -->
+{% endraw %}
+{% include "game/_mode_prompt.html" %}
+{% raw %}
+  <ui-toast-region></ui-toast-region>
+{% endraw %}
+</div>
+{# 初始狀態：tojson 會跳脫 < > & '，可安全嵌入；前端只用 JSON.parse 讀取。只有會員等級與閘門結果，沒有劇本內容 #}
+<script type="application/json" id="initial-state">{{ initial_state|tojson }}</script>
+{% endblock %}
+{% block scripts %}
+  <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/mode-prompt.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/script-detail.js') }}"></script>
+{% endblock %}

@@ -108,7 +108,7 @@ def test_an_anonymous_visitor_is_sent_to_the_login_page_and_comes_back_to_game(a
 ])
 def test_a_restricted_login_is_sent_to_its_own_page(app, overrides, target):
     client, _ = client_for(app, **overrides)
-    for path in ("/game", f"/game/{GHOST}", f"/game/start/{GHOST}"):
+    for path in ("/game", f"/game/{GHOST}", f"/game/start/{GHOST}", f"/game/script/{GHOST}"):
         response = client.get(path)
         assert response.status_code == 302 and response.headers["Location"].startswith(target), path
 
@@ -152,13 +152,13 @@ def test_a_player_who_is_too_young_for_the_models_gets_the_age_restricted_gate(a
 def test_every_game_page_is_not_cached(app):
     client, user = client_for(app)
     save_id = open_save(app, user)
-    for path in ("/game", f"/game/{save_id}", f"/game/start/{GHOST}"):
+    for path in ("/game", f"/game/{save_id}", f"/game/start/{GHOST}", f"/game/script/{GHOST}"):
         assert "no-store" in client.get(path).headers.get("Cache-Control", ""), path
 
 
 def test_the_game_pages_accept_only_get(app):
     client, _ = client_for(app)
-    for path in ("/game", f"/game/{GHOST}", f"/game/start/{GHOST}"):
+    for path in ("/game", f"/game/{GHOST}", f"/game/start/{GHOST}", f"/game/script/{GHOST}"):
         for method in ("post", "put", "delete"):
             assert getattr(client, method)(path).status_code in (400, 403, 405), (method, path)   # 沒有 CSRF 權杖時可能先被擋
 
@@ -329,11 +329,83 @@ def test_the_start_path_is_the_wizard_shell_and_never_mistaken_for_a_save(app):
     assert client.get("/game/start").status_code == 404                          # 單一路徑段 `start` 是存檔識別碼的位置，不是精靈
 
 
-def test_the_three_game_routes_are_distinct_rules(app):
+def test_the_four_game_routes_are_distinct_rules(app):
     rules = {rule.rule: rule for rule in app.url_map.iter_rules() if rule.rule.startswith("/game")}
-    assert set(rules) == {"/game", "/game/start/<version_public_id>", "/game/<session_public_id>"}
+    assert set(rules) == {"/game", "/game/start/<version_public_id>", "/game/script/<version_public_id>", "/game/<session_public_id>"}
     for rule in rules.values():
         assert rule.methods - {"HEAD", "OPTIONS"} == {"GET"}, rule.rule
+
+
+# ---- /game/script/<版本>：劇本詳情頁的外殼（畫面與行為在 tests/js/script-detail.test.js）-----------------------------------------
+
+SCRIPT_STATE_KEYS = {"user", "gate"}
+
+
+def test_the_script_detail_path_is_the_detail_shell_and_never_mistaken_for_a_save_or_the_wizard(app):
+    client, user = client_for(app)
+    version_id = publish_builtin(app, title="不該出現在外殼裡的劇本標題")
+    save_id = open_save(app, user, title="不該出現在外殼裡的存檔")
+    response = client.get(f"/game/script/{version_id}")
+    assert response.status_code == 200
+    html = response.get_data(as_text=True)
+    assert 'id="script-app"' in html and "劇本詳情" in html
+    assert version_id not in html                                                # 版本識別碼只在網址裡
+    assert "不該出現在外殼裡" not in html                                          # 外殼不含任何劇本文字：資料由前端呼叫詳情端點取得
+    assert "劇情畫面建置中" not in html and 'id="wizard-app"' not in html and 'id="game-app"' not in html
+    assert client.get(f"/game/{save_id}").status_code == 200                     # 存檔頁照常
+    assert 'id="wizard-app"' in client.get(f"/game/start/{version_id}").get_data(as_text=True)   # 精靈頁照常
+    assert client.get("/game/script").status_code == 404                         # 單一路徑段 `script` 是存檔識別碼的位置，不是詳情頁
+    assert client.get("/game/script/").status_code == 404
+
+
+def test_the_script_detail_shell_is_identical_whether_or_not_the_version_exists(app):
+    """是否上架、能不能看由詳情端點判斷（404 時前端顯示「找不到這個劇本」）；外殼本身不查詢，所以存在與不存在的版本得到逐字相同的頁面。"""
+    client, _ = client_for(app)
+    version_id = publish_builtin(app)
+    existing = client.get(f"/game/script/{version_id}").get_data(as_text=True)
+    missing = client.get(f"/game/script/{GHOST}").get_data(as_text=True)
+    csrf = re.compile(r'<meta name="csrf-token" content="[^"]*">')
+    assert csrf.sub("", existing) == csrf.sub("", missing)
+
+
+def test_the_script_detail_initial_state_holds_only_the_member_tier_and_the_gate(app):
+    client, _ = client_for(app, member_tier="vip", story_preference="female")
+    state = state_of(client.get(f"/game/script/{GHOST}"))
+    assert set(state) == SCRIPT_STATE_KEYS
+    assert state == {"user": {"member_tier": "vip"}, "gate": None}                # 沒有故事偏好、email、生日與年齡
+    html = client.get(f"/game/script/{GHOST}").get_data(as_text=True)
+    assert "user1@example.com" not in html and "birth" not in html.lower() and "female" not in html
+
+
+def test_the_script_detail_shell_carries_the_gate_the_server_decided(app):
+    client, _ = client_for(app, role=ROLE_ADMIN, age=None)
+    assert state_of(client.get(f"/game/script/{GHOST}"))["gate"] == "age_confirmation_required"   # 管理員沒有受限登入狀態：頁面可以開，開始由閘門禁用
+    client, _ = client_for(app, 2, age=12)
+    assert state_of(client.get(f"/game/script/{GHOST}"))["gate"] == "age_restricted"
+
+
+def test_an_anonymous_visitor_is_sent_to_the_login_page_and_comes_back_to_the_script_page(app):
+    response = app.test_client().get(f"/game/script/{GHOST}")
+    assert response.status_code == 302
+    assert response.headers["Location"] == f"/login?next=%2Fgame%2Fscript%2F{GHOST}"
+
+
+def test_a_player_waiting_for_deletion_is_sent_away_from_the_script_page(app):
+    client, _ = client_for(app, status="deletion_pending")
+    response = client.get(f"/game/script/{GHOST}")
+    assert response.status_code == 302 and response.headers["Location"].startswith("/account")
+
+
+def test_the_script_shell_creates_nothing_and_changes_nothing(app):
+    client, user = client_for(app)
+    version_id = publish_builtin(app)
+    with Session(app.extensions["db_engine"]) as s:
+        before = (s.scalar(select(func.count()).select_from(RpgSession)), s.scalar(select(func.count()).select_from(Wallet)))
+    for path in (f"/game/script/{version_id}", f"/game/script/{GHOST}"):
+        assert client.get(path).status_code == 200
+    with Session(app.extensions["db_engine"]) as s:
+        after = (s.scalar(select(func.count()).select_from(RpgSession)), s.scalar(select(func.count()).select_from(Wallet)))
+    assert before == after
 
 
 # ---- /game/start/<版本>：精靈頁的初始狀態與樣板（精靈的行為在 tests/js/wizard-state.test.js 與之後的 wizard.test.js） -----------------
@@ -552,7 +624,7 @@ def collect(html: str) -> _Resources:
 
 
 @pytest.mark.parametrize("path_of", [
-    lambda save_id: "/game", lambda save_id: f"/game/{save_id}", lambda save_id: f"/game/start/{save_id}",
+    lambda save_id: "/game", lambda save_id: f"/game/{save_id}", lambda save_id: f"/game/start/{save_id}", lambda save_id: f"/game/script/{save_id}",
 ])
 def test_every_game_page_loads_only_local_resources_in_traditional_chinese_utf8(app, path_of):
     client, user = client_for(app)
@@ -568,12 +640,27 @@ def test_the_index_page_scripts_load_in_dependency_order_and_the_entry_script_co
     client, _ = client_for(app)
     html = client.get("/game").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
-    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "game-api.js", "entry.js"):
+    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "mode-prompt.js", "game-api.js", "entry.js"):
         assert needed in names, needed
     assert names[-1] == "entry.js"
     assert names.index("auth-common.js") < names.index("game-api.js") < names.index("entry.js")
     assert names.index("game-labels.js") < names.index("entry.js")
+    assert names.index("mode-prompt.js") < names.index("entry.js")                  # 共用的詢問狀態機要先載入
+    assert names.index("catalog-state.js") < names.index("entry.js")                # 目錄的搜尋與游標狀態要先載入
     assert 'id="game-app"' in html and re.search(r'<div id="game-app"[^>]*\bv-cloak\b', html)
+
+
+def test_the_index_page_renders_the_shared_ask_modal_once_with_its_vue_syntax_intact(app):
+    """詢問 Modal 是與詳情頁共用的樣板片段（`_mode_prompt.html`）：渲染後恰好一份，Vue 的 `{{ }}` 沒有被 Jinja 吃掉，也沒有殘留的 Jinja 指令。"""
+    client, _ = client_for(app)
+    html = client.get("/game").get_data(as_text=True)
+    assert html.count('<ui-modal v-model="askOpen"') == 1
+    for expression in ("{{ modePrompt.cancel }}", "{{ modePrompt.keepSafe }}", "{{ modePrompt.goSettings }}", "{{ line }}"):
+        assert expression in html, expression
+    assert "{% " not in html and "%}" not in html
+    assert html.index('<ui-modal v-model="askOpen"') < html.index("<ui-toast-region")           # Modal 在 Toast 區之前、仍在應用的根元素內
+    root_open = html.index('<div id="game-app"')
+    assert root_open < html.index('<ui-modal v-model="askOpen"') < html.index('<script type="application/json" id="initial-state">')
 
 
 def test_the_index_template_has_the_two_tabs_the_navigation_and_the_plain_text_interpolations():
@@ -585,6 +672,159 @@ def test_the_index_template_has_the_two_tabs_the_navigation_and_the_plain_text_i
     assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
     assert "v-html" not in html and "data-bs-" not in html and "offcanvas" not in html.lower()
     assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)               # 初始狀態經 tojson 跳脫
+
+
+# ---- 劇本詳情頁的樣板與腳本（rpg-script-catalog 規格「詳情頁」；行為在 tests/js/script-detail.test.js）-----------------------------------------
+
+
+def _detail_template() -> str:
+    return read(TEMPLATES / "script_detail.html")
+
+
+def test_the_detail_page_loads_its_scripts_in_dependency_order_and_the_detail_script_comes_last(app):
+    client, _ = client_for(app)
+    html = client.get(f"/game/script/{GHOST}").get_data(as_text=True)
+    names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
+    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "mode-prompt.js", "game-api.js", "script-detail.js"):
+        assert needed in names, needed
+    assert names[-1] == "script-detail.js"
+    assert names.index("auth-common.js") < names.index("game-api.js") < names.index("script-detail.js")
+    assert names.index("game-labels.js") < names.index("script-detail.js") and names.index("mode-prompt.js") < names.index("script-detail.js")
+    assert "entry.js" not in names and "wizard.js" not in names                  # 不載入別頁的腳本
+    assert re.search(r'<div id="script-app"[^>]*\bv-cloak\b', html)
+
+
+def test_the_detail_template_has_the_four_phases_the_actions_and_the_shared_ask_modal():
+    html = _detail_template()
+    for phase in ("loading", "notfound", "failed", "ready"):
+        assert f"phase === '{phase}'" in html, phase
+    assert "找不到這個劇本" in html
+    assert '<a class="ui-btn ui-btn--primary" href="/game">回到目錄</a>' in html and '<a class="ui-btn" href="/game">返回目錄</a>' in html
+    assert '<button type="button" class="ui-btn" @click="loadDetail">重試</button>' in html                 # 暫時失敗可以重試
+    assert '<button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start">開始冒險</button>' in html
+    assert '{% include "game/_mode_prompt.html" %}' in html and "<ui-modal" not in html                    # 與入口頁同一份 Modal，不另寫
+    assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
+    assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)                                         # 初始狀態經 tojson 跳脫
+
+
+def test_the_detail_template_shows_every_author_text_only_as_a_plain_interpolation():
+    html = _detail_template()
+    for expression in ("detail.title", "detail.summary", "detail.world_name", "detail.author_name", "detail.author_code", "detail.background",
+                       "character.name", "character.occupation", "place", "tag", "failureText"):
+        assert re.search(r"\{\{\s*" + re.escape(expression) + r"\s*\}\}", html), expression
+    for forbidden in ("v-html", "innerHTML", "|safe", "<img", "<iframe", "data-bs-"):
+        assert forbidden not in html, forbidden
+    assert not re.search(r"\{\{[^}]*\|\s*safe", html)
+
+
+def test_the_detail_template_never_asks_for_anything_the_public_detail_does_not_carry():
+    """詳情頁只顯示公開的白名單欄位：樣板裡不得出現隱藏特質、個性、里程碑、結局說明、規則、初始對話與審查結果。"""
+    html = _detail_template()
+    body = html[html.index("{% raw %}"):html.index("{% endraw %}")]
+    assert not re.search(r"hidden|personality|milestone|ending_text|ending_note|rules|opening|review|content_hash|content_json", body, re.I)
+
+
+def test_the_detail_script_is_read_only_keeps_nothing_in_the_browser_and_asks_only_for_the_detail():
+    code = strip_js_comments(read(JS_DIR / "script-detail.js"))
+    assert set(re.findall(r"Game\.api\.(\w+)", code)) == {"scriptDetail"}
+    # 詳情端點的回應是 { ok, script: {…} }（session_api_controller.catalog_detail；test_session_api 固定了 `body["script"]`），
+    # 頁面讀 `data.script`：Node 測試用替身回應，這裡守住兩端的包裝一致（第一次瀏覽器冒煙就是因為這個包裝對不上才發現的）
+    assert "data.script" in code
+    assert "script=get_game_entry_service().script_detail(" in read(PROJECT_ROOT / "app" / "controllers" / "session_api_controller.py")
+    for storage in ("localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "v-html"):
+        assert storage not in code, storage
+    assert ".finally(" in code and "inflight = false" in code                                              # 無論成功或失敗都恢復載入狀態
+    assert "Auth.loginUrlFor(window.location.pathname)" in code and "window.location.assign" in code         # 401 導向登入並保留位置
+    assert "Game.modePrompt.create" in code                                                                 # 詢問流程與入口頁共用，不另寫一份
+    assert not re.search(r"needsModeAsk|content_tier === 'adult'", code)
+
+
+def test_every_detail_class_the_template_uses_has_a_style_rule():
+    css = read(STATIC / "css" / "game.css")
+    used = set()
+    for attribute in re.findall(r'class="([^"]*)"', _detail_template()):
+        used.update(name for name in attribute.split() if name.startswith(("ge-", "sd-", "gw-")))
+    assert {"sd-detail", "sd-title", "sd-summary", "sd-section", "sd-list", "sd-list__item", "sd-list__name", "sd-list__note"} <= used, used
+    defined = set(re.findall(r"\.((?:ge|sd|gw)-[\w-]+)", css))
+    assert sorted(name for name in used if name not in defined) == []
+
+
+# ---- 入口頁的目錄搜尋與篩選（rpg-script-catalog 規格「目錄畫面的搜尋與篩選」；行為在 tests/js/entry.test.js 與 catalog-state.test.js）----------------
+
+def _scripts_panel() -> str:
+    html = read(TEMPLATES / "index.html")
+    return html[html.index('id="ge-panel-scripts"'):html.index('id="ge-panel-saves"')]
+
+
+def test_the_catalog_panel_has_a_search_form_a_channel_select_tag_chips_and_a_clear_button_all_driven_by_vue_state():
+    panel = _scripts_panel()
+    assert '<form class="ge-search" role="search" @submit.prevent="submitSearch">' in panel             # Enter 與按鈕都走同一個送出
+    assert re.search(r'<input id="ge-search-input"[^>]*type="search"[^>]*v-model="searchText"[^>]*:maxlength="qMax"', panel, re.S)
+    assert '<label class="ge-search__label" for="ge-search-input">' in panel and '<button type="submit"' in panel and ">搜尋<" in panel
+    assert '<select id="ge-audience-select" class="ge-select" :value="catalog.audience" @change="chooseAudience($event.target.value)">' in panel
+    assert 'v-for="option in audienceOptions"' in panel and "{{ option.label }}" in panel
+    assert 'v-for="chip in tagChips"' in panel and '@click="chooseTag(chip.tag)"' in panel and "{{ chip.tag }}" in panel
+    assert panel.count('@click="clearFilters"') == 2 and panel.count(">清除篩選<") == 2                    # 篩選列一個、無結果的說明一個
+    assert 'v-if="hasFilters"' in panel
+    assert "沒有符合的劇本" in panel and "目前沒有可玩的劇本" in panel
+    assert "emptyKind === 'filtered'" in panel and "emptyKind === 'none'" in panel
+
+
+def test_tag_chips_are_buttons_that_say_whether_they_are_selected_and_never_plain_markup():
+    panel = _scripts_panel()
+    for expression in ("chip.tag", "tag"):
+        assert f":class=\"{{ 'ge-chip--on': isTagOn({expression}) }}\"" in panel, expression
+        assert f":aria-pressed=\"isTagOn({expression}) ? 'true' : 'false'\"" in panel, expression
+    assert '@click="chooseCardTag(tag)"' in panel and ">{{ tag }}</button>" in panel                    # 卡片上的標籤可點選，文字是插值
+    assert panel.count('type="button" class="ge-chip ge-chip--tag ge-chip--button"') == 1 or "ge-chip--button" in panel
+
+
+def test_the_card_title_links_to_the_detail_page_and_load_more_continues_with_the_same_loader():
+    panel = _scripts_panel()
+    assert '<h2 class="ge-card__title"><a class="ge-card__link" :href="detailPath(card.id)">{{ card.title }}</a></h2>' in panel
+    assert panel.count('@click="loadCatalog"') == 2                                                      # 重試與載入更多都是同一個函式（游標由狀態接續）
+    assert "catalog.hasMore" in panel and "catalog.error" in panel
+    assert '@click="start(card)"' in panel and ":disabled=\"!canStart\"" in panel
+
+
+def test_the_catalog_panel_shows_author_text_only_as_plain_interpolations_and_uses_no_forbidden_markup():
+    panel = _scripts_panel()
+    for expression in ("{{ card.title }}", "{{ card.summary }}", "{{ card.world_name }}", "{{ card.author_name }}", "{{ chip.tag }}", "{{ tag }}"):
+        assert expression in panel, expression
+    assert "v-html" not in panel and "data-bs-" not in panel and "|safe" not in panel
+    assert "localStorage" not in panel and "sessionStorage" not in panel
+
+
+def test_every_catalog_class_the_index_template_uses_has_a_style_rule():
+    css = read(STATIC / "css" / "game.css")
+    panel = _scripts_panel()
+    used = set()
+    for attribute in re.findall(r'class="([^"]*)"', panel):
+        used.update(name for name in attribute.split() if name.startswith("ge-"))
+    used.update(re.findall(r"'(ge-[\w-]+)'\s*:", panel))                                                  # :class 物件裡的類別
+    assert {"ge-search", "ge-filters", "ge-tags", "ge-chip--button", "ge-chip--on", "ge-card__link", "ge-select"} <= used, used
+    defined = set(re.findall(r"\.(ge-[\w-]+)", css))
+    assert sorted(name for name in used if name not in defined) == []
+
+
+def test_the_catalog_state_constants_match_the_backend_limits_and_the_channel_labels():
+    """搜尋框的上限、常用標籤的上限與頻道選項是後端規則的鏡像：後端調整時這裡失敗，提醒同步 `catalog-state.js`。"""
+    from app.services.catalog_query import Q_MAX_CHARS
+    from app.services.game_entry_service import CATALOG_TAGS_LIMIT
+
+    source = read(JS_DIR / "catalog-state.js")
+    assert int(re.search(r"var Q_MAX_CHARS = (\d+);", source).group(1)) == Q_MAX_CHARS
+    assert int(re.search(r"var TAGS_MAX = (\d+);", source).group(1)) == CATALOG_TAGS_LIMIT
+    values = re.search(r"var AUDIENCE_VALUES = \[([^\]]*)\];", source).group(1)
+    assert sorted(re.findall(r"'(\w+)'", values)) == sorted(AUDIENCES)                                       # 選項值與後端的三個頻道完全一致
+
+
+def test_the_catalog_never_sends_an_offset_and_the_saves_list_still_pages_by_offset():
+    api = strip_js_comments(read(JS_DIR / "game-api.js"))
+    params = re.search(r"function catalogParams\(options\) \{(.*?)\n  \}", api, re.S).group(1)
+    assert "offset" not in params and "'cursor'" in params and "'q'" in params and "'tag'" in params and "'audience'" in params
+    entry = strip_js_comments(read(JS_DIR / "entry.js"))
+    assert "offset: list.offset" in entry                                                                 # 「我的存檔」仍以位移分頁
 
 
 VOID_TAGS = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track", "wbr"}
@@ -616,7 +856,7 @@ class _Balance(HTMLParser):
             self.stack.pop()
 
 
-@pytest.mark.parametrize("name", ["index.html", "session.html", "start.html"])
+@pytest.mark.parametrize("name", ["index.html", "session.html", "start.html", "script_detail.html", "_mode_prompt.html"])
 def test_every_game_template_has_balanced_tags(name):
     balance = _Balance()
     balance.feed(read(TEMPLATES / name))
@@ -655,7 +895,7 @@ def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
     """rpg-game-ui 2.1 與 2.3 **有意識地改變**了這個測試的契約（不是刪除，也不是掩蓋缺陷）：原本是「整個 `game/` 目錄都不碰瀏覽器儲存、
     API 只有精靈的兩個寫入」；遊戲頁現在要離線閱讀的快取與在途回合，所以 IndexedDB 只允許出現在 `game-store.js`（一個檔案、一個出口），
     其餘的瀏覽器儲存（localStorage、sessionStorage、cookie）整個目錄仍然都不得出現。API 的寫入呼叫由下一個測試固定為四個。
-    入口頁本身不變：`entry.js` 只讀（只引用 catalog 與 sessions），精靈只用 setup、suggest、start。"""
+    入口頁本身只讀（rpg-script-publishing 7.2 之後多一個唯讀的 catalogTags）：`entry.js` 只引用 catalog、catalogTags 與 sessions，精靈只用 setup、suggest、start。"""
     code = {path.name: strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js"))}
     assert code, "沒有找到前端腳本"
     for name, js in code.items():
@@ -667,7 +907,7 @@ def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
     api = code["game-api.js"]
     assert "axios" in api and "/api/sessions" in api
     assert not re.search(r"""method:\s*['"](post|put|patch|delete)""", api, re.I)   # 兩個清單端點的 get() 只用 GET，入口頁只讀
-    assert set(re.findall(r"Game\.api\.(\w+)", code["entry.js"])) == {"catalog", "sessions"}
+    assert set(re.findall(r"Game\.api\.(\w+)", code["entry.js"])) == {"catalog", "catalogTags", "sessions"}
     assert set(re.findall(r"Game\.api\.(\w+)", code["wizard.js"])) == {"setup", "suggest", "start"}
 
 
@@ -678,7 +918,10 @@ def test_the_game_api_writes_through_exactly_four_calls_and_takes_timeouts_and_s
     calls = re.findall(r"""(\w+):\s*function\s*\([^)]*\)\s*\{\s*return\s+(?:call|send)\('(get|post|put|patch|delete)'""", api, re.I)
     assert sorted(name for name, method in calls if method != "get") == ["checkin", "saveNotebook", "start", "suggest"]
     assert dict(calls)["saveNotebook"] == "put" and dict(calls)["checkin"] == "post"
-    assert sorted(name for name, method in calls if method == "get") == ["notebook", "setup", "snapshot", "turns", "wallet"]
+    # 目錄、常用標籤與劇本詳情（rpg-script-publishing 7.2）也經 send()，但都是 GET：寫入的呼叫仍恰好是上面四個
+    assert sorted(name for name, method in calls if method == "get") == [
+        "catalog", "catalogTags", "notebook", "scriptDetail", "setup", "snapshot", "turns", "wallet",
+    ]
     for needed in ("/api/game/sessions", "/api/wallet", "encodeURIComponent"):
         assert needed in api, needed
     assert "request.timeout" in api and "request.signal" in api                 # 逾時與中止訊號由呼叫端傳入
@@ -872,10 +1115,13 @@ def test_the_entry_template_shows_the_binding_label_only_when_there_is_one_and_t
 
 def test_the_ask_modal_in_the_entry_template_is_vue_driven_with_three_answers():
     html = read(TEMPLATES / "index.html")
-    modal = html[html.index('<ui-modal v-model="askOpen"'):html.index("</ui-modal>")]
+    partial = read(TEMPLATES / "_mode_prompt.html")                 # Modal 已抽成與詳情頁共用的片段，入口頁以 include 引入
+    assert '{% include "game/_mode_prompt.html" %}' in html
+    modal = partial[partial.index('<ui-modal v-model="askOpen"'):partial.index("</ui-modal>")]
     for needle in ('@click="cancelAsk"', '@click="keepSafe"', '@click="goToSettings"', "modePrompt.goSettings", "modePrompt.keepSafe", "modePrompt.cancel", "v-for=\"(line, index) in modePrompt.body\""):
         assert needle in modal, needle
-    assert "data-bs-" not in html.replace('data-bs-theme="dark"', "") and "v-html" not in html
+    both = html + partial
+    assert "data-bs-" not in both.replace('data-bs-theme="dark"', "") and "v-html" not in both
 
 
 def test_the_session_template_shows_the_live_mode_chip_and_the_note():

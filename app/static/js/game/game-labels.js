@@ -8,10 +8,11 @@
  * - `contentModeNotice(mode)`：入口頁顯示玩家目前的安全模式（`mode` 是 `{ effective, forced }`）：開時提示可到帳號設定調整，關時只是狀態，
  *   緊急煞車時說明「目前系統暫時只提供安全模式」。只有說明，沒有任何自動改變模式的動作（不自動調高）。
  * - `sessionModeNotice(mode, saveMode)`：遊戲頁的補充說明：緊急煞車、或劇本綁定安全模式（玩家已關閉安全模式、存檔卻仍是安全）；其他情況沒有說明。
- * - `modePrompt`（`modePromptCopy()`）：目錄點選未綁定劇本時，詢問是否修改安全模式的固定文案；`accountLink(returnPath)`：帳號設定頁的連結（帶返回位置）。
+ * - `modePromptCopy()`：目錄點選未綁定劇本時，詢問是否修改安全模式的固定文案——文案與狀態機在 `mode-prompt.js`（入口頁與劇本詳情頁共用），這裡是薄轉接；
+ *   `accountLink(returnPath)`：帳號設定頁的連結（帶返回位置）。
  * - 遊戲內提示（safe-mode-upgrade-hint）：`safeHintText()`、`safeHintCopy(returnPath)`——「可以嘗試關閉安全模式」的固定文字（「可以嘗試」的語氣，
  *   註明實際內容由模型決定、模型也可能拒絕或調整，沒有任何承諾字樣）與前往帳號設定的連結（返回位置是目前存檔的頁面）；文字不來自伺服器或模型。
- * - `startPath(id)`、`sessionPath(id)`：站內路徑，識別碼經 encodeURIComponent。
+ * - `startPath(id)`、`scriptPath(id)`、`sessionPath(id)`：站內路徑（開存檔精靈、劇本詳情頁、遊戲頁），識別碼經 encodeURIComponent。
  * - `formatTaipeiTime(iso)`：伺服器的 UTC 時間（`2026-10-27T12:00:00Z`）轉成台灣時間 `YYYY-MM-DD HH:mm`；台灣沒有日光節約時間，固定加 8 小時，不依賴瀏覽器的時區。
  * 遊戲主畫面（rpg-game-ui）另加：回合與串流結束狀態的名稱、轉場與中斷說明、串流 `error` 事件的訊息、歷史裡未完成回合的那一行說明、
  * 記事簿與簽到用的固定文字。這些文字**不含任何玩家文字**；不認得的值一律退回固定文字（失敗時關閉：不當成有內容的回合）。
@@ -81,19 +82,6 @@
     closeText: '關閉',
     closeLabel: '關閉提示'
   };
-  /* 目錄點選未綁定安全模式的劇本、玩家目前是安全模式時的詢問（自製 Modal；Esc 與遮罩視同取消）。 */
-  var MODE_PROMPT = {
-    code: 'SAFE_MODE',
-    title: '要調整安全模式嗎？',
-    body: [
-      '這個劇本沒有綁定安全模式，會跟隨您的設定。您目前是安全模式開，劇情不會出現性內容。',
-      '如果想體驗更深入的內容，可以先到帳號設定關閉安全模式，改完會回到這個劇本；關閉之後是否出現露骨內容取決於模型，不保證。'
-    ],
-    goSettings: '前往設定',
-    keepSafe: '維持安全模式繼續',
-    cancel: '取消'
-  };
-
   /* ---- 遊戲主畫面（rpg-game-ui）：串流結束狀態、轉場與中斷說明、記事簿與簽到的固定文字 ----
      這些文字只來自這裡，**不含任何玩家文字**（行動、劇情、記事簿內容、角色名都不會被帶進來）；數字只有字數、幣數這類整數。
      與後端列舉的鍵對照由 tests/test_game_pages.py 守住（回合狀態、串流錯誤代碼）。 */
@@ -252,8 +240,13 @@
     return { text: SAFE_HINT.text, link: accountLink(returnPath), linkText: SAFE_HINT.linkText, closeText: SAFE_HINT.closeText, closeLabel: SAFE_HINT.closeLabel };
   }
 
+  /* 詢問 Modal 的固定文案已搬到 mode-prompt.js（入口頁與劇本詳情頁共用同一份）；這裡保留舊名稱作為薄轉接。
+     Node 以 require 取得；瀏覽器與 vm 沙盒取全域的 `Game.modePrompt`（頁面要先載入 mode-prompt.js；呼叫時才查，所以載入順序不影響）。 */
   function modePromptCopy() {
-    return { code: MODE_PROMPT.code, title: MODE_PROMPT.title, body: MODE_PROMPT.body.slice(), goSettings: MODE_PROMPT.goSettings, keepSafe: MODE_PROMPT.keepSafe, cancel: MODE_PROMPT.cancel };
+    var shared = typeof module === 'object' && module.exports && typeof require === 'function'
+      ? require('./mode-prompt.js')
+      : globalThis.Game.modePrompt;
+    return shared.copy();
   }
 
   /* 帳號設定頁的連結，帶「改完回到哪裡」：只接受站內 `/game/` 開頭的路徑（伺服器與帳號頁都會再驗證一次），其他一律不帶返回位置。 */
@@ -264,6 +257,8 @@
 
   function startPath(versionId) { return '/game/start/' + encodeURIComponent(versionId); }
   function sessionPath(sessionId) { return '/game/' + encodeURIComponent(sessionId); }
+  /* 劇本詳情頁（可分享的連結）：`/game/script/<版本識別碼>`。 */
+  function scriptPath(versionId) { return '/game/script/' + encodeURIComponent(versionId); }
 
   function pad(number) { return number < 10 ? '0' + number : String(number); }
 
@@ -448,6 +443,7 @@
     contentModeNotice: contentModeNotice,
     startPath: startPath,
     sessionPath: sessionPath,
+    scriptPath: scriptPath,
     formatTaipeiTime: formatTaipeiTime
   };
 });

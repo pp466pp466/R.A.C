@@ -10,6 +10,11 @@
   - `suggest_timeout_ms`：AI 生成預覽的前端逾時 = 後端單次請求總預算 + 5 秒（與 `/scripts` 的送審同一個算法）。
   - `start_timeout_ms`：開存檔的前端逾時 = `2 × 後端單次請求總預算 + 5 秒`（預設 65 秒，與 `session_api_controller` 說明一致）：
     最壞情況是「劇本審查（必要時）＋主角模型審查」兩次呼叫各用滿一份預算。兩者都由設定算出，前端不寫死。
+- `/game/script/<版本識別碼>`：公開劇本的詳情頁（rpg-script-publishing，`rpg-script-catalog`）。可分享的連結、返回鍵自然。**不使用也不輸出版本識別碼**：
+  版本是否上架、能不能看由前端呼叫 `GET /api/sessions/catalog/<版本識別碼>` 判斷（下架、他人的草稿與不存在都是同一個 404，頁面顯示「找不到這個劇本」），
+  前端自己從網址讀取識別碼。初始狀態只有（沒有劇本內容）：
+  - `user`：只有 `member_tier`（會員等級；沒有 email、生日與年齡、故事偏好）。
+  - `gate`：同上（`AccessPolicy.chat_gate` 的結果，不自行判斷）。
 - `/game/<存檔識別碼>`：遊戲主畫面（RC-3b，`rpg-game-ui`）。標題、主角姓名、內容模式與是否完結由 `GameEntryService.session_summary` 取得，
   非擁有者與不存在的存檔得到相同的 404 頁面；**權限判斷全在 Service**，這裡不寫。頁面外殼只有（`tojson` 已跳脫的 JSON 區塊）：
   - `session`：`id`、`title`、`content_tier`、`ended`、`player_name`（都來自 `session_summary`）。
@@ -22,7 +27,7 @@
   **不含**回合內容、第 0 幕、記事簿與世界狀態：這些一律由前端呼叫既有端點（快照、回合、記事簿、錢包）取得，所以頁面外殼永遠沒有劇情，
   返回上一頁或頁面快取也不會看到舊內容；本頁**不改任何後端端點**。
 
-兩條路由的路徑段數不同（`/game/start/<x>` 兩段、`/game/<x>` 一段），不會互相吃掉；存檔識別碼是 UUID，不會等於 `start`。
+三條帶參數的路由不會互相吃掉：`/game/start/<x>` 與 `/game/script/<x>` 都是兩段、第二段的固定字不同，`/game/<x>` 只有一段；存檔識別碼是 UUID，不會等於 `start` 或 `script`。
 受限登入狀態由 `login_required_page` 預設導向各自的頁面（被鎖定 -> `/appeal`、待確認年齡 -> `/age`、等待刪除 -> `/account`）。
 """
 from flask import Blueprint, render_template
@@ -66,6 +71,18 @@ def game_start_page(version_public_id: str):
         "start_timeout_ms": int((llm.frontend_timeout_seconds + llm.request_budget_seconds) * 1000),
     }
     return render_template("game/start.html", initial_state=state)
+
+
+@game_pages_bp.get("/game/script/<version_public_id>")
+@login_required_page
+def game_script_page(version_public_id: str):
+    # 版本識別碼只在網址裡，頁面不使用它：前端自己從網址讀取並呼叫詳情端點（非上架與不存在都由那裡回 404，這裡不查詢也不洩漏）
+    user = current_user()
+    state = {
+        "user": {"member_tier": user.member_tier},
+        "gate": get_access_policy().chat_gate(user),
+    }
+    return render_template("game/script_detail.html", initial_state=state)
 
 
 @game_pages_bp.get("/game/<session_public_id>")

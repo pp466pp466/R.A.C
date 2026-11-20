@@ -37,7 +37,7 @@ const serverError = (status, body) => () => Promise.reject({ response: { status,
 
 test('the page-level API exposes exactly the entry, game and wallet calls', () => {
   const { api } = sandboxWith(ok({}));
-  assert.deepEqual(Object.keys(api).sort(), ['catalog', 'checkin', 'notebook', 'saveNotebook', 'sessions', 'setup', 'snapshot', 'start', 'suggest', 'turns', 'wallet']);
+  assert.deepEqual(Object.keys(api).sort(), ['catalog', 'catalogTags', 'checkin', 'notebook', 'saveNotebook', 'scriptDetail', 'sessions', 'setup', 'snapshot', 'start', 'suggest', 'turns', 'wallet']);
 });
 
 test('snapshot reads the save by its public id and returns the response body untouched', async () => {
@@ -131,26 +131,74 @@ test('ids are URL-encoded so a hostile id cannot change the path', async () => {
   ]);
 });
 
-test('the entry calls keep their behaviour: GET lists with paging, setup, and the two POSTs with the caller timeout', async () => {
+test('the entry calls keep their behaviour: the saves list pages by offset, the catalog by cursor, setup, and the two POSTs with the caller timeout', async () => {
   const { api, requests } = sandboxWith(ok({}));
-  await api.catalog({ limit: 12, offset: 24 });
-  await api.sessions();
+  await api.catalog({ limit: 12, offset: 24 });                      // 目錄已改游標：`offset` 不再送出（後端不讀取）
+  await api.sessions({ limit: 20, offset: 40 });
   await api.setup('v/1', { timeout: 5000 });
   await api.suggest({ intro: 'x' }, { timeout: 35000 });
   await api.start({ version_id: 'v' }, { timeout: 65000 });
   assert.deepEqual(requests.map((r) => [r.method, r.url, r.params, r.data, r.timeout]), [
-    ['get', '/api/sessions/catalog', { limit: 12, offset: 24 }, undefined, undefined],
-    ['get', '/api/sessions', {}, undefined, undefined],
+    ['get', '/api/sessions/catalog', { limit: 12 }, undefined, undefined],
+    ['get', '/api/sessions', { limit: 20, offset: 40 }, undefined, undefined],
     ['get', '/api/sessions/setup/v%2F1', undefined, undefined, 5000],
     ['post', '/api/sessions/protagonist/suggest', undefined, { intro: 'x' }, 35000],
     ['post', '/api/sessions', undefined, { version_id: 'v' }, 65000]
   ]);
 });
 
+test('the catalog request carries the search, tag, channel and cursor only when they are non-empty strings, and never an offset', async () => {
+  const { api, requests } = sandboxWith(ok({}));
+  await api.catalog();
+  await api.catalog({});
+  await api.catalog({ q: '青雲 仙俠', tag: '仙俠', audience: 'female', cursor: 'abc_-', limit: 12 });
+  await api.catalog({ q: '', tag: '', audience: '', cursor: '' });                               // 空字串＝沒有條件
+  await api.catalog({ q: 7, tag: null, audience: undefined, cursor: {}, limit: '12', offset: 5, extra: 'x' });   // 型別不對、未列出的欄位一律不送
+  assert.deepEqual(requests.map((r) => r.params), [
+    {},
+    {},
+    { limit: 12, q: '青雲 仙俠', tag: '仙俠', audience: 'female', cursor: 'abc_-' },
+    {},
+    {},
+  ]);
+  assert.ok(requests.every((r) => r.method === 'get' && r.url === '/api/sessions/catalog' && !('data' in r)));
+});
+
+test('the catalog passes the timeout and the signal of the caller like every other read', async () => {
+  const controller = new AbortController();
+  const { api, requests } = sandboxWith(ok({}));
+  await api.catalog({ q: 'x', timeout: 8000, signal: controller.signal });
+  assert.equal(requests[0].timeout, 8000);
+  assert.equal(requests[0].signal, controller.signal);
+  assert.deepEqual(requests[0].params, { q: 'x' });                                             // 逾時與 signal 不會變成查詢參數
+});
+
+test('popular tags and the script detail are plain reads; the version id is URL-encoded so a hostile id cannot change the path', async () => {
+  const { api, requests } = sandboxWith(ok({ ok: true }));
+  await api.catalogTags();
+  await api.scriptDetail('11111111-1111-4111-8111-111111111111');
+  await api.scriptDetail('../../admin?x=1', { timeout: 7000 });
+  await api.scriptDetail('tags');                                                                // 想冒充「常用標籤」路徑的識別碼仍是詳情路徑下的一段
+  assert.deepEqual(requests.map((r) => [r.method, r.url, r.data, r.params, r.timeout]), [
+    ['get', '/api/sessions/catalog/tags', undefined, undefined, undefined],
+    ['get', '/api/sessions/catalog/11111111-1111-4111-8111-111111111111', undefined, undefined, undefined],
+    ['get', '/api/sessions/catalog/..%2F..%2Fadmin%3Fx%3D1', undefined, undefined, 7000],
+    ['get', '/api/sessions/catalog/tags', undefined, undefined, undefined],
+  ]);
+});
+
+test('a 404 from the script detail rejects with the described failure so the page can say the script was not found', async () => {
+  const { api } = sandboxWith(serverError(404, { error: { code: 'not_found', message: '找不到。' } }));
+  const info = await api.scriptDetail('x').then(() => null, (failure) => failure);
+  assert.equal(info.status, 404);
+  assert.equal(info.code, 'not_found');
+  assert.equal(info.kind, 'server');
+});
+
 test('the only calls that can change anything are suggest, start, checkin and saveNotebook', async () => {
   const { api, requests } = sandboxWith(ok({}));
   const args = {
-    catalog: [], sessions: [], setup: ['v'], suggest: [{}], start: [{}], snapshot: [SESSION], turns: [SESSION, 0], notebook: [SESSION],
+    catalog: [], catalogTags: [], scriptDetail: ['v'], sessions: [], setup: ['v'], suggest: [{}], start: [{}], snapshot: [SESSION], turns: [SESSION, 0], notebook: [SESSION],
     saveNotebook: [SESSION, 'x', 1], wallet: [], checkin: [false]
   };
   for (const name of Object.keys(api)) { await api[name](...args[name]); }

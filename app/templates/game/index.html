@@ -39,17 +39,48 @@
     <!-- ===== 選劇本 ===== -->
     <section v-show="tab === 'scripts'" class="ge-panel" id="ge-panel-scripts" role="tabpanel" aria-labelledby="ge-tab-scripts">
       <p v-if="preferenceText" class="ge-hint">排序依您的故事偏好（{{ preferenceText }}），符合偏好的劇本會排在前面；可以到<a href="/account">帳號設定</a>調整，不會影響能玩的劇本。</p>
+
+      <!-- 搜尋與篩選：條件改變就清空清單並從第一頁重新載入；搜尋框按 Enter 或「搜尋」才送出。篩選條件只在頁面記憶體，不寫任何瀏覽器儲存。 -->
+      <form class="ge-search" role="search" @submit.prevent="submitSearch">
+        <label class="ge-search__label" for="ge-search-input">搜尋劇本</label>
+        <div class="ge-search__row">
+          <input id="ge-search-input" class="ge-search__input" type="search" v-model="searchText" :maxlength="qMax"
+                 placeholder="標題、簡介、世界名稱或標籤" autocomplete="off" enterkeyhint="search">
+          <button type="submit" class="ui-btn ui-btn--primary ge-search__submit">搜尋</button>
+        </div>
+      </form>
+      <div class="ge-filters">
+        <div class="ge-filter">
+          <label class="ge-filter__label" for="ge-audience-select">讀者頻道</label>
+          <select id="ge-audience-select" class="ge-select" :value="catalog.audience" @change="chooseAudience($event.target.value)">
+            <option v-for="option in audienceOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+          </select>
+        </div>
+        <button v-if="hasFilters" type="button" class="ui-btn ge-filters__clear" @click="clearFilters">清除篩選</button>
+      </div>
+      <ul v-if="tagChips.length" class="ge-tags" aria-label="常用標籤">
+        <li v-for="chip in tagChips" :key="chip.tag">
+          <button type="button" class="ge-chip ge-chip--tag ge-chip--button" :class="{ 'ge-chip--on': isTagOn(chip.tag) }"
+                  :aria-pressed="isTagOn(chip.tag) ? 'true' : 'false'" @click="chooseTag(chip.tag)">{{ chip.tag }}</button>
+        </li>
+      </ul>
+
       <p v-if="catalog.loading && catalog.items.length === 0" class="ge-hint" role="status">載入中…</p>
-      <p v-else-if="catalog.loaded && catalog.items.length === 0 && !catalog.error" class="ge-hint">目前沒有可玩的劇本，晚點再來看看。</p>
+      <p v-else-if="emptyKind === 'none'" class="ge-hint">目前沒有可玩的劇本，晚點再來看看。</p>
+      <div v-else-if="emptyKind === 'filtered'" class="ge-empty" role="status">
+        <p class="ge-hint">沒有符合的劇本。換個關鍵字、標籤或頻道試試看。</p>
+        <button type="button" class="ui-btn" @click="clearFilters">清除篩選</button>
+      </div>
 
       <ul v-if="catalog.items.length" class="ge-cards">
         <li v-for="card in catalog.items" :key="card.id" class="ge-card">
-          <h2 class="ge-card__title">{{ card.title }}</h2>
+          <h2 class="ge-card__title"><a class="ge-card__link" :href="detailPath(card.id)">{{ card.title }}</a></h2>
           <p v-if="card.summary" class="ge-card__summary">{{ card.summary }}</p>
           <p class="ge-card__meta">
             <span v-if="tierLabel(card.content_tier)" class="ge-chip">{{ tierLabel(card.content_tier) }}</span>
             <span class="ge-chip">{{ audienceLabel(card.audience) }}</span>
-            <span v-for="(tag, index) in card.tags" :key="index" class="ge-chip ge-chip--tag">{{ tag }}</span>
+            <button v-for="(tag, index) in card.tags" :key="index" type="button" class="ge-chip ge-chip--tag ge-chip--button"
+                    :class="{ 'ge-chip--on': isTagOn(tag) }" :aria-pressed="isTagOn(tag) ? 'true' : 'false'" @click="chooseCardTag(tag)">{{ tag }}</button>
           </p>
           <p class="ge-card__by">
             <span v-if="card.world_name">{{ card.world_name }}</span>
@@ -102,18 +133,10 @@
     </section>
   </main>
 
-  <!-- 點選未綁定安全模式的劇本時的詢問：顯示完全由 Vue 狀態（askCard）接管；Esc 與遮罩視同取消，留在目錄 -->
-  <ui-modal v-model="askOpen" :title="modePrompt.title" :status-code="modePrompt.code">
-    <p v-for="(line, index) in modePrompt.body" :key="index">{{ line }}</p>
-    <template #actions>
-      <div class="ge-ask-actions">
-        <button type="button" class="ui-btn" @click="cancelAsk">{{ modePrompt.cancel }}</button>
-        <button type="button" class="ui-btn" @click="keepSafe">{{ modePrompt.keepSafe }}</button>
-        <button type="button" class="ui-btn ui-btn--primary" @click="goToSettings">{{ modePrompt.goSettings }}</button>
-      </div>
-    </template>
-  </ui-modal>
-
+  <!-- 點選未綁定安全模式的劇本時的詢問（共用片段，與劇本詳情頁同一份）：顯示完全由 Vue 狀態接管；Esc 與遮罩視同取消，留在目錄 -->
+{% endraw %}
+{% include "game/_mode_prompt.html" %}
+{% raw %}
   <ui-toast-region></ui-toast-region>
 {% endraw %}
 </div>
@@ -123,6 +146,8 @@
 {% block scripts %}
   <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/mode-prompt.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/catalog-state.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/entry.js') }}"></script>
 {% endblock %}

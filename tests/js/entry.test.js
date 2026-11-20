@@ -35,13 +35,15 @@ const catalogPage = (scripts, extra = {}) => ({ data: { ok: true, scripts, has_m
 const savesPage = (sessions, extra = {}) => ({ data: { ok: true, sessions, has_more: false, ...extra } });
 
 const CATALOG_URL = '/api/sessions/catalog';
+const TAGS_URL = '/api/sessions/catalog/tags';
 const SAVES_URL = '/api/sessions';
+const noTags = () => Promise.resolve({ data: { ok: true, tags: [] } });
 const emptySaves = () => Promise.resolve(savesPage([]));
 
 /* 載入入口頁需要的腳本並回傳 setup() 的結果。`respond(request)` 是 axios 的替身：收到 { method, url, params }，回傳 Promise。
- * 掛載時會**並行載入「選劇本」與「我的存檔」兩個清單的第一頁**（預設分頁依玩家有沒有存檔決定）。只關心「選劇本」的測試傳 `saves`（存檔清單請求的回應函式，
+ * 掛載時會**並行載入「選劇本」與「我的存檔」兩個清單的第一頁與常用標籤**（預設分頁依玩家有沒有存檔決定）；常用標籤的請求由 `tags`（預設空清單）回應，不經 `respond` 與 `saves`。只關心「選劇本」的測試傳 `saves`（存檔清單請求的回應函式，
  * 通常是 `emptySaves`），這樣依序消耗的回應佇列與請求次數不會被存檔清單的請求打亂，並以 `catalogRequests()` 取得「選劇本」的請求；沒給 `saves` 時，所有請求都交給 `respond`。 */
-function setupEntry({ state = STATE, respond = () => Promise.reject(new Error('unexpected request')), saves = null } = {}) {
+function setupEntry({ state = STATE, respond = () => Promise.reject(new Error('unexpected request')), saves = null, tags = noTags } = {}) {
   const requests = [];
   const navigations = [];
   const mounted = [];
@@ -58,6 +60,7 @@ function setupEntry({ state = STATE, respond = () => Promise.reject(new Error('u
   };
   const axios = (request) => {
     requests.push(JSON.parse(JSON.stringify(request)));
+    if (request.url === TAGS_URL) { return tags(request); }                   // 掛載時也載入常用標籤；沒有特別要測它的測試一律給空清單
     return saves && request.url === SAVES_URL ? saves(request) : respond(request);
   };
   axios.defaults = { headers: { common: {} } };
@@ -71,7 +74,7 @@ function setupEntry({ state = STATE, respond = () => Promise.reject(new Error('u
     createApp: (given) => { options = given; return { use() {}, component() {}, mount() {} }; },
     onMounted: (hook) => { mounted.push(hook); },
   });
-  ['js/auth/auth-common.js', 'js/ui/restriction.js', 'js/game/game-labels.js', 'js/game/game-api.js'].forEach((file) => run('app/static/' + file));
+  ['js/auth/auth-common.js', 'js/ui/restriction.js', 'js/game/game-labels.js', 'js/game/mode-prompt.js', 'js/game/catalog-state.js', 'js/game/game-api.js'].forEach((file) => run('app/static/' + file));
   sandbox.UI = Object.assign(sandbox.UI || {}, { install: () => {}, toast: () => {} });
   run('app/static/js/game/entry.js');
   assert.ok(options && typeof options.setup === 'function', 'entry.js 沒有呼叫 createApp');
@@ -96,7 +99,8 @@ t('with no saves the default tab is the script catalog; mounting loads the first
   assert.equal(requests.length, 0);                                 // setup() 本身不送請求，掛載才載入
   await mount();
   assert.deepEqual(requests, [
-    { method: 'get', url: CATALOG_URL, params: { offset: 0 } },
+    { method: 'get', url: CATALOG_URL, params: {} },                  // 目錄第一頁：沒有條件、沒有游標（也不再送 offset）
+    { method: 'get', url: TAGS_URL },                                 // 常用標籤
     { method: 'get', url: SAVES_URL, params: { offset: 0 } },
   ]);
   assert.deepEqual(ids(page.catalog), [ID_A, ID_B]);
@@ -151,7 +155,7 @@ t('a player who already has saves lands on the saves tab with the most recent sa
   assert.equal(page.tab.value, 'scripts');
   page.selectTab('saves');
   await tick();
-  assert.equal(requests.length, 2);                                 // 切換不再多送請求：兩個清單掛載時就載好了
+  assert.equal(requests.length, 3);                                 // 切換不再多送請求：兩個清單與常用標籤掛載時就載好了
 });
 
 t('when the saves cannot be read the page stays on the script catalog, the saves tab shows its own error and retry, and a later retry does not pull the player away', async () => {
@@ -215,7 +219,7 @@ t('the two first pages load in parallel and neither waits for the other', async 
   const { page, requests, mount } = setupEntry({ respond: routed(() => slowCatalog.promise, () => Promise.resolve(savesPage([save(ID_B)]))) });
   const mounting = mount();
   await tick();
-  assert.deepEqual(requests.map((request) => request.url), [CATALOG_URL, SAVES_URL]);   // 兩個請求都已送出，沒有誰等誰
+  assert.deepEqual(requests.map((request) => request.url), [CATALOG_URL, TAGS_URL, SAVES_URL]);   // 請求都已送出，沒有誰等誰
   assert.equal(page.catalog.loading, true);
   assert.equal(page.tab.value, 'saves');                            // 存檔先到就先切換，不等「選劇本」
   slowCatalog.resolve(catalogPage([card(ID_A)]));
@@ -251,13 +255,13 @@ t('a save list whose body is malformed counts as no saves: the catalog stays and
 
 // ---- 載入更多 -------------------------------------------------------------------------------------
 
-t('load more appends the next page with the offset the server consumed, and the button state is restored', async () => {
-  const pages = [catalogPage([card(ID_A), card(ID_B)], { has_more: true }), catalogPage([card(ID_C)])];
+t('load more appends the next page with the cursor the server gave, and the button state is restored', async () => {
+  const pages = [catalogPage([card(ID_A), card(ID_B)], { has_more: true, next_cursor: 'c-1' }), catalogPage([card(ID_C)])];
   const { page, catalogRequests, mount } = setupEntry({ respond: () => Promise.resolve(pages.shift()), saves: emptySaves });
   await mount();
   assert.equal(page.catalog.hasMore, true);
   assert.equal(await page.loadCatalog(), true);
-  assert.deepEqual(catalogRequests().map((r) => r.params), [{ offset: 0 }, { offset: 2 }]);
+  assert.deepEqual(catalogRequests().map((r) => r.params), [{}, { cursor: 'c-1' }]);
   assert.deepEqual(ids(page.catalog), [ID_A, ID_B, ID_C]);
   assert.equal(page.catalog.hasMore, false);                        // has_more 為假：不再顯示「載入更多」
   assert.equal(page.catalog.loading, false);
@@ -266,7 +270,7 @@ t('load more appends the next page with the offset the server consumed, and the 
 t('while a page is loading, pressing load more again sends nothing; afterwards it is enabled again', async () => {
   let release;
   const { page, catalogRequests, mount } = setupEntry({
-    respond: () => new Promise((resolve) => { release = () => resolve(catalogPage([card(ID_A)], { has_more: true })); }),
+    respond: () => new Promise((resolve) => { release = () => resolve(catalogPage([card(ID_A)], { has_more: true, next_cursor: 'c-1' })); }),
     saves: emptySaves,
   });
   const first = mount();
@@ -281,13 +285,13 @@ t('while a page is loading, pressing load more again sends nothing; afterwards i
 });
 
 t('a card that comes back on the next page (a script was published in between) is shown once', async () => {
-  const pages = [catalogPage([card(ID_A), card(ID_B)], { has_more: true }), catalogPage([card(ID_B), card(ID_C)])];
+  const pages = [catalogPage([card(ID_A), card(ID_B)], { has_more: true, next_cursor: 'c-1' }), catalogPage([card(ID_B), card(ID_C)])];
   const { page, catalogRequests, mount } = setupEntry({ respond: () => Promise.resolve(pages.shift()), saves: emptySaves });
   await mount();
   await page.loadCatalog();
   assert.deepEqual(ids(page.catalog), [ID_A, ID_B, ID_C]);
-  assert.equal(page.catalog.offset, 4);                             // 位移依伺服器實際回的筆數前進，不是去重後的筆數
-  assert.deepEqual(catalogRequests().map((r) => r.params.offset), [0, 2]);
+  assert.equal(page.catalog.nextCursor, '');                        // 游標由伺服器決定，這一頁沒有下一頁就清空
+  assert.deepEqual(catalogRequests().map((r) => r.params.cursor), [undefined, 'c-1']);
 });
 
 t('has_more with an empty page cannot loop forever', async () => {
@@ -314,7 +318,7 @@ t('a failed load keeps the cards already loaded, shows the error, and retry fetc
   const { page, catalogRequests, mount } = setupEntry({
     respond: () => {
       call += 1;
-      if (call === 1) { return Promise.resolve(catalogPage([card(ID_A)], { has_more: true })); }
+      if (call === 1) { return Promise.resolve(catalogPage([card(ID_A)], { has_more: true, next_cursor: 'c-1' })); }
       if (call === 2) { return Promise.reject(serverError(500, 'internal_error', '系統發生錯誤，請稍後再試。')); }
       return Promise.resolve(catalogPage([card(ID_B)]));
     },
@@ -326,7 +330,7 @@ t('a failed load keeps the cards already loaded, shows the error, and retry fetc
   assert.equal(page.catalog.error, '系統發生錯誤，請稍後再試。');
   assert.equal(page.catalog.loading, false);                        // finally 恢復
   assert.equal(await page.loadCatalog(), true);                     // 重試
-  assert.deepEqual(catalogRequests().map((r) => r.params.offset), [0, 1, 1]);  // 失敗時位移沒有前進，重試的是同一頁
+  assert.deepEqual(catalogRequests().map((r) => r.params.cursor), [undefined, 'c-1', 'c-1']);  // 失敗時游標沒有前進，重試的是同一頁
   assert.deepEqual(ids(page.catalog), [ID_A, ID_B]);
   assert.equal(page.catalog.error, '');
 });
@@ -528,13 +532,246 @@ t('a second start while the question is open replaces the card instead of stacki
 
 t('the ask modal is driven by Vue state only: no Bootstrap script, no v-html, three answers in the actions slot', () => {
   const html = read('app/templates/game/index.html');
-  const modal = html.slice(html.indexOf('<ui-modal v-model="askOpen"'), html.indexOf('</ui-modal>'));
+  const partial = read('app/templates/game/_mode_prompt.html');                 // Modal 已抽成與詳情頁共用的片段，入口頁以 include 引入
+  assert.ok(html.includes('{% include "game/_mode_prompt.html" %}'));
+  const modal = partial.slice(partial.indexOf('<ui-modal v-model="askOpen"'), partial.indexOf('</ui-modal>'));
   assert.ok(modal.length > 200, '找不到詢問 Modal');
   for (const needle of ['@click="cancelAsk"', '@click="keepSafe"', '@click="goToSettings"', 'modePrompt.goSettings', 'modePrompt.keepSafe', 'modePrompt.cancel', ':status-code="modePrompt.code"']) {
     assert.ok(modal.includes(needle), needle);
   }
-  assert.ok(!/data-bs-|v-html/.test(html));
+  assert.ok(!/data-bs-|v-html/.test(html + partial));
   assert.match(html, /<span v-if="tierLabel\(card\.content_tier\)" class="ge-chip">/);        // 沒有綁定的卡片不顯示標籤
+});
+
+// ---- 目錄的搜尋與篩選（rpg-script-catalog 規格「目錄畫面的搜尋與篩選」）-----------------------------------------
+
+/* 依序消耗 `answers` 的目錄替身（沒有了就回空頁）。 */
+const answering = (answers) => () => Promise.resolve(answers.length ? answers.shift() : catalogPage([]));
+
+t('submitting a search clears the list and loads the first page with the words, and the box shows the tidied text', async () => {
+  const { page, catalogRequests, mount } = setupEntry({ respond: answering([catalogPage([card(ID_A)], { has_more: true, next_cursor: 'c-1' }), catalogPage([card(ID_B)])]), saves: emptySaves });
+  await mount();
+  page.searchText.value = '  青雲   仙俠 ';
+  const loading = page.submitSearch();
+  assert.deepEqual(ids(page.catalog), []);                                  // 條件一改就清空（回應還沒到）
+  assert.equal(page.catalog.nextCursor, '');
+  await loading;
+  assert.deepEqual(catalogRequests().map((r) => r.params), [{}, { q: '青雲 仙俠' }]);   // 第一頁：沒有游標
+  assert.equal(page.searchText.value, '青雲 仙俠');
+  assert.equal(page.catalog.q, '青雲 仙俠');
+  assert.deepEqual(ids(page.catalog), [ID_B]);
+  assert.equal(page.hasFilters.value, true);
+});
+
+t('typing alone changes nothing: the words only count once they are submitted', async () => {
+  const { page, catalogRequests, mount } = setupEntry({ respond: answering([catalogPage([card(ID_A)])]), saves: emptySaves });
+  await mount();
+  page.searchText.value = '還在打字';
+  await tick();
+  assert.equal(catalogRequests().length, 1);
+  assert.equal(page.catalog.q, '');
+  assert.equal(page.hasFilters.value, false);
+  assert.deepEqual(ids(page.catalog), [ID_A]);
+});
+
+t('submitting an empty box after a search takes the words off and reloads from the first page', async () => {
+  const { page, catalogRequests, mount } = setupEntry({ respond: answering([catalogPage([card(ID_A)]), catalogPage([]), catalogPage([card(ID_A)])]), saves: emptySaves });
+  await mount();
+  page.searchText.value = '青雲';
+  await page.submitSearch();
+  page.searchText.value = '   ';
+  await page.submitSearch();
+  assert.deepEqual(catalogRequests().map((r) => r.params), [{}, { q: '青雲' }, {}]);
+  assert.equal(page.catalog.q, '');
+  assert.equal(page.hasFilters.value, false);
+});
+
+t('a tag chip applies the tag, shows as selected, and a second press takes it off; a tag on a card works the same way', async () => {
+  const { page, catalogRequests, mount } = setupEntry({ respond: answering([]), saves: emptySaves });
+  await mount();
+  await page.chooseTag('仙俠');
+  assert.equal(page.isTagOn('仙俠'), true);
+  assert.equal(page.isTagOn('SCIFI'), false);
+  assert.equal(page.isTagOn('科幻'), false);
+  await page.chooseTag('仙俠');
+  assert.equal(page.isTagOn('仙俠'), false);
+  await page.chooseCardTag('SciFi');                                        // 卡片上的標籤：保留作者寫的大小寫送給伺服器（伺服器不分大小寫）
+  assert.equal(page.isTagOn('scifi'), true);
+  assert.deepEqual(catalogRequests().map((r) => r.params), [{}, { tag: '仙俠' }, {}, { tag: 'SciFi' }]);
+});
+
+t('the channel select applies one of the three channels, and "all channels" takes the filter off', async () => {
+  const { page, catalogRequests, mount } = setupEntry({ respond: answering([]), saves: emptySaves });
+  await mount();
+  assert.deepEqual(plain(page.audienceOptions), [
+    { value: '', label: '全部頻道' }, { value: 'male', label: '男頻' }, { value: 'female', label: '女頻' }, { value: 'all', label: '全讀者' },
+  ]);
+  await page.chooseAudience('female');
+  await page.chooseAudience('all');                                         // 「全讀者」是一個頻道篩選，不是沒有篩選
+  await page.chooseAudience('');
+  await page.chooseAudience('other');                                       // 不認得的值當成沒有篩選，不會送給伺服器
+  assert.deepEqual(catalogRequests().map((r) => r.params), [{}, { audience: 'female' }, { audience: 'all' }, {}, {}]);
+});
+
+t('the three conditions combine, and load more repeats all of them with the cursor', async () => {
+  const { page, catalogRequests, mount } = setupEntry({
+    respond: answering([catalogPage([]), catalogPage([]), catalogPage([]), catalogPage([card(ID_A)], { has_more: true, next_cursor: 'c-9' }), catalogPage([card(ID_B)])]),
+    saves: emptySaves,
+  });
+  await mount();
+  page.searchText.value = '青雲';
+  await page.chooseAudience('male');
+  await page.chooseTag('仙俠');
+  await page.submitSearch();
+  assert.equal(page.catalog.hasMore, true);
+  await page.loadCatalog();
+  const last = catalogRequests().slice(-2).map((r) => r.params);
+  assert.deepEqual(last, [{ q: '青雲', tag: '仙俠', audience: 'male' }, { q: '青雲', tag: '仙俠', audience: 'male', cursor: 'c-9' }]);
+  assert.deepEqual(ids(page.catalog), [ID_A, ID_B]);
+});
+
+t('clear filters empties the box and every condition and loads the unfiltered first page', async () => {
+  const { page, catalogRequests, mount } = setupEntry({ respond: answering([]), saves: emptySaves });
+  await mount();
+  page.searchText.value = '青雲';
+  await page.submitSearch();
+  await page.chooseTag('仙俠');
+  await page.chooseAudience('female');
+  assert.equal(page.hasFilters.value, true);
+  await page.clearFilters();
+  assert.equal(page.searchText.value, '');
+  assert.deepEqual([page.catalog.q, page.catalog.tag, page.catalog.audience], ['', '', '']);
+  assert.equal(page.hasFilters.value, false);
+  assert.deepEqual(catalogRequests().pop().params, {});
+});
+
+t('a slow answer to the first of two quick searches never covers the newer result', async () => {
+  const first = gate();
+  let calls = 0;
+  const { page, mount } = setupEntry({
+    respond: () => {
+      calls += 1;
+      if (calls === 1) { return Promise.resolve(catalogPage([])); }                                   // 掛載時的第一頁
+      return calls === 2 ? first.promise : Promise.resolve(catalogPage([card(ID_B)]));
+    },
+    saves: emptySaves,
+  });
+  await mount();
+  page.searchText.value = '甲';
+  const older = page.submitSearch();
+  page.searchText.value = '乙';
+  const newer = page.submitSearch();
+  await newer;
+  assert.deepEqual(ids(page.catalog), [ID_B]);
+  first.resolve(catalogPage([card(ID_A), card(ID_C)], { has_more: true, next_cursor: 'stale' }));
+  await older;
+  assert.deepEqual(ids(page.catalog), [ID_B]);                              // 較晚抵達的舊結果被丟掉
+  assert.equal(page.catalog.hasMore, false);
+  assert.equal(page.catalog.q, '乙');
+  assert.equal(page.catalog.loading, false);
+});
+
+t('with a filter on and nothing found the page says so and offers to clear; with no filter it says there is nothing to play; neither is an error', async () => {
+  const none = setupEntry({ respond: answering([catalogPage([])]), saves: emptySaves });
+  await none.mount();
+  assert.equal(none.page.emptyKind.value, 'none');
+  none.page.searchText.value = '找不到的字';
+  await none.page.submitSearch();
+  assert.equal(none.page.emptyKind.value, 'filtered');
+  assert.equal(none.page.catalog.error, '');
+  await none.page.clearFilters();
+  assert.equal(none.page.emptyKind.value, 'none');
+});
+
+t('a filtered page that fails keeps what was loaded, shows the error, and retry repeats the same conditions and cursor', async () => {
+  let call = 0;
+  const { page, catalogRequests, mount } = setupEntry({
+    respond: () => {
+      call += 1;
+      if (call === 1) { return Promise.resolve(catalogPage([])); }
+      if (call === 2) { return Promise.resolve(catalogPage([card(ID_A)], { has_more: true, next_cursor: 'c-2' })); }
+      if (call === 3) { return Promise.reject(serverError(500, 'internal_error', '系統發生錯誤，請稍後再試。')); }
+      return Promise.resolve(catalogPage([card(ID_B)]));
+    },
+    saves: emptySaves,
+  });
+  await mount();
+  await page.chooseTag('仙俠');
+  assert.equal(await page.loadCatalog(), false);
+  assert.deepEqual(ids(page.catalog), [ID_A]);
+  assert.equal(page.catalog.error, '系統發生錯誤，請稍後再試。');
+  assert.equal(page.emptyKind.value, '');
+  assert.equal(await page.loadCatalog(), true);
+  assert.deepEqual(catalogRequests().slice(-2).map((r) => r.params), [{ tag: '仙俠', cursor: 'c-2' }, { tag: '仙俠', cursor: 'c-2' }]);
+  assert.deepEqual(ids(page.catalog), [ID_A, ID_B]);
+});
+
+t('an expired session during a search sends the player to the login page', async () => {
+  let call = 0;
+  const { page, navigations, mount } = setupEntry({
+    respond: () => { call += 1; return call === 1 ? Promise.resolve(catalogPage([card(ID_A)])) : Promise.reject(serverError(401, 'unauthorized', '請先登入。')); },
+    saves: emptySaves,
+  });
+  await mount();
+  page.searchText.value = '青雲';
+  await page.submitSearch();
+  assert.deepEqual(navigations, ['/login?next=%2Fgame']);
+});
+
+// ---- 常用標籤晶片 ---------------------------------------------------------------------------------
+
+t('the popular tags load with the page and become chips; the search box limit is the one the server enforces', async () => {
+  const { page, requests, mount } = setupEntry({
+    respond: answering([catalogPage([card(ID_A)])]), saves: emptySaves,
+    tags: () => Promise.resolve({ data: { ok: true, tags: [{ tag: '仙俠', count: 3 }, { tag: '科幻', count: 1 }] } }),
+  });
+  await mount();
+  assert.deepEqual(plain(page.tagChips.value), [{ tag: '仙俠' }, { tag: '科幻' }]);
+  assert.equal(requests.filter((r) => r.url === TAGS_URL).length, 1);
+  assert.equal(page.qMax, 50);
+});
+
+t('a tag picked on a card that is not among the popular ones still shows as a selected chip, so it can be taken off', async () => {
+  const { page, mount } = setupEntry({
+    respond: answering([]), saves: emptySaves,
+    tags: () => Promise.resolve({ data: { ok: true, tags: [{ tag: '仙俠', count: 3 }] } }),
+  });
+  await mount();
+  await page.chooseCardTag('冷門標籤');
+  assert.deepEqual(plain(page.tagChips.value), [{ tag: '冷門標籤' }, { tag: '仙俠' }]);
+  assert.equal(page.isTagOn('冷門標籤'), true);
+  await page.chooseTag('冷門標籤');
+  assert.deepEqual(plain(page.tagChips.value), [{ tag: '仙俠' }]);
+  await page.chooseTag('仙俠');                                             // 已在常用標籤裡的不會重複出現
+  assert.deepEqual(plain(page.tagChips.value), [{ tag: '仙俠' }]);
+});
+
+t('when the popular tags cannot be read there are simply no chips, and the catalog, the search and everything else still work', async () => {
+  const { page, mount } = setupEntry({
+    respond: answering([catalogPage([card(ID_A)]), catalogPage([card(ID_B)])]), saves: emptySaves,
+    tags: () => Promise.reject(serverError(500, 'internal_error', '系統發生錯誤，請稍後再試。')),
+  });
+  await mount();
+  assert.deepEqual(plain(page.tagChips.value), []);
+  assert.deepEqual(ids(page.catalog), [ID_A]);
+  assert.equal(page.catalog.error, '');
+  assert.equal(page.restriction.value, null);
+  page.searchText.value = '青雲';
+  await page.submitSearch();
+  assert.deepEqual(ids(page.catalog), [ID_B]);
+});
+
+t('every card links its title to the detail page by its version id', () => {
+  const { page } = setupEntry();
+  assert.equal(page.detailPath(ID_A), `/game/script/${ID_A}`);
+  assert.equal(page.detailPath('a/b'), '/game/script/a%2Fb');
+});
+
+t('searching and filtering write nothing to the browser: neither the page code nor the catalog state reaches for storage', () => {
+  for (const file of ['app/static/js/game/entry.js', 'app/static/js/game/catalog-state.js']) {
+    const code = read(file).replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:])\/\/[^\n]*/g, '$1');
+    assert.ok(!/\b(localStorage|sessionStorage|indexedDB|document\.cookie)\b/.test(code), file);
+  }
 });
 
 // ---- 我的存檔 -------------------------------------------------------------------------------------
@@ -551,8 +788,8 @@ t('opening the saves tab loads the first page once; opening it again does not re
   page.selectTab('scripts');
   page.selectTab('saves');
   await tick();
-  assert.deepEqual(requests.map((r) => r.url), ['/api/sessions/catalog', '/api/sessions']);
-  assert.deepEqual(requests[1].params, { offset: 0 });
+  assert.deepEqual(requests.map((r) => r.url), ['/api/sessions/catalog', TAGS_URL, '/api/sessions']);
+  assert.deepEqual(requests[2].params, { offset: 0 });
 });
 
 t('an empty save list is loaded and empty (the page shows guidance, not an error)', async () => {
@@ -613,7 +850,7 @@ t('save links are site-internal paths with the identifier encoded', () => {
 // ---- 樣板與腳本的對應 -----------------------------------------------------------------------------
 
 const JS_WORDS = new Set(['true', 'false', 'null', 'undefined', 'in', 'of', 'typeof']);
-const LOOP_VARS = new Set(['card', 'save', 'tag', 'index', 'line']);
+const LOOP_VARS = new Set(['card', 'save', 'tag', 'index', 'line', 'chip', 'option', '$event']);   // v-for 的迴圈變數與事件物件
 
 /* 取出 Vue 樣板裡所有運算式（插值與 v-*、:、@ 屬性），回傳其中最外層的識別字（不含屬性存取與字串內容）。 */
 function templateNames(html) {

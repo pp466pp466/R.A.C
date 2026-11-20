@@ -1,0 +1,16 @@
+{# 共用片段：點選未綁定安全模式的劇本時，詢問是否修改安全模式的自製 Modal（入口頁 /game 與劇本詳情頁 /game/script 加版本識別碼，兩頁共用同一份，行為一致）。
+   顯示完全由 Vue 狀態接管（askOpen），不使用 Bootstrap 的任何互動外掛；Esc 與遮罩由 ui-modal 設為 false，視同取消。文字一律是固定文案（mode-prompt.js），純文字插值。
+   使用的頁面要在 setup() 回傳（由 Game.modePrompt.create 取得）：askOpen（可寫計算屬性）、modePrompt（copy()）、cancelAsk、keepSafe、goToSettings。
+   Vue 的範本放在 raw 區塊內；頁面本身的 raw 區塊要先結束再 include（Jinja 不會處理 raw 區塊內的指令）。 #}
+{% raw %}
+  <ui-modal v-model="askOpen" :title="modePrompt.title" :status-code="modePrompt.code">
+    <p v-for="(line, index) in modePrompt.body" :key="index">{{ line }}</p>
+    <template #actions>
+      <div class="ge-ask-actions">
+        <button type="button" class="ui-btn" @click="cancelAsk">{{ modePrompt.cancel }}</button>
+        <button type="button" class="ui-btn" @click="keepSafe">{{ modePrompt.keepSafe }}</button>
+        <button type="button" class="ui-btn ui-btn--primary" @click="goToSettings">{{ modePrompt.goSettings }}</button>
+      </div>
+    </template>
+  </ui-modal>
+{% endraw %}

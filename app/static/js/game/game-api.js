@@ -10,7 +10,8 @@
  *   沒有這些內容時欄位不存在；型別不對的值一律不放進來，也不複製其他未列出的回應欄位。
  *
  * 三組端點：
- * - **入口與創角**（`/api/sessions`）：`catalog`、`sessions` 兩個清單端點是唯讀、不呼叫模型、不動遊戲幣，用 axios 的預設逾時即可；
+ * - **入口與創角**（`/api/sessions`）：`catalog`（可帶 `q`、`tag`、`audience`、`cursor`；游標分頁，不送 `offset`）、`catalogTags`、`scriptDetail` 與 `sessions`
+ *   都是唯讀、不呼叫模型、不動遊戲幣，用 axios 的預設逾時即可；
  *   `setup`（載入）、`suggest`（AI 生成預覽，無狀態）、`start`（開存檔）由開存檔精靈使用，`suggest` 與 `start` 會呼叫模型。
  * - **遊戲頁**（`/api/game/sessions/<id>`）：`snapshot`（存檔狀態、第 0 幕、世界狀態的玩家視圖、記事簿用量摘要）、`turns`（`since_seq` 增量讀取回合）、
  *   `notebook`（記事簿全文，開啟面板才讀）、`saveNotebook`（玩家儲存編輯，帶 `expected_version`）。**回合與第 0 幕的串流不在這裡**：
@@ -61,6 +62,18 @@
     return axios({ method: 'get', url: BASE + path, params: paging(options) }).then(function (response) { return response.data; }, reject);
   }
 
+  /* 公開目錄的查詢參數：`limit`（數字）與 `q`、`tag`、`audience`、`cursor`（非空字串才送）。**不送 `offset`**：目錄已改游標分頁，後端不再讀取位移。
+     條件的正規化與驗證在伺服器（`catalog_query`），前端不重複實作規則。 */
+  function catalogParams(options) {
+    var params = {};
+    if (!options) { return params; }
+    if (typeof options.limit === 'number') { params.limit = options.limit; }
+    ['q', 'tag', 'audience', 'cursor'].forEach(function (key) {
+      if (typeof options[key] === 'string' && options[key] !== '') { params[key] = options[key]; }
+    });
+    return params;
+  }
+
   /* 逾時與中止訊號只在呼叫端有給時才放進請求（沒給就用 axios 的預設）。 */
   function send(method, url, data, options, params) {
     var request = { method: method, url: url };
@@ -85,8 +98,14 @@
 
   root.Game = root.Game || {};
   root.Game.api = {
-    /* 可玩的劇本一頁：{ ok, scripts, has_more, content_mode } */
-    catalog: function (options) { return get('/catalog', options); },
+    /* 可玩的劇本一頁（唯讀）：{ ok, scripts, has_more, next_cursor, content_mode }；`options` 可帶 `q`、`tag`、`audience`、`cursor`、`limit`（見 catalogParams），
+       逾時與 `signal` 與其他呼叫一樣由呼叫端傳入。 */
+    catalog: function (options) { return send('get', BASE + '/catalog', undefined, options, catalogParams(options)); },
+    /* 常用標籤（唯讀、不依使用者）：{ ok, tags: [{ tag, count }] } */
+    catalogTags: function (options) { return send('get', BASE + '/catalog/tags', undefined, options); },
+    /* 一個上架劇本的公開詳情（唯讀）：{ ok, script: { id, title, summary, world_name, tags, author_name, author_code, content_tier, audience, version_no, published_at,
+       background, characters: [{ name, occupation }], locations, has_custom_ending, content_mode } }；非上架與不存在都是 404。 */
+    scriptDetail: function (versionId, options) { return send('get', BASE + '/catalog/' + encodeURIComponent(versionId), undefined, options); },
     /* 我的存檔一頁：{ ok, sessions, has_more } */
     sessions: function (options) { return get('', options); },
     /* 序章與創角需要的資料：{ ok, title, background, characters, locations, milestones, limits, origin_options, suggestions_remaining, suggestions_available } */
