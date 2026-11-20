@@ -8,6 +8,9 @@ CSRF 在 `before_request` 統一檢查；業務錯誤由 controllers/errors.py �
 - `GET /api/scripts/example`：內建首發劇本的標準化內容（給編輯器帶入欄位範例）。 `GET /api/scripts/limits`：自己的額度與暫停狀態。
 - `GET /api/scripts/versions/<id>`：自己的一個版本與完整內容。 `PUT /api/scripts/versions/<id>`：儲存草稿，本文 `{"content": {...}, "base_hash": "…"}`。
 - `DELETE /api/scripts/versions/<id>`：刪除草稿。 `POST /api/scripts/versions/<id>/withdraw`：撤回待審。
+- `POST /api/scripts/versions/<id>/remove`：作者自行下架上架中的版本（不重審、不要密碼；非上架中 409 `not_published`）。
+  `POST /api/scripts/versions/<id>/restore`：恢復自己下架的版本（管理員下架的 403 `removal_locked`、非下架 409 `not_removed`、
+  同劇本已有另一個上架版本 409 `live_exists`）。版本摘要含 `decision_category`、`decided_at`、`removed_by`，**絕不含審核備註**。
 - `POST /api/scripts/versions/<id>/submit`：送審（草稿 -> 待審），依序檢查暫停、每日次數、規則層與模型層；自動拒絕回 422 與類別，
   模型層不可用回 503（不計次）。審查呼叫最長約 30 秒，前端的逾時要略大於它。
 - `POST /api/scripts/<script_id>/versions`：由最新的非進行中版本建立新草稿。
@@ -72,6 +75,18 @@ def delete_draft(version_id: str):
 def withdraw(version_id: str):
     user = require_login()
     return jsonify(ok=True, version=get_script_authoring_service().withdraw(user, version_id))
+
+
+@script_api_bp.post("/versions/<version_id>/remove")
+def remove(version_id: str):
+    user = require_login()
+    return jsonify(ok=True, version=get_script_authoring_service().remove(user, version_id))
+
+
+@script_api_bp.post("/versions/<version_id>/restore")
+def restore(version_id: str):
+    user = require_login()
+    return jsonify(ok=True, version=get_script_authoring_service().restore(user, version_id))
 
 
 @script_api_bp.post("/versions/<version_id>/submit")

@@ -1,9 +1,10 @@
 """service-observability 與 admin-audit-log 規格（rpg-script-publishing）的整合驗證：玩家建立並送審（假模型）→ 管理員讀取、退回（含備註）
-→ 作者修改再送審 → 管理員核可 → 管理員以錯誤密碼下架（被拒）→ 下架 → 恢復，全程收集日誌、稽核與回應，**找不到審核備註與劇本文字**。
+→ 作者修改再送審 → 管理員核可 → 管理員以錯誤密碼下架（被拒）→ 下架 → 恢復 → 作者自行下架與恢復（不寫稽核），
+全程收集日誌、稽核與回應，**找不到審核備註與劇本文字**。
 
 規格情境對應（逐一）：
-- service-observability「欄位白名單」：最後一個測試的 `ALLOWED_FIELDS` 檢查；「不含文字」「審核與下架不含備註」：日誌掃描（本檔）；
-  作者下架與恢復的那一半在作者後端（第 3 組）加入之後補進同一個流程。
+- service-observability「欄位白名單」：事件測試的 `ALLOWED_FIELDS` 檢查；「不含文字」「審核與下架不含備註」：日誌掃描（本檔，含作者下架
+  與恢復的那一半，第 3 組補進同一個流程；作者端自己的 HTTP 與日誌斷言另見 `tests/test_script_api_takedown.py`）。
 - admin-audit-log「核可劇本」「退回不記備註」「讀取劇本」「未知的動作」：本檔的稽核斷言（核可與退回的細節、讀取先於回傳）與
   `tests/test_admin_audit_repository.py`（列舉以外被拒絕）、`tests/test_admin_service_scripts.py`（稽核寫入失敗就不回傳）。
 """
@@ -127,6 +128,13 @@ class Tour:
         restored = self.as_admin("POST", f"/api/admin/scripts/versions/{second['id']}/restore", json={"password": GOOD_PASSWORD})
         assert restored.status_code == 200 and restored.get_json()["version"]["status"] == "published"
         assert SECRETS["title_two"] in self.catalog_titles()
+
+        down = self.as_author("POST", f"/api/scripts/versions/{second['id']}/remove")           # 作者自行下架與恢復（第 3 組）：不寫稽核
+        assert down.status_code == 200 and down.get_json()["version"]["removed_by"] == "author"
+        assert SECRETS["title_two"] not in self.catalog_titles()
+        up = self.as_author("POST", f"/api/scripts/versions/{second['id']}/restore")
+        assert up.status_code == 200 and up.get_json()["version"]["status"] == "published"
+        assert SECRETS["title_two"] in self.catalog_titles()
         return {"first": first["id"], "second": second["id"], "script": first["script"]["id"]}
 
     def catalog_titles(self) -> set[str]:
@@ -193,9 +201,12 @@ def test_the_review_events_are_logged_with_only_fixed_values_and_every_field_is_
     for line in events:
         by_event.setdefault(line["event"], []).append(line)
     assert [l["reason"] for l in by_event["script.rejected"]] == ["other_policy"]
-    assert [(l["kind"], l["reason"]) for l in by_event["script.removed"]] == [("admin", "tier_mismatch")]
-    assert [l["kind"] for l in by_event["script.restored"]] == ["admin"] and len(by_event["script.approved"]) == 1
-    assert {l["user_id"] for name in ("script.approved", "script.rejected", "script.removed", "script.restored") for l in by_event[name]} == {admin_id}
+    author_id = tour.ids["author"][0]
+    assert [(l["kind"], l.get("reason")) for l in by_event["script.removed"]] == [("admin", "tier_mismatch"), ("author", None)]
+    assert [l["kind"] for l in by_event["script.restored"]] == ["admin", "author"] and len(by_event["script.approved"]) == 1
+    assert {l["user_id"] for name in ("script.approved", "script.rejected") for l in by_event[name]} == {admin_id}
+    assert [l["user_id"] for l in by_event["script.removed"]] == [admin_id, author_id]       # 作者自行下架記的是作者
+    assert [l["user_id"] for l in by_event["script.restored"]] == [admin_id, author_id]
     # 讀取不寫「管理員操作」事件；改變資料的四個動作與失敗的重新輸入密碼各一筆
     actions = [l["reason"] for l in by_event["admin.action"]]
     assert sorted(actions) == ["script.approve", "script.reject", "script.remove", "script.restore"]

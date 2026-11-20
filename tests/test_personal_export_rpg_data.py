@@ -109,7 +109,8 @@ def test_the_json_has_every_version_of_my_scripts_with_all_the_spec_fields(membe
     first, second = script["versions"]
     assert (first["version_no"], first["status"], second["version_no"], second["status"]) == (1, "published", 2, "draft")
     for key in ("title", "summary", "world_name", "content_tier", "background", "opening", "rules", "tags", "calendar", "ending_mode",
-                "ending_text", "ending_age", "characters", "locations", "milestones", "spec_version", "created_at", "published_at"):
+                "ending_text", "ending_age", "characters", "locations", "milestones", "spec_version", "created_at", "published_at",
+                "decision_category", "decided_at", "removed_by"):
         assert key in first, key
     assert first["title"] == "青雲問道" and first["content_tier"] == "adult" and first["tags"] == ["仙俠", "Fantasy"]
     assert first["calendar"] == {"name": "乾歷朝", "start_year": 1200} and first["characters"][0]["name"] == "林曉"

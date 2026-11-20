@@ -361,6 +361,13 @@ class RemovedByAuthor(Conflict):
     default_message = "這個版本是作者自己下架的，只有作者能恢復上架。"
 
 
+class RemovalLocked(Forbidden):
+    """版本是管理員下架的（403）：作者不能自行恢復，只有管理員能恢復（作者看得到狀態，所以不用 404）。"""
+
+    code = "removal_locked"
+    default_message = "這個版本是管理員下架的，無法自行恢復上架。如有疑問請前往申訴頁，或修改內容後重新送審。"
+
+
 class LiveExists(Conflict):
     """恢復上架時，同一個劇本已有另一個上架中的版本（409）。版本保持下架。"""
 

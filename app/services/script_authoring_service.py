@@ -1,4 +1,4 @@
-"""玩家創作劇本：建立、編輯、新草稿、刪除、撤回、筆名與額度（見 script-authoring 規格與 rpg-script-authoring 的 design D4）。
+"""玩家創作劇本：建立、編輯、新草稿、刪除、撤回、下架與恢復、筆名與額度（見 script-authoring、script-takedown 規格與 rpg-script-authoring 的 design D4）。
 
 每個方法都先過帳號與年齡閘門（與其他會員功能同一個入口，`AccessPolicy.require_chat_access`），Repository 的方法一律帶 `user_id`，
 別人的劇本與版本得到 `NotFound`（與不存在相同）。固定規格的驗證由純函式 `validate_script` 負責（`content_tier` 只有 `safe`＝綁定安全模式與 `adult`＝未綁定，
@@ -15,11 +15,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Callable
 
-from app.models.script import REVIEW_REJECT, VERSION_DRAFT, Script, ScriptVersion
+from app.models.script import REMOVER_AUTHOR, REVIEW_REJECT, VERSION_DRAFT, Script, ScriptVersion
 from app.models.user import User
 from app.observability import script_events
 from app.repositories.errors import (
-    AuthorNameLockedError, DraftChangedError, InvalidVersionTransitionError, OpenVersionExistsError, VersionNotDraftError,
+    AuthorNameLockedError, DraftChangedError, InvalidVersionTransitionError, LiveVersionExistsError, OpenVersionExistsError,
+    RemovalLockedError, VersionNotDraftError,
 )
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
@@ -27,8 +28,8 @@ from app.repositories.user_repository import UserRepository
 from app.services.access_policy import AccessPolicy
 from app.services.current_user import CurrentUser, iso_utc
 from app.services.errors import (
-    AuthorNameLocked, DraftChanged, NicknameRequired, NotDraft, NotFound, NotPending, OpenVersionExists, ScriptAutoRejected,
-    ScriptLimitReached, Unauthenticated, ValidationError,
+    AuthorNameLocked, DraftChanged, LiveExists, NicknameRequired, NotDraft, NotFound, NotPending, NotPublished, NotRemoved,
+    OpenVersionExists, RemovalLocked, ScriptAutoRejected, ScriptLimitReached, Unauthenticated, ValidationError,
 )
 from app.services.quota_policy import taipei_day_bounds
 from app.services.runtime_limits import RuntimeLimits
@@ -217,6 +218,38 @@ class ScriptAuthoringService:
         script_events.log_withdrawn(user_id=user.id)
         return self.version_detail(version)
 
+    def remove(self, current: CurrentUser, version_public_id: str) -> dict[str, Any]:
+        """作者自行下架上架中的版本：不重審、不要密碼、不寫管理員稽核（只記日誌事件）。被暫停發佈者仍可下架
+        （暫停只停止送審）。不是自己的版本與不存在得到相同的 404；不是上架中是 `NotPublished`。"""
+        self._policy.require_chat_access(current)
+        user = self._require_user(current)
+        try:
+            version = self._scripts.remove_own(user.id, version_public_id, self._clock()) if isinstance(version_public_id, str) else None
+        except InvalidVersionTransitionError:
+            raise NotPublished() from None
+        if version is None:
+            raise NotFound()
+        script_events.log_removed(user_id=user.id, remover=REMOVER_AUTHOR)
+        return self.version_detail(version)
+
+    def restore(self, current: CurrentUser, version_public_id: str) -> dict[str, Any]:
+        """作者恢復自己下架的版本（不重審，內容與發佈時間不變）。管理員下架的是 `RemovalLocked`（403）；不是下架狀態
+        （含下架之後已被新的上架版本取代）是 `NotRemoved`；同劇本已有另一個上架版本是 `LiveExists`，版本保持下架。"""
+        self._policy.require_chat_access(current)
+        user = self._require_user(current)
+        try:
+            version = self._scripts.restore_own(user.id, version_public_id) if isinstance(version_public_id, str) else None
+        except RemovalLockedError:
+            raise RemovalLocked() from None
+        except LiveVersionExistsError:
+            raise LiveExists() from None
+        except InvalidVersionTransitionError:
+            raise NotRemoved() from None
+        if version is None:
+            raise NotFound()
+        script_events.log_restored(user_id=user.id, remover=REMOVER_AUTHOR)
+        return self.version_detail(version)
+
     def refresh_author_name(self, current: CurrentUser, script_public_id: str) -> dict[str, Any]:
         """劇本從未發佈時，重新取用目前的暱稱與短代號作為筆名；已鎖定則拒絕。更改暱稱本身不會自動改變任何筆名。"""
         self._policy.require_chat_access(current)
@@ -268,6 +301,10 @@ class ScriptAuthoringService:
             "summary": version.summary, "content_tier": version.content_tier, "content_hash": version.content_hash,
             "total_chars": version.total_chars, "created_at": iso_utc(version.created_at), "updated_at": iso_utc(version.updated_at),
             "published_at": None if version.published_at is None else iso_utc(version.published_at),
+            # 審核結果與下架狀態：固定的類別列舉、時間與下架者；**絕不含審核備註**（只有管理員看得到，見鍵集合測試）
+            "decision_category": version.decision_category,
+            "decided_at": None if version.decided_at is None else iso_utc(version.decided_at),
+            "removed_by": version.removed_by,
         }
 
     def version_detail(self, version: ScriptVersion) -> dict[str, Any]:

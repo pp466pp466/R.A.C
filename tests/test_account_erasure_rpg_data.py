@@ -12,6 +12,7 @@ from datetime import timedelta
 from sqlalchemy import func, select
 
 from app.models import DeletionTombstone, MemoryLog, RpgSession, Script, ScriptVersion, ScriptVersionTag, TurnRegeneration, User
+from app.models.script import VERSION_REJECTED, VERSION_REMOVED
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
@@ -21,6 +22,7 @@ from app.services.account_erasure_service import AccountErasureService
 from app.services.deletion_replay_service import DeletionReplayService
 from tests.support.auth import START, add_user
 from tests.support.script_data import validated
+from tests.support.script_review import put_in_status
 from tests.support.protagonist import protagonist
 
 CUTOFF = START + timedelta(days=1)
@@ -83,6 +85,30 @@ def test_erasing_an_author_removes_their_scripts_versions_tags_saves_and_turns_b
     assert s.scalar(select(MemoryLog.user_action)) == "讀者的行動"
     (tombstone,) = s.scalars(select(DeletionTombstone))
     assert tombstone.user_id == author_id
+
+
+def test_erasing_an_author_also_removes_rejected_and_removed_versions_together_with_their_admin_notes(member_session):
+    """rpg-script-publishing：被退回、被下架（含管理員下架並附備註）的版本隨作者一起刪除，備註在同一列、沒有殘留；
+    讀者用該劇本開過的存檔保留，來源參照清為空值。"""
+    s = member_session
+    author = old_user(s, 1)
+    scripts, saves = ScriptRepository(s), SessionRepository(s)
+    rejected = put_in_status(scripts, author, VERSION_REJECTED)
+    removed = put_in_status(scripts, author, VERSION_REMOVED, removed_by="admin")
+    reader = old_user(s, 2)
+    snapshot = scripts.content_of(removed)
+    kept = saves.create(
+        reader.id, source_version_id=removed.id, snapshot=snapshot, snapshot_spec_version=1, protagonist=protagonist("讀者", 18),
+        content_tier="safe", now=START,
+    )
+    s.commit()
+    assert count(s, ScriptVersion) == 2 and s.scalars(select(ScriptVersion.decision_note).where(ScriptVersion.decision_note.is_not(None))).all()
+    author_id, kept_id, reader_id = author.id, kept.id, reader.id
+    assert erase_inactive(s, author_id) is True
+    assert (count(s, Script), count(s, ScriptVersion), count(s, ScriptVersionTag)) == (0, 0, 0)
+    assert s.scalars(select(ScriptVersion.decision_note)).all() == []
+    survivor = s.get(RpgSession, kept_id)
+    assert survivor.user_id == reader_id and survivor.source_version_id is None and survivor.script_snapshot_json == snapshot
 
 
 def test_when_the_erasure_condition_no_longer_holds_nothing_changes_including_the_cleared_references(member_session):

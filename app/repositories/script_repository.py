@@ -630,8 +630,9 @@ class ScriptRepository(BaseRepository[Script]):
         """這位使用者創作的全部劇本，每個劇本一筆，含**全部**版本（草稿、待審、被退回與已被取代的也在內），由舊到新逐筆產生
         （以劇本編號為游標分頁，所以記憶體用量與劇本總數無關）。
 
-        只含使用者自己的內容：劇本的筆名與時間、每個版本的版本編號、狀態、全部固定規格欄位與標籤。**不含**種子鍵、內容雜湊、
-        內容字數、輔助欄位與內部整數編號（對外只有 UUID）。時間是 `datetime`（UTC），由呼叫端決定格式。
+        只含使用者自己的內容：劇本的筆名與時間、每個版本的版本編號、狀態（含 `removed`）、審核與下架的結果（固定類別、時間、下架者）、
+        全部固定規格欄位與標籤。**不含**審核備註、種子鍵、內容雜湊、內容字數、輔助欄位與內部整數編號（對外只有 UUID）。
+        時間是 `datetime`（UTC），由呼叫端決定格式。
         """
         after = 0
         while True:
@@ -665,6 +666,8 @@ class ScriptRepository(BaseRepository[Script]):
                             "ending_mode": v.ending_mode, "ending_text": v.ending_text, "ending_age": v.ending_age,
                             "characters": list(v.characters_json or []), "locations": list(v.locations_json or []),
                             "milestones": list(v.milestones_json or []), "created_at": v.created_at, "published_at": v.published_at,
+                            # 審核與下架的結果：固定類別、時間與下架者。**不含審核備註**（只有管理員看得到，見 script-takedown 規格）
+                            "decision_category": v.decision_category, "decided_at": v.decided_at, "removed_by": v.removed_by,
                         }
                         for v in versions
                     ],

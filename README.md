@@ -831,6 +831,8 @@ change `rpg-script-authoring`（RC-7）。玩家依固定規格創作劇本，�
 | `/api/scripts/limits` | GET | 我的劇本數與上限、今日送審次數與上限、是否被暫停發佈、可宣告的內容模式上限、固定規格的欄位上限 |
 | `/api/scripts/versions/<version_id>` | GET、PUT、DELETE | 讀取、儲存（只有草稿；帶 `base_hash`，別處已更新回 409 `draft_changed`）、刪除草稿（已發佈與待審的版本不能刪） |
 | `/api/scripts/versions/<version_id>/withdraw` | POST | 撤回待審的版本，回到草稿 |
+| `/api/scripts/versions/<version_id>/remove` | POST | 作者自行下架上架中的版本（不重審、不要密碼、不寫管理員稽核，只記日誌事件；被暫停發佈者也可下架）；非上架中回 409 `not_published`；非擁有者與不存在同為 404 |
+| `/api/scripts/versions/<version_id>/restore` | POST | 恢復自己下架的版本（不重審，內容與發佈時間不變）；管理員下架的回 403 `removal_locked`、非下架（含已被新版本取代）回 409 `not_removed`、同劇本已有另一個上架版本回 409 `live_exists` |
 | `/api/scripts/versions/<version_id>/submit` | POST | 送審：見下方順序；被自動拒絕回 422 `script_auto_rejected`（頂層 `categories` 只有固定類別，不指出內容） |
 | `/api/scripts/<script_id>/versions` | POST | 由最新的版本建立新草稿（同一劇本一次只能有一個進行中的版本） |
 | `/api/scripts/<script_id>/author-name/refresh` | POST | 重新取用目前的暱稱作為筆名（第一次發佈鎖定之前才可以） |
@@ -843,6 +845,7 @@ change `rpg-script-authoring`（RC-7）。玩家依固定規格創作劇本，�
 - **規則層**（`app/services/script_rules.py`，純運算，詞表是隨映像封裝的 `app/data/review/lexicon.json`）：同一句內的詞共現判斷，並以 `not_after`／`not_before` 排除誤判（例如「異國中生存」）；**直接拒絕的主軸是露骨的性用語與未成年用語出現在同一句（不分先後）**，其餘的組合（非自願、性暴力、真人）也都要求同句有露骨的性用語；強姦或性暴力用語單獨出現（犯罪劇情、新聞、防治課）只標示、不直接拒絕；一般的親子、育兒、校園日常不會被擋；只回報固定類別，不回報內容或位置。**詞表（版本 `2026-11-04-4`）已由使用者檢視並依指示放寬，仍未用真實內容校正，上線前須經法務檢視**。
 - **模型層**（`ScriptReviewService`，呼叫類別 `script_review`）：RPG 用途的模型（`OPENROUTER_*`，不使用 Gemini）；輸出固定為 `{verdict, categories}`，沒有自由文字欄位。**模型不可用（沒有設定、預算用盡、降級、被擋）一律不放行**，送審回 503。結果掛在版本上並對應內容雜湊，內容不變就不再呼叫。內建劇本不經模型層。
 - **類別**：紅線（拒絕）四類：涉及未成年的性內容（`minor_sexual`）、性暴力（`sexual_violence`）、非自願的性情節（`non_consensual`）、以真人名義的性內容（`real_person_sexual`）；有疑慮（只標示、仍可送審，之後進人工）：`minor_suspected`、`real_person_suspected`、`tier_mismatch`、`other_concern`。被拒絕只告知類別。
+- **下架與恢復（rpg-script-publishing，作者端）**：作者可下架自己上架中的版本（`removed`，下架者 `author`，不重審、不要密碼、不寫管理員稽核、只記 `script.removed` 日誌事件；被暫停發佈者也可下架），並可恢復**自己下架**的版本（內容與 `published_at` 不變、清除決定欄位）；管理員下架的版本作者不能恢復（403 `removal_locked`，只有管理員能恢復）。下架的版本不在公開目錄、**任何人（含作者）都不能用它開新存檔**（開存檔、創角資料與 AI 生成預覽都與不存在相同的 404，沒有呼叫任何模型），已開出的存檔不受影響；下架的版本和被退回、已發佈的版本一樣內容凍結（編輯、刪除、撤回、送審都回 409），作者可由它建立新草稿，新版本核可時舊的下架版改為 `superseded`（不可再恢復；管理員下架後的新版本仍須完整審核）。版本摘要（`GET /api/scripts`、版本詳情與兩個新端點的回應）新增 `decision_category`、`decided_at`、`removed_by`，**絕不含審核備註**（鍵集合由測試固定）；個人資料匯出的劇本版本（JSON 與 `scripts.csv`）同樣新增這三欄，狀態含 `removed`，不含備註；作者被刪除時含備註的版本隨同一列消失。下架的劇本仍計入作者的劇本數量上限（上限計的是劇本、不是上架中的版本）。
 - **暫停發佈**：最近 `script_reject_streak`（預設 3）筆送審紀錄全部是自動拒絕時，以條件式更新設定 `users.publish_suspended_at`（管理員不會被暫停），寫 `publish.suspend` 稽核（管理員欄位為空）。**獨立於帳號鎖定**：只有送審被擋，其餘功能照常；被暫停的玩家可使用申訴頁，管理員重新輸入密碼後解除，並補一筆 `lifted` 使連續被拒中斷。
 - **申訴捷徑**：被鎖定或被暫停時，`/cs`、`/scripts` 與 `/account` 直接顯示「前往申訴」按鈕（指向 `/appeal` 的一般連結）；是否顯示只依伺服器回應，解除後重新整理即消失。
 - **營運限制存在資料庫**（`runtime_limits`，七個鍵：`script_limit.free|plus|vip` 預設 3／10／30、`script_submit_daily.free|plus|vip` 預設 3／5／10、`script_reject_streak` 預設 3），程式每次使用時現讀、不快取：

@@ -14,10 +14,26 @@ from app.models.script import (
     REMOVER_ADMIN, REMOVER_AUTHOR, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_REMOVED,
     VERSION_SUPERSEDED,
 )
+from app.repositories.runtime_limit_repository import RuntimeLimitRepository
 from app.repositories.script_repository import ScriptRepository
+from app.repositories.script_submission_repository import ScriptSubmissionRepository
+from app.repositories.user_repository import UserRepository
+from app.services.access_policy import AccessPolicy
+from app.services.runtime_limits import RuntimeLimits
+from app.services.script_authoring_service import ScriptAuthoringService
+from tests.support.auth import FakeClock
 from tests.support.script_data import validated
 
 BASE = utcnow().replace(microsecond=0)
+
+
+def authoring_service(session: Session, clock: FakeClock | None = None) -> ScriptAuthoringService:
+    """作者端的創作 Service（真的 Repository 與真的 AccessPolicy，只有時鐘是假的），與 `registry.get_script_authoring_service` 同一組裝。"""
+    clock = clock or FakeClock()
+    return ScriptAuthoringService(
+        scripts=ScriptRepository(session), users=UserRepository(session), submissions=ScriptSubmissionRepository(session),
+        policy=AccessPolicy(clock=clock), limits=RuntimeLimits(limits=RuntimeLimitRepository(session), clock=clock), clock=clock,
+    )
 
 
 def at(minutes: int = 0) -> datetime:

@@ -108,6 +108,7 @@ ENDPOINTS = [
     ("GET", "/api/scripts"), ("POST", "/api/scripts"), ("GET", "/api/scripts/example"), ("GET", "/api/scripts/limits"),
     ("GET", "/api/scripts/versions/x"), ("PUT", "/api/scripts/versions/x"), ("DELETE", "/api/scripts/versions/x"),
     ("POST", "/api/scripts/versions/x/withdraw"), ("POST", "/api/scripts/x/versions"), ("POST", "/api/scripts/x/author-name/refresh"),
+    ("POST", "/api/scripts/versions/x/remove"), ("POST", "/api/scripts/versions/x/restore"),
 ]
 
 

@@ -66,7 +66,7 @@ SUBMISSION_COLUMNS = ("outcome", "categories", "created_at")
 SCRIPT_COLUMNS = (
     "script_id", "version_no", "status", "spec_version", "title", "summary", "world_name", "content_tier", "background", "opening",
     "rules", "tags", "calendar_name", "calendar_start_year", "ending_mode", "ending_text", "ending_age", "audience", "characters",
-    "locations", "milestones", "author_name", "author_code", "created_at", "published_at",
+    "locations", "milestones", "author_name", "author_code", "created_at", "published_at", "decision_category", "decided_at", "removed_by",
 )
 SESSION_COLUMNS = (
     "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "origin", "personality", "appearance",
@@ -215,7 +215,10 @@ class PersonalExportService:
             "id": script["id"], "author_name": script["author_name"], "author_code": script["author_code"],
             "author_locked_at": self._when(script["author_locked_at"]), "created_at": self._when(script["created_at"]),
             "versions": [
-                {**version, "created_at": self._when(version["created_at"]), "published_at": self._when(version["published_at"])}
+                {
+                    **version, "created_at": self._when(version["created_at"]), "published_at": self._when(version["published_at"]),
+                    "decided_at": self._when(version["decided_at"]),
+                }
                 for version in script["versions"]
             ],
         }
@@ -364,6 +367,8 @@ class PersonalExportService:
                                 "milestones": json.dumps(version["milestones"], ensure_ascii=False),
                                 "author_name": entry["author_name"], "author_code": entry["author_code"],
                                 "created_at": version["created_at"], "published_at": version["published_at"],
+                                "decision_category": version["decision_category"], "decided_at": version["decided_at"],
+                                "removed_by": version["removed_by"],
                             }
                             writer.writerow([csv_safe(cells[name]) for name in SCRIPT_COLUMNS])
             with archive.open("sessions.csv", "w") as raw:

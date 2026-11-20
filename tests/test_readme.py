@@ -166,7 +166,7 @@ def test_readme_script_authoring_tables_list_exactly_the_registered_routes_and_b
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/scripts") or rule.endpoint.startswith("script_pages."):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 12, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 14, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
     for command in ("set-script-limit", "show-script-limits"):
         assert command in section, command
