@@ -139,3 +139,115 @@ def test_the_appeals_view_says_what_it_does_and_does_not_show():
     template = _frontend("template")
     section = template.split("<!-- ===== 申訴 ===== -->", 1)[1].split("<!-- ===== 使用者 ===== -->", 1)[0]
     assert "只有目前被鎖定或被暫停發佈的帳號" in section and "不提供該帳號的任何對話" in section
+
+
+# ---- 劇本審核分頁（rpg-script-publishing）---------------------------------------------------------------------
+
+def _script_section(template: str) -> str:
+    return template.split("<!-- ===== 劇本審核 ===== -->", 1)[1].split("<!-- ===== 被鎖定的帳號 ===== -->", 1)[0]
+
+
+def test_the_console_has_the_script_review_tab_with_three_lists_loaded_from_the_script_endpoints():
+    script, template = _frontend("script"), _frontend("template")
+    assert "{ id: 'scripts', label: '劇本審核' }" in script
+    for status in ("pending_review", "published", "removed"):
+        assert f"scripts_{status}: {{ path: '/scripts', key: 'versions', paged: true, params: {{ status: '{status}' }} }}" in script
+    assert "tab === 'scripts'" in template
+    for label in ("待審", "上架中", "已下架"):
+        assert f"label: '{label}'" in script
+
+
+def test_the_pending_count_comes_from_the_pending_list_and_is_shown_on_the_tab_label_not_the_overview():
+    script, template = _frontend("script"), _frontend("template")
+    assert "ensureLoaded(PENDING_LIST)" in script.split("Vue.onMounted", 1)[1].split("return {", 1)[0]     # 進入頁面就讀一次待審清單
+    assert "tabBadge(item.id)" in template.split("</nav>", 1)[0]
+    assert "pending" not in template.split("<!-- ===== 總覽 ===== -->", 1)[1].split("<!-- ===== 被標記對話 ===== -->", 1)[0].lower()
+
+
+def test_the_shell_carries_no_script_text_even_when_a_script_is_waiting_for_review(app):
+    from tests.support.script_review import at, make_author, put_in_status
+    from app.repositories.script_repository import ScriptRepository
+    from app.models.script import VERSION_PENDING
+
+    with Session(app.extensions["db_engine"]) as session:
+        repo = ScriptRepository(session)
+        author = make_author(session, 9)
+        version = put_in_status(repo, author, VERSION_PENDING, now=at(), title="獨一無二的測試標題", summary="獨一無二的測試簡介")
+        markers = (version.public_id, repo.get_script_of(version).public_id, author.email, author.public_id)
+        session.commit()
+    html = client_for(app, "admin").get("/admin").get_data(as_text=True)
+    for marker in ("獨一無二的測試標題", "獨一無二的測試簡介", *markers):
+        assert marker not in html
+
+
+def test_script_text_the_note_and_the_titles_are_rendered_as_plain_text_never_as_markup():
+    template, script = _frontend("template"), _frontend("script")
+    section = _script_section(template)
+    assert "{{ row.title }}" in section and "{{ row.summary }}" in section
+    modal = template.split("<!-- 劇本全文", 1)[1].split("<!-- 退回", 1)[0]
+    for expression in ("{{ scriptDoc.version.title }}", "{{ scriptDoc.version.decision_note }}", "{{ section.text }}", "{{ section.label }}"):
+        assert expression in modal, expression
+    assert "v-html" not in template and "innerHTML" not in script and "insertAdjacentHTML" not in script
+    assert "admin-msg__text" in modal                                      # 與對話訊息相同的純文字樣式（保留換行）
+
+
+def test_the_row_list_has_no_script_body_and_only_the_full_text_button_reads_it():
+    template, script = _frontend("template"), _frontend("script")
+    section = _script_section(template)
+    assert "openScript(row.id)" in section and "看全文" in section
+    assert "content" not in section.replace("content_tier", "")           # 清單沒有內文
+    assert "approve" not in section and "askReject" not in section         # 核可與退回只在讀完全文的視窗裡
+    assert "'/scripts/versions/' + encodeURIComponent(publicId)" in script
+
+
+def test_approving_needs_no_password_and_rejecting_has_a_category_and_an_optional_private_note():
+    template, script = _frontend("template"), _frontend("script")
+    approve = script.split("function approveOpenScript()", 1)[1].split("/* 從全文視窗進入", 1)[0]
+    assert "password" not in approve and "/approve'" in approve
+    reject = template.split("<!-- 退回", 1)[1].split("<!-- 危險操作共用的確認視窗", 1)[0]
+    assert "v-model=\"rejectState.category\"" in reject and "v-model=\"rejectState.note\"" in reject
+    assert "password" not in reject and "只有管理員看得到" in reject and "categoryOptions" in reject
+    assert "選填" in reject and "必填" in reject
+    submit = script.split("function submitReject()", 1)[1].split("// ---- 啟動", 1)[0]
+    assert "'/reject'" in submit and "password" not in submit
+
+
+def test_removing_and_restoring_go_through_the_shared_password_confirmation_with_category_and_note():
+    script, template = _frontend("script"), _frontend("template")
+    remove = script.split("script_remove: {", 1)[1].split("script_restore: {", 1)[0]
+    assert "needsCategory: true" in remove and "needsNote: true" in remove and "needsReason: false" in remove
+    assert "'/scripts/versions/' + encodeURIComponent(id) + '/remove'" in remove
+    restore = script.split("script_restore: {", 1)[1].split("var NO_CONFIRM", 1)[0]
+    assert "needsCategory" not in restore and "'/scripts/versions/' + encodeURIComponent(id) + '/restore'" in restore
+    confirm = template.split("<!-- 危險操作共用的確認視窗", 1)[1]
+    assert "confirmSpec.needsCategory" in confirm and "confirmSpec.needsNote" in confirm and 'type="password"' in confirm
+    submit = script.split("function submitConfirm()", 1)[1].split("// ---- 劇本審核", 1)[0]
+    assert submit.index("confirmState.password = ''") < submit.index("request('post', spec.path(targetId)")    # 密碼送出前清空
+    assert "body.category = confirmState.category" in submit and "body.note = confirmState.note" in submit
+
+
+def test_the_note_is_cleared_with_the_password_when_the_confirmation_closes_and_never_stored():
+    script = _frontend("script")
+    closing = script.split("Vue.watch(confirmOpen", 1)[1].split("function userTarget", 1)[0]
+    assert "confirmState.note = ''" in closing and "confirmState.password = ''" in closing
+    reject_closing = script.split("Vue.watch(rejectOpen", 1)[1].split("function submitReject", 1)[0]
+    assert "rejectState.note = ''" in reject_closing
+    for storage in ("localStorage", "sessionStorage", "indexedDB"):
+        assert storage + "." not in script and storage + "[" not in script        # 註解可以提到，程式碼不使用
+
+
+def test_a_409_closes_the_window_shows_the_reason_and_reloads_the_lists():
+    script = _frontend("script")
+    for function in ("function approveOpenScript()", "function submitReject()", "function submitConfirm()"):
+        body = script.split(function, 1)[1].split("\n      function ", 1)[0] if function != "function submitConfirm()" else \
+            script.split(function, 1)[1].split("// ---- 劇本審核", 1)[0]
+        assert "status === 409" in body and "refreshScriptLists()" in body, function
+    refresh = script.split("function refreshScriptLists()", 1)[1].split("function removeScriptRow", 1)[0]
+    assert "fetchList(PENDING_LIST, false)" in refresh                      # 標籤上的待審數量也要更新
+
+
+def test_the_modals_are_driven_by_vue_state_and_use_no_bootstrap_javascript():
+    template = _frontend("template")
+    for model in ("scriptOpen", "rejectOpen", "confirmOpen"):
+        assert f'v-model="{model}"' in template
+    assert "data-bs-" not in template and "bootstrap.bundle" not in template

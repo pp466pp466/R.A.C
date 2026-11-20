@@ -11,6 +11,9 @@
  *   讀取申訴會寫稽核（只記筆數），所以和「模型失敗」一樣，進入分頁時才載入、不因切換分頁而重複讀取。
  * - 清單依分頁載入：進入分頁時才載入一次（模型失敗每次讀取都會寫稽核，所以不因切換分頁而重複讀取），
  *   「重新整理」才會重新讀取；做了會改變資料的操作之後，相關的分頁標記為過期，下次進入時重新載入。
+ * - 「劇本審核」（rpg-script-publishing）：待審、上架中、已下架三個清單（清單沒有劇本內文）；點「看全文」才讀取版本（先寫稽核），
+ *   全文與審核備註都以純文字顯示。核可不需密碼；退回有類別與選填備註；下架與恢復走共用的密碼確認視窗（類別與備註在同一個視窗）。
+ *   待審數量取自待審清單（進入頁面時就讀取一次，顯示在分頁標籤上，不新增總覽欄位）。409（他人已處理）時關閉視窗、顯示訊息並重新載入清單。
  */
 (function () {
   'use strict';
@@ -29,6 +32,7 @@
     { id: 'overview', label: '總覽' },
     { id: 'flagged', label: '被標記對話' },
     { id: 'feedback', label: '意見回饋' },
+    { id: 'scripts', label: '劇本審核' },
     { id: 'locked', label: '被鎖定的帳號' },
     { id: 'suspended', label: '被暫停發佈' },
     { id: 'appeals', label: '申訴' },
@@ -37,8 +41,20 @@
     { id: 'audit', label: '稽核' }
   ];
 
-  /* 清單的來源。paged 為 false 的只讀一次（伺服器已限制筆數）。 */
+  /* 「劇本審核」的三個清單（status 是 GET /api/admin/scripts 的查詢參數）；清單編號為 scripts_<status>。 */
+  var SCRIPT_VIEWS = [
+    { id: 'pending_review', label: '待審' },
+    { id: 'published', label: '上架中' },
+    { id: 'removed', label: '已下架' }
+  ];
+  var PENDING_LIST = 'scripts_pending_review';
+  var CATEGORY_OPTIONS = fmt.categoryOptions();
+
+  /* 清單的來源。paged 為 false 的只讀一次（伺服器已限制筆數）；params 是固定的查詢參數。 */
   var SOURCES = {
+    scripts_pending_review: { path: '/scripts', key: 'versions', paged: true, params: { status: 'pending_review' } },
+    scripts_published: { path: '/scripts', key: 'versions', paged: true, params: { status: 'published' } },
+    scripts_removed: { path: '/scripts', key: 'versions', paged: true, params: { status: 'removed' } },
     flagged: { path: '/flagged', key: 'conversations', paged: true },
     feedback: { path: '/feedback', key: 'conversations', paged: true },
     audit: { path: '/audit', key: 'entries', paged: true },
@@ -48,7 +64,8 @@
     appeals: { path: '/appeals', key: 'appeals', paged: true }
   };
 
-  /* 七個危險操作。needsReason：停權、刪除對話與調整遊戲幣必須填原因；needsTier：調整等級要選新的等級；needsWallet：調整遊戲幣要選餘額種類與增減量。 */
+  /* 九個危險操作。needsReason：停權、刪除對話與調整遊戲幣必須填原因；needsTier：調整等級要選新的等級；needsWallet：調整遊戲幣要選餘額種類與增減量；
+     needsCategory／needsNote：劇本下架要選類別（必填）並可附只有管理員看得到的備註（選填）。 */
   var CONFIRMS = {
     suspend: {
       code: 'ADMIN_SUSPEND_USER', title: '停權這位使用者？', confirmText: '確認停權', needsReason: true, needsTier: false,
@@ -84,9 +101,19 @@
       code: 'ADMIN_DELETE_CONVERSATION', title: '刪除這個對話？', confirmText: '確認刪除', needsReason: true, needsTier: false,
       intro: '整個對話與其中所有訊息會被永久刪除，無法復原；用量紀錄會保留。',
       path: function (id) { return '/conversations/' + encodeURIComponent(id) + '/delete'; }, done: '已刪除對話。'
+    },
+    script_remove: {
+      code: 'ADMIN_REMOVE_SCRIPT', title: '下架這份劇本？', confirmText: '確認下架', needsReason: false, needsTier: false, needsCategory: true, needsNote: true, script: true,
+      intro: '下架後，這個版本立即不在公開目錄，也不能再用來開新存檔；已經開出的存檔不受影響。作者看得到類別與時間，看不到備註；只有您能恢復管理員下架的版本。',
+      path: function (id) { return '/scripts/versions/' + encodeURIComponent(id) + '/remove'; }, done: '已下架。'
+    },
+    script_restore: {
+      code: 'ADMIN_RESTORE_SCRIPT', title: '恢復上架這份劇本？', confirmText: '確認恢復', needsReason: false, needsTier: false, script: true,
+      intro: '恢復後，這個版本回到公開目錄，內容與發佈時間不變；下架時記下的類別與備註會清除。',
+      path: function (id) { return '/scripts/versions/' + encodeURIComponent(id) + '/restore'; }, done: '已恢復上架。'
     }
   };
-  var NO_CONFIRM = { code: 'ADMIN_CONFIRM', title: '', confirmText: '確認', needsReason: false, needsTier: false, needsWallet: false, intro: '' };
+  var NO_CONFIRM = { code: 'ADMIN_CONFIRM', title: '', confirmText: '確認', needsReason: false, needsTier: false, needsWallet: false, needsCategory: false, needsNote: false, intro: '' };
   var BUCKETS = ['free', 'paid'];
 
   function onAuthLost() { window.location.assign(Auth.loginUrlFor('/admin')); }
@@ -172,7 +199,10 @@
       function reloadOverview() { overviewState.loaded = false; return fetchOverview(); }
 
       // ---- 清單 -----------------------------------------------------------------------------
-      var lists = { flagged: newList(), feedback: newList(), audit: newList(), failures: newList(), locked: newList(), suspended: newList(), appeals: newList() };
+      var lists = {
+        flagged: newList(), feedback: newList(), audit: newList(), failures: newList(), locked: newList(), suspended: newList(), appeals: newList(),
+        scripts_pending_review: newList(), scripts_published: newList(), scripts_removed: newList()
+      };
 
       function fetchList(id, more) {
         var list = lists[id];
@@ -181,7 +211,7 @@
         if (!more) { list.items = []; list.done = false; list.loaded = false; }
         list.loading = true;
         list.error = '';
-        var params = source.paged ? { limit: PAGE_SIZE, offset: more ? list.items.length : 0 } : {};
+        var params = Object.assign({}, source.params || {}, source.paged ? { limit: PAGE_SIZE, offset: more ? list.items.length : 0 } : {});
         return request('get', source.path, { params: params }).then(function (data) {
           var rows = Array.isArray(data[source.key]) ? data[source.key] : [];
           list.items = list.items.concat(rows);
@@ -203,6 +233,7 @@
 
       function ensureLoaded(id) {
         if (id === 'overview') { return overviewState.loaded ? Promise.resolve() : fetchOverview(); }
+        if (id === 'scripts') { id = scriptListId.value; }                // 「劇本審核」分頁：載入目前選的那個清單
         var list = lists[id];
         if (!list || list.loaded || list.loading) { return Promise.resolve(); }
         return fetchList(id, false);
@@ -319,8 +350,8 @@
       // ---- 危險操作的確認視窗 -----------------------------------------------------------------
       var confirmOpen = Vue.ref(false);
       var confirmState = Vue.reactive({
-        kind: '', targetId: '', targetLabel: '', currentTier: '', reason: '', tier: '', bucket: 'paid', delta: '', password: '', busy: false,
-        error: { reason: '', password: '', tier: '', bucket: '', delta: '', general: '' }
+        kind: '', targetId: '', targetLabel: '', currentTier: '', reason: '', tier: '', bucket: 'paid', delta: '', category: '', note: '', password: '', busy: false,
+        error: { reason: '', password: '', tier: '', bucket: '', delta: '', category: '', note: '', general: '' }
       });
       var confirmSpec = Vue.computed(function () { return CONFIRMS[confirmState.kind] || NO_CONFIRM; });
       var tierOptions = Vue.computed(function () {
@@ -335,6 +366,8 @@
         confirmState.error.tier = '';
         confirmState.error.bucket = '';
         confirmState.error.delta = '';
+        confirmState.error.category = '';
+        confirmState.error.note = '';
         confirmState.error.general = '';
       }
 
@@ -349,19 +382,24 @@
         confirmState.tier = kind === 'tier' ? (TIERS.filter(function (value) { return value !== target.tier; })[0] || '') : '';
         confirmState.bucket = 'paid';
         confirmState.delta = '';
+        confirmState.category = '';
+        confirmState.note = '';
         clearConfirmErrors();
         confirmOpen.value = true;
         window.setTimeout(function () {                      // 把焦點放在第一個要填的欄位
-          var field = document.getElementById(kind === 'tier' ? 'admin-confirm-tier' : (kind === 'wallet' ? 'admin-confirm-bucket' : (CONFIRMS[kind].needsReason ? 'admin-confirm-reason' : 'admin-confirm-password')));
+          var spec = CONFIRMS[kind];
+          var field = document.getElementById(kind === 'tier' ? 'admin-confirm-tier' : (kind === 'wallet' ? 'admin-confirm-bucket' : (spec.needsCategory ? 'admin-confirm-category' : (spec.needsReason ? 'admin-confirm-reason' : 'admin-confirm-password'))));
           if (field) { field.focus(); }
         }, 60);
       }
 
-      // 視窗無論如何關閉（取消、Esc、點遮罩、成功）都清空密碼與原因
+      // 視窗無論如何關閉（取消、Esc、點遮罩、成功）都清空密碼、原因與備註
       Vue.watch(confirmOpen, function (open) {
         if (open) { return; }
         confirmState.password = '';
         confirmState.reason = '';
+        confirmState.note = '';
+        confirmState.category = '';
         confirmState.busy = false;
         clearConfirmErrors();
       });
@@ -407,6 +445,12 @@
 
       function applyConfirmError(error) {
         var fields = error.fields || {};
+        if (fields.category || fields.note) {                  // 劇本下架：後端一次指出所有不合法的欄位
+          confirmState.error.category = fields.category || '';
+          confirmState.error.note = fields.note || '';
+          if (fields.password) { confirmState.error.password = fields.password; }
+          return;
+        }
         if (fields.password) { confirmState.error.password = fields.password; return; }
         if (fields.reason) { confirmState.error.reason = fields.reason; return; }
         if (fields.tier) { confirmState.error.tier = fields.tier; return; }
@@ -433,6 +477,15 @@
           confirmState.error.tier = '請選擇新的會員等級。';
           invalid = true;
         }
+        if (spec.needsCategory && !isCategory(confirmState.category)) {
+          confirmState.error.category = '請選擇類別。';
+          invalid = true;
+        }
+        var noteIssue = spec.needsNote ? fmt.noteProblem(confirmState.note) : '';
+        if (noteIssue) {
+          confirmState.error.note = noteIssue;
+          invalid = true;
+        }
         var delta = null;
         if (spec.needsWallet) {
           if (BUCKETS.indexOf(confirmState.bucket) === -1) { confirmState.error.bucket = '請選擇要調整的餘額。'; invalid = true; }
@@ -450,6 +503,8 @@
         if (spec.needsReason) { body.reason = reason; }
         if (spec.needsTier) { body.tier = confirmState.tier; }
         if (spec.needsWallet) { body.bucket = confirmState.bucket; body.delta = delta; }
+        if (spec.needsCategory) { body.category = confirmState.category; }
+        if (spec.needsNote && confirmState.note.trim()) { body.note = confirmState.note; }
         confirmState.busy = true;
 
         return request('post', spec.path(targetId), { data: body }).then(function (data) {
@@ -458,6 +513,12 @@
           if (kind === 'remove') {
             removeConversationFromLists(targetId);
             markStale('audit');
+          } else if (kind === 'script_remove') {
+            removeScriptRow('scripts_published', targetId);       // 離開上架中，出現在已下架（下次進入時重新載入）
+            markStale('scripts_removed', 'audit');
+          } else if (kind === 'script_restore') {
+            removeScriptRow('scripts_removed', targetId);
+            markStale('scripts_published', 'audit');
           } else if (kind === 'unlock') {
             removeUnlockedFromLists(targetId);                 // 解除之後，帳號與它的申訴都從管理員的檢視消失
             markStale('overview', 'audit');
@@ -473,15 +534,190 @@
             UI.toast(error.message || '操作失敗，請稍後再試。', { type: 'error' });
             return;
           }
+          if (spec.script && error.status === 409) {           // 他人已處理（版本已不是這個狀態）：關閉視窗、顯示原因並重新載入清單
+            confirmOpen.value = false;
+            UI.toast(error.message || '這份劇本的狀態已經改變，請重新整理。', { type: 'error' });
+            return refreshScriptLists();
+          }
           applyConfirmError(error);
         }).finally(function () { confirmState.busy = false; });
       }
 
+      // ---- 劇本審核 -------------------------------------------------------------------------
+      var scriptView = Vue.ref('pending_review');
+      var scriptListId = Vue.computed(function () { return 'scripts_' + scriptView.value; });
+      var scriptList = Vue.computed(function () { return lists[scriptListId.value]; });
+      var pendingText = Vue.computed(function () {
+        var list = lists[PENDING_LIST];
+        return list.loaded ? fmt.pendingCountText(list.items.length, list.done) : '';
+      });
+
+      function tabBadge(id) { return id === 'scripts' ? pendingText.value : ''; }
+      function isCategory(value) { return CATEGORY_OPTIONS.some(function (option) { return option.value === value; }); }
+      function failureText(error) { return (error && error.message) || '操作失敗，請稍後再試。'; }
+
+      function selectScriptView(id) {
+        scriptView.value = id;
+        return ensureLoaded('scripts');
+      }
+      function reloadScripts() { return fetchList(scriptListId.value, false); }
+      function loadMoreScripts() { return fetchList(scriptListId.value, true); }
+
+      /* 他人已處理（409）或版本已不可讀（404）：待審清單（標籤上的數量也取自它）與目前看的清單重新載入，另一個清單標記為過期。 */
+      function refreshScriptLists() {
+        markStale('scripts_published', 'scripts_removed', 'audit');
+        var jobs = [fetchList(PENDING_LIST, false)];
+        if (scriptListId.value !== PENDING_LIST) { jobs.push(fetchList(scriptListId.value, false)); }
+        return Promise.all(jobs);
+      }
+
+      function removeScriptRow(listId, publicId) {
+        lists[listId].items = lists[listId].items.filter(function (row) { return row.id !== publicId; });
+      }
+
+      // 全文：讀取版本會寫稽核，所以只在按下「看全文」時才讀取；關閉視窗就丟掉內容
+      var scriptOpen = Vue.ref(false);
+      var scriptDoc = Vue.reactive({ loading: false, error: '', actionError: '', version: null, busy: false });
+      var scriptToken = 0;                                     // 只採用最後一次讀取的結果
+      var scriptSections = Vue.computed(function () { return scriptDoc.version ? fmt.scriptSections(scriptDoc.version.content) : []; });
+      var scriptDocActions = Vue.computed(function () { return fmt.scriptActions(scriptDoc.version); });
+
+      function openScript(publicId) {
+        scriptDoc.version = null;
+        scriptDoc.error = '';
+        scriptDoc.actionError = '';
+        scriptDoc.busy = false;
+        scriptDoc.loading = true;
+        scriptOpen.value = true;
+        markStale('audit');
+        var token = ++scriptToken;
+        return request('get', '/scripts/versions/' + encodeURIComponent(publicId)).then(function (data) {
+          if (token === scriptToken) { scriptDoc.version = data.version; }
+        }, function (error) {
+          if (token !== scriptToken) { return; }
+          scriptDoc.error = failureText(error);
+          if (error.status === 404) { refreshScriptLists(); }  // 作者在這段時間撤回了：清單已過期
+        }).finally(function () { if (token === scriptToken) { scriptDoc.loading = false; } });
+      }
+
+      Vue.watch(scriptOpen, function (open) {
+        if (open) { return; }
+        scriptToken++;
+        scriptDoc.version = null;
+        scriptDoc.error = '';
+        scriptDoc.actionError = '';
+        scriptDoc.loading = false;
+        scriptDoc.busy = false;
+      });
+
+      function approveOpenScript() {
+        if (!scriptDoc.version || scriptDoc.busy) { return Promise.resolve(); }
+        var publicId = scriptDoc.version.id;
+        scriptDoc.busy = true;
+        scriptDoc.actionError = '';
+        return request('post', '/scripts/versions/' + encodeURIComponent(publicId) + '/approve', { data: {} }).then(function () {
+          scriptOpen.value = false;
+          UI.toast('已核可，這份劇本已上架。');
+          removeScriptRow(PENDING_LIST, publicId);
+          markStale('scripts_published', 'scripts_removed', 'audit');     // 核可也會把同劇本下架的舊版改為「已被取代」
+        }, function (error) {
+          if (!scriptOpen.value) { UI.toast(failureText(error), { type: 'error' }); return; }
+          if (error.status === 409) {
+            scriptOpen.value = false;
+            UI.toast(failureText(error), { type: 'error' });
+            return refreshScriptLists();
+          }
+          scriptDoc.actionError = failureText(error);
+        }).finally(function () { scriptDoc.busy = false; });
+      }
+
+      /* 從全文視窗進入退回、下架或恢復：先關掉全文（不疊兩個視窗），等它釋放之後再開下一個視窗。 */
+      function leaveScriptModal(next) {
+        var version = scriptDoc.version;
+        if (!version) { return; }
+        var target = { id: version.id, label: version.title };
+        scriptOpen.value = false;
+        Vue.nextTick(function () { next(target); });
+      }
+      function askRejectFromDoc() { leaveScriptModal(openReject); }
+      function askRemoveFromDoc() { leaveScriptModal(function (target) { openConfirm('script_remove', target); }); }
+      function askRestoreFromDoc() { leaveScriptModal(function (target) { openConfirm('script_restore', target); }); }
+      function askRemoveScript(row) { openConfirm('script_remove', { id: row.id, label: row.title }); }
+      function askRestoreScript(row) { openConfirm('script_restore', { id: row.id, label: row.title }); }
+
+      // 退回：類別（必填）與只有管理員看得到的備註（選填）；不需要密碼
+      var rejectOpen = Vue.ref(false);
+      var rejectState = Vue.reactive({ id: '', label: '', category: '', note: '', busy: false, error: { category: '', note: '', general: '' } });
+
+      function clearRejectErrors() {
+        rejectState.error.category = '';
+        rejectState.error.note = '';
+        rejectState.error.general = '';
+      }
+
+      function openReject(target) {
+        rejectState.id = target.id;
+        rejectState.label = target.label;
+        rejectState.category = '';
+        rejectState.note = '';
+        rejectState.busy = false;
+        clearRejectErrors();
+        rejectOpen.value = true;
+        window.setTimeout(function () {
+          var field = document.getElementById('admin-reject-category');
+          if (field) { field.focus(); }
+        }, 60);
+      }
+
+      Vue.watch(rejectOpen, function (open) {
+        if (open) { return; }
+        rejectState.category = '';
+        rejectState.note = '';
+        rejectState.busy = false;
+        clearRejectErrors();
+      });
+
+      function submitReject() {
+        if (rejectState.busy || !rejectState.id) { return Promise.resolve(); }
+        clearRejectErrors();
+        var publicId = rejectState.id;
+        var invalid = false;
+        if (!isCategory(rejectState.category)) { rejectState.error.category = '請選擇類別。'; invalid = true; }
+        var noteIssue = fmt.noteProblem(rejectState.note);
+        if (noteIssue) { rejectState.error.note = noteIssue; invalid = true; }
+        if (invalid) { return Promise.resolve(); }
+
+        var body = { category: rejectState.category };
+        if (rejectState.note.trim()) { body.note = rejectState.note; }
+        rejectState.busy = true;
+        return request('post', '/scripts/versions/' + encodeURIComponent(publicId) + '/reject', { data: body }).then(function () {
+          rejectOpen.value = false;
+          UI.toast('已退回，作者只會看到類別。');
+          removeScriptRow(PENDING_LIST, publicId);
+          markStale('audit');
+        }, function (error) {
+          if (!rejectOpen.value) { UI.toast(failureText(error), { type: 'error' }); return; }
+          if (error.status === 409) {
+            rejectOpen.value = false;
+            UI.toast(failureText(error), { type: 'error' });
+            return refreshScriptLists();
+          }
+          var fields = error.fields || {};
+          if (fields.category || fields.note) {
+            rejectState.error.category = fields.category || '';
+            rejectState.error.note = fields.note || '';
+            return;
+          }
+          rejectState.error.general = failureText(error);
+        }).finally(function () { rejectState.busy = false; });
+      }
+
       // ---- 啟動 -----------------------------------------------------------------------------
-      Vue.onMounted(function () { ensureLoaded('overview'); });
+      // 待審數量要顯示在分頁標籤上，所以進入頁面就讀一次待審清單（清單端點只讀、不寫稽核）
+      Vue.onMounted(function () { ensureLoaded('overview'); ensureLoaded(PENDING_LIST); });
 
       return {
-        adminName: adminName, fmt: fmt, tabs: TABS, tab: tab, maxReason: MAX_REASON,
+        adminName: adminName, fmt: fmt, tabs: TABS, tab: tab, maxReason: MAX_REASON, maxNote: fmt.MAX_NOTE, categoryOptions: CATEGORY_OPTIONS,
         overview: overview, overviewState: overviewState, warningLevel: warningLevel, warningHint: warningHint,
         budgetRows: budgetRows, tokenWidth: tokenWidth, levelNote: levelNote, reloadOverview: reloadOverview,
         lists: lists, reload: reload, loadMore: loadMore, selectTab: selectTab, suspensionNote: suspensionNote,
@@ -491,7 +727,14 @@
         confirmOpen: confirmOpen, confirmState: confirmState, confirmSpec: confirmSpec, tierOptions: tierOptions,
         askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askWallet: askWallet, askUnlock: askUnlock, askLift: askLift,
         askDeleteConversation: askDeleteConversation,
-        onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm
+        onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm,
+        scriptViews: SCRIPT_VIEWS, scriptView: scriptView, scriptListId: scriptListId, scriptList: scriptList, pendingText: pendingText,
+        tabBadge: tabBadge, selectScriptView: selectScriptView, reloadScripts: reloadScripts, loadMoreScripts: loadMoreScripts,
+        scriptOpen: scriptOpen, scriptDoc: scriptDoc, scriptSections: scriptSections, scriptDocActions: scriptDocActions,
+        openScript: openScript, approveOpenScript: approveOpenScript,
+        askRejectFromDoc: askRejectFromDoc, askRemoveFromDoc: askRemoveFromDoc, askRestoreFromDoc: askRestoreFromDoc,
+        askRemoveScript: askRemoveScript, askRestoreScript: askRestoreScript,
+        rejectOpen: rejectOpen, rejectState: rejectState, submitReject: submitReject
       };
     }
   });

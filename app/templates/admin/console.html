@@ -19,7 +19,7 @@
     <button v-for="item in tabs" :key="item.id" type="button" role="tab" class="admin-tab"
             :class="{ 'admin-tab--active': tab === item.id }" :id="'admin-tab-' + item.id"
             :aria-selected="tab === item.id ? 'true' : 'false'" aria-controls="admin-panel"
-            @click="selectTab(item.id)">{{ item.label }}</button>
+            @click="selectTab(item.id)">{{ item.label }}<span v-if="tabBadge(item.id)" class="admin-tab__badge">{{ tabBadge(item.id) }}<span class="admin-visually-hidden"> 份待審</span></span></button>
   </nav>
 
   <main class="admin-main" id="admin-panel" role="tabpanel" :aria-labelledby="'admin-tab-' + tab">
@@ -178,6 +178,50 @@
         </li>
       </ul>
       <admin-list-foot :list="lists.feedback" empty-text="目前沒有意見回饋對話。" @retry="reload('feedback')" @more="loadMore('feedback')"></admin-list-foot>
+    </section>
+
+    <!-- ===== 劇本審核 ===== -->
+    <section v-if="tab === 'scripts'">
+      <div class="admin-section-head">
+        <h2 class="admin-section-title">劇本審核</h2>
+        <button type="button" class="ui-btn admin-btn-sm" @click="reloadScripts" :disabled="scriptList.loading">重新整理</button>
+      </div>
+      <p class="admin-hint">玩家送審公開的劇本要經您核可才會上架；退回時作者只會看到類別（可另寫只有您看得到的備註）。清單不含劇本內文，按「看全文」才會讀取，每次讀取都會留下稽核紀錄。下架與恢復需要重新輸入密碼。</p>
+      <div class="admin-subtabs" role="tablist" aria-label="劇本狀態">
+        <button v-for="view in scriptViews" :key="view.id" type="button" role="tab" class="admin-subtab"
+                :class="{ 'admin-subtab--active': scriptView === view.id }" :aria-selected="scriptView === view.id ? 'true' : 'false'"
+                @click="selectScriptView(view.id)">{{ view.label }}<span v-if="view.id === 'pending_review' && pendingText" class="admin-tab__badge">{{ pendingText }}</span></button>
+      </div>
+      <ul class="admin-rows" v-if="scriptList.items.length">
+        <li v-for="row in scriptList.items" :key="row.id" class="admin-row admin-row--script">
+          <div class="admin-row__main">
+            <p class="admin-row__line">
+              <strong class="admin-row__title">{{ row.title }}</strong>
+              <span class="admin-chip" :class="{ 'admin-chip--alert': row.status === 'pending_review' && row.review_verdict === 'flag' }">{{ fmt.scriptStateText(row) }}</span>
+              <span v-if="row.has_note" class="admin-chip">有審核備註</span>
+            </p>
+            <p v-if="row.summary" class="admin-row__line admin-row__summary">{{ row.summary }}</p>
+            <p class="admin-row__line">
+              <span class="admin-row__muted">作者</span> <span>{{ fmt.authorText(row) }}</span>
+              <span class="admin-row__muted">第 {{ row.version_no }} 版</span>
+              <span class="admin-row__muted">{{ fmt.audienceLabel(row.audience) }}</span>
+              <span class="admin-row__muted">{{ fmt.tierBindingText(row.content_tier) }}</span>
+            </p>
+            <p class="admin-row__line">
+              <span class="admin-row__muted">{{ fmt.scriptTimeText(row) }}</span>
+              <span class="admin-row__muted">版本</span> <code :title="row.id">{{ fmt.shortId(row.id) }}</code>
+              <span v-if="row.status === 'published' && !row.author_id" class="admin-row__muted">內建劇本不可下架</span>
+            </p>
+          </div>
+          <div class="admin-row__actions">
+            <button type="button" class="ui-btn admin-btn-sm" @click="openScript(row.id)">看全文</button>
+            <button v-if="fmt.scriptActions(row).remove" type="button" class="ui-btn admin-btn-sm admin-btn--danger" @click="askRemoveScript(row)">下架</button>
+            <button v-if="fmt.scriptActions(row).restore" type="button" class="ui-btn admin-btn-sm" @click="askRestoreScript(row)">恢復上架</button>
+          </div>
+        </li>
+      </ul>
+      <admin-list-foot :list="scriptList" :empty-text="scriptView === 'pending_review' ? '目前沒有待審的劇本。' : (scriptView === 'published' ? '目前沒有上架中的劇本。' : '目前沒有已下架的劇本。')"
+                       @retry="reloadScripts" @more="loadMoreScripts"></admin-list-foot>
     </section>
 
     <!-- ===== 被鎖定的帳號 ===== -->
@@ -382,6 +426,68 @@
     </template>
   </ui-modal>
 
+  <!-- 劇本全文（純文字；標題、內文與審核備註都以插值顯示，含標記字元的文字會原樣呈現，不被解析）-->
+  <ui-modal v-model="scriptOpen" title="劇本全文" status-code="ADMIN_READ_SCRIPT">
+    <div class="admin-script">
+      <p v-if="scriptDoc.loading" class="admin-hint" role="status">載入中…</p>
+      <p v-if="scriptDoc.error" class="admin-field-error" role="alert">{{ scriptDoc.error }}</p>
+      <template v-if="scriptDoc.version">
+        <h3 class="admin-script__title">{{ scriptDoc.version.title }}</h3>
+        <p class="admin-row__line">
+          <span class="admin-chip" :class="{ 'admin-chip--alert': scriptDoc.version.status === 'pending_review' && scriptDoc.version.review_verdict === 'flag' }">{{ fmt.scriptStateText(scriptDoc.version) }}</span>
+          <span class="admin-row__muted">作者</span> <span>{{ fmt.authorText(scriptDoc.version) }}</span>
+          <span class="admin-row__muted">第 {{ scriptDoc.version.version_no }} 版</span>
+          <span class="admin-row__muted">{{ fmt.scriptTimeText(scriptDoc.version) }}</span>
+          <span class="admin-row__muted">版本</span> <code :title="scriptDoc.version.id">{{ fmt.shortId(scriptDoc.version.id) }}</code>
+        </p>
+        <p v-if="scriptDoc.version.status === 'pending_review' && scriptDoc.version.review_verdict === 'flag'" class="admin-hint">
+          模型層審查有疑慮：{{ fmt.categoriesText(scriptDoc.version.review_categories) || '（沒有指出類別）' }}。請讀完全文再決定。
+        </p>
+        <div v-if="scriptDoc.version.decision_note" class="admin-note">
+          <p class="admin-msg__meta">審核備註（只有管理員看得到，不顯示給作者）</p>
+          <p class="admin-msg__text">{{ scriptDoc.version.decision_note }}</p>
+        </div>
+        <div class="admin-script__sections" role="document" aria-label="劇本內容">
+          <article v-for="section in scriptSections" :key="section.key" class="admin-msg">
+            <p class="admin-msg__meta">{{ section.label }}</p>
+            <p class="admin-msg__text">{{ section.text }}</p>
+          </article>
+        </div>
+        <p v-if="scriptDoc.actionError" class="admin-field-error" role="alert">{{ scriptDoc.actionError }}</p>
+        <p v-if="scriptDoc.busy" class="admin-hint" role="status">處理中…</p>
+      </template>
+    </div>
+    <template #actions>
+      <button v-if="scriptDocActions.reject" type="button" class="ui-btn admin-btn--danger" :disabled="scriptDoc.busy" @click="askRejectFromDoc">退回</button>
+      <button v-if="scriptDocActions.remove" type="button" class="ui-btn admin-btn--danger" :disabled="scriptDoc.busy" @click="askRemoveFromDoc">下架</button>
+      <button v-if="scriptDocActions.restore" type="button" class="ui-btn" :disabled="scriptDoc.busy" @click="askRestoreFromDoc">恢復上架</button>
+      <button v-if="scriptDocActions.approve" type="button" class="ui-btn ui-btn--primary" :disabled="scriptDoc.busy" @click="approveOpenScript">核可</button>
+      <button type="button" class="ui-btn" @click="scriptOpen = false">關閉</button>
+    </template>
+  </ui-modal>
+
+  <!-- 退回：類別（必填）與只有管理員看得到的備註（選填）；不需要密碼 -->
+  <ui-modal v-model="rejectOpen" title="退回這份劇本？" status-code="ADMIN_REJECT_SCRIPT" confirm-text="確認退回" :close-on-confirm="false" @confirm="submitReject">
+    <p>退回後版本回到「已退回」，作者可以修改後重新送審。作者只會看到類別與時間，看不到您的備註。</p>
+    <p class="admin-target">對象：{{ rejectState.label }}</p>
+    <div class="admin-field">
+      <label for="admin-reject-category" class="admin-label">類別（必填）</label>
+      <select id="admin-reject-category" class="admin-input" v-model="rejectState.category">
+        <option value="" disabled>請選擇類別</option>
+        <option v-for="option in categoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+      </select>
+      <p v-if="rejectState.error.category" class="admin-field-error" role="alert">{{ rejectState.error.category }}</p>
+    </div>
+    <div class="admin-field">
+      <label for="admin-reject-note" class="admin-label">審核備註（選填，只有管理員看得到，最多 {{ maxNote }} 字）</label>
+      <textarea id="admin-reject-note" class="admin-input admin-textarea" rows="4" autocomplete="off" v-model="rejectState.note"></textarea>
+      <p class="admin-counter">{{ fmt.noteLength(rejectState.note) }} / {{ maxNote }}</p>
+      <p v-if="rejectState.error.note" class="admin-field-error" role="alert">{{ rejectState.error.note }}</p>
+    </div>
+    <p v-if="rejectState.error.general" class="admin-field-error" role="alert">{{ rejectState.error.general }}</p>
+    <p v-if="rejectState.busy" class="admin-hint" role="status">處理中…</p>
+  </ui-modal>
+
   <!-- 危險操作共用的確認視窗：原因（需要時）與密碼；密碼送出或取消後立即清空，不存進任何儲存體 -->
   <ui-modal v-model="confirmOpen" :title="confirmSpec.title" :status-code="confirmSpec.code" :confirm-text="confirmSpec.confirmText"
             :close-on-confirm="false" @confirm="submitConfirm">
@@ -409,6 +515,21 @@
       <input id="admin-confirm-delta" class="admin-input" type="text" inputmode="numeric" autocomplete="off" maxlength="10"
              v-model="confirmState.delta" @keydown.enter="onConfirmEnter">
       <p v-if="confirmState.error.delta" class="admin-field-error" role="alert">{{ confirmState.error.delta }}</p>
+    </div>
+
+    <div v-if="confirmSpec.needsCategory" class="admin-field">
+      <label for="admin-confirm-category" class="admin-label">類別（必填）</label>
+      <select id="admin-confirm-category" class="admin-input" v-model="confirmState.category">
+        <option value="" disabled>請選擇類別</option>
+        <option v-for="option in categoryOptions" :key="option.value" :value="option.value">{{ option.label }}</option>
+      </select>
+      <p v-if="confirmState.error.category" class="admin-field-error" role="alert">{{ confirmState.error.category }}</p>
+    </div>
+    <div v-if="confirmSpec.needsNote" class="admin-field">
+      <label for="admin-confirm-note" class="admin-label">審核備註（選填，只有管理員看得到，最多 {{ maxNote }} 字）</label>
+      <textarea id="admin-confirm-note" class="admin-input admin-textarea" rows="3" autocomplete="off" v-model="confirmState.note"></textarea>
+      <p class="admin-counter">{{ fmt.noteLength(confirmState.note) }} / {{ maxNote }}</p>
+      <p v-if="confirmState.error.note" class="admin-field-error" role="alert">{{ confirmState.error.note }}</p>
     </div>
 
     <div v-if="confirmSpec.needsReason" class="admin-field">

@@ -13,8 +13,10 @@ from app.models.admin_audit_log import AUDIT_ACTIONS
 from app.models.chat import MSG_STATUS_FALLBACK, MSG_STATUS_OK
 from app.models.llm_call_log import CALL_KINDS
 from app.models.lock_strike import STRIKE_KINDS
-from app.models.user import MEMBER_TIERS, USER_STATUSES
+from app.models.script import DECISION_CATEGORIES, ENDING_MODES, REMOVERS, REVIEW_VERDICTS, VERSION_STATUSES
+from app.models.user import AUDIENCES, MEMBER_TIERS, USER_STATUSES
 from app.models.wallet import BUCKETS
+from app.services.script_spec import TRIGGER_KINDS
 
 NODE = shutil.which("node")
 FORMAT_JS = "app/static/js/admin/admin-format.js"
@@ -43,8 +45,23 @@ def labels() -> dict[str, dict[str, str]]:
         ("role", ("user", "admin")),
         ("messageRole", ("user", "assistant")),
         ("bucket", BUCKETS),                      # game-wallet：遊戲幣的兩個餘額
+        # rpg-script-publishing：劇本審核分頁（版本狀態、下架者、人工決定的類別、模型層結果、讀者頻道、結局模式、里程碑觸發種類）
+        ("scriptStatus", VERSION_STATUSES),
+        ("remover", REMOVERS),
+        ("category", DECISION_CATEGORIES),
+        ("verdict", REVIEW_VERDICTS),
+        ("audience", AUDIENCES),
+        ("endingMode", ENDING_MODES),
+        ("triggerKind", TRIGGER_KINDS),
     ],
 )
 def test_the_frontend_labels_cover_exactly_the_backend_values(labels, group, expected):
     assert sorted(labels[group]) == sorted(expected)
     assert all(text.strip() for text in labels[group].values())
+
+
+@pytest.mark.skipif(NODE is None, reason="未安裝 Node.js，略過前端標籤檢查")
+def test_the_category_dropdown_follows_the_backend_order_with_the_manual_only_category_last(labels):
+    """退回與下架的類別下拉依後端列舉的順序（先四項紅線、再四項疑慮、最後是人工專用的 other_policy）。"""
+    assert list(labels["category"]) == list(DECISION_CATEGORIES)
+    assert list(labels["category"])[-1] == "other_policy"

@@ -70,6 +70,20 @@
 .admin-tab:focus-visible { color: var(--color-accent); }
 .admin-tab--active { color: var(--color-text); border-bottom-color: var(--color-accent); }
 
+/* 待審數量：分頁標籤與「待審」子分頁上的小標記（有數量才出現；靠文字與琥珀橙色一起表達，不單靠顏色） */
+.admin-tab__badge {
+  display: inline-block;
+  min-width: 1.25rem;
+  margin-left: 0.375rem;
+  padding: 0 0.375rem;
+  border: 1px solid var(--color-accent);
+  border-radius: 999px;
+  color: var(--color-accent);
+  font-size: 0.75rem;
+  line-height: 1.25rem;
+  text-align: center;
+}
+
 /* ---- 版面 ----------------------------------------------------------------- */
 .admin-main {
   max-width: var(--admin-width);
@@ -213,6 +227,29 @@
 .admin-listfoot { text-align: center; }
 .admin-listfoot .admin-hint { text-align: center; }
 
+/* ---- 劇本審核 ------------------------------------------------------------- */
+.admin-subtabs { display: flex; gap: 0.5rem; margin: 0 0 0.75rem; overflow-x: auto; scrollbar-width: none; }
+.admin-subtabs::-webkit-scrollbar { display: none; }
+.admin-subtab {
+  flex: none;
+  appearance: none;
+  padding: 0.3125rem 0.875rem;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s ease, border-color 0.15s ease;
+}
+.admin-subtab:hover,
+.admin-subtab:focus-visible { color: var(--color-accent); border-color: var(--color-accent); }
+.admin-subtab--active { color: var(--color-text); border-color: var(--color-accent); }
+.admin-row__title { overflow-wrap: anywhere; }
+.admin-row__summary { color: var(--color-text-muted); }                     /* 簡介：純文字，長文由換行規則處理 */
+
 /* ---- 使用者 --------------------------------------------------------------- */
 .admin-lookup { display: flex; gap: 0.5rem; }
 .admin-lookup .admin-input { flex: 1; min-width: 0; }
@@ -257,7 +294,8 @@
 }
 
 /* ---- 對話全文 Modal -------------------------------------------------------- */
-.ui-modal:has(.admin-conv) { max-width: 44rem; }          /* 不支援 :has 的瀏覽器維持預設寬度，仍可使用 */
+.ui-modal:has(.admin-conv),
+.ui-modal:has(.admin-script) { max-width: 44rem; }        /* 不支援 :has 的瀏覽器維持預設寬度，仍可使用 */
 .ui-modal__actions { flex-wrap: wrap; }                     /* 對話全文有三個按鈕：窄螢幕時整顆換行，不讓按鈕文字斷成兩行 */
 .ui-modal__actions .ui-btn { white-space: nowrap; }
 .admin-conv__messages { display: flex; flex-direction: column; gap: 0.625rem; max-height: 55vh; margin-top: 0.625rem; padding-right: 0.25rem; overflow-y: auto; }
@@ -267,6 +305,12 @@
 .admin-msg__meta { margin: 0 0 0.25rem; color: var(--color-text-muted); font-size: 0.75rem; }
 .admin-msg__text { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }   /* 純文字，保留換行 */
 .admin-appeal__text { margin: 0.5rem 0 0.75rem; padding-left: 0.75rem; border-left: var(--border-hairline); }   /* 申訴內容：純文字 */
+
+/* ---- 劇本全文 Modal 與退回／下架的備註 -------------------------------------- */
+.admin-script__title { margin: 0 0 0.5rem; font-size: 1.0625rem; font-weight: 500; overflow-wrap: anywhere; }
+.admin-script__sections { display: flex; flex-direction: column; gap: 0.625rem; max-height: 50vh; margin-top: 0.625rem; padding-right: 0.25rem; overflow-y: auto; }
+.admin-note { margin-top: 0.625rem; padding: 0.5rem 0.75rem; border: 1px solid var(--color-accent); border-left-width: 2px; background: var(--color-surface); }
+.admin-textarea { resize: vertical; min-height: 4.5rem; line-height: 1.6; }
 
 /* ---- 窄螢幕（手機）-------------------------------------------------------- */
 @media (max-width: 575.98px) {

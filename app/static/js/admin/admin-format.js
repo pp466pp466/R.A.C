@@ -44,8 +44,23 @@
     messageStatus: { ok: '正常', fallback: '降級回覆' },
     via: { email: '以信箱', id: '以識別碼' },
     /* 遊戲幣的兩個餘額（app/models/wallet.py 的 BUCKETS） */
-    bucket: { free: '免費幣', paid: '付費幣' }
+    bucket: { free: '免費幣', paid: '付費幣' },
+    /* 劇本審核（rpg-script-publishing；app/models/script.py）：版本狀態、下架者、人工決定的類別（審查類別加 other_policy）、模型層結果、
+       讀者頻道、結局模式與里程碑觸發種類。 */
+    scriptStatus: { draft: '草稿', pending_review: '待審', published: '上架中', rejected: '已退回', removed: '已下架', superseded: '已被取代' },
+    remover: { author: '作者', admin: '管理員' },
+    category: {
+      minor_sexual: '涉及未成年角色的性內容', sexual_violence: '性暴力', non_consensual: '非自願的性情節', real_person_sexual: '以真人名義的性內容',
+      minor_suspected: '疑似涉及未成年角色', real_person_suspected: '疑似涉及真人', tier_mismatch: '內容不符合綁定的安全模式', other_concern: '其他疑慮',
+      other_policy: '其他違反平台規範'
+    },
+    verdict: { pass: '通過', flag: '有疑慮', reject: '拒絕' },
+    audience: { all: '全讀者', male: '男頻', female: '女頻' },
+    endingMode: { none: '無結局', custom: '自訂結局' },
+    triggerKind: { age: '年齡', year: '年份' }
   };
+
+  var MAX_NOTE = 500;                            // 審核備註上限（Unicode 字元；app/models/script.py 的 MAX_DECISION_NOTE_CHARS）
 
   function pad(number) { return (number < 10 ? '0' : '') + number; }
 
@@ -112,6 +127,11 @@
   function messageStatusLabel(value) { return label('messageStatus', value); }
   function lockReasonLabel(value) { return label('lockReason', value); }
   function bucketLabel(value) { return label('bucket', value); }
+  function scriptStatusLabel(value) { return label('scriptStatus', value); }
+  function removerLabel(value) { return label('remover', value); }
+  function categoryLabel(value) { return label('category', value); }
+  function verdictLabel(value) { return label('verdict', value); }
+  function audienceLabel(value) { return label('audience', value); }
 
   /* 比例（0 到 1，可超過 1）轉成百分比文字。無條件捨去：0.998 顯示 99% 而不是 100%，
      這樣「100%」只在真的用滿時出現，與 ratioLevel 的界線一致。資料不是有限的非負數時回傳「—」。 */
@@ -183,7 +203,167 @@
       if (typeof d.delta !== 'number' || typeof d.balance_after !== 'number') { return ''; }
       return bucketLabel(d.bucket) + ' ' + signedCount(d.delta) + '，調整後 ' + count(d.balance_after);
     }
+    if (typeof action === 'string' && action.indexOf('script.') === 0) { return scriptAuditText(d); }
     return '';
+  }
+
+  /* 劇本審核的稽核細節（只有版本與劇本的對外識別碼、狀態與類別列舉；沒有標題、筆名與任何劇本文字）：
+     「版本 4d6f5c2a，劇本 9a8c0123，狀態：上架中，類別：性暴力」。沒有可顯示的欄位時回傳空字串。 */
+  function scriptAuditText(d) {
+    var parts = [];
+    if (typeof d.version_id === 'string' && d.version_id) { parts.push('版本 ' + shortId(d.version_id)); }
+    if (typeof d.script_id === 'string' && d.script_id) { parts.push('劇本 ' + shortId(d.script_id)); }
+    if (d.status) { parts.push('狀態：' + scriptStatusLabel(d.status)); }
+    if (d.category) { parts.push('類別：' + categoryLabel(d.category)); }
+    return parts.join('，');
+  }
+
+  // ---- 劇本審核（rpg-script-publishing）------------------------------------------------------------
+
+  function plainObject(value) { return value && typeof value === 'object' && !Array.isArray(value) ? value : {}; }
+
+  function nonEmptyText(value) { return typeof value === 'string' ? value.trim() : ''; }
+
+  function wholeNumberText(value) { return typeof value === 'number' && isFinite(value) ? String(Math.floor(value)) : ''; }
+
+  /* 類別清單轉一行文字（「、」分隔）；不認得的類別退回原始代碼，不是陣列或沒有項目回傳空字串。 */
+  function categoriesText(categories) {
+    if (!Array.isArray(categories)) { return ''; }
+    return categories.filter(function (value) { return typeof value === 'string' && value; }).map(categoryLabel).join('、');
+  }
+
+  /* 作者的筆名與短代號：「筆名#短代號」；沒有短代號只顯示筆名，兩者都沒有回傳「—」。 */
+  function authorText(item) {
+    var it = plainObject(item);
+    var name = nonEmptyText(it.author_name);
+    if (!name) { return EMPTY; }
+    return nonEmptyText(it.author_code) ? name + '#' + it.author_code.trim() : name;
+  }
+
+  /* 清單一筆的狀態說明：待審附有疑慮的類別、下架附下架者與類別；其他狀態只有狀態名稱。 */
+  function scriptStateText(item) {
+    var it = plainObject(item);
+    if (it.status === 'pending_review') {
+      if (it.review_verdict !== 'flag') { return '待審'; }
+      var concern = categoriesText(it.review_categories);
+      return concern ? '待審，有疑慮：' + concern : '待審，有疑慮';
+    }
+    if (it.status === 'removed') {
+      var base = it.removed_by === 'admin' ? '管理員下架' : (it.removed_by === 'author' ? '作者自行下架' : '已下架');
+      return it.decision_category ? base + '（' + categoryLabel(it.decision_category) + '）' : base;
+    }
+    if (it.status === 'rejected' && it.decision_category) { return '已退回（' + categoryLabel(it.decision_category) + '）'; }
+    return scriptStatusLabel(it.status);
+  }
+
+  /* 清單一筆的時間說明：待審是送審時間、上架中是發佈時間、已下架與已退回是決定的時間；時間不明顯示「—」。 */
+  function scriptTimeText(item) {
+    var it = plainObject(item);
+    if (it.status === 'pending_review') { return '送審於 ' + taipeiDateTime(it.submitted_at); }
+    if (it.status === 'published') { return '發佈於 ' + taipeiDateTime(it.published_at); }
+    if (it.status === 'removed') { return '下架於 ' + taipeiDateTime(it.decided_at); }
+    if (it.status === 'rejected') { return '退回於 ' + taipeiDateTime(it.decided_at); }
+    return '';
+  }
+
+  /* 這一筆能做哪些操作（只決定要不要顯示按鈕；後端仍會逐項驗證）：待審才能核可與退回、上架中且有作者的才能下架（內建劇本沒有作者，
+     後端回 409）、只有「管理員下架」的才能由管理員恢復（作者自己下架的是作者自己的決定）。 */
+  function scriptActions(item) {
+    var it = plainObject(item);
+    var pending = it.status === 'pending_review';
+    return {
+      approve: pending,
+      reject: pending,
+      remove: it.status === 'published' && !!it.author_id,
+      restore: it.status === 'removed' && it.removed_by === 'admin'
+    };
+  }
+
+  /* 分頁標籤上的待審數量：清單還沒讀完時是「至少」（N+）；沒有待審回傳空字串。 */
+  function pendingCountText(total, done) {
+    if (typeof total !== 'number' || !isFinite(total) || total <= 0) { return ''; }
+    return done ? String(Math.floor(total)) : Math.floor(total) + '+';
+  }
+
+  /* 退回與下架的類別下拉選單：依後端列舉的順序（先四項紅線、再四項疑慮、最後是人工專用的 other_policy）。 */
+  function categoryOptions() {
+    return Object.keys(LABELS.category).map(function (value) { return { value: value, label: LABELS.category[value] }; });
+  }
+
+  /* 審核備註的字數（NFC 正規化後以 Unicode 字元計，與後端一致；不是字串當作 0）。 */
+  function noteLength(text) {
+    return typeof text === 'string' ? Array.from(text.normalize('NFC')).length : 0;
+  }
+
+  /* 備註的前端檢查（只是少打一次請求）；沒有問題回傳空字串。 */
+  function noteProblem(text) {
+    return noteLength(text) > MAX_NOTE ? '備註最多 ' + MAX_NOTE + ' 字。' : '';
+  }
+
+  /* 內容模式的綁定說明：只有 safe 是綁定安全模式；其餘（adult 與舊值 standard）跟隨玩家的設定。 */
+  function tierBindingText(value) {
+    return value === 'safe' ? '綁定安全模式' : '未綁定（跟隨玩家的安全模式設定）';
+  }
+
+  function characterText(character) {
+    var c = plainObject(character);
+    var head = '姓名：' + (nonEmptyText(c.name) || EMPTY);
+    var age = wholeNumberText(c.age);
+    var lines = [age ? head + '　年齡：' + age + ' 歲' : head];
+    [['occupation', '職業'], ['personality', '個性'], ['appearance', '外貌'], ['speech_style', '說話風格'], ['hidden_trait', '隱藏個性']].forEach(function (pair) {
+      var text = nonEmptyText(c[pair[0]]);
+      if (text) { lines.push(pair[1] + '：' + text); }
+    });
+    return lines.join('\n');
+  }
+
+  function milestoneText(milestone) {
+    var m = plainObject(milestone);
+    var trigger = plainObject(m.trigger);
+    var when = label('triggerKind', trigger.kind) + ' ' + (wholeNumberText(trigger.value) || EMPTY);
+    var line = '・' + (nonEmptyText(m.title) || EMPTY) + '（' + when + '）';
+    var note = nonEmptyText(m.note);
+    return note ? line + '\n　備註：' + note : line;
+  }
+
+  /* 全文 Modal 的分段：[{ key, label, text }]，text 一律是純文字（以 white-space: pre-wrap 顯示，保留換行），沒有內容的欄位略過。
+     content 的形狀不認得（不是物件、欄位型別不對）時盡量取得可讀的部分，不丟例外；不包含封面圖片（v1 不實作）。 */
+  function scriptSections(content) {
+    var c = plainObject(content);
+    var sections = [];
+    if (!Object.keys(c).length) { return sections; }
+    function add(key, text, title) { if (text) { sections.push({ key: key, label: title, text: text }); } }
+    var tags = Array.isArray(c.tags) ? c.tags.filter(function (tag) { return nonEmptyText(tag); }).join('、') : '';
+    var calendar = plainObject(c.calendar);
+    var calendarText = nonEmptyText(calendar.name);
+    var startYear = wholeNumberText(calendar.start_year);
+    if (calendarText && startYear) { calendarText += '，起始年 ' + startYear; }
+    var ending = '';
+    if (c.ending_mode === 'custom') {
+      var endingAge = wholeNumberText(c.ending_age);
+      ending = '自訂結局' + (endingAge ? '（壽終年齡 ' + endingAge + ' 歲）' : '');
+      if (nonEmptyText(c.ending_text)) { ending += '\n' + nonEmptyText(c.ending_text); }
+    } else if (c.ending_mode) {
+      ending = label('endingMode', c.ending_mode);
+    }
+    var characters = Array.isArray(c.characters) ? c.characters : [];
+    var locations = Array.isArray(c.locations) ? c.locations.filter(function (place) { return nonEmptyText(place); }).join('、') : '';
+    var milestones = Array.isArray(c.milestones) ? c.milestones : [];
+
+    add('summary', nonEmptyText(c.summary), '簡介');
+    add('world_name', nonEmptyText(c.world_name), '世界名稱');
+    add('tags', tags, '標籤');
+    add('audience', audienceLabel(c.audience || 'all'), '讀者頻道');
+    add('content_tier', c.content_tier ? tierBindingText(c.content_tier) : '', '內容模式');
+    add('calendar', calendarText, '曆法');
+    add('background', nonEmptyText(c.background), '背景與體系');
+    add('rules', nonEmptyText(c.rules), '世界規則（狀態轉移規則）');
+    add('ending', ending, '結局');
+    add('opening', nonEmptyText(c.opening), '初始對話');
+    add('characters', characters.map(characterText).join('\n\n'), '角色（' + characters.length + '）');
+    add('locations', locations, '地點');
+    add('milestones', milestones.map(milestoneText).join('\n'), '里程碑（' + milestones.length + '）');
+    return sections;
   }
 
   return {
@@ -193,6 +373,11 @@
     messageRoleLabel: messageRoleLabel, messageStatusLabel: messageStatusLabel, lockReasonLabel: lockReasonLabel,
     bucketLabel: bucketLabel, signedCount: signedCount, parseCoinDelta: parseCoinDelta,
     ratioPercent: ratioPercent, ratioLevel: ratioLevel, ratioWidth: ratioWidth, count: count, shortId: shortId,
-    suspensionText: suspensionText, auditDetailText: auditDetailText
+    suspensionText: suspensionText, auditDetailText: auditDetailText,
+    MAX_NOTE: MAX_NOTE, scriptStatusLabel: scriptStatusLabel, removerLabel: removerLabel, categoryLabel: categoryLabel,
+    verdictLabel: verdictLabel, audienceLabel: audienceLabel, categoriesText: categoriesText, authorText: authorText,
+    scriptStateText: scriptStateText, scriptTimeText: scriptTimeText, scriptActions: scriptActions, pendingCountText: pendingCountText,
+    categoryOptions: categoryOptions, noteLength: noteLength, noteProblem: noteProblem, tierBindingText: tierBindingText,
+    scriptSections: scriptSections
   };
 });
