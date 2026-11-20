@@ -9,7 +9,9 @@ from app.config import PROJECT_ROOT
 
 APP = PROJECT_ROOT / "app"
 SERVICE = APP / "services" / "admin_service.py"
-ADMIN_REPOSITORIES = ("app.repositories.admin_repository", "app.repositories.admin_audit_repository")
+ADMIN_REPOSITORIES = (
+    "app.repositories.admin_repository", "app.repositories.admin_audit_repository", "app.repositories.admin_script_repository",
+)
 # 唯一允許匯入後台專用 Repository 的檔案：後台 Service 本身，與負責組裝的 registry
 ALLOWED_IMPORTERS = {"app/services/admin_service.py", "app/services/registry.py"}
 
@@ -126,7 +128,33 @@ def test_the_import_check_really_fails_for_a_controller_or_another_service():
 
 
 def test_the_admin_repositories_do_not_inherit_the_generic_base_whose_methods_ignore_ownership():
-    for name in ("admin_repository.py", "admin_audit_repository.py"):
+    for name in ("admin_repository.py", "admin_audit_repository.py", "admin_script_repository.py"):
         tree = ast.parse((APP / "repositories" / name).read_text(encoding="utf-8-sig"))
         for cls in (n for n in tree.body if isinstance(n, ast.ClassDef)):
             assert not cls.bases, f"{cls.name} 不得繼承基底類別：{[ast.unparse(b) for b in cls.bases]}"
+
+
+# ---- 規則三：審核劇本的後台 Repository 只讀（版本狀態只在 ScriptRepository 寫入）----------------------------
+
+WRITE_CALLS = {"update", "delete", "insert", "add", "add_all", "merge", "bulk_insert_mappings", "bulk_update_mappings"}
+
+
+def write_calls(source: str) -> list[str]:
+    found = []
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Call):
+            function = node.func
+            name = function.id if isinstance(function, ast.Name) else function.attr if isinstance(function, ast.Attribute) else None
+            if name in WRITE_CALLS:
+                found.append(name)
+    return found
+
+
+def test_the_admin_script_repository_never_writes():
+    assert write_calls((APP / "repositories" / "admin_script_repository.py").read_text(encoding="utf-8-sig")) == []
+
+
+def test_the_write_check_really_fails_for_an_update_or_an_add():
+    assert write_calls("from sqlalchemy import update\nx = update(Model).values(a=1)\n") == ["update"]
+    assert write_calls("def f(self):\n    self._session.add(row)\n    self._session.delete(row)\n") == ["add", "delete"]
+    assert write_calls("def f(self):\n    return self._session.scalars(select(Model).where(a == 1))\n") == []

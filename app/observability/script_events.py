@@ -1,4 +1,4 @@
-"""劇本創作、審查與營運限制的結構化日誌事件（見 service-observability 規格「劇本、暱稱與審查事件只含白名單欄位」）。
+"""劇本創作、審查、審核（核可、退回、下架、恢復上架）與營運限制的結構化日誌事件（見 service-observability 規格「劇本、暱稱與審查事件只含白名單欄位」）。
 
 欄位限於白名單內的「事件名稱、內部使用者編號、固定列舉的類別或結果、整數長度、模型名稱與嘗試次數」。**絕不含**暱稱、
 短代號、筆名、劇本的任何文字、標題、標籤、申訴內容或模型原文——這裡的函式根本沒有接收這些的參數，所以不是「記得不要放」，
@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from typing import Iterable
 
-from app.models.script import REVIEW_CATEGORIES, REVIEW_VERDICTS
+from app.models.script import DECISION_CATEGORIES, REMOVERS, REVIEW_CATEGORIES, REVIEW_VERDICTS
 
 logger = logging.getLogger("app.script")
 
@@ -26,6 +26,10 @@ EVENT_REVIEW = "script.review"
 EVENT_REVIEW_UNAVAILABLE = "script.review_unavailable"
 EVENT_PUBLISH_SUSPENDED = "script.publish_suspended"
 EVENT_PUBLISH_LIFTED = "script.publish_lifted"
+EVENT_APPROVED = "script.approved"
+EVENT_REJECTED = "script.rejected"
+EVENT_REMOVED = "script.removed"
+EVENT_RESTORED = "script.restored"
 EVENT_LIMIT_INVALID = "limits.invalid"
 EVENT_LIMIT_CHANGED = "limits.changed"
 
@@ -108,6 +112,41 @@ def log_publish_suspended(*, user_id: int) -> None:
 
 def log_publish_lifted(*, user_id: int) -> None:
     _info(EVENT_PUBLISH_LIFTED, "管理員解除暫停發佈", user_id=user_id)
+
+
+def log_approved(*, user_id: int) -> None:
+    """管理員核可一份劇本（`user_id` 是執行的管理員；沒有任何劇本文字與備註）。"""
+    _info(EVENT_APPROVED, "管理員核可劇本", user_id=user_id)
+
+
+def log_rejected(*, user_id: int, category: str) -> None:
+    """管理員人工退回：固定類別（審查類別加 `other_policy`）；函式沒有備註參數，備註放不進日誌。"""
+    _check_category(category)
+    _info(EVENT_REJECTED, "管理員退回劇本", user_id=user_id, reason=category)
+
+
+def log_removed(*, user_id: int, remover: str, category: str | None = None) -> None:
+    """劇本下架：下架者（`author`／`admin`）與固定類別（作者自行下架沒有類別）；`user_id` 是執行下架的人。"""
+    _check_remover(remover)
+    if category is not None:
+        _check_category(category)
+    _info(EVENT_REMOVED, "劇本下架", user_id=user_id, kind=remover, reason=category)
+
+
+def log_restored(*, user_id: int, remover: str) -> None:
+    """劇本恢復上架：`remover` 是原本的下架者，也就是這次的恢復者（作者恢復自己下架的、管理員恢復自己下架的）。"""
+    _check_remover(remover)
+    _info(EVENT_RESTORED, "劇本恢復上架", user_id=user_id, kind=remover)
+
+
+def _check_category(category: str) -> None:
+    if category not in DECISION_CATEGORIES:
+        raise ValueError(f"類別必須是固定列舉：{category!r}")
+
+
+def _check_remover(remover: str) -> None:
+    if remover not in REMOVERS:
+        raise ValueError(f"下架者必須是固定列舉：{remover!r}")
 
 
 def log_limit_invalid(*, key: str) -> None:

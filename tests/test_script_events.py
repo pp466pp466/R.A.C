@@ -7,7 +7,7 @@ import logging
 
 import pytest
 
-from app.models.script import REVIEW_CATEGORIES, REVIEW_VERDICTS
+from app.models.script import DECISION_CATEGORIES, REMOVERS, REVIEW_CATEGORIES, REVIEW_VERDICTS
 from app.observability import script_events
 from app.observability.json_logging import ALLOWED_FIELDS
 
@@ -16,7 +16,10 @@ LOG_FUNCTIONS = {
     if name.startswith("log_") and function.__module__ == script_events.__name__
 }
 # 允許出現在簽名裡的參數：內部編號、整數、固定列舉（以名稱區分），以及鍵名（只接固定列舉的營運限制鍵）
-ALLOWED_PARAMETERS = {"user_id", "total_chars", "flagged", "stage", "layer", "categories", "model", "verdict", "attempt", "reason", "key"}
+ALLOWED_PARAMETERS = {
+    "user_id", "total_chars", "flagged", "stage", "layer", "categories", "model", "verdict", "attempt", "reason", "key",
+    "category", "remover",             # 審核與下架（rpg-script-publishing）：固定類別與下架者的列舉，傳入列舉以外的值會立刻出錯
+}
 
 
 @pytest.fixture(autouse=True)
@@ -58,6 +61,10 @@ def test_the_extra_fields_are_all_in_the_log_whitelist(caplog):
     script_events.log_review_unavailable(user_id=1, reason="budget")
     script_events.log_publish_suspended(user_id=1)
     script_events.log_publish_lifted(user_id=1)
+    script_events.log_approved(user_id=1)
+    script_events.log_rejected(user_id=1, category="other_policy")
+    script_events.log_removed(user_id=1, remover="admin", category="minor_sexual")
+    script_events.log_restored(user_id=1, remover="author")
     script_events.log_limit_invalid(key="script_limit.free")
     script_events.log_limit_changed(key="script_limit.free")
     records = capture(caplog)
@@ -99,3 +106,56 @@ def test_the_rejection_log_keeps_the_categories_sorted_and_joined_without_conten
     script_events.log_auto_rejected(user_id=7, stage="submit", layer="model", categories=["non_consensual", "minor_sexual", "minor_sexual"])
     (record,) = capture(caplog)
     assert (record.kind, record.outcome, record.reason, record.user_id) == ("submit", "model", "minor_sexual,non_consensual", 7)
+
+
+# ---- 審核與下架（rpg-script-publishing）：只有內部編號與固定列舉，備註放不進來 ---------------------------------------
+
+
+def test_the_review_and_takedown_events_have_no_parameter_that_could_carry_a_note():
+    for name in ("log_approved", "log_rejected", "log_removed", "log_restored"):
+        parameters = set(inspect.signature(LOG_FUNCTIONS[name]).parameters)
+        assert not parameters & {"note", "reason", "text", "title", "content", "message", "category_text"}, (name, parameters)
+
+
+def test_the_review_events_carry_only_the_actor_the_remover_and_the_fixed_category(caplog):
+    script_events.log_approved(user_id=3)
+    script_events.log_rejected(user_id=3, category="other_policy")
+    script_events.log_removed(user_id=3, remover="admin", category="real_person_sexual")
+    script_events.log_removed(user_id=4, remover="author")
+    script_events.log_restored(user_id=3, remover="admin")
+    approved, rejected, removed_by_admin, removed_by_author, restored = capture(caplog)
+    assert (approved.event, approved.user_id) == (script_events.EVENT_APPROVED, 3)
+    assert (rejected.event, rejected.reason) == (script_events.EVENT_REJECTED, "other_policy")
+    assert (removed_by_admin.event, removed_by_admin.kind, removed_by_admin.reason) == (script_events.EVENT_REMOVED, "admin", "real_person_sexual")
+    assert (removed_by_author.kind, removed_by_author.reason, removed_by_author.user_id) == ("author", None, 4)
+    assert (restored.event, restored.kind) == (script_events.EVENT_RESTORED, "admin")
+
+
+def test_every_decision_category_and_both_removers_are_accepted(caplog):
+    for category in DECISION_CATEGORIES:
+        script_events.log_rejected(user_id=1, category=category)
+        script_events.log_removed(user_id=1, remover="admin", category=category)
+    for remover in REMOVERS:
+        script_events.log_restored(user_id=1, remover=remover)
+    assert len(capture(caplog)) == 2 * len(DECISION_CATEGORIES) + len(REMOVERS)
+
+
+@pytest.mark.parametrize("category", ["", "free text with a reviewer note", "OTHER_POLICY", None])
+def test_a_category_outside_the_enumeration_is_refused_so_a_note_cannot_reach_the_log(category):
+    with pytest.raises(ValueError):
+        script_events.log_rejected(user_id=1, category=category)
+
+
+@pytest.mark.parametrize("category", ["", "free text with a reviewer note", "OTHER_POLICY"])
+def test_a_takedown_category_outside_the_enumeration_is_refused_but_none_means_no_category(category):
+    with pytest.raises(ValueError):
+        script_events.log_removed(user_id=1, remover="admin", category=category)
+    script_events.log_removed(user_id=1, remover="author", category=None)          # 作者自行下架沒有類別
+
+
+@pytest.mark.parametrize("remover", ["", "root", "ADMIN", None])
+def test_a_remover_outside_the_enumeration_is_refused(remover):
+    with pytest.raises(ValueError):
+        script_events.log_removed(user_id=1, remover=remover)
+    with pytest.raises(ValueError):
+        script_events.log_restored(user_id=1, remover=remover)

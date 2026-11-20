@@ -260,6 +260,12 @@ flowchart TD
 | `/api/admin/publish-suspended` | GET | 目前被暫停發佈的玩家帳號（識別碼、顯示名稱、暫停時間；不含 email 與暱稱） |
 | `/api/admin/users/<public_id>/lift-publish-suspension` | POST | 解除暫停發佈（重新輸入密碼）；補一筆 `lifted` 送審紀錄使連續被拒中斷、申訴標為已處理、寫 `publish.lift` |
 | `/api/admin/users/<public_id>/wallet/adjust` | POST | 調整玩家的遊戲幣餘額（`bucket`、`delta`、`reason`、密碼）；不受免費幣上限限制，不能使餘額低於 0（409 `insufficient_coins`）；稽核 `wallet.adjust` 與調整同一個交易 |
+| `/api/admin/scripts` | GET | 劇本審核清單（待審、上架中、已下架；待審有疑慮的排最前）：只有目錄資訊與狀態，沒有內文與審核備註全文，不寫稽核 |
+| `/api/admin/scripts/versions/<public_id>` | GET | 讀取送審過的版本全文與審核備註（先寫 `script.read` 稽核再回傳；草稿與不存在一律 404） |
+| `/api/admin/scripts/versions/<public_id>/approve` | POST | 核可（不需要密碼）；取代同劇本原本上架或下架的版本，寫 `script.approve` |
+| `/api/admin/scripts/versions/<public_id>/reject` | POST | 人工退回（固定類別加只有管理員看得到的備註，不需要密碼）；寫 `script.reject`，備註不進稽核與日誌 |
+| `/api/admin/scripts/versions/<public_id>/remove` | POST | 管理員下架（類別、備註與密碼）；內建劇本不可下架；寫 `script.remove` |
+| `/api/admin/scripts/versions/<public_id>/restore` | POST | 管理員恢復自己下架的版本（密碼）；作者自行下架的不恢復；寫 `script.restore` |
 
 頁面：`/admin`（只有管理員的顯示名稱，所有資料經由 API 取得；前端見 [前端結構-frontend.md](前端結構-frontend.md)）。
 

@@ -93,8 +93,9 @@ flowchart TD
 | 規則 | 守法 |
 |---|---|
 | `AdminService` 的每個公開方法，第一個陳述式是 `self._policy.require_admin(admin)` | `tests/architecture/test_admin_boundaries.py`（AST；測試本身有自我驗證，餵它故意違規的原始碼必須失敗並指出方法） |
-| 後台專用的 Repository（`admin_repository.py`、`admin_audit_repository.py`）只被 `admin_service.py` 與 `registry.py` 匯入 | 同上（指出違規的檔案） |
+| 後台專用的 Repository（`admin_repository.py`、`admin_audit_repository.py`、`admin_script_repository.py`）只被 `admin_service.py` 與 `registry.py` 匯入 | 同上（指出違規的檔案） |
 | `AdminAuditRepository` 只有 `add` 與 `list`，沒有更新與刪除 | `tests/test_admin_audit_repository.py` 以反射檢查公開方法 |
+| `AdminScriptRepository` 只讀（劇本審核的清單、全文與參照；版本狀態只在 `ScriptRepository` 轉移） | `tests/architecture/test_admin_boundaries.py` 以 AST 檢查沒有寫入呼叫、`tests/test_admin_script_repository.py` 以反射檢查公開方法 |
 
 `AdminService` 依賴 `AccessPolicy`、兩個後台 Repository、`UsageService`（用量快照）、`AgeStatsService`（年齡區間人數）與兩個注入的可呼叫物件：`AuthService.confirm_password`（重新輸入密碼）與 `keep_changes_on_error`（失敗的重新驗證也要保存稽核），由 `registry.get_admin_service()` 組裝。回傳的資料一律是明確組出來的字典，不是 ORM 物件，所以內部編號、密碼雜湊與 `token_version` 不可能意外外露。
 

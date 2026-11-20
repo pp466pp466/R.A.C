@@ -16,6 +16,7 @@ from app.db.session import defer_until_commit, get_session, keep_changes_on_erro
 from app.llm.types import LLMProvider
 from app.repositories.admin_audit_repository import AdminAuditRepository
 from app.repositories.admin_repository import AdminRepository
+from app.repositories.admin_script_repository import AdminScriptRepository
 from app.repositories.auth_token_repository import AuthTokenRepository
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
@@ -353,7 +354,7 @@ def get_admin_service() -> AdminService:
     return AdminService(
         policy=get_access_policy(), admins=AdminRepository(session), audit=AdminAuditRepository(session),
         usage=get_usage_service(), age_stats=build_age_stats_service(session, age_policy=get_age_policy()),
-        usage_settings=config.usage,
+        usage_settings=config.usage, scripts=ScriptRepository(session), admin_scripts=AdminScriptRepository(session),
         confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
         wallet=get_wallet_service(),
     )

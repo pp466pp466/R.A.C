@@ -7,11 +7,11 @@ Controller 只做三件事：確認登入、**先確認是管理員**、讀取�
 「不存在」相同的 404，而不是 400 或 415 這種會透露端點存在的回應。回應只含明確組出來的資料，沒有內部編號、密碼雜湊與
 `token_version`，也沒有任何個別使用者的年齡資料。
 """
-from flask import Blueprint, jsonify
+from flask import Blueprint, jsonify, request
 
 from app.controllers.request_helpers import int_arg, read_json_object
 from app.security.session import require_login
-from app.services.admin_service import DEFAULT_PAGE_SIZE, AdminService
+from app.services.admin_service import DEFAULT_PAGE_SIZE, DEFAULT_SCRIPT_STATUS, AdminService
 from app.services.current_user import CurrentUser
 from app.services.registry import get_admin_service
 
@@ -130,6 +130,55 @@ def lift_publish_suspension(public_id: str):
     admin, service = _admin()
     body = read_json_object()
     return jsonify(user=service.lift_publish_suspension(admin, public_id, password=body.get("password")))
+
+
+# ---- 劇本審核、下架與恢復（rpg-script-publishing）-----------------------------------------------------
+# 先 `_admin()`（非管理員一律 404，含格式錯誤的本文）才解析本文與查詢參數。核可不讀本文（不需要密碼與其他欄位）；
+# 退回與下架帶固定列舉的 `category` 與選填的 `note`；下架與恢復另帶管理員自己的密碼（高風險）。回應不含內部編號。
+
+@admin_api_bp.get("/scripts")
+def script_queue():
+    """審核清單：`status`（`pending_review` 預設、`published`、`removed`）、`limit`、`offset`。沒有劇本內文與備註全文。"""
+    admin, service = _admin()
+    limit, offset = _page()
+    status = request.args.get("status", DEFAULT_SCRIPT_STATUS)
+    return jsonify(versions=service.script_queue(admin, status=status, limit=limit, offset=offset))
+
+
+@admin_api_bp.get("/scripts/versions/<public_id>")
+def read_script(public_id: str):
+    """送審過的版本的全文與審核備註；先寫 `script.read` 稽核再回傳（草稿與不存在一律 404）。"""
+    admin, service = _admin()
+    return jsonify(service.read_script(admin, public_id))
+
+
+@admin_api_bp.post("/scripts/versions/<public_id>/approve")
+def approve_script(public_id: str):
+    admin, service = _admin()
+    return jsonify(service.approve_script(admin, public_id))
+
+
+@admin_api_bp.post("/scripts/versions/<public_id>/reject")
+def reject_script(public_id: str):
+    admin, service = _admin()
+    body = read_json_object()
+    return jsonify(service.reject_script(admin, public_id, category=body.get("category"), note=body.get("note")))
+
+
+@admin_api_bp.post("/scripts/versions/<public_id>/remove")
+def remove_script(public_id: str):
+    admin, service = _admin()
+    body = read_json_object()
+    return jsonify(service.remove_script(
+        admin, public_id, category=body.get("category"), note=body.get("note"), password=body.get("password"),
+    ))
+
+
+@admin_api_bp.post("/scripts/versions/<public_id>/restore")
+def restore_script(public_id: str):
+    admin, service = _admin()
+    body = read_json_object()
+    return jsonify(service.restore_script(admin, public_id, password=body.get("password")))
 
 
 # ---- 對話與模型失敗的原文 ---------------------------------------------------------------------------

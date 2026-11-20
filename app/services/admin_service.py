@@ -6,6 +6,9 @@
 3. **每個讀取與改變都留下稽核**，且與動作同一個交易（請求成功才一起提交）；讀取類先寫稽核再回傳內容，稽核寫入失敗就不回傳。
    重新輸入密碼失敗（`reauth.failed`）與查無此人的查詢是 4xx，請求交易預設會回復，所以明確以 `persist_on_error` 保存。
 
+劇本審核（rpg-script-publishing）：送審過的版本全文可讀（草稿讀不到，每次讀取先寫 `script.read` 稽核），核可與退回不需要密碼，
+下架與恢復須重新輸入密碼；審核備註只在管理員讀取版本的回應中，不進稽核、日誌與事件。
+
 可讀範圍最小：清單只有識別碼、次數與時間；只有「意見回饋」與「被內容安全過濾標記」兩類對話可讀全文；使用者資料沒有任何
 個別的年齡資料（生日、年齡區間、年齡群組），年齡只有總覽的各區間人數彙總。回傳的資料一律是明確組出來的字典，不是 ORM 物件，
 所以內部編號、密碼雜湊與 `token_version` 不可能意外外露。
@@ -19,8 +22,13 @@ from app.config import UsageSettings
 from app.models.admin_audit_log import (
     ACTION_ACCOUNT_UNLOCK, ACTION_APPEAL_READ, ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ,
     ACTION_PUBLISH_LIFT,
-    ACTION_REAUTH_FAILED, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
+    ACTION_REAUTH_FAILED, ACTION_SCRIPT_APPROVE, ACTION_SCRIPT_READ, ACTION_SCRIPT_REJECT, ACTION_SCRIPT_REMOVE,
+    ACTION_SCRIPT_RESTORE, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
     ACTION_WALLET_ADJUST, MAX_REASON_CHARS,
+)
+from app.models.script import (
+    DECISION_CATEGORIES, MAX_DECISION_NOTE_CHARS, REMOVER_ADMIN, REMOVER_AUTHOR, VERSION_PENDING, VERSION_PUBLISHED,
+    VERSION_REJECTED, VERSION_REMOVED,
 )
 from app.models.user import (
     MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
@@ -30,13 +38,22 @@ from app.models.wallet import BUCKET_FREE, BUCKETS
 from app.observability import admin_events, script_events, security_events
 from app.repositories.admin_audit_repository import AdminAuditRepository
 from app.repositories.admin_repository import AdminRepository, ReviewableConversation
+from app.repositories.admin_script_repository import LISTABLE_STATUSES, AdminScriptRepository, ScriptVersionRef
+from app.repositories.errors import (
+    BuiltinNotRemovableError, InvalidVersionTransitionError, LiveVersionExistsError, RemovedByAuthorError,
+)
+from app.repositories.script_repository import ScriptRepository
+from app.services import admin_script_views
 from app.services.access_policy import AccessPolicy
 from app.services.age_policy import TAIPEI
 from app.services.age_stats_service import AgeStatsService
 from app.services.cs_intents import INTENT_COMPLAINT_FEEDBACK, INTENT_HUMAN_HANDOFF
 from app.services.current_user import CurrentUser
-from app.services.errors import AdminTargetForbidden, Conflict, NotFound, NotSuspended, ValidationError
-from app.services.input_cleaning import clean_single_line
+from app.services.errors import (
+    AdminTargetForbidden, BuiltinNotRemovable, Conflict, LiveExists, NotFound, NotPending, NotPublished, NotRemoved, NotSuspended,
+    RemovedByAuthor, ValidationError,
+)
+from app.services.input_cleaning import clean_message, clean_single_line
 from app.services.normalization import canonical_email, is_valid_email
 from app.services.quota_policy import suspension_until, taipei_day_bounds
 from app.services.usage_service import UsageService
@@ -51,6 +68,8 @@ MAX_MESSAGES = 200
 FAILURE_WINDOW = timedelta(days=14)
 MAX_FAILURES = 100
 OVERVIEW_DAYS = 7
+
+DEFAULT_SCRIPT_STATUS = VERSION_PENDING            # 審核清單沒有指定狀態時看待審的
 
 VIA_EMAIL = "email"
 VIA_ID = "id"
@@ -76,6 +95,8 @@ class AdminService:
         usage: UsageService,
         age_stats: AgeStatsService,
         usage_settings: UsageSettings,
+        scripts: ScriptRepository,                          # 劇本審核的狀態轉移（唯一寫入版本狀態的 Repository）
+        admin_scripts: AdminScriptRepository,               # 劇本審核的唯讀查詢（清單、全文、參照）
         confirm_password: Callable[[CurrentUser, object], None],
         persist_on_error: Callable[[], None],
         clock: Callable[[], datetime],
@@ -88,6 +109,8 @@ class AdminService:
         self._usage = usage
         self._age_stats = age_stats
         self._usage_settings = usage_settings
+        self._scripts = scripts
+        self._admin_scripts = admin_scripts
         self._confirm_password = confirm_password
         self._persist_on_error = persist_on_error          # 「這個請求即使以 4xx 結束也保留變更」（與登入失敗計數同一個機制）
         self._clock = clock
@@ -322,6 +345,137 @@ class AdminService:
         return {"public_id": user.public_id, "display_name": user.display_name, "publish_suspended": False}
 
     # =========================================================================
+    # 劇本審核、下架與恢復（rpg-script-publishing）
+    # =========================================================================
+    # 讀取（清單、全文）與核可、退回不重新輸入密碼；下架與恢復是高風險操作，須重新輸入密碼。版本狀態的轉移全部在
+    # `ScriptRepository`（條件式 UPDATE，並行只有一個成功）；這裡的前置檢查只是為了更早給出明確的 409（例如不必先輸入密碼），
+    # 真正的判斷仍是 Repository 的條件，輸掉競態的一方同樣得到 409，稽核與動作同一個交易所以不留痕。
+    # 稽核的細節只有版本與劇本的對外識別碼、狀態與類別列舉；**審核備註不進稽核、日誌與事件**（函式沒有備註參數）。
+
+    def script_queue(
+        self, admin: CurrentUser, *, status: object = DEFAULT_SCRIPT_STATUS, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0
+    ) -> list[dict[str, Any]]:
+        """審核清單（待審、上架中、已下架）。沒有劇本內文與審核備註全文（只有 `has_note`），所以列出不寫稽核。"""
+        self._policy.require_admin(admin)
+        errors: dict[str, str] = {}
+        if not isinstance(status, str) or status not in LISTABLE_STATUSES:
+            errors["status"] = "狀態必須是 " + "、".join(LISTABLE_STATUSES) + " 其中之一。"
+        try:
+            limit, offset = self._page(limit, offset)
+        except ValidationError as error:
+            errors.update(error.fields)
+        if errors:
+            raise ValidationError(fields=errors)
+        rows = self._admin_scripts.list_by_status(status, limit=limit, offset=offset)    # type: ignore[arg-type]
+        return [admin_script_views.list_item(row) for row in rows]
+
+    def read_script(self, admin: CurrentUser, public_id: str) -> dict[str, Any]:
+        """讀取送審過的版本的全文與審核備註（先寫 `script.read` 稽核再回傳，稽核寫入失敗就不回傳）。草稿與不存在的識別碼
+        得到完全相同的 404，且沒有任何寫入。"""
+        self._policy.require_admin(admin)
+        found = self._admin_scripts.get_reviewable(public_id) if isinstance(public_id, str) else None
+        if found is None:
+            raise NotFound()
+        row = found.row
+        self._record(
+            admin, ACTION_SCRIPT_READ, target_user_public_id=row.author_public_id,
+            detail={"version_id": row.version_public_id, "script_id": row.script_public_id, "status": row.status},
+        )
+        return {"version": admin_script_views.detail(found)}
+
+    def approve_script(self, admin: CurrentUser, public_id: str) -> dict[str, Any]:
+        """核可：待審 → 上架中（同劇本原本上架或下架的版本改為被取代，第一次發佈時鎖定筆名）。不需要密碼、不寄信。"""
+        self._policy.require_admin(admin)
+        ref = self._script_ref(public_id)
+        if ref.status != VERSION_PENDING:
+            raise self._not_pending()
+        try:
+            version = self._scripts.approve_version(ref.version_public_id, now=self._clock())
+        except InvalidVersionTransitionError:
+            raise self._not_pending() from None
+        if version is None:
+            raise NotFound()
+        self._record(
+            admin, ACTION_SCRIPT_APPROVE, target_user_public_id=ref.author_public_id,
+            detail=self._script_detail(ref, VERSION_PUBLISHED), changed=True,
+        )
+        script_events.log_approved(user_id=admin.id)
+        return {"version": self._script_item(ref)}
+
+    def reject_script(self, admin: CurrentUser, public_id: str, *, category: object, note: object = None) -> dict[str, Any]:
+        """人工退回：待審 → 已退回，記錄固定類別與只有管理員看得到的備註。不需要密碼、不寄信；不計入送審次數或連續被自動拒絕。"""
+        self._policy.require_admin(admin)
+        clean_category, clean_note = self._decision(category, note)
+        ref = self._script_ref(public_id)
+        if ref.status != VERSION_PENDING:
+            raise self._not_pending()
+        try:
+            version = self._scripts.reject_version(ref.version_public_id, clean_category, clean_note, self._clock())
+        except InvalidVersionTransitionError:
+            raise self._not_pending() from None
+        if version is None:
+            raise NotFound()
+        self._record(
+            admin, ACTION_SCRIPT_REJECT, target_user_public_id=ref.author_public_id,
+            detail=self._script_detail(ref, VERSION_REJECTED, clean_category), changed=True,
+        )
+        script_events.log_rejected(user_id=admin.id, category=clean_category)
+        return {"version": self._script_item(ref)}
+
+    def remove_script(
+        self, admin: CurrentUser, public_id: str, *, category: object, note: object = None, password: object
+    ) -> dict[str, Any]:
+        """管理員下架：上架中 → 已下架（高風險：重新輸入密碼）。內建劇本不可下架；只有管理員能恢復管理員下架的版本。"""
+        self._policy.require_admin(admin)
+        clean_category, clean_note = self._decision(category, note)
+        ref = self._script_ref(public_id)
+        if ref.status != VERSION_PUBLISHED:
+            raise NotPublished()
+        if ref.is_builtin:
+            raise BuiltinNotRemovable()
+        self._confirm(admin, password, ACTION_SCRIPT_REMOVE, target_user_public_id=ref.author_public_id)
+        try:
+            version = self._scripts.remove_by_admin(ref.version_public_id, clean_category, clean_note, self._clock())
+        except InvalidVersionTransitionError:
+            raise NotPublished() from None
+        except BuiltinNotRemovableError:
+            raise BuiltinNotRemovable() from None
+        if version is None:
+            raise NotFound()
+        self._record(
+            admin, ACTION_SCRIPT_REMOVE, target_user_public_id=ref.author_public_id,
+            detail=self._script_detail(ref, VERSION_REMOVED, clean_category), changed=True,
+        )
+        script_events.log_removed(user_id=admin.id, remover=REMOVER_ADMIN, category=clean_category)
+        return {"version": self._script_item(ref)}
+
+    def restore_script(self, admin: CurrentUser, public_id: str, *, password: object) -> dict[str, Any]:
+        """管理員恢復上架（高風險：重新輸入密碼）：只限管理員自己下架的版本；作者自行下架的是作者自己的決定。"""
+        self._policy.require_admin(admin)
+        ref = self._script_ref(public_id)
+        if ref.status != VERSION_REMOVED:
+            raise NotRemoved()
+        if ref.removed_by == REMOVER_AUTHOR:
+            raise RemovedByAuthor()
+        self._confirm(admin, password, ACTION_SCRIPT_RESTORE, target_user_public_id=ref.author_public_id)
+        try:
+            version = self._scripts.restore_by_admin(ref.version_public_id)
+        except InvalidVersionTransitionError:
+            raise NotRemoved() from None
+        except RemovedByAuthorError:
+            raise RemovedByAuthor() from None
+        except LiveVersionExistsError:
+            raise LiveExists() from None
+        if version is None:
+            raise NotFound()
+        self._record(
+            admin, ACTION_SCRIPT_RESTORE, target_user_public_id=ref.author_public_id,
+            detail=self._script_detail(ref, VERSION_PUBLISHED), changed=True,
+        )
+        script_events.log_restored(user_id=admin.id, remover=REMOVER_ADMIN)
+        return {"version": self._script_item(ref)}
+
+    # =========================================================================
     # 對話與模型失敗的原文
     # =========================================================================
 
@@ -432,6 +586,52 @@ class AdminService:
             raise NotFound()
         return found
 
+    def _script_ref(self, public_id: object) -> ScriptVersionRef:
+        """核可、退回、下架與恢復的目標（任何狀態都找得到，含草稿）；不存在回 404。"""
+        ref = self._admin_scripts.find_ref(public_id) if isinstance(public_id, str) else None
+        if ref is None:
+            raise NotFound()
+        return ref
+
+    def _script_item(self, ref: ScriptVersionRef) -> dict[str, Any]:
+        """動作完成之後這個版本的清單項目（版本此時一定是送審過的狀態，所以一定讀得到）。"""
+        found = self._admin_scripts.get_reviewable(ref.version_public_id)
+        if found is None:                                                    # 只有資料庫被直接改動才會發生
+            raise NotFound()
+        return admin_script_views.list_item(found.row)
+
+    @staticmethod
+    def _script_detail(ref: ScriptVersionRef, status: str, category: str | None = None) -> dict[str, Any]:
+        """審核稽核的細節：版本與劇本的對外識別碼、動作之後的狀態與類別列舉；沒有標題、筆名、備註與任何劇本文字。"""
+        detail: dict[str, Any] = {"version_id": ref.version_public_id, "script_id": ref.script_public_id, "status": status}
+        if category is not None:
+            detail["category"] = category
+        return detail
+
+    @staticmethod
+    def _not_pending() -> NotPending:
+        return NotPending("這份劇本已不在待審，請重新整理後再試。")
+
+    @staticmethod
+    def _decision(category: object, note: object) -> tuple[str, str | None]:
+        """退回與下架的決定：類別必須是固定列舉，備註（選填）NFC 正規化、去除控制字元（保留換行）、至多 500 字；
+        一次指出所有不合法的欄位。空白的備註視為沒有備註。"""
+        errors: dict[str, str] = {}
+        if not isinstance(category, str) or category not in DECISION_CATEGORIES:
+            errors["category"] = "請選擇一個類別。"
+        clean_note: str | None = None
+        if note is not None:
+            cleaned = clean_message(note) if isinstance(note, str) else None
+            if cleaned is None:
+                errors["note"] = "審核備註必須是可儲存的文字。"
+            elif len(cleaned) > MAX_DECISION_NOTE_CHARS:
+                errors["note"] = f"審核備註至多 {MAX_DECISION_NOTE_CHARS} 字。"
+            else:
+                clean_note = cleaned or None
+        if errors:
+            raise ValidationError(fields=errors)
+        return category, clean_note                                          # type: ignore[return-value]
+
     def _confirm(
         self, admin: CurrentUser, password: object, action: str, *, target_user: User | None = None,
         target_user_public_id: str | None = None, target_conversation: str | None = None,
@@ -452,12 +652,14 @@ class AdminService:
             raise
 
     def _record(
-        self, admin: CurrentUser, action: str, *, target_user: User | None = None, reason: str | None = None,
-        detail: dict[str, Any] | None = None, changed: bool = False,
+        self, admin: CurrentUser, action: str, *, target_user: User | None = None, target_user_public_id: str | None = None,
+        reason: str | None = None, detail: dict[str, Any] | None = None, changed: bool = False,
     ) -> None:
+        """寫一筆稽核（與動作同一個交易）。目標使用者以 `User` 或其對外識別碼給（劇本審核只有作者的識別碼，沒有載入帳號）。"""
         self._audit.add(
             admin_user_id=admin.id, action=action, now=self._clock(),
-            target_user_public_id=target_user.public_id if target_user is not None else None, reason=reason, detail=detail,
+            target_user_public_id=target_user.public_id if target_user is not None else target_user_public_id,
+            reason=reason, detail=detail,
         )
         if changed:
             admin_events.log_action(user_id=admin.id, action=action)

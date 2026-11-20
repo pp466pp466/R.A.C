@@ -340,6 +340,41 @@ class NotPending(Conflict):
     default_message = "只有待審的版本可以撤回。"
 
 
+class NotPublished(Conflict):
+    """版本不是上架中（409）：只有上架中的版本可以下架（rpg-script-publishing）。"""
+
+    code = "not_published"
+    default_message = "只有上架中的版本可以下架。"
+
+
+class NotRemoved(Conflict):
+    """版本不是下架狀態（409）：只有下架的版本可以恢復上架；包含下架之後已被新的上架版本取代的版本。"""
+
+    code = "not_removed"
+    default_message = "只有已下架的版本可以恢復上架。"
+
+
+class RemovedByAuthor(Conflict):
+    """版本是作者自己下架的（409）：管理員不恢復它，那是作者自己的決定。"""
+
+    code = "removed_by_author"
+    default_message = "這個版本是作者自己下架的，只有作者能恢復上架。"
+
+
+class LiveExists(Conflict):
+    """恢復上架時，同一個劇本已有另一個上架中的版本（409）。版本保持下架。"""
+
+    code = "live_exists"
+    default_message = "這個劇本已經有另一個上架中的版本，無法恢復。"
+
+
+class BuiltinNotRemovable(Conflict):
+    """內建劇本（沒有作者）不可下架（409）：它由種子與部署流程管理。"""
+
+    code = "builtin_not_removable"
+    default_message = "內建劇本不可下架。"
+
+
 class NotSuspended(Conflict):
     """帳號目前沒有被暫停發佈（409）。"""
 

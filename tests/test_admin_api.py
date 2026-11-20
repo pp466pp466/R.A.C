@@ -211,7 +211,7 @@ def test_there_are_no_endpoints_for_listing_users_changing_the_audit_or_deleting
     assert world.client("admin").open(path, method=method, json={} if method != "GET" else None).status_code in (404, 405)
 
 
-def test_the_registered_admin_routes_are_exactly_the_eighteen_documented_ones(world):
+def test_the_registered_admin_routes_are_exactly_the_twenty_four_documented_ones(world):
     routes = {(rule.rule, method) for rule in world.app.url_map.iter_rules() if rule.rule.startswith("/api/admin") for method in rule.methods - {"HEAD", "OPTIONS"}}
     assert routes == {
         ("/api/admin/overview", "GET"), ("/api/admin/audit", "GET"), ("/api/admin/users/lookup", "POST"),
@@ -222,6 +222,9 @@ def test_the_registered_admin_routes_are_exactly_the_eighteen_documented_ones(wo
         ("/api/admin/locked", "GET"), ("/api/admin/appeals", "GET"), ("/api/admin/users/<public_id>/unlock", "POST"),
         ("/api/admin/publish-suspended", "GET"), ("/api/admin/users/<public_id>/lift-publish-suspension", "POST"),      # rpg-script-authoring
         ("/api/admin/users/<public_id>/wallet/adjust", "POST"),                                                          # game-wallet
+        ("/api/admin/scripts", "GET"), ("/api/admin/scripts/versions/<public_id>", "GET"),                                # rpg-script-publishing
+        ("/api/admin/scripts/versions/<public_id>/approve", "POST"), ("/api/admin/scripts/versions/<public_id>/reject", "POST"),
+        ("/api/admin/scripts/versions/<public_id>/remove", "POST"), ("/api/admin/scripts/versions/<public_id>/restore", "POST"),
     }
 
 

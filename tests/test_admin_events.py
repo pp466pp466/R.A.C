@@ -37,18 +37,21 @@ def test_a_failed_reauthentication_logs_the_attempted_action_as_a_warning(log_li
     assert fields(line) == {"event": EVENT_REAUTH_FAILED, "user_id": 3, "reason": action}
 
 
-@pytest.mark.parametrize("action", ["user.lookup", "conversation.read", "failures.read", "reauth.failed", "x", ""])
+@pytest.mark.parametrize(
+    "action", ["user.lookup", "conversation.read", "failures.read", "reauth.failed", "script.read", "script.approve", "script.reject", "x", ""],
+)
 def test_only_the_dangerous_actions_can_fail_reauthentication(log_lines, action):
     with pytest.raises(ValueError):
         log_reauth_failed(user_id=3, action=action)
     assert log_lines() == []
 
 
-def test_the_dangerous_actions_are_exactly_the_seven_that_need_a_password():
+def test_the_dangerous_actions_are_exactly_the_nine_that_need_a_password():
     assert set(DANGEROUS_ACTIONS) == {
         "user.suspend", "user.unsuspend", "user.change_tier", "conversation.delete", "account.unlock",
         "publish.lift",             # rpg-script-authoring：解除暫停發佈
         "wallet.adjust",            # game-wallet：調整遊戲幣餘額
+        "script.remove", "script.restore",      # rpg-script-publishing：管理員下架與恢復劇本（讀取、核可與退回不需要密碼）
     }
 
 
