@@ -87,6 +87,7 @@
             <span v-if="card.author_name">作者：{{ card.author_name }}<template v-if="card.author_code">#{{ card.author_code }}</template></span>
           </p>
           <p class="ge-card__actions">
+            <a class="ui-btn" :href="detailPath(card.id)">查看詳情</a>
             <button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start(card)">開始</button>
           </p>
         </li>

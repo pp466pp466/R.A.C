@@ -787,6 +787,30 @@ def test_the_card_title_links_to_the_detail_page_and_load_more_continues_with_th
     assert '@click="start(card)"' in panel and ":disabled=\"!canStart\"" in panel
 
 
+def test_every_card_has_a_visible_view_details_button_next_to_start():
+    """使用者驗收時回報：卡片上只看得到「開始」，無法只查看詳情。標題雖然是連結，但原本長得跟普通文字一樣（手機沒有「滑鼠移上去」），
+    所以按鈕列要有明確的「查看詳情」，與「開始」並排；兩者都是一般站內連結或按鈕，沒有 Bootstrap 的互動屬性。"""
+    panel = _scripts_panel()
+    actions = re.search(r'<p class="ge-card__actions">(.*?)</p>', panel, re.S)
+    assert actions, "卡片沒有按鈕列"
+    body = actions.group(1)
+    detail = re.search(r'<a class="ui-btn" :href="detailPath\(card\.id\)">查看詳情</a>', body)
+    start = re.search(r'<button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start\(card\)">開始</button>', body)
+    assert detail and start
+    assert detail.start() < start.start()                                                              # 先看詳情、再開始
+    assert "data-bs-" not in body and "v-html" not in body
+
+
+def test_the_card_title_looks_like_a_link_and_the_card_buttons_have_a_touch_sized_target():
+    """標題連結要看得出能點（底線），不能只靠 hover 變色；按鈕列的兩個按鈕在手機上約 44px 高。"""
+    css = read(STATIC / "css" / "game.css")
+    link = css.split(".ge-card__link {", 1)[1].split("}", 1)[0]
+    assert "text-decoration: underline" in link and "text-decoration: none" not in link
+    actions = css.split(".ge-card__actions .ui-btn {", 1)[1].split("}", 1)[0]
+    assert "min-height: 2.75rem" in actions and "align-items: center" in actions
+    assert "display: flex" in css.split(".ge-card__actions {", 1)[1].split("}", 1)[0]
+
+
 def test_the_catalog_panel_shows_author_text_only_as_plain_interpolations_and_uses_no_forbidden_markup():
     panel = _scripts_panel()
     for expression in ("{{ card.title }}", "{{ card.summary }}", "{{ card.world_name }}", "{{ card.author_name }}", "{{ chip.tag }}", "{{ tag }}"):
