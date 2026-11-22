@@ -12,7 +12,7 @@ description: 分批執行 OpenSpec change 的 apply、交接與 commit 時使用
 | 階段 | 做什麼 | 產出寫進哪裡 |
 |---|---|---|
 | explore（`/openspec-explore`） | 釐清問題、比較方案，不寫程式。一次只問一個問題並附建議 | 結論與已確認的決定寫進 `docs/RPG.md`、`docs/report.md`（決策紀錄含備選方案與理由）；尚未立案的項目與順序寫進 `docs/路線圖-roadmap.md`。規範需要修訂時，草案給使用者審，核可後才改 `AGENTS.md` |
-| propose（`/openspec-propose`） | 把 change 的範圍、設計與任務寫成可驗證的文件 | `openspec/changes/<名稱>/` 的 `proposal.md`、`design.md`、`specs/<能力>/spec.md`（delta）、`tasks.md`；以 `openspec validate <名稱> --strict` 驗證 |
+| propose（`/openspec-propose`） | 把 change 的範圍、設計與任務寫成可驗證的文件 | `openspec/changes/<名稱>/` 的 `proposal.md`、`design.md`、`specs/<能力>/spec.md`（delta）、`tasks.md`（驗證欄位依第 4 節：中間批次列相關測試，全套只放最後一批）；以 `openspec validate <名稱> --strict` 驗證 |
 | apply（`/openspec-apply-change`） | 依 `tasks.md` 實作、測試、同步文件；每完成一項就勾選 | 程式與測試；`tasks.md` 的勾選；`README.md`（端點表、指令、驗收紀錄）；`docs/` 設計文件（`design-docs-sync` 技能）；動到 SQL Server `project` 時同步 `docs/project資料結構文件.md` |
 | archive（`/openspec-archive-change`） | 使用者驗收後，把 delta 同步到主規格並封存 | `openspec/specs/` 的主規格；`openspec/changes/archive/<日期>-<名稱>/`；`docs/路線圖-roadmap.md` 的狀態與日期 |
 
@@ -50,6 +50,10 @@ apply 之前，先讀 `tasks.md`，**把任務分組並請使用者確認後才�
 - **任務彼此獨立時，全部完成後跑一次**：不互相依賴的任務可以連續做完，再一次跑涵蓋它們的測試。
 - **測試輸出只回報摘要**：通過與失敗的筆數、失敗的測試名稱與一行原因；用安靜模式（`-q`）執行，不貼完整輸出。**失敗時才去看細節**，只展開失敗的那幾項。
 - **全套測試在收尾時跑**：一批的相關測試通過即可繼續；整個 change 要交付驗收或封存之前，跑一次全套（pytest 與 Node 測試），並把筆數寫進驗收紀錄。
+- **中間批次只有必要才跑全套 pytest，非必要留到最後一批**（使用者 2026-11-22 的要求；全套含真實 SQL Server 約 22 至 25 分鐘，且同時只能有一個 pytest 行程）。產生 `tasks.md` 與分批時就照這個寫：每批的驗證欄位列「相關測試」，全套 pytest 與 Node 全套只放最後一批（驗收前）。
+  - **中間批次固定要跑的**：該批的相關測試，加上收尾時的全域守門子集——`tests/architecture`、`test_service_errors`、`test_design_docs`、`test_readme`、`test_restricted_session`、`test_legal_pages`、`test_agents_skill_sync`（約 20 秒）。守門子集不可省：只跑相關測試會漏掉 README、設計文件、路由數與鍵數這類寫死的數量斷言。
+  - **何時算「必要」而補跑一次全套**：該批改了後端程式（`app/`）、端點或回應形狀、遷移、抹除與權限路徑，或會改變別處寫死的數量（路由數、鍵數、事件欄位白名單）。純前端、文件、政策頁的批次不必要，改加跑 Node 全套與對應的頁面測試。
+  - **最後一批的順序**：變異驗證 → pytest 全套與 Node 全套 → 使用者驗收。沒跑全套的批次，`HANDOFF.md` 與完成註記要如實寫「未跑全套」，不得暗示已全數通過。
 - **不要宣稱沒有執行過的結果**：沒跑的測試、沒驗證的環境，照實列為「未驗證」。
 - **專案慣例**：使用 `.venv` 的 Python（`.venv\Scripts\python.exe -m pytest`）；連真實 SQL Server `project_test` 的測試同時只能有一個 pytest 行程；測試不得指向 `project`。
 - 修改測試的斷言去配合新行為時，要確認是行為「刻意改變」造成的，不是掩蓋缺陷。
