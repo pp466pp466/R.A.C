@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-20 ｜ 對應 change：rpg-script-publishing（RC-8 的 8a：管理員審核佇列與下架、完整公開目錄與游標分頁、詳情頁 `/game/script/<版本>`；遷移 `0021`）、safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-22 ｜ 對應 change：rpg-script-reports（RC-8 的 8b：`ScriptReportService`、`ScriptReportRepository`、`ScriptRetentionPreferenceService`、`AdminService` 的檢舉讀取與結案、版本離開上架時自動結案、抹除流程的匿名保留；遷移 `0022`；見下方「劇本檢舉與匿名保留」）、rpg-script-publishing（RC-8 的 8a：管理員審核佇列與下架、完整公開目錄與游標分頁、詳情頁 `/game/script/<版本>`；遷移 `0021`）、safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -149,7 +149,7 @@ stateDiagram-v2
 
 | 規則 | 守法 |
 |---|---|
-| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 18 歲的立即抹除，都共用 `AccountErasureService`：先把別人的存檔對這位作者的劇本版本的來源參照清為空值（無動作的外鍵，不清會擋住刪除）、再清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復 | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
+| 閒置清除、自助刪除、逾時未補填年齡的清除（`purge-unconfirmed-accounts`）與補填時未滿 18 歲的立即抹除，都共用 `AccountErasureService`：（自助刪除與閒置清除且偏好開啟時）先匿名保留目前上架的劇本、再刪作者版本上的檢舉（無動作的外鍵，每一條路都做）、把別人的存檔對這位作者的劇本版本的來源參照清為空值（無動作的外鍵，不清會擋住刪除）、再清帳本的對話編號、再條件式刪除、寫刪除紀錄、提交；條件不成立整個回復（見「劇本檢舉與匿名保留」） | `tests/test_account_erasure_service.py`；`tests/test_cli_account_retention.py` 證明閒置清除也走它 |
 | 每張指向使用者、對話、存檔、劇本或版本的資料表都要登記（任意父表的串聯與無動作的外鍵都分類），沒有外鍵的整數參照與無動作的外鍵必須由抹除流程在刪除使用者之前明確清除 | `tests/architecture/test_account_erasure_coverage.py`（新增資料表漏掉就失敗，並有自我驗證）；`test_account_erasure_rpg_data.py` 以行為證明作者被抹除時別人的存檔保留 |
 | 劇本版本的狀態與兩個輔助欄位（`live_script_id`、`open_script_id`）只由 `ScriptRepository` 寫入；不得在別處建立 `ScriptVersion`、對它 `update`／`delete` 或對它的 `status` 賦值 | `tests/architecture/test_script_state_writes.py`（AST 掃描 `app/`，並附反向驗證） |
 | `RetentionRepository`（依期限刪除對話、帳本、權杖、稽核、鎖定計次、RPG 存檔與回合的部分內容）只被 `data_retention_service.py` 與 `registry.py` 匯入；`AdminAuditRepository` 仍沒有更新與刪除 | `tests/architecture/test_retention_boundaries.py` |
@@ -274,6 +274,51 @@ flowchart TD
 - **沒有寫入也沒有日誌**：標題、筆名與主角姓名都是玩家文字衍生的內容，Service 連日誌都不寫；兩個端點呼叫前後遊戲幣餘額、帳本與模型呼叫帳本都不變（`tests/test_session_api.py`）。
 - 組裝在 `registry.py` 的 `get_game_entry_service()`（只注入兩個 Repository 與 `AccessPolicy`，沒有任何模型供應商）。
 - **頁面控制器**（`app/controllers/game_page_controller.py`，MVC，只回 HTML）：`/game` 以 `login_required_page` 保護，初始狀態只有 `user`（會員等級與故事偏好）與 `gate`（`AccessPolicy.chat_gate` 的結果），**沒有清單內容**，由前端呼叫上面兩個端點取得；`/game/<存檔識別碼>` 是**遊戲主畫面**（rpg-game-ui）的外殼：呼叫 `GameEntryService.session_summary`，非擁有者與不存在得到逐字相同的 404 頁面，權限判斷全在 Service、Controller 不寫；初始狀態（`tojson` 已跳脫）只有 `session`（`id`、`title`、`content_tier`、`ended`、`player_name`）、`user`（`public_id` 供本機暫存的資料庫名稱用，加會員等級）、`gate`（`chat_gate`）、`content_mode`（`AccessPolicy.mode_state` 的生效模式與緊急煞車是否啟用 `{effective, forced}`，與 `/api/sessions/catalog` 同一個來源與形狀，供畫面顯示目前模式與緊急煞車的說明，不含生日與年齡、也沒有 `is_adult`）、`stream`（前端逾時：閒置 `STREAM_IDLE_TIMEOUT_MS` ＝ 45000、總計 `STREAM_TOTAL_TIMEOUT_MS` ＝ 180000，具名常數，依據見 `docs/RPG.md` 7.15、7.17.3）`limits`（`action_max` ＝ `game_service.ACTION_MAX`，後端調整時前端一起變）與 `revision_limits`（`reason_min`、`reason_max` 與五個回饋分類的識別字串，直接引用 `game_service` 的 `REASON_MIN`、`REASON_MAX`、`CATEGORIES`，前端不寫死；rpg-turn-revision），**沒有回合內容、第 0 幕、記事簿、世界狀態、email、生日與年齡**——這些由前端依序呼叫既有端點（快照、第 0 幕串流、回合、錢包）取得，所以頁面外殼永遠沒有劇情，返回上一頁或頁面快取也不會看到舊內容，本頁不改任何端點；`/game/start/<版本識別碼>` 是開存檔精靈的頁面：初始狀態只有 `member_tier`、`gate` 與兩個請求逾時（`suggest_timeout_ms` = 後端單次請求總預算 + 5 秒，`start_timeout_ms` = `2 × 預算 + 5 秒`，都由設定算出），**沒有劇本內容**，版本識別碼不出現在頁面內容（前端自己從網址讀取並呼叫 `setup` 端點；Vue 掛載的 `wizard.js` 已實作）。`/game/script/<版本識別碼>` 是**劇本詳情頁**（rpg-script-publishing）的外殼：以 `login_required_page` 保護，初始狀態只有 `user`（會員等級）與 `gate`，**不查詢版本、不含劇本內容與版本識別碼**，所以存在與不存在的版本得到逐字相同的頁面（前端自己從網址讀取識別碼並呼叫 `GET /api/sessions/catalog/<版本>`，404 時顯示「找不到這個劇本」）。四條都只接受 GET；路徑段數不同（`/game/script/<x>` 與 `/game/start/<x>` 兩段、`/game/<x>` 一段），所以不會互相吃掉，`/game/start` 或 `/game/script` 單獨一段會被當成存檔識別碼而得到 404（`tests/test_game_pages.py`）。受限登入狀態由 `login_required_page` 導向各自的頁面，`tests/test_restricted_session.py` 的全路由掃描把四條都列為「必須被掃到」。前端模組見 [前端結構](前端結構-frontend.md) 第 3d 節。
+
+### 劇本檢舉與匿名保留（rpg-script-reports）
+
+```mermaid
+flowchart TD
+    subgraph Player["玩家端"]
+        RCtl["session_api_controller<br/>POST /api/sessions/catalog/版本/report"] --> RSvc["ScriptReportService.submit"]
+        RSvc --> Pol["AccessPolicy.require_can_report<br/>帳號可用且已完成年齡確認"]
+        RSvc --> RRepo["ScriptReportRepository<br/>add、exists、count_between"]
+        RSvc --> Lim["RuntimeLimits.report_daily<br/>每次現讀資料庫"]
+        Det["GameEntryService.script_detail<br/>report_state 三種狀態"] --> RRepo
+    end
+    subgraph Close["自動結案（同一個交易）"]
+        Rm["ScriptRepository._remove<br/>作者與管理員下架共用"] -->|"結為 removed"| Cl["ScriptReportRepository.close_open<br/>全站唯一寫入結案欄位的地方"]
+        Ap["ScriptRepository.approve_version<br/>取代舊版本與下架版本"] -->|"結為 superseded"| Cl
+        Dis["AdminService.dismiss_script_reports"] -->|"結為 dismissed"| Cl
+    end
+    subgraph Admin["管理員端"]
+        ACtl["admin_api_controller<br/>GET scripts?status=reported<br/>GET 與 POST 版本/reports、reports/dismiss"] --> ASvc["AdminService<br/>script_reports、dismiss_script_reports"]
+        ASvc --> ARepo["AdminScriptRepository 只讀<br/>被檢舉清單依優先度排序<br/>list_reports 不選取檢舉人"]
+        ASvc --> Aud["稽核 report.read、report.dismiss"]
+    end
+    subgraph Keep["匿名保留與抹除"]
+        PCtl["account_api_controller<br/>GET 與 PUT /api/account/script-retention<br/>POST /api/account/delete 帶 keep_published_scripts"] --> PSvc["ScriptRetentionPreferenceService<br/>AccountDeletionService.request"]
+        Era["AccountErasureService.erase"] --> RetainFn["ScriptRepository.retain_published_anonymously<br/>delete_reports_on_authored_versions"]
+    end
+    Ret["RetentionRepository<br/>結案後 365 天才清除"] --> RRepo
+```
+
+| 元件 | 責任 |
+|---|---|
+| `ScriptReportService.submit` | 檢查順序固定：`require_can_report`（沿用 `chat_gate`：帳號可用且已完成年齡確認，**不論角色與會員等級**，管理員也一樣；受限登入狀態在更早的登入檢查就被擋）→ 版本必須是上架中且非內建（種子鍵）→ 不得檢舉自己的劇本（403 `report_own_script`）→ 理由與自寫文字驗證（`check_report_body`：理由為預設七項的多選、至少一項；文字至多 200 字、純文字、不送入模型）→ 已檢舉過同一版本（409 `already_reported`）→ 每日上限（台灣時間 0 點刷新，429 並附 `Retry-After`）→ 寫入。紅線旗標 `red_line`（涉及未成年的性內容、性暴力或非自願情節、以真人名義的性內容任一項）在建立時由 Service 算出並固定，排序只讀它，不依 JSON 欄位內容排序。並行的重複請求由 `(reporter_id, version_id)` 唯一約束擋下；非上架的版本、內建劇本與不存在的識別碼得到逐字相同的 404 |
+| `ScriptReportRepository` | 檢舉的新增、查詢與刪除；**結案欄位（`closed_at`、`closed_result`）只有 `close_open` 寫入**（條件式 UPDATE `closed_at IS NULL`，已結案的不被改寫），`tests/architecture/test_script_report_writes.py` 以 AST 守住；個人資料匯出只選理由、自寫文字與時間，不選結案欄位與別人的檢舉 |
+| 自動結案 | 版本離開上架時，未結案的檢舉在**同一個交易**結案：下架（作者或管理員）結為 `removed`、被新版本取代結為 `superseded`、管理員判定不成立結為 `dismissed`（不需要密碼、版本仍上架）；恢復上架不重開檢舉（結案是歷史事實）。核可時的結案在 SAVEPOINT 內，轉移失敗就整個回復 |
+| `AdminService.script_reports`、`dismiss_script_reports` | 讀取檢舉內容**先寫 `report.read` 稽核再回傳**（草稿與不存在一律 404、沒有任何寫入）；回傳的資料列**沒有檢舉人**（查詢根本不選取 `reporter_id`）；結案為「不成立」寫 `report.dismiss`，沒有未結案的檢舉回 409 `no_open_reports`。結案為「下架」沿用 `remove_script`（須重新輸入密碼），不提供免密碼的下架捷徑。稽核與事件只有識別碼與整數筆數 |
+| `AdminScriptRepository`（只讀） | 所有清單與詳情帶 `report_count`、`red_line_reported`（對未結案檢舉的分組子查詢做外連接）；`status=reported` 檢視是上架中且有未結案檢舉的版本，排序為紅線優先 → 未結案人數多者 → 最早檢舉者 → 版本編號 |
+| `ScriptRetentionPreferenceService` | `get`、`set` 只讀寫呼叫者本人的偏好；受限登入狀態拒絕、管理員一律 403 `admin_script_retention_forbidden`；回傳 `keep` 與目前上架的劇本數 `live_count`（刪除視窗據此決定是否顯示核取方塊）。`GET /api/auth/me` 沒有新增欄位 |
+| `AccountDeletionService.request` | 新增選填 `keep_published_scripts`：非布林 400 且早於確認本人；偏好在 `request_deletion` 條件式 UPDATE 成功**之後**才寫、同一個交易，申請被並行搶先時偏好不變 |
+| `AccountErasureService.erase` | 新增 `retain_scripts`：只有 `erase_pending_due` 與 `erase_inactive` 傳 `True`，預設 `False`（新增呼叫者時漏傳偏向全刪）；先做匿名保留，再**每一條路**刪作者版本上的檢舉，最後才清來源參照與條件式刪除（順序與理由見 [資料模型](資料模型-data-model.md) 的保存與刪除一節） |
+| `RetentionRepository` 的檢舉清除 | 結案時間早於 `SCRIPT_REPORT_RETENTION`（365 天）才清，`closed_at IS NOT NULL` 在 find、count 與 purge 三處都有，未結案者與所屬版本同壽命；`purge-expired-data` 的類別為「劇本檢舉（已結案）」 |
+
+- **檢舉不自動下架**：只升高管理員審核佇列的優先度，是否下架由管理員決定；檢舉人不會收到通知，作者看不到檢舉人與檢舉內容（作者端的版本摘要沒有任何檢舉欄位）；檢舉人的個人資料匯出只含自己送出的檢舉，不含被檢舉版本的標題、作者與結案欄位。
+- **文字不落日誌**：理由與自寫文字是玩家文字，日誌事件（`script_events`：`script.report_submitted`、`script.report_limited`、`script.reports_dismissed`、`script.reports_auto_closed`）只有內部編號、固定列舉與整數長度、筆數；自動結案事件只在轉移確定成功之後記錄，沒有檢舉（0 筆）不產生事件。
+- **每日上限與設定鍵**：`script_report_daily`（預設 5，0 表示暫停接受檢舉）存放於 `runtime_limits`，每次使用時現讀、不快取於行程內，以 `flask set-script-limit` 修改並寫入稽核（`limit.set`）。
+- 組裝在 `registry.py` 的 `get_script_report_service()` 與 `get_script_retention_preference_service()`。
 
 ### 遊戲幣錢包（game-wallet）
 

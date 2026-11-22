@@ -1,8 +1,8 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-21 ｜ 對應 change：rpg-script-reports（新增 `script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`；遷移 `0022`；本批只有資料與 Repository 核心，其餘設計見後續批次）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`，版本狀態新增 `removed`；遷移 `0021`；本批只有資料與 Repository 核心，其餘設計見後續批次）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0022_script_reports` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-22 ｜ 對應 change：rpg-script-reports（新增 `script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`；遷移 `0022`；抹除流程新增匿名保留與刪除作者版本檢舉兩步；變更已實作、待使用者驗收與封存）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`，版本狀態新增 `removed`；遷移 `0021`；本批只有資料與 Repository 核心，其餘設計見後續批次）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0022_script_reports` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
-> 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：刪帳號的「匿名保留已發佈劇本」偏好（RC-8）、性格原型三張表（RC-5）、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
+> 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：性格原型三張表（RC-5）；刪帳號的「匿名保留已發佈劇本」偏好已由 `rpg-script-reports`（RC-8 的 8b，`0022`）實作，見下方保存與刪除一節、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
 
 本文件說明資料表之間的關係、約束與保存規則。欄位與約束以 `app/models/` 與 `migrations/versions/` 為準；這裡只列對設計有意義的欄位。**逐表逐欄的資料字典（型別、可空、鍵、說明）、各領域的 ERD、固定值與 JSON 欄位結構**在 [project資料結構文件.md](project資料結構文件.md)，兩份文件同步維護。
@@ -471,14 +471,37 @@ flowchart TD
     Sub -->|"隨帳號抹除 CASCADE"| Era
     Rep["script_reports（劇本檢舉）"] -->|"結案後 365 天（purge-expired-data，未結案者不清）"| Del11["刪除，只刪檢舉本身 版本與帳號不受影響"]
     Rep -->|"檢舉人的帳號抹除 CASCADE"| Era
-    Scr["scripts、script_versions、script_version_tags"] -->|"隨作者的帳號抹除"| Era
+    Scr["scripts、script_versions、script_version_tags"] -->|"隨作者的帳號抹除（偏好開啟且原因為自己申請刪除或 12 個月未登入時，目前上架的版本匿名保留）"| Era
     Wal["wallets、wallet_entries（錢包與帳本）"] -->|"隨帳號抹除 CASCADE，不匿名化保留"| Era
     Appeal["lock_appeals（申訴）"] -->|"與帳號同進退，不由期限清除"| Era
 ```
 
 三個排程指令都已實作（`flask purge-inactive-accounts`、`execute-account-deletions`、`purge-expired-data`），設定排程屬 C-5。**抹除一個人只有一個出口**：每個帳號在一個交易內依序「把別人的存檔對這位作者的劇本版本的來源參照清為空值 → 把帳本的對話編號清為空值 → 條件式刪除（當下再確認一次條件）→ 寫刪除紀錄 → 提交」，條件不成立時整個回復。順序不能反過來：使用者一刪，帳本的 `user_id` 就變成空值，找不到要清的列；帳本的 `conversation_id` 沒有外鍵，不先清掉的話，SQLite 重用整數編號時會錯指別人的新對話。管理員在後台刪除違規對話、使用者自己刪除對話與期限清除對話，都是同一個原則：先清帳本的對話編號再刪對話，訊息靠 `CASCADE` 一起刪，帳本保留。稽核的管理員欄位會因 `SET NULL` 變空，紀錄保留。
 
-劇本、版本、標籤與作者自己的存檔、回合都靠 `CASCADE` 一起消失；別的玩家用該作者的劇本開過的存檔**保留**（有自己的劇本複本），只是來源參照變成空值。「匿名保留已發佈劇本」的偏好與抹除分支屬 RC-8，目前沒有它，漏掉處理時偏向刪除。
+劇本、版本、標籤與作者自己的存檔、回合都靠 `CASCADE` 一起消失；別的玩家用該作者的劇本開過的存檔**保留**（有自己的劇本複本），只是來源參照變成空值。
+
+**匿名保留已發佈劇本**（rpg-script-reports 的 8b；帳號偏好 `users.keep_published_scripts`，預設關）在抹除流程最前面多兩步，順序同樣不能換：
+
+```mermaid
+flowchart TD
+    Start["AccountErasureService.erase（一個交易）"] --> Q{"retain_scripts 且<br/>偏好在這一刻開啟？"}
+    Q -->|"是（只有 execute-account-deletions 與 purge-inactive-accounts）"| Keep["步驟 0'：ScriptRepository.retain_published_anonymously<br/>保留集合＝目前上架的版本；刪除集合＝其餘所有版本"]
+    Q -->|"否（偏好關閉、未滿 18 歲、逾時未確認、replay-deletions 一律不傳）"| Rep
+    Keep --> K1["① 刪除集合被存檔參照的來源參照清為空值，刪除集合的檢舉刪除"]
+    K1 --> K2["② 刪除集合的版本（標籤串聯）→ ③ 刪除沒有保留版本的劇本"]
+    K2 --> K3["④ 保留的劇本解除作者關聯：creator_id 為空、筆名『已註銷的作者』、短代號清空；保留版本的審核備註清除"]
+    K3 --> Rep["步驟 0-1：delete_reports_on_authored_versions<br/>刪除作者名下（尚未解除關聯的）所有版本上的檢舉"]
+    Rep --> Z0["步驟 0：別人的存檔對作者劇本版本的來源參照清為空值"]
+    Z0 --> Z1["步驟 1：帳本的對話編號清為空值 → 步驟 2：條件式刪除使用者"]
+    Z1 --> Deleted{"刪到了？"}
+    Deleted -->|"是"| Fin["寫刪除紀錄 → 提交 → 記錄 account.scripts_retained（只有內部編號與整數筆數）"]
+    Deleted -->|"否（剛好登入或撤銷刪除）"| Back["整個交易回復：劇本與作者關聯原狀"]
+```
+
+- **為什麼 0-1 每一條路都要做**：`script_reports.version_id` 是無動作的外鍵（避免 SQL Server 的多重串聯路徑），作者一刪、版本串聯消失時只要還有檢舉就會讓刪除整個失敗。偏好開啟時 0' 已處理被刪版本的檢舉並解除保留劇本的作者關聯，0-1 碰不到它們；其餘各條路靠 0-1 清檢舉（⑤ 批的整合測試抓到「偏好關閉時漏做」的缺陷，已修正並由 `tests/architecture/test_account_erasure_coverage.py` 固定順序）。
+- **偏好於刪除當下讀取**：`erase` 在交易內才讀偏好，申請之後、寬限期內的變更以期滿當下為準；`replay-deletions`（備份還原後重新抹除）一律不讀偏好、全部刪除，是已知限制（先前選擇保留的劇本會被一併刪除，見 `docs/report.md` U-25）。條件式刪除沒有刪到時整個交易回復，保留與刪除都不發生。
+- **保留的版本之後的狀態**：沒有作者關聯的劇本仍是玩家創作的劇本（以種子鍵辨識內建，不以「沒有作者」判斷）：目錄顯示「已註銷的作者」、可開新存檔、可被檢舉、管理員可下架；別人的存檔對保留版本的來源參照原樣保留。
+- **作者外鍵仍採串聯刪除**：`scripts.creator_id` 保留 `CASCADE`，漏掉處理時偏向刪除。
 
 期限的數值集中在 `app/services/data_retention_service.py`（月以天計：365 與 730；存檔 365、送審紀錄 365、回合的部分內容 14），與隱私權政策頁的保存期限表由測試比對；`deletion_tombstones` 不含個資，且備份還原後要靠它重新執行刪除，所以不清除。重新抹除（`flask replay-deletions`）只抹除「建立時間不晚於刪除時間」且非管理員的帳號：SQL Server 的 IDENTITY 在還原後從備份時的種子繼續，備份之後註冊再被刪除的編號會被還原後的新使用者沿用，只憑編號刪除會刪到別人；同一個編號有多筆紀錄時只看最晚的刪除時間。紀錄本身沒有外鍵、也不唯一，重新抹除時若該編號已有不早於這次的紀錄就不再寫入。
 

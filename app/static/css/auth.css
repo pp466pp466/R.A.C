@@ -281,6 +281,22 @@ a.ui-btn {
   padding-top: 0.75rem;
 }
 
+/* 匿名保留的開關與刪除視窗的核取方塊：手機上的觸控範圍至少約 44px，核取方塊本身放大（只限這個區塊，不動其他頁共用的開關與核取方塊） */
+.account-retention .account-switch {
+  min-height: 2.75rem;
+}
+
+.account-retention .account-check {
+  min-height: 2.75rem;
+  margin: 0;
+}
+
+.account-retention .account-check input {
+  flex: none;
+  width: 1.5rem;
+  height: 1.5rem;
+}
+
 .account-subtitle {
   margin: 0 0 0.5rem;
   font-size: 0.9375rem;
