@@ -9,6 +9,9 @@
    作者的劇本，就不會把別人的存檔對**保留版本**的來源參照也清掉。偏好在交易內讀取（申請之後、寬限期內改的偏好以期滿當下為準）。
    只有「使用者自己申請刪除」與「連續 12 個月未登入」兩條路傳 `True`；未滿 18 歲抹除、逾時未確認年齡與備份還原後的重新抹除
    一律不傳（預設 `False`，使新增呼叫者時漏傳偏向全刪）。
+0-1. 刪除這位使用者名下所有版本上的檢舉（`script_reports.version_id` 也是無動作的外鍵：使用者一刪，作者的版本串聯消失，
+   還有檢舉就會讓刪除失敗）。**每一條路都做**：不保留劇本的路（偏好關閉、未滿 18 歲、逾時未確認、備份還原後重新抹除）靠這一步；
+   偏好開啟時，0' 已處理被刪版本的檢舉並解除保留劇本的作者關聯，這一步只會碰到沒被保留的部分（通常沒有）。
 0. 把別人的存檔對這位使用者創作的劇本版本的來源參照清為空值（`sessions.source_version_id` 是無動作的外鍵，
    SQL Server 不允許多重串聯路徑；不先清掉會擋住刪除）。存檔本身保留，它有自己的劇本複本。
 1. 把用量帳本中該使用者的對話編號清為空值。帳本的 `conversation_id` 沒有外鍵（SQL Server 錯誤 1785），不先清掉的話，
@@ -74,6 +77,7 @@ class AccountErasureService:
         try:
             if retain_scripts and self._users.keep_published_scripts_of(user_id):
                 retained = self._scripts.retain_published_anonymously(user_id)
+            self._scripts.delete_reports_on_authored_versions(user_id)         # 無動作外鍵：版本串聯消失之前，檢舉要先刪
             self._users.clear_script_version_refs(user_id)
             self._users.clear_ledger_conversation_refs(user_id)
             if not delete(user_id):

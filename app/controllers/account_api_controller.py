@@ -4,7 +4,8 @@ Controller 只讀取請求、呼叫 Service、處理登入狀態；確認本人�
 所有寫入的請求都經過全站的 CSRF 與 Origin 檢查；回應一律禁止快取（`/api/account/` 在 `cache_headers.py` 的前綴清單內）。
 
 - `POST /api/account/delete`：申請刪除（有密碼者帶 `password`，只靠 Google 者帶 `confirm_text`）。成功後所有裝置的登入狀態失效，
-  這台裝置也一併清除。
+  這台裝置也一併清除。選填 `keep_published_scripts`（布林，刪除視窗的「匿名保留我已發佈的劇本」）：申請成立時一併寫入偏好，
+  沒帶（或 `null`）就不碰偏好，不是布林回 400。
 - `POST /api/account/export`：匯出自己的帳號資料與全部對話（本文 `{"format": "json" | "csv"}`），回應是附件下載、禁止快取。
   用 POST 是為了受 CSRF 與來源檢查保護，也不會被預取連結觸發。受限登入狀態（等待刪除）不能匯出：請在申請刪除之前匯出。
 - `GET /api/account/content-mode`、`PUT /api/account/content-mode`：查詢與切換自己的安全模式（`mode` 為 `safe` 或 `adult`）。
@@ -12,6 +13,9 @@ Controller 只讀取請求、呼叫 Service、處理登入狀態；確認本人�
   關閉安全模式（`adult`）時，尚未在目前版本同意者本文須帶 `confirm_rules`（見 `ContentModeService`）；緊急煞車時要求 `adult` 回 403。
 - `GET /api/account/story-preference`、`PUT /api/account/story-preference`：查詢與設定自己的故事偏好（全讀者、男頻、女頻）。
   偏好只影響劇本清單的排序，所以只要求已登入（受限登入狀態一律拒絕），不過年齡閘門；值必須完全等於列舉值，否則 400 與欄位錯誤。
+- `GET /api/account/script-retention`、`PUT /api/account/script-retention`：查詢與設定自己的「匿名保留我已發佈的劇本」偏好
+  （本文 `{"keep": 布林}`；非布林 400 並指出 `keep`）。回應為 `{ok, keep, live_count}`，`live_count` 是目前上架的版本數
+  （帳號頁與刪除視窗據此決定要不要顯示）。受限登入狀態一律拒絕，管理員（不能自助刪除）一律 403；偏好只在帳號被抹除的當下被採用。
 - `PUT /api/account/nickname`：設定或更改自己的公開暱稱（第一次設定時產生短代號，之後不變）。先過年齡閘門，受限登入狀態不可用；
   格式不合格時以暱稱欄位的錯誤回應。回應是最新的帳號資料（本人才看得到暱稱與短代號）。
 - `POST /api/account/cancel-deletion`：寬限期內撤銷。**這是少數允許「受限登入狀態」的端點之一**（見 `require_login`）：
@@ -24,7 +28,7 @@ from app.security.session import logout_user, require_login
 from app.services.current_user import iso_utc
 from app.services.registry import (
     get_account_deletion_service, get_auth_service, get_content_mode_service, get_nickname_service,
-    get_personal_export_service, get_story_preference_service,
+    get_personal_export_service, get_script_retention_preference_service, get_story_preference_service,
 )
 
 account_api_bp = Blueprint("account_api", __name__, url_prefix="/api/account")
@@ -38,7 +42,8 @@ def delete_account():
     user = require_login()
     body = read_json_object()
     scheduled_at = get_account_deletion_service().request(
-        user, password=body.get("password"), confirm_text=body.get("confirm_text")
+        user, password=body.get("password"), confirm_text=body.get("confirm_text"),
+        keep_published_scripts=body.get("keep_published_scripts"),
     )
     logout_user()          # token_version 已加 1，其他裝置也已失效；這台的 cookie 一併清除
     return jsonify(ok=True, scheduled_at=iso_utc(scheduled_at), message=DELETE_MESSAGE)
@@ -82,6 +87,19 @@ def set_story_preference():
     user = require_login()
     body = read_json_object()
     return jsonify(ok=True, story_preference=get_story_preference_service().set(user, body.get("story_preference")))
+
+
+@account_api_bp.get("/script-retention")
+def get_script_retention():
+    user = require_login()
+    return jsonify(ok=True, **get_script_retention_preference_service().get(user).as_dict())
+
+
+@account_api_bp.put("/script-retention")
+def set_script_retention():
+    user = require_login()
+    body = read_json_object()
+    return jsonify(ok=True, **get_script_retention_preference_service().set(user, body.get("keep")).as_dict())
 
 
 @account_api_bp.put("/nickname")

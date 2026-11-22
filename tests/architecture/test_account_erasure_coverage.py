@@ -101,6 +101,9 @@ def test_the_erasure_service_clears_every_no_action_reference_before_deleting_th
 
     source = inspect.getsource(AccountErasureService.erase)
     assert source.index("clear_script_version_refs") < source.index("delete(user_id)")
+    assert source.index("delete_reports_on_authored_versions") < source.index("delete(user_id)"), (
+        "script_reports.version_id 是無動作的外鍵：每一條抹除路徑（含不保留劇本的）都要在刪除使用者之前刪掉作者版本上的檢舉"
+    )
     assert {"sessions.source_version_id", "script_reports.version_id"} == set(NO_ACTION_REFERENCES), (
         "新增無動作的外鍵時，抹除流程要有對應的清空方法並更新這個測試"
     )
@@ -117,6 +120,8 @@ def test_the_anonymous_retention_runs_before_the_refs_are_cleared_and_before_the
 
     erase = inspect.getsource(AccountErasureService.erase)
     assert erase.index("retain_published_anonymously") < erase.index("clear_script_version_refs") < erase.index("delete(user_id)")
+    # 刪除作者版本上的檢舉必須在匿名保留之後：保留的劇本已解除作者關聯，它們的檢舉才不會被這一步一併刪掉
+    assert erase.index("retain_published_anonymously") < erase.index("delete_reports_on_authored_versions") < erase.index("delete(user_id)")
     assert erase.index("keep_published_scripts_of") < erase.index("retain_published_anonymously")      # 偏好在交易內、刪除之前讀取
 
     retain = inspect.getsource(ScriptRepository.retain_published_anonymously)

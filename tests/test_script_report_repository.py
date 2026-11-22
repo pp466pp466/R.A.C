@@ -280,6 +280,58 @@ def test_delete_for_versions_handles_more_ids_than_a_single_statement_can_carry(
     assert member_session.scalar(select(func.count(ScriptReport.id))) == 0
 
 
+def test_delete_for_author_removes_every_report_on_every_version_of_that_authors_scripts(repo, world, member_session):
+    """抹除流程在刪除使用者之前呼叫（所有不保留劇本的路都靠它，否則無動作外鍵會擋下刪除）：開著的與已結案的都刪，
+    作者的每一份劇本、每一個版本都算，別的作者的版本上的檢舉不動。"""
+    author, (alice, bob, carol), first = world
+    other_author = make_user(member_session, 9)
+    second_script = make_version(member_session, author, title="第二份劇本")
+    scripts = ScriptRepository(member_session)
+    scripts.submit_for_review(author.id, first.public_id, now=NOW)
+    scripts.approve_version(first.public_id, now=NOW)                          # 第 1 版上架，才能再開第 2 版草稿
+    successor = scripts.create_draft_version(
+        author.id, scripts.get_script_of(first).public_id, content=validated(title="新版").content,
+        content_hash=validated(title="新版").content_hash, total_chars=validated(title="新版").total_chars,
+    )
+    others = make_version(member_session, other_author, title="別人的劇本")
+    add_report(repo, alice, first)
+    add_report(repo, bob, first)
+    repo.close_open(first.id, CLOSED_SUPERSEDED, NOW)                         # 已結案的也一併刪除
+    add_report(repo, alice, second_script)
+    add_report(repo, carol, successor)
+    add_report(repo, alice, others)
+    kept = add_report(repo, bob, others).id
+
+    assert repo.delete_for_author(author.id) == 4
+    member_session.expire_all()
+    assert sorted(member_session.scalars(select(ScriptReport.version_id))) == [others.id, others.id]
+    assert kept in set(member_session.scalars(select(ScriptReport.id)))
+
+
+def test_delete_for_author_with_no_scripts_or_no_reports_is_a_no_op(repo, world, member_session):
+    author, (alice, *_), version = world
+    add_report(repo, alice, version)
+    assert repo.delete_for_author(987654) == 0                                # 不存在的使用者
+    assert repo.delete_for_author(alice.id) == 0                              # 檢舉人自己沒有劇本：檢舉人的身分不影響結果
+    assert member_session.scalar(select(func.count(ScriptReport.id))) == 1
+    assert repo.delete_for_author(author.id) == 1
+    assert repo.delete_for_author(author.id) == 0                             # 重複執行
+
+
+def test_delete_for_author_leaves_reports_on_scripts_that_are_no_longer_authored_by_them(repo, world, member_session):
+    """匿名保留解除作者關聯之後（`creator_id` 為空），保留版本上的檢舉不屬於任何作者，不會被這一步誤刪。"""
+    from sqlalchemy import update
+
+    from app.models import Script
+
+    author, (alice, *_), version = world
+    add_report(repo, alice, version)
+    script = ScriptRepository(member_session).get_script_of(version)
+    member_session.execute(update(Script).where(Script.id == script.id).values(creator_id=None).execution_options(synchronize_session=False))
+    assert repo.delete_for_author(author.id) == 0
+    assert member_session.scalar(select(func.count(ScriptReport.id))) == 1
+
+
 # ---- 匯出 -------------------------------------------------------------------------
 
 def test_export_has_exactly_the_four_allowed_keys_and_no_closing_information(repo, world, member_session):

@@ -183,6 +183,25 @@ def test_an_invalid_nickname_is_refused_with_a_field_error_and_the_old_value_sta
     assert user_row(app).nickname == VALID
 
 
+@pytest.mark.parametrize("name", ["已註銷的作者", "已註銷 的作者", "我是已註銷的作者"])
+def test_the_retired_author_name_is_refused_on_the_account_page_and_nothing_is_saved(app, name):
+    """匿名保留劇本的系統署名（rpg-script-reports）：暱稱欄位的錯誤、不洩漏輸入、舊的暱稱不變。"""
+    client = client_for(app)
+    put_nickname(client, VALID)
+    response = put_nickname(client, name)
+    assert response.status_code == 400 and set(response.get_json()["error"]["fields"]) == {"nickname"}
+    assert "系統署名" in response.get_json()["error"]["fields"]["nickname"] and name not in response.get_data(as_text=True)
+    assert user_row(app).nickname == VALID
+
+
+def test_the_retired_author_name_is_refused_on_the_first_setup_page_and_the_age_is_not_saved(app):
+    client = client_for(app, age=None)
+    response = client.post("/api/auth/verify-age", json=age_fields(30, nickname="已註銷的作者"))
+    assert response.status_code == 400 and set(response.get_json()["error"]["fields"]) == {"nickname"}
+    row = user_row(app)
+    assert row.birth_date is None and row.nickname is None
+
+
 def test_an_admin_without_the_age_confirmation_cannot_set_a_nickname_yet(app):
     admin = client_for(app, role="admin", age=None)
     response = put_nickname(admin, VALID)

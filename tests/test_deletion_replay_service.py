@@ -116,6 +116,52 @@ def test_only_the_latest_deletion_time_per_id_counts(member_session):
     assert report.erased == 1 and count(s, User) == 0
 
 
+# ---- 劇本：重新抹除不讀「匿名保留」偏好，已匿名保留的劇本不受影響（rpg-script-reports）---------------------------------
+
+
+def test_a_replay_deletes_every_script_of_a_restored_account_even_with_the_preference_on_and_leaves_anonymous_ones_alone(member_session):
+    """script-anonymous-retention 規格「還原後重新抹除」：不讀取偏好，與一般全刪相同；先前真正被抹除而匿名保留的劇本
+    （作者關聯已是空值）不屬於任何帳號，不受影響。還原後復活的帳號帶著被檢舉的上架版本與別人的存檔：抹除沒有被無動作外鍵擋下。"""
+    from app.models import RpgSession, Script, ScriptReport, ScriptVersion
+    from app.models.script import RETIRED_AUTHOR_NAME, VERSION_DRAFT, VERSION_PUBLISHED
+    from app.models.script_report import REASON_OTHER
+    from app.repositories.script_report_repository import ScriptReportRepository
+    from app.repositories.session_repository import SessionRepository
+    from tests.support.protagonist import protagonist
+    from tests.support.script_review import put_in_status
+
+    s = member_session
+    scripts, reports = ScriptRepository(s), ScriptReportRepository(s)
+    earlier = add_user(s, 1, keep_published_scripts=True)
+    anonymous = put_in_status(scripts, earlier, VERSION_PUBLISHED, title="先前匿名保留的劇本")
+    scripts.retain_published_anonymously(earlier.id)                              # 先前的抹除留下它：沒有作者、筆名是「已註銷的作者」
+    zombie = add_user(s, 2, keep_published_scripts=True, created_at=LONG_AGO)     # 還原後復活的帳號，偏好開啟
+    live = put_in_status(scripts, zombie, VERSION_PUBLISHED, title="復活帳號的上架劇本")
+    draft = put_in_status(scripts, zombie, VERSION_DRAFT, title="復活帳號的草稿")
+    reader = add_user(s, 3)
+    reports.add(reader.id, live.id, [REASON_OTHER], False, None, now=START)
+    reports.add(reader.id, anonymous.id, [REASON_OTHER], False, None, now=START)
+    save = SessionRepository(s).create(
+        reader.id, source_version_id=draft.id, snapshot=scripts.content_of(draft), snapshot_spec_version=1,
+        protagonist=protagonist("讀者", 18), content_tier="safe", now=START,
+    )
+    s.commit()
+    zombie_id, anonymous_id, anonymous_title, live_id, draft_id, save_id = zombie.id, anonymous.id, anonymous.title, live.id, draft.id, save.id
+    tombstone(s, zombie_id)
+
+    report = make_service(s).run()
+
+    assert report.erased == 1
+    s.expire_all()
+    assert s.get(User, zombie_id) is None
+    assert s.get(ScriptVersion, live_id) is None and s.get(ScriptVersion, draft_id) is None               # 偏好開啟也全刪
+    assert [(v.id, v.title) for v in s.scalars(select(ScriptVersion))] == [(anonymous_id, anonymous_title)]  # 先前保留的原樣
+    (script,) = s.scalars(select(Script)).all()
+    assert script.creator_id is None and script.author_name == RETIRED_AUTHOR_NAME
+    assert [r.version_id for r in s.scalars(select(ScriptReport))] == [anonymous_id]                       # 復活帳號版本上的檢舉已刪，保留版本的還在
+    assert s.get(RpgSession, save_id).source_version_id is None                                            # 別人的存檔還在、來源參照清空
+
+
 # ---- 檔案 -------------------------------------------------------------------------------
 
 

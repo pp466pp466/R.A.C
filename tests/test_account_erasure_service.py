@@ -147,11 +147,12 @@ def test_an_exception_rolls_back_and_propagates_without_committing():
         raise RuntimeError("資料庫暫時失敗")
 
     service = AccountErasureService(
-        users=Users(), scripts=object(), tombstones=Tombstones(), commit=lambda: calls.append("commit"), rollback=lambda: calls.append("rollback")
+        users=Users(), scripts=RecordingScripts(calls), tombstones=Tombstones(), commit=lambda: calls.append("commit"),
+        rollback=lambda: calls.append("rollback"),
     )
     with pytest.raises(RuntimeError):
         service.erase(1, delete=boom, reason=REASON_USER_REQUESTED, now=START)
-    assert calls == ["script-refs", "clear", "rollback"]
+    assert calls == ["reports", "script-refs", "clear", "rollback"]
 
 
 def test_the_event_is_emitted_only_after_the_commit_and_carries_the_id_only():
@@ -168,9 +169,11 @@ def test_the_event_is_emitted_only_after_the_commit_and_carries_the_id_only():
         def record(self, **kwargs):
             order.append("record")
 
-    service = AccountErasureService(users=Users(), scripts=object(), tombstones=Tombstones(), commit=lambda: order.append("commit"))
+    service = AccountErasureService(
+        users=Users(), scripts=RecordingScripts(order), tombstones=Tombstones(), commit=lambda: order.append("commit"),
+    )
     assert service.erase(9, delete=lambda uid: True, reason=REASON_USER_REQUESTED, now=START, on_erased=lambda uid: order.append(f"event:{uid}"))
-    assert order == ["script-refs", "clear", "record", "commit", "event:9"]
+    assert order == ["reports", "script-refs", "clear", "record", "commit", "event:9"]
 
 
 def test_inactive_erasure_logs_the_existing_event_and_no_personal_data(member_session, log_lines):
@@ -208,6 +211,9 @@ class RecordingScripts:
     def __init__(self, order: list[str]) -> None:
         self.order = order
 
+    def delete_reports_on_authored_versions(self, user_id):
+        self.order.append("reports")                                      # 每一條路都做：作者版本上的檢舉要在刪除使用者之前刪除
+
     def retain_published_anonymously(self, user_id):
         from app.repositories.script_repository import RetainResult
 
@@ -237,7 +243,7 @@ def test_the_preference_is_read_and_the_scripts_are_retained_before_anything_els
     assert retaining_service(order, keep=True).erase(
         1, delete=lambda uid: order.append("delete") or True, reason=REASON_USER_REQUESTED, now=START, retain_scripts=True
     )
-    assert order == ["preference", "retain", "script-refs", "clear", "delete", "record", "commit"]
+    assert order == ["preference", "retain", "reports", "script-refs", "clear", "delete", "record", "commit"]
 
 
 def test_with_the_preference_off_the_scripts_are_not_touched():
@@ -245,7 +251,7 @@ def test_with_the_preference_off_the_scripts_are_not_touched():
     assert retaining_service(order, keep=False).erase(
         1, delete=lambda uid: order.append("delete") or True, reason=REASON_USER_REQUESTED, now=START, retain_scripts=True
     )
-    assert order == ["preference", "script-refs", "clear", "delete", "record", "commit"]
+    assert order == ["preference", "reports", "script-refs", "clear", "delete", "record", "commit"]
 
 
 def test_when_the_caller_does_not_ask_to_retain_the_preference_is_not_even_read():
@@ -254,7 +260,7 @@ def test_when_the_caller_does_not_ask_to_retain_the_preference_is_not_even_read(
     assert retaining_service(order, keep=True).erase(
         1, delete=lambda uid: order.append("delete") or True, reason=REASON_USER_REQUESTED, now=START
     )
-    assert order == ["script-refs", "clear", "delete", "record", "commit"]
+    assert order == ["reports", "script-refs", "clear", "delete", "record", "commit"]
 
 
 def test_when_the_delete_misses_the_whole_transaction_is_rolled_back_including_the_retention_and_no_event_follows(caplog):
@@ -265,7 +271,7 @@ def test_when_the_delete_misses_the_whole_transaction_is_rolled_back_including_t
             1, delete=lambda uid: order.append("delete") or False, reason=REASON_USER_REQUESTED, now=START,
             retain_scripts=True, on_erased=events.append,
         ) is False
-    assert order == ["preference", "retain", "script-refs", "clear", "delete", "rollback"]
+    assert order == ["preference", "retain", "reports", "script-refs", "clear", "delete", "rollback"]
     assert events == [] and not [r for r in caplog.records if getattr(r, "event", "") == "account.scripts_retained"]
 
 

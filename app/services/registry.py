@@ -87,6 +87,7 @@ from app.services.rpg_revision_runner import RevisionRunner
 from app.services.rpg_turn_runner import TurnRunner
 from app.services.session_service import SessionService
 from app.services.startable import StartableVersions
+from app.services.script_retention_preference_service import ScriptRetentionPreferenceService
 from app.services.story_preference_service import StoryPreferenceService
 from app.services.summary_service import SummaryService
 from app.services.usage_service import UsageService
@@ -378,6 +379,12 @@ def get_content_mode_service() -> ContentModeService:
 def get_story_preference_service() -> StoryPreferenceService:
     """目前請求的故事偏好服務：只讀寫呼叫者本人的偏好（不碰內容分級，也不需要模型供應商）。"""
     return StoryPreferenceService(users=UserRepository(get_session()))
+
+
+def get_script_retention_preference_service() -> ScriptRetentionPreferenceService:
+    """目前請求的「匿名保留我已發佈的劇本」偏好服務：只讀寫呼叫者本人的偏好，並數出他目前上架的版本數。"""
+    session = get_session()
+    return ScriptRetentionPreferenceService(users=UserRepository(session), scripts=ScriptRepository(session))
 
 
 def get_script_authoring_service() -> ScriptAuthoringService:

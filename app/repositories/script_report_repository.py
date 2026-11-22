@@ -15,7 +15,7 @@ from typing import Iterator, Sequence
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.exc import IntegrityError
 
-from app.models.script import ScriptVersion
+from app.models.script import Script, ScriptVersion
 from app.models.script_report import CLOSED_RESULTS, ScriptReport
 from app.repositories.base import BaseRepository
 from app.repositories.errors import AlreadyReportedError
@@ -105,6 +105,19 @@ class ScriptReportRepository(BaseRepository[ScriptReport]):
                 delete(ScriptReport).where(ScriptReport.version_id.in_(chunk)).execution_options(synchronize_session=False)
             ).rowcount
         return deleted
+
+    def delete_for_author(self, user_id: int) -> int:
+        """刪除這位作者**所有**劇本版本上的檢舉（不論是否結案），回傳刪除筆數。
+
+        抹除流程在刪除使用者之前呼叫它：使用者一刪，作者的劇本與版本串聯消失，但 `script_reports.version_id` 是無動作的外鍵，
+        版本被刪時還有檢舉就會讓整個刪除失敗（SQL Server 與 SQLite 都一樣）。這是**不保留劇本**的各條路（偏好關閉、未滿 18 歲、
+        逾時未確認、備份還原後重新抹除）清除檢舉的地方；偏好開啟時匿名保留已先處理被刪版本的檢舉，並把保留的劇本解除作者關聯，
+        所以這裡只會碰到沒被保留的部分（通常沒有）。單一語句以子查詢完成，不載入編號，沒有 SQL Server 參數上限的問題。
+        """
+        authored = select(ScriptVersion.id).join(Script, Script.id == ScriptVersion.script_id).where(Script.creator_id == user_id)
+        return self._session.execute(
+            delete(ScriptReport).where(ScriptReport.version_id.in_(authored)).execution_options(synchronize_session=False)
+        ).rowcount
 
     def export_for_reporter(self, user_id: int, *, page_size: int = 200) -> Iterator[dict]:
         """個人資料匯出：這位檢舉人自己送出的檢舉，由舊到新，分頁讀取。

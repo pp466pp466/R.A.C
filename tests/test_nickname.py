@@ -4,8 +4,8 @@ import re
 import pytest
 
 from app.services.nickname import (
-    CODE_ALPHABET, CODE_LENGTH, MESSAGE_LENGTH, MESSAGE_OFFICIAL, MESSAGE_PATTERN, MESSAGE_REQUIRED, check_nickname,
-    display_name, new_code,
+    CODE_ALPHABET, CODE_LENGTH, MESSAGE_LENGTH, MESSAGE_OFFICIAL, MESSAGE_PATTERN, MESSAGE_REQUIRED, MESSAGE_RETIRED,
+    check_nickname, display_name, new_code,
 )
 
 
@@ -79,6 +79,31 @@ def test_a_short_digit_run_is_not_a_phone_number(raw):
 @pytest.mark.parametrize("raw", ["官方客服", "我是官方", "官 方", "ＯＦＦ官方", "官​方"])
 def test_impersonating_the_official_name_is_refused(raw):
     assert bad(raw) == MESSAGE_OFFICIAL
+
+
+@pytest.mark.parametrize(
+    "raw",
+    ["已註銷的作者", "已註銷 的作者", "已 註 銷 的 作 者", "我是已註銷的作者", "已註銷的作者本人", "已註銷​的作者", "已註銷　的作者"],
+    ids=["exact", "one-space", "spaces-between-all", "prefix", "suffix", "zero-width", "ideographic-space"],
+)
+def test_impersonating_the_retired_author_name_is_refused(raw):
+    """匿名保留的劇本署名是「已註銷的作者」（`RETIRED_AUTHOR_NAME`）：暱稱不得冒用，比對方式與「官方」相同（包含即拒絕）。"""
+    assert bad(raw) == MESSAGE_RETIRED
+
+
+def test_the_retired_message_is_its_own_category_and_never_repeats_the_input():
+    message = bad("已註銷的作者")
+    assert message == MESSAGE_RETIRED and message != MESSAGE_OFFICIAL and "已註銷" not in message
+
+
+@pytest.mark.parametrize("raw", ["小註銷", "註銷", "作者", "已註銷", "的作者", "已經註銷的作者", "雲遊作者"], ids=repr)
+def test_a_nickname_that_only_resembles_the_retired_name_is_not_refused_by_this_rule(raw):
+    """部分重疊、少一字或多一字都不是「包含」，一般暱稱不受影響。"""
+    assert ok(raw) == raw
+
+
+def test_the_official_name_keeps_its_own_message():
+    assert bad("官方") == MESSAGE_OFFICIAL and bad("官方") != MESSAGE_RETIRED
 
 
 def test_the_error_message_never_repeats_the_input():

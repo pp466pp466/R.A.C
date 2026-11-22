@@ -511,13 +511,15 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 
 | 端點 | 方法 | 用途 | 需要登入 |
 |---|---|---|---|
-| `/api/account/delete` | POST | 申請刪除自己的帳號。有密碼的帳號帶 `password`（與登入共用失敗計數與鎖定，連續 5 次鎖定 15 分鐘）；只靠 Google 的帳號帶 `confirm_text`（固定文字「刪除我的帳號」，由伺服器放進頁面狀態，前端不另存一份）。成功後帳號為 `deletion_pending`、`token_version` 加 1（所有裝置登出，這台的 cookie 一併清除）；**不寄通知信**（玩家端不寄任何信）。錯誤：400 欄位錯誤、403 `admin_delete_forbidden`（管理員不可自助刪除）、409 `deletion_not_allowed`（已在待刪除，或停權等不允許的狀態） | 是 |
+| `/api/account/delete` | POST | 申請刪除自己的帳號。有密碼的帳號帶 `password`（與登入共用失敗計數與鎖定，連續 5 次鎖定 15 分鐘）；只靠 Google 的帳號帶 `confirm_text`（固定文字「刪除我的帳號」，由伺服器放進頁面狀態，前端不另存一份）。成功後帳號為 `deletion_pending`、`token_version` 加 1（所有裝置登出，這台的 cookie 一併清除）；**不寄通知信**（玩家端不寄任何信）。選填 `keep_published_scripts`（布林，刪除視窗的「匿名保留我已發佈的劇本」）：申請**成立之後**才在同一個交易寫入偏好（確認本人失敗或被並行的請求搶先時不寫），沒帶或 `null` 不碰偏好，不是布林回 400 並指出 `keep_published_scripts`（早於確認本人，不計入登入失敗）。錯誤：400 欄位錯誤、403 `admin_delete_forbidden`（管理員不可自助刪除）、409 `deletion_not_allowed`（已在待刪除，或停權等不允許的狀態） | 是 |
 | `/api/account/nickname` | PUT | 設定或更改自己的公開暱稱，本文 `nickname`（2 至 20 字，NFC 正規化並去除控制字元，不得含網址、電子郵件或電話的樣式，也不得冒用「官方」；不合格 400 並指出 `nickname`）。需登入、先過年齡閘門（尚未確認年齡 403 `age_confirmation_required`，鎖定 403 `account_locked`，未登入 401）。第一次設定時產生 4 碼的短代號並保存，之後更改暱稱不改變短代號；不要求唯一，公開顯示為「暱稱#短代號」。回應 `user` 與 `GET /api/auth/me` 相同（本人才看得到暱稱與短代號）。成功時記錄 `account.nickname_set` 事件（只含事件名稱與使用者編號，**不含暱稱與短代號**）。玩家首次登入後的 `POST /api/auth/verify-age` 也要帶 `nickname`（與生日、年齡區間同一個步驟，全有或全無） | 是 |
 | `/api/account/cancel-deletion` | POST | 撤銷刪除（只在申請後 7 天內）：一律還原為 `active`（`pending_verification` 已退役）。**少數允許受限登入狀態的端點之一**；`token_version` 不變，撤銷後目前的登入狀態直接變成完整的。錯誤：409 `grace_expired`、`not_pending` | 是（含待刪除） |
 | `/api/account/content-mode` | GET | 查詢自己的內容模式（安全、一般、成人，見 AGENTS.md 第 7 節）。需登入、先過年齡閘門（尚未確認年齡 403 `age_confirmation_required`，未登入 401）。回應 `content_mode` 只含 `preference`（偏好）、`effective`（生效模式，偏好與年齡上限中較保守者）、`selectable`（`safe`／`standard`／`adult` 各是否可選）、`adult_reason`（成人模式沒有啟用的原因：`not_adult`、`disabled`、`needs_confirmation` 或空）與 `adult_confirmed`（是否已在目前的安全規範版本下確認），**不含**生日、年齡區間、年齡確認時間或內部編號；`Cache-Control: no-store`。滿 18 歲不會自動調高偏好，`selectable.standard` 變成真值時介面提示可自行切換 | 是 |
 | `/api/account/content-mode` | PUT | 切換自己的內容模式，本文 `mode`（`safe`、`standard`、`adult`，其餘 400 並指出 `mode`）。成年玩家可選任一種（含安全模式）；未滿成年門檻者只能選 `safe`，否則 403 `content_mode_restricted`。切換為 `adult` 另須：部署開關開啟（否則 403 `adult_mode_unavailable`）、尚未在目前規範版本確認時本文須同時帶 `confirm_adult: true` 與 `confirm_rules: true`（缺哪一項就 400 並指出哪一項）；確認成功記錄時間、規範版本與方式（自行聲明）。已確認後再切換不需再勾選，離開成人模式不清除紀錄。成功時記錄 `account.content_mode.<模式>` 事件（只含事件名稱與使用者編號）。回應同 GET | 是 |
 | `/api/account/story-preference` | GET | 查詢自己的故事偏好（全讀者 `all`、男頻 `male`、女頻 `female`，預設 `all`，見 AGENTS.md 第 7 節）。**只影響劇本清單的排序**，不影響內容分級、可看或可玩的劇本、敘事與額度。只要求已登入（受限登入狀態一律 403：`account_locked`、`account_deletion_pending`、`age_confirmation_required`；未登入 401），**不過年齡閘門**（偏好不涉及模型）。回應 `{ok, story_preference}`，不含任何個資；`Cache-Control: no-store`。`GET /api/auth/me` 的 `user` 也多一個 `story_preference` 鍵，讓 `/account` 有初始值 | 是 |
 | `/api/account/story-preference` | PUT | 設定自己的故事偏好，本文 `story_preference`（必須**完全等於** `all`、`male`、`female` 之一；大小寫不同、空白、數字、`null`、陣列或缺欄位都是 400 並指出 `story_preference`，偏好不變，錯誤訊息不回顯輸入）。冪等：設成目前的值同樣成功。需通過 CSRF 與來源檢查；請求中沒有任何可指定他人的欄位（多餘的 `user_id` 等一律忽略）。成功時記錄 `account.story_preference_changed` 事件（只含事件名稱與使用者編號，**不含偏好的值**）。回應同 GET | 是 |
+| `/api/account/script-retention` | GET | 查詢自己的「匿名保留我已發佈的劇本」偏好（預設關閉，見 AGENTS.md 第 11 節）。回應 `{ok, keep, live_count}`：`keep` 是布林，`live_count` 是目前上架的版本數（只算 `live_script_id` 非空的版本；帳號頁與刪除視窗據此決定要不要顯示選項），**沒有任何劇本文字、標題或識別碼**；`Cache-Control: no-store`。只要求已登入（受限登入狀態一律 403：`account_locked`、`account_deletion_pending`、`age_confirmation_required`；未登入 401）；**管理員一律 403 `admin_script_retention_forbidden`**（管理員不能自助刪除帳號，這個偏好對他們沒有意義）。`GET /api/auth/me` 的 `user` **不**帶這個偏好（設計 D7：登入快照不新增欄位） | 是 |
+| `/api/account/script-retention` | PUT | 設定偏好，本文 `{"keep": 布林}`（必須是真正的布林；`"true"`、`1`、`null`、陣列或缺欄位都是 400 並指出 `keep`，偏好不變，錯誤訊息不回顯輸入）。冪等。需通過 CSRF 與來源檢查；多餘的 `user_id` 等一律忽略。回應同 GET（含更新後的 `keep` 與 `live_count`）。**偏好只在帳號被抹除的當下被讀取**（使用者申請刪除、寬限期滿，或連續 12 個月未登入），見「RPG 劇本檢舉與匿名保留」。不記日誌事件（值不屬於可記錄的欄位） | 是 |
 | `/api/account/export` | POST | 匯出自己的帳號資料與全部對話。本文 `format`：`json` 或 `csv`（其餘 400）。回應是附件與 `Cache-Control: no-store`：JSON 為 UTF-8（無 BOM）；CSV 為一個 zip，內含 `account.csv` 與 `messages.csv`（UTF-8-sig，Excel 開啟繁體中文不亂碼；以 `=`、`+`、`-`、`@`、Tab 或歸位字元開頭的儲存格前加單引號，避免被當成公式）。用 POST 是為了受 CSRF 與來源檢查保護、不被預取連結觸發；請求夾帶的其他使用者識別碼一律忽略。受限登入狀態不可用 | 是 |
 
 `/api/auth/me` 另有 `deletion_scheduled_at`（UTC，只有待刪除的帳號才有）。頁面：`/account` 多了「匯出我的資料」與「刪除帳號」（管理員沒有刪除）；帳號正在等待刪除的人看到的是**另一份 HTML**（預定刪除時間、撤銷、登出，沒有其他區塊；寬限期已過但排程還沒執行時，不顯示注定失敗的撤銷按鈕）；`/login?notice=deletion_requested` 顯示寬限期的說明（代碼是固定列舉）。
@@ -1684,7 +1686,7 @@ change `rpg-script-publishing`（RC-8 的 8a，2026-11-20 實作，**已通過�
 
 ## RPG 劇本檢舉與匿名保留（rpg-script-reports）
 
-change `rpg-script-reports`（RC-8 的 8b，**實作中**：tasks 分七批，① 資料層、② 版本轉移的自動結案與匿名保留的抹除、③ 玩家端檢舉後端已實作並通過測試，④ 管理員後端、⑤ 匿名保留的偏好與整合、⑥ 前端與政策頁、⑦ 驗證與驗收尚未做；**尚未經使用者驗收，也尚未部署**）。玩家可以檢舉已上架的劇本版本，檢舉只升高管理員審核佇列的優先度、不自動下架、不通知任何人；作者刪除帳號時可選擇「匿名保留我已發佈的劇本」。
+change `rpg-script-reports`（RC-8 的 8b，**實作中**：tasks 分七批，① 資料層、② 版本轉移的自動結案與匿名保留的抹除、③ 玩家端檢舉後端、④ 管理員後端、⑤ 匿名保留的偏好與抹除整合已實作並通過測試，⑥ 前端與政策頁、⑦ 驗證與驗收尚未做；**尚未經使用者驗收，也尚未部署**）。玩家可以檢舉已上架的劇本版本，檢舉只升高管理員審核佇列的優先度、不自動下架、不通知任何人；作者刪除帳號時可選擇「匿名保留我已發佈的劇本」。
 
 ### 玩家端檢舉（③ 批）
 
@@ -1695,9 +1697,16 @@ change `rpg-script-reports`（RC-8 的 8b，**實作中**：tasks 分七批，�
 - **保存期限與匯出**：結案後 365 天由 `flask purge-expired-data` 清除（類別「劇本檢舉（已結案）」，**未結案的不清**，預覽與實際筆數一致）；檢舉人刪帳號時其檢舉隨 `ON DELETE CASCADE` 一併刪除。個人資料匯出多了 JSON 的 `script_reports` 與 CSV 的 `script_reports.csv`（被檢舉版本的識別碼、理由、自寫文字與送出時間；**不含**結案結果、標題、作者與別人的檢舉；公式字元中和），帳號資料多了 `keep_published_scripts`。
 - **日誌**：`script.report_submitted`（`user_id`、`count`＝理由數量、`chars`＝文字字數）、`script.report_limited`（`user_id`）、`script.reports_dismissed`、`script.reports_auto_closed`；**沒有**理由內容、自寫文字、版本與劇本的識別碼、標題與筆名。沿用既有的日誌欄位，沒有新增白名單欄位。
 
+### 匿名保留的偏好與抹除整合（⑤ 批）
+
+- **偏好**：`users.keep_published_scripts`（預設關閉，既有帳號視為關閉）。`GET`／`PUT /api/account/script-retention`（端點表見「個資生命週期（C-4c）」）由 `ScriptRetentionPreferenceService` 讀寫，回應含 `live_count`；刪除視窗以 `POST /api/account/delete` 的選填欄位 `keep_published_scripts` 再確認一次，與申請寫在同一個交易（確認本人失敗、被並行搶先時不改偏好）。**偏好在抹除的當下於交易內讀取**，所以寬限期內改的偏好以期滿當下為準。
+- **抹除**：只有「使用者申請刪除（寬限期滿）」與「連續 12 個月未登入」兩條路依偏好保留目前上架的版本（筆名「已註銷的作者」、沒有短代號、審核備註清除；其餘版本、標籤與檢舉刪除；別人的存檔對被刪版本的來源參照清為空值）；未滿 18 歲抹除、逾時未確認年齡與備份還原後重新抹除一律全刪。**每一條路在刪除使用者之前都先刪除作者版本上的檢舉**（`script_reports.version_id` 是無動作外鍵，漏掉會讓抹除整個失敗；⑤ 批的整合測試抓到偏好關閉時漏掉這一步，已修）。
+- **暱稱**：不得冒用「已註銷的作者」（與「官方」同一種比對：NFC、全形轉半形、不分大小寫、忽略空白，包含即拒絕，錯誤訊息「暱稱不可冒用系統署名。」）。
+- **測試**：`tests/test_erasure_retain_integration.py` 以多劇本、多版本、有檢舉與別人存檔的作者世界，走排程指令實際使用的組裝，在 SQLite 與真實 SQL Server 各跑一次（保留與全刪兩種偏好、兩條保留路徑、未滿 18 歲與逾時未確認不保留、撤銷與剛登入的競態、保留的版本仍可在目錄顯示、開存檔、被檢舉、被管理員下架、備份還原後重新抹除不讀偏好）。
+
 ### 尚未完成
 
-管理員的「被檢舉」檢視與結案（④）、匿名保留的偏好與帳號頁（⑤）、前端的檢舉按鈕與 Modal 以及政策頁（⑥；`/privacy` 的保存期限表尚未列出「劇本檢舉」）、變異驗證與驗收（⑦）。**沒有驗收紀錄**：沒有執行過的項目一律是「未驗證」。
+前端的檢舉按鈕與 Modal、帳號頁的保留開關與刪除視窗的核取方塊、後台的「被檢舉」檢視，以及政策頁（⑥；`/privacy` 的保存期限表尚未列出「劇本檢舉」）、變異驗證與驗收（⑦）。**沒有驗收紀錄**：沒有執行過的項目一律是「未驗證」。
 
 ## AWS 展示環境（aws-demo-environment）
 

@@ -226,8 +226,14 @@ class ScriptRepository(BaseRepository[Script]):
 
     @property
     def _reports(self) -> ScriptReportRepository:
-        """結案檢舉用（只呼叫它的 `close_open`、`delete_for_versions`；結案欄位只在它那個檔案寫入）。"""
+        """結案與刪除檢舉用（只呼叫它的 `close_open`、`delete_for_versions`、`delete_for_author`；結案欄位只在它那個檔案寫入）。"""
         return ScriptReportRepository(self._session)
+
+    def delete_reports_on_authored_versions(self, user_id: int) -> int:
+        """刪除這位作者名下所有版本上的檢舉，回傳筆數。抹除流程在刪除使用者之前、**每一條路**都呼叫：`script_reports.version_id`
+        是無動作的外鍵，版本隨使用者串聯消失時還有檢舉會讓刪除失敗。匿名保留先做完之後，保留的劇本已解除作者關聯，這裡不會誤刪它們的檢舉。"""
+        self._session.flush()
+        return self._reports.delete_for_author(user_id)
 
     def _close_reports(self, version_ids: Sequence[int], result: str, now: datetime) -> int:
         """把這些版本未結案的檢舉全部結案，回傳筆數（呼叫端在轉移**確定成功之後**才記錄事件，SAVEPOINT 回復時不會留下不實的紀錄）。"""

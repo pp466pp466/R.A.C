@@ -3,6 +3,7 @@
 純函式，不碰資料庫與網路：
 - `check_nickname(raw)`：NFC 正規化、去除控制字元與零寬度等格式字元、頭尾空白與多餘空白，長度 2 至 20 字（Unicode 字元），
   不得含網址、電子郵件或電話的樣式，也不得冒用平台的官方署名（含「官方」）。回傳（標準化後的暱稱, 錯誤說明）其中一個為 `None`。
+  也不得冒用匿名保留劇本的系統署名「已註銷的作者」（比對方式與「官方」相同：包含該字串即拒絕，見 `MESSAGE_RETIRED`）。
   樣式比對在「全形轉半形、不分大小寫」之後進行，所以全形的網址或數字也擋得住；錯誤說明只說類別，不回顯使用者輸入。
 - `new_code()`：短代號。第一次設定暱稱時亂數產生並保存（`secrets`），所以無法由內部編號或對外識別碼推得；固定 4 碼、
   不含容易混淆的字元；不要求唯一，碰撞無害（公開顯示為「暱稱#短代號」，兩者一起才是署名）。
@@ -13,7 +14,7 @@ import re
 import secrets
 import unicodedata
 
-from app.models.script import OFFICIAL_AUTHOR_NAME
+from app.models.script import OFFICIAL_AUTHOR_NAME, RETIRED_AUTHOR_NAME
 from app.services.script_spec import normalize_single_line
 
 NICKNAME_MIN = 2
@@ -26,6 +27,7 @@ MESSAGE_REQUIRED = "請輸入暱稱。"
 MESSAGE_LENGTH = f"暱稱需為 {NICKNAME_MIN} 至 {NICKNAME_MAX} 個字。"
 MESSAGE_PATTERN = "暱稱不可包含網址、電子郵件或電話。"
 MESSAGE_OFFICIAL = "暱稱不可冒用官方署名。"
+MESSAGE_RETIRED = "暱稱不可冒用系統署名。"
 
 # 常見的網域後綴（不用「任何字母加點」，否則 "Mr.Smith" 這種正常的署名會被誤擋）
 _TLDS = "com|net|org|edu|gov|tw|cn|jp|hk|io|co|me|tv|cc|xyz|info|app|dev|ai|gg|ly|to|us|uk|de|fr|kr|biz|shop|site|online|top|link"
@@ -60,6 +62,8 @@ def check_nickname(raw: object) -> tuple[str | None, str | None]:
         return None, MESSAGE_PATTERN
     if _compare_form(OFFICIAL_AUTHOR_NAME) in squeezed:
         return None, MESSAGE_OFFICIAL
+    if _compare_form(RETIRED_AUTHOR_NAME) in squeezed:
+        return None, MESSAGE_RETIRED
     return text, None
 
 

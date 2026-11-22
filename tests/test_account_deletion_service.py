@@ -1,4 +1,4 @@
-"""account-deletion 規格：申請與撤銷刪除的服務（確認本人、管理員、狀態、通知信、事件）。
+"""account-deletion 規格：申請與撤銷刪除的服務（確認本人、管理員、狀態、通知信、事件、匿名保留偏好的一併寫入）。
 
 用真的 Repository 與真的 `AuthService.confirm_password`（讓「密碼錯誤計入失敗並鎖定」被實際走過），假的只有時鐘與寄信器。
 以 `member_session` 同時在 SQLite 與真實 SQL Server 上執行。
@@ -198,3 +198,134 @@ def test_events_carry_the_internal_id_only(member_session, log_lines):
     assert events == [("account.deletion_requested", user.id), ("account.deletion_cancelled", user.id)]
     for secret in ("secret.person@example.com", "機密姓名", GOOD_PASSWORD, CONFIRM_TEXT):
         assert secret not in log_lines.raw()
+
+
+# ---- 刪除視窗的「匿名保留我已發佈的劇本」（script-anonymous-retention 規格，任務 4.1）---------------------------
+
+def keep_of(kit: Kit, user: User) -> bool:
+    return kit.row(user).keep_published_scripts
+
+
+@pytest.mark.parametrize("before", [False, True], ids=["off-to-on", "on-to-on"])
+def test_keep_true_is_written_together_with_the_request(member_session, before):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, keep_published_scripts=before)
+    kit.service.request(kit.me(user), password=GOOD_PASSWORD, keep_published_scripts=True)
+    row = kit.row(user)
+    assert row.keep_published_scripts is True and row.status == STATUS_DELETION_PENDING and row.deletion_requested_at == START
+
+
+def test_keep_false_overwrites_an_earlier_on(member_session):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, keep_published_scripts=True)
+    kit.service.request(kit.me(user), password=GOOD_PASSWORD, keep_published_scripts=False)
+    row = kit.row(user)
+    assert row.keep_published_scripts is False and row.status == STATUS_DELETION_PENDING
+
+
+@pytest.mark.parametrize("before", [False, True], ids=["off", "on"])
+def test_leaving_the_field_out_does_not_touch_the_preference(member_session, before):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, keep_published_scripts=before)
+    kit.service.request(kit.me(user), password=GOOD_PASSWORD)
+    assert keep_of(kit, user) is before
+
+
+def test_a_google_only_account_writes_it_with_the_confirmation_text(member_session):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, password=None)
+    kit.service.request(kit.me(user), confirm_text=CONFIRM_TEXT, keep_published_scripts=True)
+    assert keep_of(kit, user) is True
+
+
+def test_a_wrong_password_does_not_write_the_preference(member_session):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1)
+    with pytest.raises(ValidationError) as exc:
+        kit.service.request(kit.me(user), password="definitely-not-the-password", keep_published_scripts=True)
+    assert "password" in exc.value.fields
+    row = kit.row(user)
+    assert row.keep_published_scripts is False and row.status == STATUS_ACTIVE and row.failed_login_count == 1
+
+
+def test_a_wrong_confirmation_text_does_not_write_the_preference(member_session):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, password=None)
+    with pytest.raises(ValidationError) as exc:
+        kit.service.request(kit.me(user), confirm_text="不對", keep_published_scripts=True)
+    assert list(exc.value.fields) == ["confirm_text"]
+    assert keep_of(kit, user) is False and kit.row(user).status == STATUS_ACTIVE
+
+
+@pytest.mark.parametrize("value", ["true", "yes", 1, 0, "", [True], {"keep": True}], ids=repr)
+def test_a_non_boolean_is_a_field_error_before_the_password_is_checked(member_session, value):
+    """型別錯誤是請求本身的錯，不是「確認本人失敗」：不計入登入失敗，也不會因此鎖定。"""
+    kit = Kit(member_session)
+    user = add_user(member_session, 1)
+    with pytest.raises(ValidationError) as exc:
+        kit.service.request(kit.me(user), password="definitely-not-the-password", keep_published_scripts=value)
+    assert list(exc.value.fields) == ["keep_published_scripts"]
+    row = kit.row(user)
+    assert row.failed_login_count == 0 and row.keep_published_scripts is False and row.status == STATUS_ACTIVE
+
+
+def test_an_admin_is_refused_before_anything_is_written(member_session):
+    kit = Kit(member_session)
+    admin = add_user(member_session, 1, role="admin")
+    with pytest.raises(Forbidden):
+        kit.service.request(kit.me(admin), password=GOOD_PASSWORD, keep_published_scripts=True)
+    assert keep_of(kit, admin) is False
+
+
+@pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
+def test_an_account_that_may_not_request_does_not_get_the_preference_written(member_session, status):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, status=status, deletion_requested_at=START, status_before_deletion=STATUS_ACTIVE)
+    with pytest.raises(Conflict):
+        kit.service.request(kit.me(user), password=GOOD_PASSWORD, keep_published_scripts=True)
+    assert keep_of(kit, user) is False
+
+
+class _LosesTheRace(UserRepository):
+    """另一個請求在「確認本人」之後、這個請求的條件式 UPDATE 之前搶先申請成立：第一次呼叫（對手）成立，第二次（自己）沒有命中。"""
+
+    def request_deletion(self, user, *, now):
+        super().request_deletion(user, now=now)
+        return super().request_deletion(user, now=now)
+
+
+def test_losing_the_race_to_a_concurrent_request_leaves_the_preference_unchanged(member_session):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1, keep_published_scripts=True)
+    auth = make_auth_service(member_session, clock=kit.clock)
+    service = AccountDeletionService(
+        users=_LosesTheRace(member_session), confirm_password=auth.confirm_password, clock=kit.clock,
+    )
+    with pytest.raises(Conflict) as exc:
+        service.request(kit.me(user), password=GOOD_PASSWORD, keep_published_scripts=False)
+    assert exc.value.code == "deletion_not_allowed"
+    assert keep_of(kit, user) is True                      # 搶先失敗的請求沒有寫入偏好（寫入在條件式 UPDATE 成功之後）
+    member_session.rollback()                              # 請求以 4xx 結束時整個交易回復
+    assert keep_of(kit, user) is True
+
+
+def test_a_failed_preference_write_rolls_the_whole_request_back(member_session, monkeypatch):
+    """偏好與申請在同一個交易：寫入失敗（帳號此刻不存在）時回 409，交易回復後申請也不存在。"""
+    kit = Kit(member_session)
+    user = add_user(member_session, 1)
+    monkeypatch.setattr(UserRepository, "set_keep_published_scripts", lambda self, user, keep: False)
+    with pytest.raises(Conflict) as exc:
+        kit.service.request(kit.me(user), password=GOOD_PASSWORD, keep_published_scripts=True)
+    assert exc.value.code == "deletion_not_allowed"
+    member_session.rollback()
+    row = kit.row(user)
+    assert (row.status, row.token_version, row.deletion_requested_at, row.keep_published_scripts) == (STATUS_ACTIVE, 1, None, False)
+
+
+def test_the_event_still_carries_the_internal_id_only_when_the_preference_is_sent(member_session, log_lines):
+    kit = Kit(member_session)
+    user = add_user(member_session, 1)
+    kit.service.request(kit.me(user), password=GOOD_PASSWORD, keep_published_scripts=True)
+    events = [(line["event"], line["user_id"]) for line in log_lines() if line.get("event", "").startswith("account.deletion")]
+    assert events == [("account.deletion_requested", user.id)]
+    assert "keep_published_scripts" not in log_lines.raw()

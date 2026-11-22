@@ -10,7 +10,7 @@ from pathlib import Path
 import pytest
 
 from app.models.script import (
-    OFFICIAL_AUTHOR_NAME, VERSION_DRAFT, VERSION_PENDING, VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED,
+    OFFICIAL_AUTHOR_NAME, RETIRED_AUTHOR_NAME, VERSION_DRAFT, VERSION_PENDING, VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED,
 )
 from app.models.script_report import CLOSED_DISMISSED
 from app.models.user import ROLE_ADMIN, User
@@ -665,6 +665,28 @@ def test_a_retained_anonymous_script_can_be_reported_and_is_not_shown_as_builtin
     member_session.commit()
     detail = service_for(member_session).script_detail(player(member_session, 3), version.public_id)
     assert detail["report_state"] == "available" and detail["author_name"] == "已註銷的作者" and detail["author_name"] != OFFICIAL_AUTHOR_NAME
+
+
+def test_a_retained_anonymous_script_shows_as_the_retired_author_with_no_code_in_the_catalog_and_the_detail(member_session):
+    """script-anonymous-retention 規格「目錄顯示」：作者為「已註銷的作者」、沒有短代號，也不被顯示為「官方」；
+    與內建劇本（筆名「官方」、沒有短代號）、一般玩家劇本（筆名與短代號）並列時各自正確，卡片的鍵集合不變。"""
+    author, reader = player(member_session, 2), player(member_session, 3)
+    retained = publish(member_session, author, title="保留的", now=TODAY_UTC)
+    builtin = publish(member_session, title="內建的", now=TODAY_UTC + timedelta(seconds=1))
+    ordinary = publish(member_session, player(member_session, 4), title="一般的", now=TODAY_UTC + timedelta(seconds=2))
+    ScriptRepository(member_session).retain_published_anonymously(author.id)
+    member_session.commit()
+    service = service_for(member_session)
+
+    cards = {card["title"]: card for card in service.catalog(reader)["scripts"]}
+    assert set(cards) == {"保留的", "內建的", "一般的"}
+    assert (cards["保留的"]["author_name"], cards["保留的"]["author_code"]) == (RETIRED_AUTHOR_NAME, None)
+    assert (cards["內建的"]["author_name"], cards["內建的"]["author_code"]) == (OFFICIAL_AUTHOR_NAME, None)
+    assert (cards["一般的"]["author_name"], cards["一般的"]["author_code"]) == ("甲", "aaaaaa")
+    assert set(cards["保留的"]) == set(CARD_FIELDS)
+    detail = service.script_detail(reader, retained.public_id)
+    assert (detail["author_name"], detail["author_code"]) == (RETIRED_AUTHOR_NAME, None)
+    assert builtin.public_id != retained.public_id != ordinary.public_id
 
 
 def test_a_players_script_detail_costs_one_extra_query_for_the_report_state_whatever_the_size(member_session):
