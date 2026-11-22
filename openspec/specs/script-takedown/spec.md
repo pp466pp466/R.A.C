@@ -44,7 +44,7 @@
 - **THEN** 最多一個成功，另一個得到 409
 
 ### Requirement: 管理員可下架與恢復並須重新輸入密碼
-`POST /api/admin/scripts/versions/<id>/remove` SHALL 把 `published` 的版本改為 `removed`，下架者為 `admin`，並 SHALL 要求固定列舉的 `category`（審查類別列舉加 `other_policy`）、選填的審核備註（至多 500 字）與管理員的密碼，寫入 `script.remove` 稽核（細節含類別）。`POST …/restore` SHALL 只適用下架者為 `admin` 的版本，要求密碼並寫入 `script.restore` 稽核。密碼錯誤 SHALL 被拒絕、寫入 `reauth.failed`，版本不變；下架者為作者的版本 SHALL 回 409 `removed_by_author`；恢復時同劇本已有另一個上架版本 SHALL 回 409 `live_exists`。內建劇本（沒有作者）SHALL 不可下架（409 `builtin_not_removable`）。
+`POST /api/admin/scripts/versions/<id>/remove` SHALL 把 `published` 的版本改為 `removed`，下架者為 `admin`，並 SHALL 要求固定列舉的 `category`（審查類別列舉加 `other_policy`）、選填的審核備註（至多 500 字）與管理員的密碼，寫入 `script.remove` 稽核（細節含類別）。`POST …/restore` SHALL 只適用下架者為 `admin` 的版本，要求密碼並寫入 `script.restore` 稽核。密碼錯誤 SHALL 被拒絕、寫入 `reauth.failed`，版本不變；下架者為作者的版本 SHALL 回 409 `removed_by_author`；恢復時同劇本已有另一個上架版本 SHALL 回 409 `live_exists`。內建劇本（有種子鍵的劇本）SHALL 不可下架（409 `builtin_not_removable`）；判斷 SHALL 依種子鍵，不依作者是否為空，所以作者已註銷、匿名保留的玩家劇本 SHALL 可被下架。下架 SHALL 把該版本未結案的檢舉與下架同一個交易結為「下架」。
 
 #### Scenario: 管理員下架
 - **WHEN** 管理員以正確的密碼與類別下架玩家劇本
@@ -69,6 +69,15 @@
 #### Scenario: 內建劇本
 - **WHEN** 管理員對內建劇本呼叫下架
 - **THEN** 回應 409 `builtin_not_removable`，版本仍上架
+
+#### Scenario: 已註銷作者的劇本
+- **WHEN** 管理員以正確的密碼下架一份作者已註銷、匿名保留的上架版本
+- **THEN** 版本為 `removed`，有一筆目標使用者為空的 `script.remove` 稽核，不回 `builtin_not_removable`
+
+#### Scenario: 下架時結案檢舉
+- **WHEN** 管理員下架一個有未結案檢舉的版本
+- **THEN** 那些檢舉結為「下架」
+
 
 ### Requirement: 下架的版本不能開新存檔
 `removed` 的版本 SHALL NOT 被用來開新存檔，包含作者自己，其開存檔、創角資料與 AI 生成預覽 SHALL 與不存在的版本一樣得到 404。已經開出的存檔 SHALL 不受影響（開局時已複製內容，之後劇本的下架或刪除不影響進行中的存檔）。

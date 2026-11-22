@@ -17,7 +17,7 @@
 - **THEN** 稽核紀錄仍在，目標識別碼保留
 
 ### Requirement: 動作是固定的列舉
-稽核的動作 SHALL 只有：`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，帳號鎖定相關的 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，劇本創作相關的 `limit.set`（部署者修改限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停），遊戲幣相關的 `wallet.adjust`（管理員調整遊戲幣餘額），以及劇本審核相關的 `script.read`（管理員讀取送審過的劇本全文）、`script.approve`（核可）、`script.reject`（人工退回）、`script.remove`（管理員下架）、`script.restore`（管理員恢復上架）。`account.lock`、`appeal.submit`、`limit.set` 與 `publish.suspend` 由系統、玩家或部署者觸發，其管理員欄位 SHALL 為空；其餘由管理員觸發。寫入列舉以外的動作 SHALL 被拒絕。申訴內容 SHALL NOT 進入稽核紀錄；`limit.set` 的細節 SHALL 只含限制的鍵與新舊數值；`wallet.adjust` 的細節 SHALL 只含調整的餘額種類、增減量與調整後的餘額；劇本審核動作的細節 SHALL 只含版本與劇本的對外識別碼、狀態與類別列舉，SHALL NOT 含劇本文字、標題、筆名與審核備註。
+稽核的動作 SHALL 只有：`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，帳號鎖定相關的 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，劇本創作相關的 `limit.set`（部署者修改限制）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停），遊戲幣相關的 `wallet.adjust`（管理員調整遊戲幣餘額），劇本審核相關的 `script.read`（管理員讀取送審過的劇本全文）、`script.approve`（核可）、`script.reject`（人工退回）、`script.remove`（管理員下架）、`script.restore`（管理員恢復上架），以及劇本檢舉相關的 `report.read`（管理員讀取版本的檢舉）、`report.dismiss`（管理員結案為不成立）。`account.lock`、`appeal.submit`、`limit.set` 與 `publish.suspend` 由系統、玩家或部署者觸發，其管理員欄位 SHALL 為空；其餘由管理員觸發。寫入列舉以外的動作 SHALL 被拒絕。申訴內容 SHALL NOT 進入稽核紀錄；`limit.set` 的細節 SHALL 只含限制的鍵與新舊數值；`wallet.adjust` 的細節 SHALL 只含調整的餘額種類、增減量與調整後的餘額；劇本審核動作的細節 SHALL 只含版本與劇本的對外識別碼、狀態與類別列舉，SHALL NOT 含劇本文字、標題、筆名與審核備註；檢舉動作的細節 SHALL 只含版本與劇本的對外識別碼與整數筆數，SHALL NOT 含檢舉的自寫文字與理由、檢舉人的任何資訊、劇本文字、標題與筆名。
 
 #### Scenario: 未知的動作
 - **WHEN** 程式嘗試寫入動作 `user.delete_everything`
@@ -54,6 +54,19 @@
 #### Scenario: 讀取劇本
 - **WHEN** 管理員讀取送審過的劇本全文
 - **THEN** 回傳之前已有一筆 `script.read` 紀錄
+
+#### Scenario: 讀取檢舉
+- **WHEN** 管理員讀取一個版本的檢舉
+- **THEN** 回傳之前已有一筆 `report.read` 紀錄，細節只有版本與劇本的對外識別碼與筆數，沒有檢舉的文字
+
+#### Scenario: 結案不成立
+- **WHEN** 管理員把一個版本的檢舉結為不成立
+- **THEN** 有一筆 `report.dismiss` 紀錄，管理員欄位是該管理員，細節只有識別碼與結案筆數
+
+#### Scenario: 已註銷作者的劇本
+- **WHEN** 管理員對作者已註銷的劇本讀取檢舉
+- **THEN** 稽核紀錄的目標使用者為空，細節仍有版本與劇本的識別碼
+
 
 ### Requirement: 稽核不記錄敏感內容
 稽核紀錄 SHALL NOT 含 email、顯示名稱、訊息或回覆文字、模型原文、密碼與其雜湊、權杖。管理員填寫的原因是唯一的自由文字，且只在停權與刪除對話時存在。以信箱查詢使用者時，紀錄 SHALL 只含查到的使用者的對外識別碼，不含被查詢的信箱。
