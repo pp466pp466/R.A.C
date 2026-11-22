@@ -252,21 +252,21 @@ test('each row shows a time that matches its state, in Taipei time, and a dash w
 });
 
 test('the action buttons follow the status: only pending can be approved, only non-builtin published versions can be removed, only admin takedowns can be restored', () => {
-  assert.deepEqual(Format.scriptActions({ status: 'pending_review' }), { approve: true, reject: true, remove: false, restore: false });
-  assert.deepEqual(Format.scriptActions({ status: 'published', author_id: 'a1', is_builtin: false }), { approve: false, reject: false, remove: true, restore: false });
+  assert.deepEqual(Format.scriptActions({ status: 'pending_review' }), { approve: true, reject: true, remove: false, restore: false, dismiss: false });
+  assert.deepEqual(Format.scriptActions({ status: 'published', author_id: 'a1', is_builtin: false }), { approve: false, reject: false, remove: true, restore: false, dismiss: false });
   assert.equal(Format.scriptActions({ status: 'published', author_id: null, is_builtin: true }).remove, false);   // 內建劇本（種子鍵），後端回 409
   assert.equal(Format.scriptActions({ status: 'published', author_id: 'a1', is_builtin: true }).remove, false);
   // 匿名保留的劇本沒有作者，但不是內建劇本：有下架按鈕（「沒有作者」不等於內建）
   assert.equal(Format.scriptActions({ status: 'published', author_id: null, is_builtin: false }).remove, true);
   assert.equal(Format.scriptActions({ status: 'removed', author_id: null, is_builtin: false }).remove, false);
-  assert.deepEqual(Format.scriptActions({ status: 'removed', removed_by: 'admin' }), { approve: false, reject: false, remove: false, restore: true });
+  assert.deepEqual(Format.scriptActions({ status: 'removed', removed_by: 'admin' }), { approve: false, reject: false, remove: false, restore: true, dismiss: false });
   assert.equal(Format.scriptActions({ status: 'removed', removed_by: 'author' }).restore, false);        // 作者自己的決定
   assert.equal(Format.scriptActions({ status: 'removed', removed_by: null }).restore, false);
   for (const status of ['draft', 'rejected', 'superseded']) {
-    assert.deepEqual(Format.scriptActions({ status, author_id: 'a1', removed_by: 'admin' }), { approve: false, reject: false, remove: false, restore: false }, status);
+    assert.deepEqual(Format.scriptActions({ status, author_id: 'a1', removed_by: 'admin' }), { approve: false, reject: false, remove: false, restore: false, dismiss: false }, status);
   }
   for (const bad of [null, undefined, 3, 'x']) {
-    assert.deepEqual(Format.scriptActions(bad), { approve: false, reject: false, remove: false, restore: false });
+    assert.deepEqual(Format.scriptActions(bad), { approve: false, reject: false, remove: false, restore: false, dismiss: false });
   }
 });
 
@@ -373,3 +373,95 @@ test('content of an unexpected shape never throws and shows what can be read', (
   assert.equal(odd.find((section) => section.key === 'characters').label, '角色（4）');
 });
 
+
+// ---- 劇本檢舉（rpg-script-reports）-----------------------------------------------------------------------
+
+const REASONS = ['minor_sexual', 'sexual_violence', 'real_person_sexual', 'tier_mismatch', 'plagiarism', 'privacy_harassment', 'other'];
+
+test('the seven report reasons and the three closing results each have a Traditional Chinese label, and nothing else is in the tables', () => {
+  assert.deepEqual(Object.keys(Format.LABELS.reportReason), REASONS);
+  assert.deepEqual(Object.keys(Format.LABELS.reportResult).sort(), ['dismissed', 'removed', 'superseded']);
+  for (const value of REASONS) { assert.notEqual(Format.reportReasonLabel(value), value, value); }
+  for (const value of ['removed', 'dismissed', 'superseded']) { assert.notEqual(Format.reportResultLabel(value), value, value); }
+  assert.equal(Format.reportResultLabel('dismissed'), '不成立');
+  assert.equal(Format.reportResultLabel('superseded'), '被新版本取代');
+});
+
+test('the red-line reasons are the three sexual-content ones, and every one of them is a known reason', () => {
+  assert.deepEqual(Format.RED_LINE_REASONS, ['minor_sexual', 'sexual_violence', 'real_person_sexual']);
+  for (const value of Format.RED_LINE_REASONS) { assert.ok(REASONS.includes(value), value); }
+});
+
+test('an unknown reason or result shows its code as it is (like every other label here), nothing shows a dash, and a prototype key is never looked up as a label', () => {
+  assert.equal(Format.reportReasonLabel('spam'), 'spam');
+  assert.equal(Format.reportReasonLabel('__proto__'), '__proto__');
+  assert.equal(Format.reportResultLabel('constructor'), 'constructor');
+  for (const value of [null, undefined, '']) {
+    assert.equal(Format.reportReasonLabel(value), Format.EMPTY);
+    assert.equal(Format.reportResultLabel(value), Format.EMPTY);
+  }
+});
+
+test('the report count text names the open reports and marks a red-line one; no open report gives nothing', () => {
+  assert.equal(Format.reportCountText({ report_count: 3, red_line_reported: false }), '未結案檢舉 3 則');
+  assert.equal(Format.reportCountText({ report_count: 1, red_line_reported: true }), '未結案檢舉 1 則（含紅線類別）');
+  for (const item of [{ report_count: 0, red_line_reported: true }, { report_count: -1 }, { report_count: '2' }, {}, null, undefined, 'x', []]) {
+    assert.equal(Format.reportCountText(item), '', JSON.stringify(item));
+  }
+  assert.equal(Format.reportCountText({ report_count: 2, red_line_reported: 'yes' }), '未結案檢舉 2 則');     // 只認布林 true
+});
+
+test('the reasons are joined with the Chinese labels; a non-list or a non-text entry is skipped', () => {
+  assert.equal(Format.reportReasonsText(['minor_sexual', 'plagiarism']), '涉及未成年的性內容、抄襲或侵權');
+  assert.equal(Format.reportReasonsText(['other', 5, null, '']), '其他');
+  for (const bad of [null, undefined, 'other', {}, 7]) { assert.equal(Format.reportReasonsText(bad), '', JSON.stringify(bad)); }
+});
+
+test('report items keep the server order, mark open and closed ones, flag red lines, and show the text as plain text', () => {
+  const rows = Format.reportItems([
+    { reasons: ['plagiarism'], text: '<b>抄襲</b>\n第二行', created_at: '2026-11-20T04:30:00Z', closed_at: null, closed_result: null },
+    { reasons: ['minor_sexual', 'other'], text: null, created_at: '2026-11-19T04:30:00Z', closed_at: '2026-11-21T00:00:00Z', closed_result: 'dismissed' },
+  ]);
+  assert.equal(rows.length, 2);
+  assert.deepEqual(rows[0], { open: true, statusText: '未結案', createdText: '檢舉於 2026-11-20 12:30', reasonsText: '抄襲或侵權', redLine: false, text: '<b>抄襲</b>\n第二行' });
+  assert.equal(rows[1].open, false);
+  assert.equal(rows[1].statusText, '已結案：不成立（2026-11-21 08:00）');
+  assert.equal(rows[1].redLine, true);
+  assert.equal(rows[1].text, '');
+});
+
+test('report items of an unexpected shape never throw and show what can be read', () => {
+  for (const bad of [null, undefined, 'x', 5, {}]) { assert.deepEqual(Format.reportItems(bad), [], JSON.stringify(bad)); }
+  const rows = Format.reportItems([null, 'x', 5, [], { reasons: 'plagiarism', text: 9, created_at: 'bad', closed_at: null }]);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].reasonsText, '');
+  assert.equal(rows[0].redLine, false);
+  assert.equal(rows[0].text, '');
+  assert.equal(typeof rows[0].createdText, 'string');
+});
+
+test('dismiss is offered only for a published version that has open reports', () => {
+  assert.equal(Format.scriptActions({ status: 'published', report_count: 2 }).dismiss, true);
+  for (const item of [{ status: 'published', report_count: 0 }, { status: 'published' }, { status: 'published', report_count: '2' }, { status: 'removed', report_count: 2 },
+    { status: 'pending_review', report_count: 2 }, null, undefined]) {
+    assert.equal(Format.scriptActions(item).dismiss, false, JSON.stringify(item));
+  }
+});
+
+test('the audit text of a report read or dismissal shows the identifiers and the count and nothing else', () => {
+  const detail = { version_id: '4d6f5c2a-1111-4111-8111-111111111111', script_id: '9a8c0123-2222-4222-8222-222222222222', count: 3 };
+  assert.equal(Format.auditDetailText('report.read', detail), '版本 4d6f5c2a，劇本 9a8c0123，3 筆');
+  assert.equal(Format.auditDetailText('report.dismiss', detail), '版本 4d6f5c2a，劇本 9a8c0123，結案 3 筆');
+  assert.equal(Format.auditDetailText('report.read', { version_id: '4d6f5c2a-1111', count: 0 }), '版本 4d6f5c2a，0 筆');
+  for (const action of ['report.read', 'report.dismiss']) {
+    assert.equal(Format.auditDetailText(action, {}), '', action);
+    assert.equal(Format.auditDetailText(action, null), '', action);
+    assert.equal(Format.auditDetailText(action, { count: 'x' }), '', action);
+  }
+});
+
+test('the empty-list text exists for the four script views and falls back for an unknown one', () => {
+  assert.equal(Format.scriptEmptyText('reported'), '目前沒有被檢舉的劇本。');
+  for (const view of ['pending_review', 'published', 'removed']) { assert.match(Format.scriptEmptyText(view), /^目前沒有.+的劇本。$/); }
+  for (const view of ['__proto__', 'constructor', '', null, undefined, 'other']) { assert.equal(Format.scriptEmptyText(view), '目前沒有資料。', String(view)); }
+});

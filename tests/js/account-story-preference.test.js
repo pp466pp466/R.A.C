@@ -33,14 +33,15 @@ function setupAccount({ user = BASE_USER, put } = {}) {
     getElementById: (id) => (id === 'initial-state'
       ? { textContent: JSON.stringify({ user, ageRules: {}, deletion: { confirmText: '刪除我的帳號' } }) } : null),
   };
-  sandbox.axios = { put, post: () => Promise.reject(new Error('unexpected post')), defaults: { headers: { common: {} } } };
+  // 帳號頁啟動時會讀「匿名保留」偏好（account-script-retention.js）；這個檔案不測它，所以讀取一律失敗（區塊不顯示），其餘行為不受影響
+  sandbox.axios = { get: () => Promise.reject(new Error('retention is not under test')), put, post: () => Promise.reject(new Error('unexpected post')), defaults: { headers: { common: {} } } };
   vm.createContext(sandbox);
   const run = (file) => vm.runInContext(read(file), sandbox, { filename: file });
 
   run('app/static/vendor/vue/vue.global.prod.js');
   let options = null;
   sandbox.Vue = Object.assign({}, sandbox.Vue, { createApp: (given) => { options = given; return { use() {}, component() {}, mount() {} }; } });
-  ['js/auth/auth-common.js', 'js/auth/auth-form.js', 'js/auth/auth-flows.js', 'js/auth/account-lifecycle.js', 'js/auth/account-safe-mode.js', 'js/ui/restriction.js']
+  ['js/auth/auth-common.js', 'js/auth/auth-form.js', 'js/auth/auth-flows.js', 'js/auth/account-lifecycle.js', 'js/auth/account-safe-mode.js', 'js/auth/account-script-retention.js', 'js/ui/restriction.js']
     .forEach((file) => run('app/static/' + file));
   sandbox.UI = Object.assign(sandbox.UI || {}, {
     toast: (message, settings) => toasts.push({ message, type: settings && settings.type ? settings.type : 'info' }),

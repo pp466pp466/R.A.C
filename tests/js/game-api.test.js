@@ -37,7 +37,7 @@ const serverError = (status, body) => () => Promise.reject({ response: { status,
 
 test('the page-level API exposes exactly the entry, game and wallet calls', () => {
   const { api } = sandboxWith(ok({}));
-  assert.deepEqual(Object.keys(api).sort(), ['catalog', 'catalogTags', 'checkin', 'notebook', 'saveNotebook', 'scriptDetail', 'sessions', 'setup', 'snapshot', 'start', 'suggest', 'turns', 'wallet']);
+  assert.deepEqual(Object.keys(api).sort(), ['catalog', 'catalogTags', 'checkin', 'notebook', 'reportScript', 'saveNotebook', 'scriptDetail', 'sessions', 'setup', 'snapshot', 'start', 'suggest', 'turns', 'wallet']);
 });
 
 test('snapshot reads the save by its public id and returns the response body untouched', async () => {
@@ -195,20 +195,42 @@ test('a 404 from the script detail rejects with the described failure so the pag
   assert.equal(info.kind, 'server');
 });
 
-test('the only calls that can change anything are suggest, start, checkin and saveNotebook', async () => {
+test('the only calls that can change anything are suggest, start, checkin, saveNotebook and reportScript', async () => {
   const { api, requests } = sandboxWith(ok({}));
   const args = {
     catalog: [], catalogTags: [], scriptDetail: ['v'], sessions: [], setup: ['v'], suggest: [{}], start: [{}], snapshot: [SESSION], turns: [SESSION, 0], notebook: [SESSION],
-    saveNotebook: [SESSION, 'x', 1], wallet: [], checkin: [false]
+    saveNotebook: [SESSION, 'x', 1], wallet: [], checkin: [false], reportScript: ['v', { reasons: ['other'] }]
   };
   for (const name of Object.keys(api)) { await api[name](...args[name]); }
   const writes = requests.filter((r) => r.method !== 'get').map((r) => `${r.method} ${r.url}`).sort();
   assert.deepEqual(writes, [
     'post /api/sessions',
+    'post /api/sessions/catalog/v/report',
     'post /api/sessions/protagonist/suggest',
     'post /api/wallet/checkin',
     `put /api/game/sessions/${SESSION}/notebook`
   ]);
+});
+
+test('reportScript posts the body to the version\'s report path, with the id encoded, and returns the response body untouched', async () => {
+  const body = { ok: true };
+  const { api, requests } = sandboxWith(() => Promise.resolve({ status: 201, data: body }));
+  const sent = { reasons: ['minor_sexual', 'other'], text: '說明' };
+  const result = await api.reportScript('a/b c', sent);
+  assert.deepEqual(plain(result), body);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'post');
+  assert.equal(requests[0].url, '/api/sessions/catalog/a%2Fb%20c/report');
+  assert.deepEqual(plain(requests[0].data), sent);
+});
+
+test('reportScript failures keep the status and code so the page can tell the limit, a repeat and a missing script apart', async () => {
+  for (const [status, code] of [[429, 'report_limit'], [409, 'already_reported'], [404, 'not_found'], [403, 'report_own_script'], [400, 'validation_error']]) {
+    const { api } = sandboxWith(serverError(status, { error: { code, message: '訊息' } }));
+    const info = await api.reportScript('v', { reasons: ['other'] }).then(() => null, (failure) => failure);
+    assert.equal(info.status, status);
+    assert.equal(info.code, code);
+  }
 });
 
 // ---- 失敗物件 ---------------------------------------------------------------------------------------

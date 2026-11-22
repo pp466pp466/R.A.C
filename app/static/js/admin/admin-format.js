@@ -58,8 +58,16 @@
     verdict: { pass: '通過', flag: '有疑慮', reject: '拒絕' },
     audience: { all: '全讀者', male: '男頻', female: '女頻' },
     endingMode: { none: '無結局', custom: '自訂結局' },
-    triggerKind: { age: '年齡', year: '年份' }
+    triggerKind: { age: '年齡', year: '年份' },
+    /* 劇本檢舉（rpg-script-reports；app/models/script_report.py）：玩家勾選的七個理由（值與後端的 REPORT_REASONS 相同）與結案結果。 */
+    reportReason: {
+      minor_sexual: '涉及未成年的性內容', sexual_violence: '性暴力或非自願情節', real_person_sexual: '以真人名義的性內容', tier_mismatch: '內容分級不符',
+      plagiarism: '抄襲或侵權', privacy_harassment: '洩漏個資或騷擾', other: '其他'
+    },
+    reportResult: { removed: '已下架', dismissed: '不成立', superseded: '被新版本取代' }
   };
+  /* 紅線理由（後端的 RED_LINE_REASONS）：有人勾選任一項，版本在被檢舉清單排最前（排序由後端決定，這裡只用來標示）。 */
+  var RED_LINE_REASONS = ['minor_sexual', 'sexual_violence', 'real_person_sexual'];
 
   var MAX_NOTE = 500;                            // 審核備註上限（Unicode 字元；app/models/script.py 的 MAX_DECISION_NOTE_CHARS）
 
@@ -129,6 +137,8 @@
   function lockReasonLabel(value) { return label('lockReason', value); }
   function bucketLabel(value) { return label('bucket', value); }
   function scriptStatusLabel(value) { return label('scriptStatus', value); }
+  function reportReasonLabel(value) { return label('reportReason', value); }
+  function reportResultLabel(value) { return label('reportResult', value); }
   function removerLabel(value) { return label('remover', value); }
   function categoryLabel(value) { return label('category', value); }
   function verdictLabel(value) { return label('verdict', value); }
@@ -205,7 +215,18 @@
       return bucketLabel(d.bucket) + ' ' + signedCount(d.delta) + '，調整後 ' + count(d.balance_after);
     }
     if (typeof action === 'string' && action.indexOf('script.') === 0) { return scriptAuditText(d); }
+    if (action === 'report.read' || action === 'report.dismiss') { return reportAuditText(action, d); }
     return '';
+  }
+
+  /* 劇本檢舉的稽核細節（只有版本與劇本的對外識別碼與筆數；沒有理由、自寫文字、標題與檢舉人）：
+     「版本 4d6f5c2a，劇本 9a8c0123，3 筆」（讀取）、「…，結案 3 筆」（結案）。沒有可顯示的欄位時回傳空字串。 */
+  function reportAuditText(action, d) {
+    var parts = [];
+    if (typeof d.version_id === 'string' && d.version_id) { parts.push('版本 ' + shortId(d.version_id)); }
+    if (typeof d.script_id === 'string' && d.script_id) { parts.push('劇本 ' + shortId(d.script_id)); }
+    if (typeof d.count === 'number' && isFinite(d.count)) { parts.push((action === 'report.dismiss' ? '結案 ' : '') + count(d.count) + ' 筆'); }
+    return parts.join('，');
   }
 
   /* 劇本審核的稽核細節（只有版本與劇本的對外識別碼、狀態與類別列舉；沒有標題、筆名與任何劇本文字）：
@@ -269,7 +290,7 @@
 
   /* 這一筆能做哪些操作（只決定要不要顯示按鈕；後端仍會逐項驗證）：待審才能核可與退回、上架中且不是內建劇本的才能下架（內建劇本後端回 409；
      「沒有作者」不等於內建：匿名保留的劇本也沒有作者，但它是玩家創作的，管理員可以下架）、
-     只有「管理員下架」的才能由管理員恢復（作者自己下架的是作者自己的決定）。 */
+     只有「管理員下架」的才能由管理員恢復（作者自己下架的是作者自己的決定）、上架中且有未結案的檢舉才能結案為「不成立」。 */
   function scriptActions(item) {
     var it = plainObject(item);
     var pending = it.status === 'pending_review';
@@ -277,9 +298,49 @@
       approve: pending,
       reject: pending,
       remove: it.status === 'published' && !it.is_builtin,
-      restore: it.status === 'removed' && it.removed_by === 'admin'
+      restore: it.status === 'removed' && it.removed_by === 'admin',
+      dismiss: it.status === 'published' && typeof it.report_count === 'number' && it.report_count > 0
     };
   }
+
+  // ---- 劇本檢舉（rpg-script-reports）-------------------------------------------------------------------
+
+  /* 清單一筆的檢舉標示：「未結案檢舉 3 則」，有人勾選紅線理由附「（含紅線類別）」；沒有未結案的檢舉回傳空字串。 */
+  function reportCountText(item) {
+    var it = plainObject(item);
+    if (typeof it.report_count !== 'number' || !isFinite(it.report_count) || it.report_count <= 0) { return ''; }
+    return '未結案檢舉 ' + Math.floor(it.report_count) + ' 則' + (it.red_line_reported === true ? '（含紅線類別）' : '');
+  }
+
+  /* 理由陣列轉一行文字（「、」分隔）；不認得的理由顯示原始代碼（與這裡其他標籤相同），不是陣列回傳空字串。 */
+  function reportReasonsText(reasons) {
+    if (!Array.isArray(reasons)) { return ''; }
+    return reasons.filter(function (value) { return typeof value === 'string' && value; }).map(reportReasonLabel).join('、');
+  }
+
+  /* 檢舉面板的各筆（純文字）：`open`（未結案）、`statusText`（「未結案」或「已結案：不成立，時間」）、`createdText`、`reasonsText`、`redLine`（理由含紅線）、`text`（玩家自寫文字，
+     不是字串當作沒有）。順序照伺服器給的，不重排；不是陣列或項目不是物件時略過。 */
+  function reportItems(reports) {
+    if (!Array.isArray(reports)) { return []; }
+    return reports.filter(function (item) { return item && typeof item === 'object' && !Array.isArray(item); }).map(function (item) {
+      var open = !item.closed_at;
+      var reasons = Array.isArray(item.reasons) ? item.reasons : [];
+      return {
+        open: open,
+        statusText: open ? '未結案' : '已結案：' + reportResultLabel(item.closed_result) + '（' + taipeiDateTime(item.closed_at) + '）',
+        createdText: '檢舉於 ' + taipeiDateTime(item.created_at),
+        reasonsText: reportReasonsText(reasons),
+        redLine: reasons.some(function (value) { return RED_LINE_REASONS.indexOf(value) >= 0; }),
+        text: typeof item.text === 'string' ? item.text : ''
+      };
+    });
+  }
+
+  /* 各清單的空清單說明。 */
+  var SCRIPT_EMPTY = {
+    pending_review: '目前沒有待審的劇本。', published: '目前沒有上架中的劇本。', reported: '目前沒有被檢舉的劇本。', removed: '目前沒有已下架的劇本。'
+  };
+  function scriptEmptyText(view) { return Object.prototype.hasOwnProperty.call(SCRIPT_EMPTY, view) ? SCRIPT_EMPTY[view] : '目前沒有資料。'; }
 
   /* 分頁標籤上的待審數量：清單還沒讀完時是「至少」（N+）；沒有待審回傳空字串。 */
   function pendingCountText(total, done) {
@@ -379,6 +440,8 @@
     MAX_NOTE: MAX_NOTE, scriptStatusLabel: scriptStatusLabel, removerLabel: removerLabel, categoryLabel: categoryLabel,
     verdictLabel: verdictLabel, audienceLabel: audienceLabel, categoriesText: categoriesText, authorText: authorText,
     scriptStateText: scriptStateText, scriptTimeText: scriptTimeText, scriptActions: scriptActions, pendingCountText: pendingCountText,
+    RED_LINE_REASONS: RED_LINE_REASONS, reportReasonLabel: reportReasonLabel, reportResultLabel: reportResultLabel, reportCountText: reportCountText,
+    reportReasonsText: reportReasonsText, reportItems: reportItems, scriptEmptyText: scriptEmptyText,
     categoryOptions: categoryOptions, noteLength: noteLength, noteProblem: noteProblem, tierBindingText: tierBindingText,
     scriptSections: scriptSections
   };

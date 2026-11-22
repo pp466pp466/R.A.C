@@ -7,7 +7,10 @@
    - 狀態：user、restriction、phase（'loading'｜'ready'｜'notfound'｜'failed'）、detail（整理過的詳情）、failureText、gateNotice（{ text, link, linkText }｜null）。
    - 計算：canStart、memberText、publishedText。
    - 方法：loadDetail、start；Game.tierLabel 與 Game.audienceLabel（tierLabel、audienceLabel）。
-   - 詢問 Modal（共用片段 game/_mode_prompt.html）：askOpen、modePrompt、cancelAsk、keepSafe、goToSettings。 #}
+   - 詢問 Modal（共用片段 game/_mode_prompt.html）：askOpen、modePrompt、cancelAsk、keepSafe、goToSettings。
+   - 檢舉（rpg-script-reports）：reportState（'available'｜'reported'｜'unavailable'）、reportOpen（給 ui-modal 的 v-model）、reportPicked、reportText、reportError、submitting、
+     reportCopy（固定文字）、reportReasons（七個理由 { value, label }）、reportCheck（{ ok, length, … }）、canSubmitReport、textMax、openReport、closeReport、submitReport。
+     檢舉 Modal 寫在本頁（只有本頁用），顯示完全由 Vue 狀態接管；理由與自寫文字一律以雙大括號插值顯示（純文字）。 #}
 {% block title %}劇本詳情{% endblock %}
 {% block head_assets %}
   <link rel="stylesheet" href="{{ url_for('static', filename='css/game.css') }}">
@@ -86,8 +89,36 @@
         <a class="ui-btn" href="/game">返回目錄</a>
         <button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start">開始冒險</button>
       </p>
+
+      <!-- 檢舉入口：依詳情回應的 report_state——可檢舉顯示「檢舉」、已檢舉顯示停用的「已檢舉」、其餘（內建、自己的劇本）不顯示 -->
+      <p v-if="reportState !== 'unavailable'" class="sd-report">
+        <button v-if="reportState === 'available'" type="button" class="ui-btn" @click="openReport">{{ reportCopy.openButton }}</button>
+        <button v-else type="button" class="ui-btn" disabled>{{ reportCopy.reportedButton }}</button>
+      </p>
     </article>
   </main>
+
+  <!-- 檢舉 Modal：七個理由（核取方塊）、選填的文字與字數；沒有任何理由時不能送出；Esc 與遮罩視同取消，送出中不可關閉 -->
+  <ui-modal v-model="reportOpen" :title="reportCopy.title" :status-code="reportCopy.code">
+    <p class="sd-report__intro">{{ reportCopy.intro }}</p>
+    <fieldset class="sd-report__reasons">
+      <legend class="gw-legend">{{ reportCopy.reasonsLegend }}</legend>
+      <label v-for="item in reportReasons" :key="item.value" class="sd-report__reason">
+        <input type="checkbox" v-model="reportPicked" :value="item.value" :disabled="submitting">
+        <span>{{ item.label }}</span>
+      </label>
+    </fieldset>
+    <div class="gw-field">
+      <label for="report-text">{{ reportCopy.textLabel }}<span class="gw-count" :class="{ 'gw-count--over': reportCheck.length > textMax }">{{ reportCheck.length }} / {{ textMax }}</span></label>
+      <textarea id="report-text" class="gw-input" rows="4" autocomplete="off" v-model="reportText" :disabled="submitting"></textarea>
+      <p class="sd-report__hint">{{ reportCopy.textHint }}</p>
+    </div>
+    <p v-if="reportError" class="ge-error" role="alert">{{ reportError }}</p>
+    <template #actions>
+      <button type="button" class="ui-btn" :disabled="submitting" @click="closeReport">{{ reportCopy.cancel }}</button>
+      <button type="button" class="ui-btn ui-btn--primary" :disabled="!canSubmitReport" @click="submitReport">{{ submitting ? reportCopy.sending : reportCopy.confirm }}</button>
+    </template>
+  </ui-modal>
 
   <!-- 點選未綁定安全模式的劇本時的詢問（共用片段，與入口頁同一份）：顯示完全由 Vue 狀態接管；Esc 與遮罩視同取消，留在本頁 -->
 {% endraw %}
@@ -103,6 +134,7 @@
   <script src="{{ url_for('static', filename='js/auth/auth-common.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-labels.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/mode-prompt.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/script-report.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-api.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/script-detail.js') }}"></script>
 {% endblock %}

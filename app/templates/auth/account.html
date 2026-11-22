@@ -142,6 +142,26 @@
         <a class="ui-btn" href="/scripts">前往劇本創作</a>
       </div>
     </form>
+
+    <!-- 匿名保留我已發佈的劇本：預設關閉；載入成功才顯示（管理員與載入失敗時沒有這個區塊）。狀態與請求在 account-script-retention.js -->
+    <div v-if="scriptRetention.available" class="account-retention">
+      <h3 id="script-retention-title" class="account-subtitle">{{ scriptRetentionCopy.title }}</h3>
+      <div class="account-switch-row">
+        <button type="button" id="script_retention_switch" class="account-switch" role="switch"
+                :aria-checked="scriptRetention.keep ? 'true' : 'false'" aria-labelledby="script-retention-title" aria-describedby="script-retention-state"
+                :class="{ 'account-switch--on': scriptRetention.keep }"
+                :disabled="scriptRetention.busy" :aria-busy="scriptRetention.busy ? 'true' : 'false'"
+                @click="toggleScriptRetention">
+          <span class="account-switch__track" aria-hidden="true"><span class="account-switch__thumb"></span></span>
+          <span class="account-switch__label">{{ scriptRetention.busy ? scriptRetentionCopy.busy : (scriptRetention.keep ? scriptRetentionCopy.onLabel : scriptRetentionCopy.offLabel) }}</span>
+        </button>
+      </div>
+      <p id="script-retention-state" class="auth-hint">{{ scriptRetention.keep ? scriptRetentionCopy.stateOn : scriptRetentionCopy.stateOff }}</p>
+      <ul class="account-bullets">
+        <li v-for="point in scriptRetentionCopy.points" :key="point">{{ point }}</li>
+      </ul>
+      <p v-if="scriptRetention.error" class="auth-form-error" role="alert">{{ scriptRetention.error }}</p>
+    </div>
   </section>
 
   <section v-if="ageConfirmed" class="account-section" aria-labelledby="story-title">
@@ -256,6 +276,14 @@
         <li>用量紀錄只會保留不含個人資料的統計。</li>
       </ul>
       <p>需要留存資料的話，請先使用「匯出我的資料」。</p>
+      <!-- 目前有上架的劇本才顯示：勾選後帳號刪除時只匿名保留目前上架的版本，其餘劇本一律刪除；沒有上架劇本時整塊不在畫面上，送出的本文也沒有這個欄位 -->
+      <div v-if="scriptRetention.available && scriptRetention.liveCount > 0" class="account-retention account-retention--delete">
+        <label class="account-check">
+          <input type="checkbox" name="keep_published_scripts" v-model="deleteKeep" :disabled="deleteForm.state.submitting">
+          <span>{{ scriptRetentionCopy.deleteTitle }}</span>
+        </label>
+        <p class="auth-hint">{{ scriptRetentionCopy.deleteNote }}</p>
+      </div>
       <div v-if="user.has_password" class="auth-field">
         <label class="auth-label" for="delete_password">輸入您的密碼以確認</label>
         <input id="delete_password" name="password" type="password" class="auth-input" autocomplete="current-password" required
@@ -284,5 +312,6 @@
   <script src="{{ url_for('static', filename='js/auth/auth-flows.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account-lifecycle.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account-safe-mode.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auth/account-script-retention.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/account.js') }}"></script>
 {% endblock %}

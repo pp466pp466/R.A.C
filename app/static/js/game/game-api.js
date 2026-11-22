@@ -18,7 +18,7 @@
  *   那是 `turn-stream.js` 的事（原生 fetch 搭配 ReadableStream，AGENTS.md 第 5 節）。
  * - **遊戲幣**（`/api/wallet`）：`wallet`（餘額、每輪幣價、簽到狀態）、`checkin`（每日簽到；`confirmOverflow` 為真才帶 `confirm_overflow: true`）。
  * 會呼叫模型或較慢的請求，逾時（`options.timeout`，毫秒）與中止用的 `signal`（AbortController）**由呼叫端傳入**，數值取自頁面初始狀態（由設定算出，這裡不寫死）；
- * 沒給就用 axios 的預設。**寫入的呼叫恰好是四個**：`suggest`、`start`、`checkin`、`saveNotebook`（測試固定，`tests/test_game_pages.py`）。
+ * 沒給就用 axios 的預設。**寫入的呼叫恰好是五個**：`suggest`、`start`、`checkin`、`saveNotebook`、`reportScript`（測試固定，`tests/js/game-api.test.js` 與 `tests/test_game_pages.py`）。
  * **玩家文字只在請求本文裡**：這裡不記錄、不快取、不寫任何瀏覽器儲存。
  * 路徑都是固定字串，識別碼經 encodeURIComponent 才放進網址；分頁參數只送呼叫端給的數字（範圍由伺服器驗證，前端不重複實作規則）。
  */
@@ -106,6 +106,10 @@
     /* 一個上架劇本的公開詳情（唯讀）：{ ok, script: { id, title, summary, world_name, tags, author_name, author_code, content_tier, audience, version_no, published_at,
        background, characters: [{ name, occupation }], locations, has_custom_ending, content_mode } }；非上架與不存在都是 404。 */
     scriptDetail: function (versionId, options) { return send('get', BASE + '/catalog/' + encodeURIComponent(versionId), undefined, options); },
+    /* 檢舉一個上架劇本版本（rpg-script-reports；寫入，不呼叫模型）：本文 `{ reasons: [理由…], text? }`（見 script-report.js 的 `requestBody`），成功 201 `{ ok: true }`（沒有任何統計）；
+       失敗：404（不是上架中、內建或不存在）、403 `report_own_script`／`age_confirmation_required`、400（理由或文字不合規定）、409 `already_reported`、429 `report_limit`。
+       自寫文字只在請求本文裡，這裡不記錄、不快取。 */
+    reportScript: function (versionId, body, options) { return send('post', BASE + '/catalog/' + encodeURIComponent(versionId) + '/report', body, options); },
     /* 我的存檔一頁：{ ok, sessions, has_more } */
     sessions: function (options) { return get('', options); },
     /* 序章與創角需要的資料：{ ok, title, background, characters, locations, milestones, limits, origin_options, suggestions_remaining, suggestions_available } */

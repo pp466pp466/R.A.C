@@ -45,9 +45,16 @@
     return matchesConfirmText(options.confirmText, options.expectedText);
   }
 
-  /* 送出請求的本文：只帶對應的那一個欄位（伺服器也只看對應的欄位）。 */
+  /* 送出請求的本文：只帶對應的那一個欄位（伺服器也只看對應的欄位）。
+     另有選填的 `keep_published_scripts`（刪除視窗的「匿名保留我已發佈的劇本」）：只有目前有上架劇本（`liveCount` 為正整數）且 `keepPublished` 是布林時才帶，
+     否則整個欄位不送，伺服器就保持原偏好（script-anonymous-retention 規格「沒有上架劇本」）。 */
   function deletionBody(options) {
-    return options.hasPassword ? { password: options.password } : { confirm_text: options.confirmText };
+    var body = options.hasPassword ? { password: options.password } : { confirm_text: options.confirmText };
+    var live = options.liveCount;
+    if (typeof live === 'number' && isFinite(live) && live > 0 && Math.floor(live) === live && typeof options.keepPublished === 'boolean') {
+      body.keep_published_scripts = options.keepPublished;
+    }
+    return body;
   }
 
   /* 把 Content-Disposition 裡的檔名取出來（伺服器保證純 ASCII）；取不到或可疑時用預設檔名。 */

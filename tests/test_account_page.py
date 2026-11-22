@@ -226,6 +226,52 @@ def test_account_page_loads_every_script_that_account_js_depends_on(app):
     assert not missing, f"account.js 用到但頁面沒有載入的 Auth 函式：{missing}"
 
 
+# ---- 匿名保留我已發佈的劇本（script-anonymous-retention 規格；行為在 tests/js/account-script-retention.test.js）----------------------------
+
+
+def test_the_retention_switch_is_a_plain_switch_in_the_nickname_section_after_the_form_and_only_when_loaded(app):
+    html = page_for(app).get_data(as_text=True)
+    section = html.split('aria-labelledby="nickname-title"', 1)[1].split('aria-labelledby="story-title"', 1)[0]
+    assert '<div v-if="scriptRetention.available" class="account-retention">' in section             # 載入成功才顯示（失敗與管理員沒有這個區塊）
+    assert 'id="script_retention_switch"' in section and 'role="switch"' in section
+    assert section.index("</form>") < section.index('id="script_retention_switch"')                    # 在暱稱表單之後
+    assert '@click="toggleScriptRetention"' in section and ':disabled="scriptRetention.busy"' in section
+    assert "{{ scriptRetentionCopy.title }}" in section and "{{ point }}" in section                    # 文字是固定文案的插值
+    assert "{{ scriptRetention.error }}" in section and 'role="alert"' in section
+
+
+def test_the_delete_modal_shows_the_keep_checkbox_only_when_there_are_live_scripts(app):
+    html = page_for(app).get_data(as_text=True)
+    modal = html.split('v-model="deleteOpen"', 1)[1]
+    assert 'v-if="scriptRetention.available && scriptRetention.liveCount > 0"' in modal
+    assert '<input type="checkbox" name="keep_published_scripts" v-model="deleteKeep" :disabled="deleteForm.state.submitting">' in modal
+    assert "{{ scriptRetentionCopy.deleteTitle }}" in modal and "{{ scriptRetentionCopy.deleteNote }}" in modal
+
+
+def test_the_retention_script_loads_before_the_page_script_and_the_page_never_asks_for_it_when_it_cannot_apply(app):
+    html = page_for(app).get_data(as_text=True)
+    assert html.index("js/auth/account-script-retention.js") < html.index("js/auth/account.js")
+    script = (JS_DIR / "account.js").read_text(encoding="utf-8")
+    assert "if (!user.deletion_scheduled_at && user.role !== 'admin' && ageConfirmed.value) { retention.load(); }" in script
+
+
+def test_a_member_awaiting_deletion_has_no_retention_block_in_the_html(app):
+    page = page_for(app, status=STATUS_DELETION_PENDING, deletion_requested_at=START, status_before_deletion="active")
+    html = page.get_data(as_text=True)
+    for absent in ("script_retention_switch", "scriptRetention", "keep_published_scripts"):
+        assert absent not in html, absent
+
+
+def test_the_retention_script_is_pure_and_the_page_only_uses_the_two_endpoint_methods():
+    pure = (JS_DIR / "account-script-retention.js").read_text(encoding="utf-8")
+    code = re.sub(r"/\*.*?\*/", "", pure, flags=re.S)
+    for forbidden in ("localStorage", "sessionStorage", "indexedDB", "document.", "window.", "axios", "fetch(", "innerHTML", "v-html"):
+        assert forbidden not in code, forbidden
+    assert "var ENDPOINT = '/api/account/script-retention';" in pure
+    script = (JS_DIR / "account.js").read_text(encoding="utf-8")
+    assert "axios.get(retentionApi.ENDPOINT)" in script and "axios.put(retentionApi.ENDPOINT, body)" in script
+
+
 # ---- 導覽 ------------------------------------------------------------------------------------------------------
 
 

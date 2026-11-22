@@ -21,6 +21,7 @@ from app.config import PROJECT_ROOT, load_config
 from app.models import Base, RpgSession, Wallet
 from app.models.rpg_session import SESSION_ENDED
 from app.models.script import REVIEW_CATEGORIES
+from app.models.script_report import REPORT_NOTE_MAX_CHARS, REPORT_REASONS
 from app.models.user import CONTENT_MODES, MEMBER_TIERS, ROLE_ADMIN
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
@@ -685,11 +686,12 @@ def test_the_detail_page_loads_its_scripts_in_dependency_order_and_the_detail_sc
     client, _ = client_for(app)
     html = client.get(f"/game/script/{GHOST}").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
-    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "mode-prompt.js", "game-api.js", "script-detail.js"):
+    for needed in ("vue.global.prod.js", "axios.min.js", "ui-components.js", "restriction.js", "auth-common.js", "game-labels.js", "mode-prompt.js", "script-report.js", "game-api.js", "script-detail.js"):
         assert needed in names, needed
     assert names[-1] == "script-detail.js"
     assert names.index("auth-common.js") < names.index("game-api.js") < names.index("script-detail.js")
     assert names.index("game-labels.js") < names.index("script-detail.js") and names.index("mode-prompt.js") < names.index("script-detail.js")
+    assert names.index("script-report.js") < names.index("script-detail.js")                  # 詳情頁的腳本一載入就讀 Game.scriptReport
     assert "entry.js" not in names and "wizard.js" not in names                  # 不載入別頁的腳本
     assert re.search(r'<div id="script-app"[^>]*\bv-cloak\b', html)
 
@@ -702,7 +704,8 @@ def test_the_detail_template_has_the_four_phases_the_actions_and_the_shared_ask_
     assert '<a class="ui-btn ui-btn--primary" href="/game">回到目錄</a>' in html and '<a class="ui-btn" href="/game">返回目錄</a>' in html
     assert '<button type="button" class="ui-btn" @click="loadDetail">重試</button>' in html                 # 暫時失敗可以重試
     assert '<button type="button" class="ui-btn ui-btn--primary" :disabled="!canStart" @click="start">開始冒險</button>' in html
-    assert '{% include "game/_mode_prompt.html" %}' in html and "<ui-modal" not in html                    # 與入口頁同一份 Modal，不另寫
+    assert '{% include "game/_mode_prompt.html" %}' in html                                              # 詢問 Modal 與入口頁同一份，不另寫
+    assert html.count("<ui-modal") == 1 and 'v-model="reportOpen"' in html                                # 本頁自己的 Modal 只有檢舉這一個
     assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
     assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)                                         # 初始狀態經 tojson 跳脫
 
@@ -724,9 +727,9 @@ def test_the_detail_template_never_asks_for_anything_the_public_detail_does_not_
     assert not re.search(r"hidden|personality|milestone|ending_text|ending_note|rules|opening|review|content_hash|content_json", body, re.I)
 
 
-def test_the_detail_script_is_read_only_keeps_nothing_in_the_browser_and_asks_only_for_the_detail():
+def test_the_detail_script_only_reads_the_detail_and_writes_only_the_report_and_keeps_nothing_in_the_browser():
     code = strip_js_comments(read(JS_DIR / "script-detail.js"))
-    assert set(re.findall(r"Game\.api\.(\w+)", code)) == {"scriptDetail"}
+    assert set(re.findall(r"Game\.api\.(\w+)", code)) == {"scriptDetail", "reportScript"}
     # 詳情端點的回應是 { ok, script: {…} }（session_api_controller.catalog_detail；test_session_api 固定了 `body["script"]`），
     # 頁面讀 `data.script`：Node 測試用替身回應，這裡守住兩端的包裝一致（第一次瀏覽器冒煙就是因為這個包裝對不上才發現的）
     assert "data.script" in code
@@ -734,6 +737,7 @@ def test_the_detail_script_is_read_only_keeps_nothing_in_the_browser_and_asks_on
     for storage in ("localStorage", "sessionStorage", "indexedDB", "document.cookie", "innerHTML", "v-html"):
         assert storage not in code, storage
     assert ".finally(" in code and "inflight = false" in code                                              # 無論成功或失敗都恢復載入狀態
+    assert "submitting.value = false" in code and code.count(".finally(") == 2                             # 檢舉送出也一樣：一律在 finally 恢復
     assert "Auth.loginUrlFor(window.location.pathname)" in code and "window.location.assign" in code         # 401 導向登入並保留位置
     assert "Game.modePrompt.create" in code                                                                 # 詢問流程與入口頁共用，不另寫一份
     assert not re.search(r"needsModeAsk|content_tier === 'adult'", code)
@@ -744,9 +748,66 @@ def test_every_detail_class_the_template_uses_has_a_style_rule():
     used = set()
     for attribute in re.findall(r'class="([^"]*)"', _detail_template()):
         used.update(name for name in attribute.split() if name.startswith(("ge-", "sd-", "gw-")))
-    assert {"sd-detail", "sd-title", "sd-summary", "sd-section", "sd-list", "sd-list__item", "sd-list__name", "sd-list__note"} <= used, used
+    assert {"sd-detail", "sd-title", "sd-summary", "sd-section", "sd-list", "sd-list__item", "sd-list__name", "sd-list__note",
+            "sd-report", "sd-report__intro", "sd-report__reasons", "sd-report__reason", "sd-report__hint"} <= used, used
     defined = set(re.findall(r"\.((?:ge|sd|gw)-[\w-]+)", css))
     assert sorted(name for name in used if name not in defined) == []
+
+
+# ---- 詳情頁的檢舉（rpg-script-reports；script-reports 規格「劇本詳情頁提供檢舉入口」；行為在 tests/js/script-report.test.js 與 script-detail.test.js）------------
+
+
+def _report_modal() -> str:
+    html = _detail_template()
+    return html[html.index("<ui-modal"):html.index("</ui-modal>")]
+
+
+def test_the_detail_page_shows_the_report_entry_by_report_state_and_never_for_the_unavailable_state():
+    html = _detail_template()
+    assert '<p v-if="reportState !== \'unavailable\'" class="sd-report">' in html
+    assert '<button v-if="reportState === \'available\'" type="button" class="ui-btn" @click="openReport">{{ reportCopy.openButton }}</button>' in html
+    assert '<button v-else type="button" class="ui-btn" disabled>{{ reportCopy.reportedButton }}</button>' in html
+
+
+def test_the_report_modal_has_seven_reason_checkboxes_a_counted_text_box_and_a_confirm_that_needs_a_reason():
+    modal = _report_modal()
+    assert 'v-model="reportOpen"' in modal and ':status-code="reportCopy.code"' in modal and ':title="reportCopy.title"' in modal
+    assert 'v-for="item in reportReasons"' in modal and '<input type="checkbox" v-model="reportPicked" :value="item.value" :disabled="submitting">' in modal   # 七個理由來自腳本，不寫死在樣板
+    assert "{{ item.label }}" in modal
+    assert re.search(r'<textarea id="report-text" class="gw-input"[^>]*v-model="reportText"[^>]*:disabled="submitting"></textarea>', modal)
+    assert "{{ reportCheck.length }} / {{ textMax }}" in modal                                           # 字數計數
+    assert '<p v-if="reportError" class="ge-error" role="alert">{{ reportError }}</p>' in modal             # 失敗說明在 Modal 內，純文字
+    assert ':disabled="!canSubmitReport" @click="submitReport"' in modal                                    # 沒有理由時確認鈕停用
+    assert ':disabled="submitting" @click="closeReport"' in modal                                           # 送出中不能取消
+
+
+def test_the_report_modal_and_entry_use_only_plain_interpolation_and_no_bootstrap_interaction():
+    for text in (_report_modal(), _detail_template()):
+        for forbidden in ("v-html", "innerHTML", "data-bs-", "|safe"):
+            assert forbidden not in text, forbidden
+    assert "<form" not in _report_modal()                                                                   # 不靠表單的原生送出，只有按鈕呼叫 submitReport
+
+
+def test_the_report_script_lists_the_backend_reasons_in_the_backend_order_and_the_same_text_limit():
+    code = strip_js_comments(read(JS_DIR / "script-report.js"))
+    assert tuple(re.findall(r"\{ value: '(\w+)', label:", code)) == REPORT_REASONS
+    assert f"var TEXT_MAX = {REPORT_NOTE_MAX_CHARS};" in code
+
+
+def test_the_report_script_knows_the_same_three_states_the_detail_service_returns():
+    code = strip_js_comments(read(JS_DIR / "script-report.js"))
+    assert "var STATES = ['available', 'reported', 'unavailable'];" in code
+    service = read(PROJECT_ROOT / "app" / "services" / "game_entry_service.py")
+    assert 'return "unavailable"' in service and 'return "reported" if' in service and '"available"' in service
+
+
+def test_the_report_script_is_pure_and_the_report_api_call_is_a_post_to_the_report_path():
+    code = strip_js_comments(read(JS_DIR / "script-report.js"))
+    for forbidden in ("localStorage", "sessionStorage", "indexedDB", "document.", "window.", "axios", "fetch(", "innerHTML", "v-html", "console."):
+        assert forbidden not in code, forbidden
+    api = strip_js_comments(read(JS_DIR / "game-api.js"))
+    assert "reportScript: function (versionId, body, options) { return send('post', BASE + '/catalog/' + encodeURIComponent(versionId) + '/report', body, options); }" in api
+    assert '@session_api_bp.post("/catalog/<version_id>/report")' in read(PROJECT_ROOT / "app" / "controllers" / "session_api_controller.py")   # 前端的路徑對得上後端
 
 
 # ---- 入口頁的目錄搜尋與篩選（rpg-script-catalog 規格「目錄畫面的搜尋與篩選」；行為在 tests/js/entry.test.js 與 catalog-state.test.js）----------------
@@ -935,14 +996,14 @@ def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
     assert set(re.findall(r"Game\.api\.(\w+)", code["wizard.js"])) == {"setup", "suggest", "start"}
 
 
-def test_the_game_api_writes_through_exactly_four_calls_and_takes_timeouts_and_signals_from_the_caller():
-    """寫入的呼叫恰好是 suggest（生成預覽，無狀態）、start（開存檔）、checkin（每日簽到）與 saveNotebook（玩家儲存記事簿）；
+def test_the_game_api_writes_through_exactly_five_calls_and_takes_timeouts_and_signals_from_the_caller():
+    """寫入的呼叫恰好是 suggest（生成預覽，無狀態）、start（開存檔）、checkin（每日簽到）、saveNotebook（玩家儲存記事簿）與 reportScript（檢舉劇本）；
     其餘都是 GET。回合與第 0 幕的串流不在 game-api.js（那是 turn-stream.js 的原生 fetch）。"""
     api = strip_js_comments(read(JS_DIR / "game-api.js"))
     calls = re.findall(r"""(\w+):\s*function\s*\([^)]*\)\s*\{\s*return\s+(?:call|send)\('(get|post|put|patch|delete)'""", api, re.I)
-    assert sorted(name for name, method in calls if method != "get") == ["checkin", "saveNotebook", "start", "suggest"]
-    assert dict(calls)["saveNotebook"] == "put" and dict(calls)["checkin"] == "post"
-    # 目錄、常用標籤與劇本詳情（rpg-script-publishing 7.2）也經 send()，但都是 GET：寫入的呼叫仍恰好是上面四個
+    assert sorted(name for name, method in calls if method != "get") == ["checkin", "reportScript", "saveNotebook", "start", "suggest"]
+    assert dict(calls)["saveNotebook"] == "put" and dict(calls)["checkin"] == "post" and dict(calls)["reportScript"] == "post"
+    # 目錄、常用標籤與劇本詳情（rpg-script-publishing 7.2）也經 send()，但都是 GET：寫入的呼叫仍恰好是上面五個
     assert sorted(name for name, method in calls if method == "get") == [
         "catalog", "catalogTags", "notebook", "scriptDetail", "setup", "snapshot", "turns", "wallet",
     ]

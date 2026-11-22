@@ -14,6 +14,9 @@
  * - 「劇本審核」（rpg-script-publishing）：待審、上架中、已下架三個清單（清單沒有劇本內文）；點「看全文」才讀取版本（先寫稽核），
  *   全文與審核備註都以純文字顯示。核可不需密碼；退回有類別與選填備註；下架與恢復走共用的密碼確認視窗（類別與備註在同一個視窗）。
  *   待審數量取自待審清單（進入頁面時就讀取一次，顯示在分頁標籤上，不新增總覽欄位）。409（他人已處理）時關閉視窗、顯示訊息並重新載入清單。
+ * - 「被檢舉」檢視（rpg-script-reports）：上架中且有未結案檢舉的版本，排序（紅線優先、人數、時間）由後端決定，前端不重排。開啟版本時先讀全文（`script.read` 稽核），
+ *   上架中且有未結案檢舉才再讀檢舉面板（`report.read` 稽核；失敗只在面板顯示錯誤，不阻止全文）；面板的理由以中文標籤、自寫文字以純文字顯示，沒有檢舉人。
+ *   「不成立（結案）」不需要密碼；「下架」沿用既有的密碼確認視窗（檢舉由下架轉移自動結案）。409／404（他人已處理）時關閉視窗、顯示原因並重新載入清單。
  */
 (function () {
   'use strict';
@@ -45,6 +48,7 @@
   var SCRIPT_VIEWS = [
     { id: 'pending_review', label: '待審' },
     { id: 'published', label: '上架中' },
+    { id: 'reported', label: '被檢舉' },
     { id: 'removed', label: '已下架' }
   ];
   var PENDING_LIST = 'scripts_pending_review';
@@ -54,6 +58,7 @@
   var SOURCES = {
     scripts_pending_review: { path: '/scripts', key: 'versions', paged: true, params: { status: 'pending_review' } },
     scripts_published: { path: '/scripts', key: 'versions', paged: true, params: { status: 'published' } },
+    scripts_reported: { path: '/scripts', key: 'versions', paged: true, params: { status: 'reported' } },
     scripts_removed: { path: '/scripts', key: 'versions', paged: true, params: { status: 'removed' } },
     flagged: { path: '/flagged', key: 'conversations', paged: true },
     feedback: { path: '/feedback', key: 'conversations', paged: true },
@@ -201,7 +206,7 @@
       // ---- 清單 -----------------------------------------------------------------------------
       var lists = {
         flagged: newList(), feedback: newList(), audit: newList(), failures: newList(), locked: newList(), suspended: newList(), appeals: newList(),
-        scripts_pending_review: newList(), scripts_published: newList(), scripts_removed: newList()
+        scripts_pending_review: newList(), scripts_published: newList(), scripts_reported: newList(), scripts_removed: newList()
       };
 
       function fetchList(id, more) {
@@ -515,6 +520,7 @@
             markStale('audit');
           } else if (kind === 'script_remove') {
             removeScriptRow('scripts_published', targetId);       // 離開上架中，出現在已下架（下次進入時重新載入）
+            removeScriptRow('scripts_reported', targetId);        // 它未結案的檢舉由下架自動結案，不再出現在被檢舉清單
             markStale('scripts_removed', 'audit');
           } else if (kind === 'script_restore') {
             removeScriptRow('scripts_removed', targetId);
@@ -547,6 +553,7 @@
       var scriptView = Vue.ref('pending_review');
       var scriptListId = Vue.computed(function () { return 'scripts_' + scriptView.value; });
       var scriptList = Vue.computed(function () { return lists[scriptListId.value]; });
+      var scriptEmptyText = Vue.computed(function () { return fmt.scriptEmptyText(scriptView.value); });
       var pendingText = Vue.computed(function () {
         var list = lists[PENDING_LIST];
         return list.loaded ? fmt.pendingCountText(list.items.length, list.done) : '';
@@ -565,7 +572,7 @@
 
       /* 他人已處理（409）或版本已不可讀（404）：待審清單（標籤上的數量也取自它）與目前看的清單重新載入，另一個清單標記為過期。 */
       function refreshScriptLists() {
-        markStale('scripts_published', 'scripts_removed', 'audit');
+        markStale('scripts_published', 'scripts_reported', 'scripts_removed', 'audit');
         var jobs = [fetchList(PENDING_LIST, false)];
         if (scriptListId.value !== PENDING_LIST) { jobs.push(fetchList(scriptListId.value, false)); }
         return Promise.all(jobs);
@@ -579,8 +586,37 @@
       var scriptOpen = Vue.ref(false);
       var scriptDoc = Vue.reactive({ loading: false, error: '', actionError: '', version: null, busy: false });
       var scriptToken = 0;                                     // 只採用最後一次讀取的結果
+      /* 檢舉面板（只在上架中且有未結案檢舉的版本顯示）：讀取會寫 `report.read` 稽核，所以與全文一樣只在開啟版本時讀；失敗只在面板顯示，不影響全文。 */
+      var scriptReports = Vue.reactive({ shown: false, loading: false, error: '', items: [] });
+      var scriptReportRows = Vue.computed(function () { return fmt.reportItems(scriptReports.items); });
+      var openReportCount = Vue.computed(function () { return scriptReportRows.value.filter(function (row) { return row.open; }).length; });
       var scriptSections = Vue.computed(function () { return scriptDoc.version ? fmt.scriptSections(scriptDoc.version.content) : []; });
       var scriptDocActions = Vue.computed(function () { return fmt.scriptActions(scriptDoc.version); });
+
+      function clearScriptReports() {
+        scriptReports.shown = false;
+        scriptReports.loading = false;
+        scriptReports.error = '';
+        scriptReports.items = [];
+      }
+
+      /* 讀取檢舉面板：只採用最後一次開啟的結果（token）；失敗只設定面板的錯誤。 */
+      function loadScriptReports(publicId, token) {
+        scriptReports.shown = true;
+        scriptReports.loading = true;
+        scriptReports.error = '';
+        markStale('audit');
+        return request('get', '/scripts/versions/' + encodeURIComponent(publicId) + '/reports').then(function (data) {
+          if (token === scriptToken) { scriptReports.items = Array.isArray(data.reports) ? data.reports : []; }
+        }, function (error) {
+          if (token === scriptToken) { scriptReports.error = failureText(error); }
+        }).finally(function () { if (token === scriptToken) { scriptReports.loading = false; } });
+      }
+
+      function reloadScriptReports() {
+        if (!scriptDoc.version) { return Promise.resolve(); }
+        return loadScriptReports(scriptDoc.version.id, scriptToken);
+      }
 
       function openScript(publicId) {
         scriptDoc.version = null;
@@ -588,11 +624,15 @@
         scriptDoc.actionError = '';
         scriptDoc.busy = false;
         scriptDoc.loading = true;
+        clearScriptReports();
         scriptOpen.value = true;
         markStale('audit');
         var token = ++scriptToken;
         return request('get', '/scripts/versions/' + encodeURIComponent(publicId)).then(function (data) {
-          if (token === scriptToken) { scriptDoc.version = data.version; }
+          if (token !== scriptToken) { return; }
+          scriptDoc.version = data.version;
+          scriptDoc.loading = false;                                        // 全文先顯示，檢舉面板自己有載入中的提示
+          if (fmt.scriptActions(data.version).dismiss) { return loadScriptReports(publicId, token); }     // 先讀全文，上架中且有未結案檢舉才再讀檢舉
         }, function (error) {
           if (token !== scriptToken) { return; }
           scriptDoc.error = failureText(error);
@@ -608,6 +648,7 @@
         scriptDoc.actionError = '';
         scriptDoc.loading = false;
         scriptDoc.busy = false;
+        clearScriptReports();
       });
 
       function approveOpenScript() {
@@ -619,10 +660,33 @@
           scriptOpen.value = false;
           UI.toast('已核可，這份劇本已上架。');
           removeScriptRow(PENDING_LIST, publicId);
-          markStale('scripts_published', 'scripts_removed', 'audit');     // 核可也會把同劇本下架的舊版改為「已被取代」
+          markStale('scripts_published', 'scripts_reported', 'scripts_removed', 'audit');     // 核可也會把同劇本下架的舊版改為「已被取代」（舊版未結案的檢舉隨之自動結案）
         }, function (error) {
           if (!scriptOpen.value) { UI.toast(failureText(error), { type: 'error' }); return; }
           if (error.status === 409) {
+            scriptOpen.value = false;
+            UI.toast(failureText(error), { type: 'error' });
+            return refreshScriptLists();
+          }
+          scriptDoc.actionError = failureText(error);
+        }).finally(function () { scriptDoc.busy = false; });
+      }
+
+      /* 結案為「不成立」：不需要密碼，版本仍上架。成功關閉視窗、該列從被檢舉清單消失；409（他人已結案或已下架）與 404 關閉視窗、顯示原因並重新載入清單。 */
+      function dismissOpenScript() {
+        // 讀完檢舉（沒有載入中、沒有讀取錯誤）才能結案：不讓管理員在沒看到內容時結案
+        if (!scriptDoc.version || scriptDoc.busy || scriptReports.loading || scriptReports.error || !fmt.scriptActions(scriptDoc.version).dismiss) { return Promise.resolve(); }
+        var publicId = scriptDoc.version.id;
+        scriptDoc.busy = true;
+        scriptDoc.actionError = '';
+        return request('post', '/scripts/versions/' + encodeURIComponent(publicId) + '/reports/dismiss', { data: {} }).then(function () {
+          scriptOpen.value = false;
+          UI.toast('已結案：檢舉不成立。');
+          removeScriptRow('scripts_reported', publicId);
+          markStale('scripts_published', 'audit');                        // 上架中清單的檢舉計數要更新
+        }, function (error) {
+          if (!scriptOpen.value) { UI.toast(failureText(error), { type: 'error' }); return; }
+          if (error.status === 409 || error.status === 404) {
             scriptOpen.value = false;
             UI.toast(failureText(error), { type: 'error' });
             return refreshScriptLists();
@@ -728,10 +792,11 @@
         askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askWallet: askWallet, askUnlock: askUnlock, askLift: askLift,
         askDeleteConversation: askDeleteConversation,
         onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm,
-        scriptViews: SCRIPT_VIEWS, scriptView: scriptView, scriptListId: scriptListId, scriptList: scriptList, pendingText: pendingText,
+        scriptViews: SCRIPT_VIEWS, scriptView: scriptView, scriptListId: scriptListId, scriptList: scriptList, scriptEmptyText: scriptEmptyText, pendingText: pendingText,
         tabBadge: tabBadge, selectScriptView: selectScriptView, reloadScripts: reloadScripts, loadMoreScripts: loadMoreScripts,
         scriptOpen: scriptOpen, scriptDoc: scriptDoc, scriptSections: scriptSections, scriptDocActions: scriptDocActions,
-        openScript: openScript, approveOpenScript: approveOpenScript,
+        openScript: openScript, approveOpenScript: approveOpenScript, dismissOpenScript: dismissOpenScript,
+        scriptReports: scriptReports, scriptReportRows: scriptReportRows, openReportCount: openReportCount, reloadScriptReports: reloadScriptReports,
         askRejectFromDoc: askRejectFromDoc, askRemoveFromDoc: askRemoveFromDoc, askRestoreFromDoc: askRestoreFromDoc,
         askRemoveScript: askRemoveScript, askRestoreScript: askRestoreScript,
         rejectOpen: rejectOpen, rejectState: rejectState, submitReject: submitReject

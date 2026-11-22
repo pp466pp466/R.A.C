@@ -5,6 +5,7 @@
 > 注意（2026-11-19）：本文件已納入 change `wallet-hub` 的前端變化（全站共用的餘額標籤與錢包狀態庫、簽到狀態機抽成 `ui/wallet-checkin.js`、新頁面 `/wallet` 的免費簽到、儲值示意與紀錄；**沒有後端 API、資料表與 migration 異動**），見第 2 節的 `wallet-*.js` 列、第 1 節的載入順序與第 3f 節。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 > 注意（2026-11-20）：本文件已納入 change `rpg-script-publishing` 第 ⑥ 批的前端變化（`/scripts` 的審核結果與下架畫面、新增 `script-status.js`）與第 ⑦ 批的載入順序（`/game` 新增 `mode-prompt.js`、`catalog-state.js`；新頁面 `/game/script/<版本>` 載入 `script-detail.js`）；入口目錄的搜尋與篩選、共用的安全模式詢問 Modal 與詳情頁的模組關係（3d）、`/admin` 的「劇本審核」分頁（3a）已由 8.6 補齊。
+> 注意（2026-11-22）：本文件已納入 change `rpg-script-reports` 第 ⑥ 批的前端變化：劇本詳情頁的檢舉（新增 `script-report.js`、`game-api.js` 的 `reportScript`、詳情頁的檢舉 Modal）、帳號頁的「匿名保留我已發佈的劇本」開關與刪除視窗的核取方塊（新增 `account-script-retention.js`）、後台劇本審核的「被檢舉」檢視與檢舉面板（`admin.js`、`admin-format.js`）。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
@@ -17,13 +18,13 @@ flowchart TD
     Base --> Vendor["vendor：vue.global.prod.js → axios.min.js"]
     Base --> Ui["共用：typewriter.js → toast-store.js → restriction.js → wallet-api.js → wallet-store.js → ui-components.js"]
     Ui --> Page{"頁面"}
-    Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → auth-flows.js → 各頁腳本<br/>（login、age、appeal、login-password、account…；account 另先載入 account-lifecycle.js 與 account-safe-mode.js）"]
+    Page -->|"會員頁面"| Auth["auth-common.js → auth-form.js → auth-flows.js → 各頁腳本<br/>（login、age、appeal、login-password、account…；account 另先載入 account-lifecycle.js、account-safe-mode.js 與 account-script-retention.js）"]
     Page -->|"/（未登入）"| Home["沒有腳本：home.html 純伺服器端渲染（另載入 home.css）"]
     Page -->|"/cs"| Cs["auth-common.js → cs-sidebar.js → cs-store.js → cs-sync.js → cs-usage.js → chat.js"]
     Page -->|"/admin"| Adm["auth-common.js → admin-format.js → admin.js（另載入 admin.css）"]
     Page -->|"/scripts"| Scr["auth-common.js → script-draft.js → script-status.js → milestone-preview.js → script-api.js → script-workshop.js（另載入 scripts.css）"]
     Page -->|"/game"| Gm["auth-common.js → game-labels.js → mode-prompt.js → catalog-state.js → game-api.js → entry.js（另載入 game.css）"]
-    Page -->|"/game/script/版本"| Sdt["auth-common.js → game-labels.js → mode-prompt.js → game-api.js → script-detail.js（另載入 game.css）"]
+    Page -->|"/game/script/版本"| Sdt["auth-common.js → game-labels.js → mode-prompt.js → script-report.js → game-api.js → script-detail.js（另載入 game.css）"]
     Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js"]
     Page -->|"/wallet"| Wlt["auth-common.js → game-labels.js → game-state.js → wallet-checkin.js → wallet-demo-packages.js → wallet-hub-state.js → wallet-hub.js（另載入 wallet.css）"]
     Page -->|"/game/存檔"| Gsv["auth-common.js → game-labels.js → sse-parser.js → turn-stream.js → game-state.js → game-store.js → game-sync.js → game-api.js → wallet-checkin.js → game-wallet.js → game-notebook.js → game-revision.js → game-session.js → game.js（另載入 game.css）"]
@@ -49,6 +50,7 @@ flowchart TD
 | `js/auth/auth-flows.js` | 登入、年齡確認、申訴與管理員密碼驗證頁的判斷邏輯（純函式，`Auth.*`）：安全的導向位置、Google 發起的請求內容（只有條款旗標與 `next`）、檢查輸入、每種錯誤代碼的處理結果（顯示欄位錯誤、清空欄位、導向、結束流程）、申訴字數以 Unicode 字元計 | `tests/js/auth-flows.test.js`（22 項） |
 | `js/auth/account-lifecycle.js` | 帳號頁匯出與刪除的純函式（`Auth.lifecycle`）：確認文字比對、送出條件、檔名、預定刪除時間（台灣時間）、錯誤代碼說明、Blob 錯誤整理 | `tests/js/account-lifecycle.test.js` |
 | `js/auth/account-safe-mode.js` | 帳號頁「安全模式」區塊的純函式與狀態機（`Auth.safeMode`，safe-mode-toggle）：`safeReturnPath`（返回位置驗證，與伺服器 `safe_return_path` 同一份規則與同一張案例表）、`normalize`（初始狀態只有 `effective`、`confirmed`、`forced`、`returnPath`）、`planToggle`（開→關未同意先開 Modal、已同意直接送出、關→開直接送出、煞車或忙碌時不動作）、`createController`（請求期間禁用並於 `finally` 恢復、失敗不樂觀更新、成功後帶有效返回位置則 Toast 後導向）與固定的繁體中文文案 `COPY`、`MESSAGES` | `tests/js/account-safe-mode.test.js`（30 項）、`tests/js/account-safe-mode-page.test.js`（12 項）、`tests/test_account_safe_mode_page.py` |
+| `js/auth/account-script-retention.js` | 帳號頁「匿名保留我已發佈的劇本」的純函式與狀態機（`Auth.scriptRetention`，rpg-script-reports）：`parse`（`{ keep, live_count }`，型別不對回傳 null）、固定文案 `COPY`、`createController`（`load()` 只讀一次、成功才顯示區塊；`toggle()` 不做樂觀更新、送出中禁用、失敗時開關維持原狀並顯示固定說明、`finally` 恢復）。刪除視窗的欄位由 `account-lifecycle.js` 的 `deletionBody` 決定（只在 `live_count > 0` 且值是布林時才帶 `keep_published_scripts`）。 |
 
 ## 3. 客服頁面（`/cs`）的模組關係
 
@@ -82,7 +84,7 @@ flowchart LR
 flowchart LR
     Html["templates/admin/console.html<br/>外殼 + initial-state JSON（只有管理員的顯示名稱）"] --> Admin
     Admin["admin.js<br/>Vue 3 應用：十個分頁（含劇本審核、被鎖定的帳號與申訴）、確認視窗、對話與劇本全文視窗、退回視窗"]
-    Admin --> Fmt["admin-format.js<br/>台灣時間、中文標籤（含劇本狀態與九個類別）、劇本按鈕規則與全文分段、用量百分比與警示等級（純函式）"]
+    Admin --> Fmt["admin-format.js<br/>台灣時間、中文標籤（含劇本狀態、九個類別與檢舉理由與結果）、劇本按鈕規則（含結案）、被檢舉清單的標示與檢舉面板格式化、全文分段、用量百分比與警示等級（純函式）"]
     Admin --> Ui["ui-components.js<br/>Modal 與 Toast"]
     Admin --> Common["auth-common.js<br/>CSRF 標頭、describeError、登入導向"]
     Admin --> Api["axios → /api/admin/*"]
@@ -90,7 +92,8 @@ flowchart LR
 ```
 
 - **十個分頁**（依管理員的使用順序，`admin.js` 的 `TABS`）：總覽、被標記對話、意見回饋、劇本審核、被鎖定的帳號、被暫停發佈、申訴、使用者、模型失敗、稽核。總覽最上面是可點擊的「今日警告」，點它切到被標記對話；被標記對話與意見回饋的每一列有「看對話」與「看使用者」；「使用者」分頁只有標明「供客服反應時使用」的信箱查詢，沒有使用者清單。
-- **劇本審核分頁**（rpg-script-publishing，admin-script-review）：三個子分頁（待審、上架中、已下架；`SOURCES[…].params` 帶固定的 `status`，清單編號為 `scripts_pending_review|published|removed`）。**清單只有標題、簡介、作者、狀態與時間，沒有劇本內文**；按「看全文」才讀取（伺服器先寫 `script.read` 稽核再回傳），全文以 `scriptSections` 分段、一律純文字。**核可與退回只放在全文視窗**（讀完才決定，也讓每次核可前都有一筆讀取稽核）：核可不需密碼；退回是獨立的 Modal（固定類別必填、備註選填且只有管理員看得到，不需密碼）。下架與恢復擴充既有的共用確認視窗（`script_remove` 有類別與備註欄位、`script_restore` 只要密碼），清單列與全文視窗兩處都有按鈕；內建劇本不顯示「下架」並說明，作者自行下架的版本不顯示「恢復上架」（`scriptActions`，只決定按鈕，後端仍逐項驗證）。待審數量在進入 `/admin` 時讀一次待審清單（只讀、不寫稽核）顯示於分頁標籤，清單未讀完時顯示「N+」。409（他人已處理）與讀取 404（作者已撤回）時關閉視窗、顯示後端原文並重新載入待審清單；錯誤密碼與欄位錯誤（400）留在視窗內。
+- **劇本審核分頁**（rpg-script-publishing，admin-script-review）：四個子分頁（待審、上架中、被檢舉、已下架；`SOURCES[…].params` 帶固定的 `status`，清單編號為 `scripts_pending_review|published|removed`）。**清單只有標題、簡介、作者、狀態與時間，沒有劇本內文**；按「看全文」才讀取（伺服器先寫 `script.read` 稽核再回傳），全文以 `scriptSections` 分段、一律純文字。**核可與退回只放在全文視窗**（讀完才決定，也讓每次核可前都有一筆讀取稽核）：核可不需密碼；退回是獨立的 Modal（固定類別必填、備註選填且只有管理員看得到，不需密碼）。下架與恢復擴充既有的共用確認視窗（`script_remove` 有類別與備註欄位、`script_restore` 只要密碼），清單列與全文視窗兩處都有按鈕；內建劇本不顯示「下架」並說明，作者自行下架的版本不顯示「恢復上架」（`scriptActions`，只決定按鈕，後端仍逐項驗證）。待審數量在進入 `/admin` 時讀一次待審清單（只讀、不寫稽核）顯示於分頁標籤，清單未讀完時顯示「N+」。409（他人已處理）與讀取 404（作者已撤回）時關閉視窗、顯示後端原文並重新載入待審清單；錯誤密碼與欄位錯誤（400）留在視窗內。
+- **被檢舉檢視與檢舉面板**（rpg-script-reports，admin-script-reports）：第四個子分頁「被檢舉」讀 `GET /api/admin/scripts?status=reported`，**順序由後端決定（紅線理由、未結案人數、最早檢舉時間），前端不重排**；列上標示「未結案檢舉 N 則」與紅線（`admin-format.js` 的 `reportCountText`）。開啟版本時先讀全文（`script.read` 稽核），**只有上架中且有未結案檢舉才再讀檢舉面板**（`report.read` 稽核）；面板的理由是中文標籤、自寫文字是純文字，沒有檢舉人；讀取失敗只在面板顯示並可重試。「不成立（結案）」不需要密碼，檢舉讀完才能按；成功關閉視窗並把該列移出清單，409 或 404 關閉視窗、顯示原因並重新載入。「下架」沿用密碼確認視窗，成功後該列也移出被檢舉清單；核可新版本會讓被檢舉清單標為過期。
 - **只有純文字**：使用者、模型與管理員填寫的原因一律以 `{{ }}` 輸出，對話內容以 `white-space: pre-wrap` 保留換行；`<script>` 與 `<img onerror>` 字樣逐字顯示，不被解析。
 - **確認視窗共用一個**：停權與刪除對話顯示原因欄位（必填、200 字、提醒勿填個人資料），解除停權與調整等級只有密碼（調整等級另有等級選單，不含目前的等級）。密碼欄位 `type=password`、`autocomplete="off"`，**送出的當下與視窗關閉時立即清空**，不存進任何儲存體；密碼錯誤的訊息顯示在密碼欄位下方。同時只開一個視窗：從對話全文按「刪除對話」會先關掉全文視窗，視窗關閉時全文也從記憶體丟掉。
 - **調整遊戲幣（game-wallet）**：「使用者」分頁的使用者檢視多一列「遊戲幣」（免費與付費餘額）與「調整遊戲幣」按鈕（目標是管理員或待刪除者時不顯示）。確認視窗多兩個欄位：餘額種類（付費或免費，預設付費）與增減量（不為 0 的整數，扣除用負數；`admin-format.js` 的 `parseCoinDelta` 解析、`bucketLabel` 提供繁體中文標籤），加上必填的原因與管理員密碼，送到 `POST /api/admin/users/<id>/wallet/adjust`；欄位錯誤（`bucket`、`delta`）顯示在對應欄位，餘額不足（409）顯示在視窗內。玩家端的錢包與記錄畫面屬 `player-hub`，目前沒有。
@@ -133,6 +136,7 @@ flowchart LR
     Html["templates/auth/account.html<br/>兩份 HTML：一般會員／等待刪除的帳號<br/>（伺服器依狀態選擇，多餘的區塊不在頁面裡）"] --> Acc
     Acc["account.js<br/>Vue 3 應用"] --> Life["account-lifecycle.js<br/>確認文字、送出條件、檔名、台灣時間、錯誤說明（純函式）"]
     Acc --> Safe["account-safe-mode.js<br/>安全模式的狀態機、返回位置驗證、固定文案（純函式）"]
+    Acc --> Ret["account-script-retention.js<br/>匿名保留偏好的狀態機（純函式）"]
     Acc --> Form["auth-form.js<br/>useForm：送出中、欄位錯誤、finally 恢復"]
     Acc --> Ui["ui-components.js<br/>Modal 與 Toast"]
     Acc --> Api["axios → /api/account/export、/delete、/cancel-deletion、/nickname、/story-preference、/content-mode"]
@@ -148,6 +152,7 @@ flowchart LR
 - **管理員**：頁面沒有刪除區塊（HTML 裡完全沒有，不是用 `v-if` 藏起來）；匯出照常提供。
 - **故事偏好**（story-preference）：「暱稱與劇本創作」之後的區塊，與暱稱區塊同樣 `v-if="ageConfirmed"`，等待刪除者的那份 HTML 沒有。三個單選（全讀者、男頻、女頻；標籤是樣板裡的固定文字）綁定 `storyForm.values.story_preference`，初始值取自 `user.story_preference`（來自 `/api/auth/me` 的使用者資料，沒有生日與年齡區間；缺值或不認得的值退回全讀者）。`saveStoryPreference` 以 `Auth.useForm` 的 `run` 送出 `PUT /api/account/story-preference`：送出中按鈕禁用並標示忙碌、`finally` 恢復、重複點擊只送一次；成功 Toast，失敗以 Toast 或欄位錯誤說明且**不改動玩家目前的選取**（網路、逾時與 CSRF 的 Toast 由 `useForm` 顯示，不重複）；401 導向登入頁並保留位置，鎖定時顯示申訴捷徑。偏好不存進瀏覽器儲存空間。
 - **安全模式**（safe-mode-toggle，`aria-labelledby="safe-mode-title"`）：放在年齡補填之後、「暱稱與劇本創作」之前；區塊以 `v-if="safeMode.available"` 顯示，初始狀態 `contentMode` 由 `auth_page_controller._content_mode_state` 提供，只有列舉值與布林（`effective`、`confirmed`、`forced`）與**已驗證的返回位置**（`/account?return=/game/…`，Page Controller 與前端各驗證一次，不合規則的丟棄）；**沒有生日、年齡區間或同意時間戳記**；尚未完成年齡確認的管理員與等待刪除者的 `contentMode` 為 `null`，區塊不顯示。開關是 `role="switch"` 的按鈕（`aria-checked`、請求期間或緊急煞車時 `disabled`），不使用 Bootstrap 的 JavaScript 或 `data-bs-*`。流程：開→關且尚未在目前版本同意時，以共用的 `ui-modal`（`actions` 插槽自訂按鈕）顯示安全規範重點，**只有一個「我同意安全規範」勾選框、沒有年齡勾選**，勾選前確認鈕停用，取消、Esc 與遮罩都不送出請求；確認後 `PUT /api/account/content-mode` 帶 `mode: 'adult'` 與 `confirm_rules: true`；已同意者直接送出 `{ mode: 'adult' }`；關→開直接送出 `{ mode: 'safe' }`。失敗時開關維持原狀（不樂觀更新）並顯示繁體中文說明，同意 Modal 保持開啟以便重試；伺服器回 `safe_mode_forced` 時畫面跟著變成禁用。緊急煞車啟用時開關顯示為開並禁用，附「目前系統暫時只提供安全模式」，玩家保存的設定在伺服器端保留。帶有效返回位置時顯示提示與「完成並返回」連結，修改成功後 Toast（約 0.9 秒）再 `location.assign` 到該位置。所有文字都在 `account-safe-mode.js` 的固定常數，以 `{{ }}` 純文字渲染；不使用瀏覽器儲存。
+- **匿名保留我已發佈的劇本**（rpg-script-reports，`aria-labelledby="script-retention-title"`）：放在「暱稱與劇本創作」區塊內、暱稱表單之後；區塊以 `v-if="scriptRetention.available"` 顯示——頁面啟動時讀一次 `GET /api/account/script-retention`（**管理員、等待刪除與尚未完成年齡確認者不讀**；讀取失敗或回應看不懂就不顯示），開關是 `role="switch"` 的按鈕（與安全模式開關同一組樣式），切換以 `PUT` 儲存、不做樂觀更新。刪除 Modal 只在 `scriptRetention.liveCount > 0` 時多一個核取方塊（每次開啟都從目前的偏好開始）。文字全是固定文案，純文字插值。
 
 ## 3c. 劇本創作頁（`/scripts`，rpg-script-authoring）
 
@@ -186,7 +191,7 @@ flowchart LR
     En --> Api["game-api.js<br/>axios 封裝 catalog、catalogTags、scriptDetail 與 GET /api/sessions"]
     En --> Ui["ui-components.js<br/>Toast 區、UiRestrictionNotice"]
     Api --> Srv["伺服器：GameEntryService 唯讀 不過年齡閘門"]
-    En -->|"卡片標題"| Det["/game/script/版本識別碼<br/>script-detail.js 詳情頁 沿用 mode-prompt.js 與 game-api.js"]
+    En -->|"卡片標題"| Det["/game/script/版本識別碼<br/>script-detail.js 詳情頁 沿用 mode-prompt.js 與 game-api.js，檢舉用 script-report.js"]
     En -->|"開始"| Start["/game/start/版本識別碼<br/>開存檔精靈 見下一小節"]
     En -->|"繼續"| Save["/game/存檔識別碼<br/>遊戲主畫面 伺服器渲染外殼 Vue 掛載"]
     En -.->|"401"| Login["登入頁 帶 next=/game"]
@@ -194,6 +199,7 @@ flowchart LR
 ```
 
 - **目錄的搜尋、篩選與詳情頁**（rpg-script-publishing，rpg-script-catalog）：搜尋框的文字只有按 Enter 或「搜尋」才成為套用中的條件；標籤晶片（常用標籤，載入失敗就安靜地不顯示）、讀者頻道選單與「清除篩選」都經 `catalog-state.js` 的 `reset`：**條件改變即清空清單與游標並從第一頁重載，請求序號加一，舊請求的回應整個丟掉**；「載入更多」沿用已套用的條件與 `next_cursor`（請求只帶 `q`／`tag`／`audience`／`cursor`／`limit`，**不再送 `offset`**，「我的存檔」仍用 `offset`）；失敗時已載入的卡片與游標保留，重試取同一頁；無結果時顯示說明與「清除篩選」。卡片上的標籤可點（也會成為選取中的晶片，方便取消），卡片標題連到 `/game/script/<版本識別碼>`，**按鈕列有明確的「查看詳情」（連到同一個詳情頁，與「開始」並排，約 44px 高），標題連結也有底線**（使用者驗收時回報，2026-11-20：原本只有標題是連結、又長得跟普通文字一樣，手機沒有「滑鼠移上去」所以看不出能點，卡片上只看得到「開始」，無法只查看詳情；`tests/test_game_pages.py` 固定按鈕、順序與樣式）。詳情頁（`script_detail.html` 與 `script-detail.js`）：識別碼取自網址中 `script` 後面那一段、不是自己拼的導向；讀取 `GET /api/sessions/catalog/<版本>`（回應是 `{ ok, script }` 包裝），404 顯示「找不到這個劇本」（下架、他人的草稿與不存在都是同一個畫面）；欄位一律純文字，角色只有姓名與職業；「開始冒險」沿用共用的安全模式詢問；沒有錢包標籤與安全模式橫幅。**共用的詢問 Modal**：樣板片段 `_mode_prompt.html` 以 `{% include %}` 放進入口頁與詳情頁，文案與狀態機在 `mode-prompt.js`（`create(Vue, deps)`，`mode()`、`navigate`、`startPath`、`accountLink` 由頁面提供，模組不碰 `window`），`Game.modePromptCopy` 保留為薄轉接。
+- **詳情頁的檢舉**（rpg-script-reports）：詳情回應的 `report_state` 決定入口——`available` 顯示「檢舉」、`reported` 顯示停用的「已檢舉」、`unavailable`（內建、自己的劇本、不認得的值）不顯示。按下開自製 Modal（`status-code="REPORT_SCRIPT"`；七個核取方塊、選填文字框與字數；沒有理由時確認鈕停用；Esc 與遮罩視同取消，**送出中不可關閉**）；Modal 寫在 `script_detail.html` 的第一個 `raw` 區塊內。成功 Toast 並改為已檢舉；409 `already_reported` 同樣改為已檢舉；404 與 403 `report_own_script` 隱藏入口；429、400、網路失敗留在 Modal 內說明、可以再試；401 導向登入；鎖定等受限狀態關閉 Modal 並顯示申訴捷徑；`finally` 一律恢復送出狀態。自寫文字只存在於表單與請求本文，不寫任何瀏覽器儲存。
 - **四個頁面、同一個前綴**：`/game` 是 Vue 應用；`/game/script/<版本識別碼>` 是劇本詳情頁（見上一條）；`/game/<存檔識別碼>` 是遊戲主畫面（見 3e）：伺服器只渲染外殼與初始狀態（存檔摘要、閘門、串流逾時等，**沒有任何劇情**），標題與主角姓名由 Vue 以插值顯示成純文字，劇情、第 0 幕、記事簿與世界狀態一律由前端呼叫既有端點取得；`/game/start/<版本識別碼>` 是開存檔精靈（見下一小節；版本識別碼只在網址裡，頁面內容不含它）。登入後的預設頁面是 `/game`（`DEFAULT_AFTER_LOGIN`），`/cs` 仍可直接開啟。
 - **初始狀態只有 `user` 與 `gate`**：`user` 是會員等級與故事偏好（沒有 email、生日與年齡），`gate` 是 `AccessPolicy.chat_gate` 的結果（`null` 或 `age_confirmation_required`、`age_restricted`、`forbidden`），前端不自行判斷。**清單內容不在初始狀態裡**，由兩個唯讀端點取得（`tests/test_game_pages.py` 以劇本與存檔的標題證明它們不在 HTML 中）。損壞的初始狀態不會讓頁面壞掉，也不會憑猜測禁用任何東西。
 - **載入規則**（「我的存檔」用 `entry.js` 的 `loadNext` 與位移；劇本目錄改由 `catalog-state.js` 以游標處理，見上）：載入中再按不送第二次請求；位移依伺服器**實際回傳的筆數**前進（不是去重後的筆數），並以 `id` 去重（兩次請求之間若有新劇本上架，同一張卡可能再出現）；失敗時已載入的卡片不消失、位移不前進，所以重試取的是同一頁；`finally` 一律恢復載入狀態；空的一頁不算還有下一頁（避免壞回應造成無止境的載入）；取消的請求不顯示錯誤；401 導向登入頁並帶回 `/game`，403 `account_locked` 顯示申訴捷徑。預設分頁依玩家有沒有存檔決定（rpg-game-ui）：掛載時**並行載入「選劇本」與「我的存檔」的第一頁**（兩個請求互不等待），存檔載入完成、非空，而玩家還沒有手動切換過（`userPickedTab`；按任何一個分頁按鈕都算，載入中途切換也不會被覆蓋），就切到「我的存檔」，最近活動的存檔在最前面；沒有存檔就維持「選劇本」；存檔請求失敗也維持「選劇本」，「我的存檔」分頁自己顯示錯誤與重試（不是整頁錯誤），**首次載入失敗後不會因為再切換分頁而自動重試**，由重試按鈕負責，之後重試成功也不會把玩家切走。掛載時兩個請求都 401 只導向登入頁一次。

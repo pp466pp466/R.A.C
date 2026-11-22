@@ -2,6 +2,7 @@
 /* 劇本詳情頁（script-detail.js；見 rpg-script-catalog 規格「詳情頁」與 rpg-entry-pages 規格「點選未綁定劇本時詢問是否修改安全模式」）：
  * 以真的 Vue、真的 Auth、真的 game-labels.js、mode-prompt.js 與 game-api.js 在 `vm` 沙盒執行 `setup()`，只把 axios、location 與 mount 換成替身。
  * 驗證識別碼只取自網址、載入與 404／失敗／重試、401 與受限狀態、整理過的詳情（只有白名單欄位與正確的型別）、「開始冒險」與共用的詢問流程，
+ * 檢舉（rpg-script-reports）：入口狀態、Modal 的開關與驗證、送出的請求與每種失敗的處理、送出中的保護。
  * 最後檢查樣板使用的每個名稱都由 setup() 回傳。沒有瀏覽器可以掛載；樣板的文字與結構由 tests/test_game_pages.py 檢查。 */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
@@ -37,6 +38,7 @@ function setupDetail({ state = STATE, respond = ok(), pathname = `/game/script/$
   const requests = [];
   const navigations = [];
   const mounted = [];
+  const toasts = [];
   const sandbox = { console, Promise, setTimeout, clearTimeout };
   sandbox.window = sandbox;
   sandbox.self = sandbox;
@@ -63,12 +65,12 @@ function setupDetail({ state = STATE, respond = ok(), pathname = `/game/script/$
     createApp: (given) => { options = given; return { use() {}, component() {}, mount() {} }; },
     onMounted: (hook) => { mounted.push(hook); },
   });
-  ['js/auth/auth-common.js', 'js/ui/restriction.js', 'js/game/game-labels.js', 'js/game/mode-prompt.js', 'js/game/game-api.js'].forEach((file) => run('app/static/' + file));
-  sandbox.UI = Object.assign(sandbox.UI || {}, { install: () => {}, toast: () => {} });
+  ['js/auth/auth-common.js', 'js/ui/restriction.js', 'js/game/game-labels.js', 'js/game/mode-prompt.js', 'js/game/script-report.js', 'js/game/game-api.js'].forEach((file) => run('app/static/' + file));
+  sandbox.UI = Object.assign(sandbox.UI || {}, { install: () => {}, toast: (message) => { toasts.push(message); } });
   run('app/static/js/game/script-detail.js');
   assert.ok(options && typeof options.setup === 'function', 'script-detail.js 沒有呼叫 createApp');
   const page = options.setup();
-  return { page, requests, navigations, mount: () => Promise.all(mounted.map((hook) => hook())) };
+  return { page, requests, navigations, toasts, mount: () => Promise.all(mounted.map((hook) => hook())) };
 }
 
 const tick = () => new Promise((resolve) => setImmediate(resolve));
@@ -109,6 +111,7 @@ t('the loaded detail is tidied: only the public fields, the right types, charact
   assert.deepEqual(plain(page.detail.value), {
     id: ID, title: '青雲問道', summary: '', world_name: '', tags: ['仙俠', '成長'], author_name: '小說家', author_code: '', content_tier: 'adult', audience: 'female',
     version_no: 0, published_at: '2026-11-18T04:30:00Z', background: '', characters: [{ name: '林初', occupation: '弟子' }], locations: ['青雲山'], has_custom_ending: false,
+    report_state: 'unavailable',                                                              // 回應沒有（或不認得）的值一律不顯示入口
   });
   assert.ok(!JSON.stringify(page.detail.value).includes('不該出現'));
 });
@@ -298,7 +301,7 @@ t('a damaged initial state does not break the page and leaves nothing disabled b
   }
 });
 
-t('the page is read-only: one GET for the detail, no other request, and the shared modal copy names no old mode', async () => {
+t('opening the page sends one GET for the detail and nothing else, and the shared modal copy names no old mode', async () => {
   const { page, requests, mount } = setupDetail();
   await mount();
   page.start();
@@ -307,10 +310,234 @@ t('the page is read-only: one GET for the detail, no other request, and the shar
   for (const forbidden of ['一般模式', '成人模式', '未滿 18']) { assert.ok(!text.includes(forbidden), forbidden); }
 });
 
+// ---- 檢舉（rpg-script-reports；script-reports 規格「劇本詳情頁提供檢舉入口」）-------------------------------------------------
+
+const REPORT_URL = `/api/sessions/catalog/${ID}/report`;
+const reportedBody = (state = 'available') => detailBody({ report_state: state });
+/* GET 回詳情；POST（檢舉）交給 `post(request)`。 */
+const withReport = (post, state = 'available') => (request) => (request.method === 'get' ? Promise.resolve({ data: envelope(reportedBody(state)) }) : post(request));
+const created = () => Promise.resolve({ status: 201, data: { ok: true } });
+const reportPage = async (post = created, state = 'available') => {
+  const setup = setupDetail({ respond: withReport(post, state) });
+  await setup.mount();
+  return setup;
+};
+const posts = (requests) => requests.filter((r) => r.method !== 'get');
+const fail = (status, code, message, fields) => Promise.reject({ response: { status, data: { error: { code, message, ...(fields ? { fields } : {}) } } } });
+
+t('the entry follows report_state: available, reported, and anything else (built-in, own script, unknown) shows nothing', async () => {
+  for (const [given, expected] of [['available', 'available'], ['reported', 'reported'], ['unavailable', 'unavailable'], ['AVAILABLE', 'unavailable'], [null, 'unavailable'], [7, 'unavailable'], ['', 'unavailable']]) {
+    const { page } = await reportPage(created, given);
+    assert.equal(page.reportState.value, expected, String(given));
+  }
+});
+
+t('opening is only possible when the entry is available, and every opening starts with a clean form', async () => {
+  for (const state of ['reported', 'unavailable']) {
+    const closed = await reportPage(created, state);
+    assert.equal(closed.page.openReport(), false, state);
+    assert.equal(closed.page.reportOpen.value, false, state);
+  }
+  const { page } = await reportPage();
+  assert.equal(page.openReport(), true);
+  assert.equal(page.reportOpen.value, true);
+  page.reportPicked.value = ['plagiarism'];
+  page.reportText.value = '舊的文字';
+  page.reportError.value = '舊的錯誤';
+  assert.equal(page.closeReport(), true);
+  assert.equal(page.reportOpen.value, false);
+  page.openReport();
+  assert.deepEqual(plain(page.reportPicked.value), []);
+  assert.equal(page.reportText.value, '');
+  assert.equal(page.reportError.value, '');
+});
+
+t('the confirm button needs at least one reason, and the text counts Unicode characters up to 200', async () => {
+  const { page } = await reportPage();
+  page.openReport();
+  assert.equal(page.canSubmitReport.value, false);                                            // 沒有任何理由
+  page.reportPicked.value = ['other'];
+  assert.equal(page.canSubmitReport.value, true);
+  page.reportText.value = '😀'.repeat(200);                                                   // 200 個字元（UTF-16 單元 400 個）
+  assert.equal(page.reportCheck.value.length, 200);
+  assert.equal(page.canSubmitReport.value, true);
+  page.reportText.value = '😀'.repeat(201);
+  assert.equal(page.reportCheck.value.length, 201);
+  assert.equal(page.canSubmitReport.value, false);
+  page.reportText.value = '字'.repeat(200) + ' \n\t ';                                         // 空白與控制字元整理掉之後仍是 200 字
+  assert.equal(page.canSubmitReport.value, true);
+});
+
+t('submitting without a reason sends nothing and says why', async () => {
+  const { page, requests } = await reportPage();
+  page.openReport();
+  assert.equal(await page.submitReport(), false);
+  assert.equal(posts(requests).length, 0);
+  assert.equal(page.reportError.value, '請至少選擇一個檢舉原因。');
+});
+
+t('a successful report posts the reasons in the fixed order with the cleaned text, closes, toasts and turns the entry into "reported"', async () => {
+  const { page, requests, toasts } = await reportPage();
+  page.openReport();
+  page.reportPicked.value = ['plagiarism', 'minor_sexual', 'other'];                        // 勾選的先後不影響順序
+  page.reportText.value = '  抄襲\n某部作品  ';
+  const result = page.submitReport();
+  assert.equal(page.submitting.value, true);
+  assert.equal(await result, true);
+  assert.deepEqual(posts(requests).map((r) => ({ method: r.method, url: r.url, data: r.data })), [
+    { method: 'post', url: REPORT_URL, data: { reasons: ['minor_sexual', 'plagiarism', 'other'], text: '抄襲某部作品' } },
+  ]);
+  assert.equal(page.submitting.value, false);
+  assert.equal(page.reportOpen.value, false);
+  assert.equal(page.reportState.value, 'reported');
+  assert.deepEqual(toasts, ['已送出檢舉，謝謝您的回報。']);
+});
+
+t('an empty text is not sent at all', async () => {
+  const { page, requests } = await reportPage();
+  page.openReport();
+  page.reportPicked.value = ['tier_mismatch'];
+  page.reportText.value = '   ';
+  await page.submitReport();
+  assert.deepEqual(posts(requests)[0].data, { reasons: ['tier_mismatch'] });
+});
+
+t('the id sent is the one the server returned in the detail, not one rebuilt from the address', async () => {
+  const other = '22222222-2222-4222-8222-222222222222';
+  const setup = setupDetail({ respond: (request) => (request.method === 'get' ? Promise.resolve({ data: envelope(detailBody({ id: other, report_state: 'available' })) }) : created()) });
+  await setup.mount();
+  setup.page.openReport();
+  setup.page.reportPicked.value = ['other'];
+  await setup.page.submitReport();
+  assert.equal(posts(setup.requests)[0].url, `/api/sessions/catalog/${other}/report`);
+});
+
+t('a second press while the request is in flight sends nothing, and the modal cannot be closed until it ends', async () => {
+  let release = null;
+  const { page, requests } = await reportPage(() => new Promise((resolve) => { release = () => resolve({ status: 201, data: { ok: true } }); }));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  const first = page.submitReport();
+  assert.equal(page.canSubmitReport.value, false);
+  assert.equal(await page.submitReport(), false);
+  assert.equal(posts(requests).length, 1);
+  assert.equal(page.closeReport(), false);
+  page.reportOpen.value = false;                                                              // Esc 與遮罩
+  assert.equal(page.reportOpen.value, true);
+  release();
+  assert.equal(await first, true);
+  assert.equal(page.submitting.value, false);
+  assert.equal(page.reportOpen.value, false);
+});
+
+t('Esc and the overlay close an idle modal without any request', async () => {
+  const { page, requests } = await reportPage();
+  page.openReport();
+  page.reportOpen.value = false;
+  assert.equal(page.reportOpen.value, false);
+  assert.equal(posts(requests).length, 0);
+  assert.equal(page.reportState.value, 'available');
+});
+
+t('409 already_reported closes the modal and shows "reported" with a toast saying so', async () => {
+  const { page, toasts } = await reportPage(() => fail(409, 'already_reported', '您已經檢舉過這個劇本版本了。'));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  assert.equal(await page.submitReport(), false);
+  assert.equal(page.reportState.value, 'reported');
+  assert.equal(page.reportOpen.value, false);
+  assert.equal(page.submitting.value, false);
+  assert.deepEqual(toasts, ['您已經檢舉過這個版本了。']);
+});
+
+t('429 keeps the modal open with the daily-limit explanation, and the button is usable again', async () => {
+  const { page } = await reportPage(() => fail(429, 'report_limit', '您今日的檢舉次數已用完，將於明日 00:00（台灣時間）重置。'));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  assert.equal(await page.submitReport(), false);
+  assert.equal(page.reportOpen.value, true);
+  assert.equal(page.reportState.value, 'available');
+  assert.equal(page.submitting.value, false);
+  assert.match(page.reportError.value, /今天的檢舉次數已用完/);
+  assert.equal(page.canSubmitReport.value, true);
+});
+
+t('404 says it was not found and hides the entry; so does 403 report_own_script', async () => {
+  for (const [status, code, expected] of [[404, 'not_found', /找不到這個劇本/], [403, 'report_own_script', /不能檢舉自己的劇本/]]) {
+    const { page } = await reportPage(() => fail(status, code, '伺服器的訊息不會被直接顯示'));
+    page.openReport();
+    page.reportPicked.value = ['other'];
+    assert.equal(await page.submitReport(), false);
+    assert.match(page.reportError.value, expected, code);
+    assert.ok(!page.reportError.value.includes('伺服器的訊息'), code);
+    assert.equal(page.reportState.value, 'unavailable', code);
+    assert.equal(page.canSubmitReport.value, false, code);                                    // 這個版本不可再檢舉，不能再送
+    assert.equal(page.submitting.value, false, code);
+  }
+});
+
+t('a 400 shows the field message the server named and stays open', async () => {
+  const { page } = await reportPage(() => fail(400, 'validation_error', '輸入有誤。', { text: '檢舉說明至多 200 字。' }));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  await page.submitReport();
+  assert.equal(page.reportError.value, '檢舉說明至多 200 字。');
+  assert.equal(page.reportOpen.value, true);
+  assert.equal(page.reportState.value, 'available');
+});
+
+t('a network failure says so, restores the button and keeps what the player typed', async () => {
+  const { page } = await reportPage(() => Promise.reject({ code: 'ERR_NETWORK' }));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  page.reportText.value = '我寫的說明';
+  assert.equal(await page.submitReport(), false);
+  assert.equal(page.reportError.value, '連線不穩，這次沒有送出，請稍後再試。');
+  assert.equal(page.submitting.value, false);
+  assert.equal(page.reportText.value, '我寫的說明');
+  assert.equal(page.canSubmitReport.value, true);
+});
+
+t('an expired session sends the player to the login page once, with no error text left in the modal', async () => {
+  const { page, navigations } = await reportPage(() => fail(401, 'unauthorized', '請先登入。'));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  await page.submitReport();
+  assert.deepEqual(navigations, [`/login?next=%2Fgame%2Fscript%2F${ID}`]);
+  assert.equal(page.reportError.value, '');
+  assert.equal(page.submitting.value, false);
+});
+
+t('a locked account closes the modal and gets the appeal shortcut', async () => {
+  const { page } = await reportPage(() => fail(403, 'account_locked', '您的帳號已被鎖定。'));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  await page.submitReport();
+  assert.equal(page.restriction.value, 'locked');
+  assert.equal(page.reportOpen.value, false);
+  assert.equal(page.reportState.value, 'available');
+});
+
+t('an age confirmation that is still missing is explained in the modal', async () => {
+  const { page } = await reportPage(() => fail(403, 'age_confirmation_required', '請先完成年齡確認。'));
+  page.openReport();
+  page.reportPicked.value = ['other'];
+  await page.submitReport();
+  assert.equal(page.reportError.value, '請先完成年齡確認，才能檢舉劇本。');
+  assert.equal(page.reportOpen.value, true);
+});
+
+t('the reasons and their labels are the seven fixed ones in the fixed order, and the copy names the modal code', async () => {
+  const { page } = await reportPage();
+  assert.deepEqual(plain(page.reportReasons).map((item) => item.value), ['minor_sexual', 'sexual_violence', 'real_person_sexual', 'tier_mismatch', 'plagiarism', 'privacy_harassment', 'other']);
+  assert.equal(page.reportCopy.code, 'REPORT_SCRIPT');
+  assert.equal(page.textMax, 200);
+});
+
 // ---- 樣板與腳本的對應 -----------------------------------------------------------------------------
 
 const JS_WORDS = new Set(['true', 'false', 'null', 'undefined', 'in', 'of', 'typeof']);
-const LOOP_VARS = new Set(['tag', 'index', 'character', 'place', 'line']);
+const LOOP_VARS = new Set(['tag', 'index', 'character', 'place', 'line', 'item']);
 
 /* 取出 Vue 樣板裡所有運算式（插值與 v-*、:、@ 屬性），回傳其中最外層的識別字（不含屬性存取與字串內容）。 */
 function templateNames(html) {
@@ -333,7 +560,7 @@ t('every name the detail template and the shared modal fragment use is returned 
   const { page } = setupDetail();
   const missing = names.filter((name) => !(name in page));
   assert.deepEqual(missing, [], `樣板用到但 setup() 沒有回傳：${missing}`);
-  for (const must of ['phase', 'detail', 'failureText', 'gateNotice', 'canStart', 'loadDetail', 'start', 'askOpen', 'modePrompt', 'cancelAsk', 'keepSafe', 'goToSettings', 'restriction']) {
+  for (const must of ['phase', 'detail', 'failureText', 'gateNotice', 'canStart', 'loadDetail', 'start', 'askOpen', 'modePrompt', 'cancelAsk', 'keepSafe', 'goToSettings', 'restriction', 'reportState', 'reportOpen', 'reportPicked', 'reportText', 'reportCheck', 'canSubmitReport', 'openReport', 'closeReport', 'submitReport', 'submitting']) {
     assert.ok(names.includes(must), `樣板沒有用到 ${must}`);
   }
 });

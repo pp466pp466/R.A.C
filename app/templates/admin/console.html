@@ -187,6 +187,7 @@
         <button type="button" class="ui-btn admin-btn-sm" @click="reloadScripts" :disabled="scriptList.loading">重新整理</button>
       </div>
       <p class="admin-hint">玩家送審公開的劇本要經您核可才會上架；退回時作者只會看到類別（可另寫只有您看得到的備註）。清單不含劇本內文，按「看全文」才會讀取，每次讀取都會留下稽核紀錄。下架與恢復需要重新輸入密碼。</p>
+      <p v-if="scriptView === 'reported'" class="admin-hint">這裡是上架中且有未結案檢舉的版本，勾選紅線理由與檢舉較多的排在前面。檢舉不會自動下架，由您決定：確認違規就「下架」（需要密碼，未結案的檢舉隨之結案），不成立就「不成立（結案）」（不需要密碼）。檢舉人不會顯示，也不會收到通知。</p>
       <div class="admin-subtabs" role="tablist" aria-label="劇本狀態">
         <button v-for="view in scriptViews" :key="view.id" type="button" role="tab" class="admin-subtab"
                 :class="{ 'admin-subtab--active': scriptView === view.id }" :aria-selected="scriptView === view.id ? 'true' : 'false'"
@@ -199,6 +200,7 @@
               <strong class="admin-row__title">{{ row.title }}</strong>
               <span class="admin-chip" :class="{ 'admin-chip--alert': row.status === 'pending_review' && row.review_verdict === 'flag' }">{{ fmt.scriptStateText(row) }}</span>
               <span v-if="row.has_note" class="admin-chip">有審核備註</span>
+              <span v-if="fmt.reportCountText(row)" class="admin-chip" :class="{ 'admin-chip--alert': row.red_line_reported }">{{ fmt.reportCountText(row) }}</span>
             </p>
             <p v-if="row.summary" class="admin-row__line admin-row__summary">{{ row.summary }}</p>
             <p class="admin-row__line">
@@ -220,7 +222,7 @@
           </div>
         </li>
       </ul>
-      <admin-list-foot :list="scriptList" :empty-text="scriptView === 'pending_review' ? '目前沒有待審的劇本。' : (scriptView === 'published' ? '目前沒有上架中的劇本。' : '目前沒有已下架的劇本。')"
+      <admin-list-foot :list="scriptList" :empty-text="scriptEmptyText"
                        @retry="reloadScripts" @more="loadMoreScripts"></admin-list-foot>
     </section>
 
@@ -453,6 +455,17 @@
             <p class="admin-msg__text">{{ section.text }}</p>
           </article>
         </div>
+        <!-- 檢舉面板：只有上架中且有未結案檢舉的版本才有（先讀全文、再讀檢舉）；理由是中文標籤、自寫文字是純文字，沒有檢舉人 -->
+        <div v-if="scriptReports.shown" class="admin-reports" role="region" aria-label="檢舉內容">
+          <p class="admin-msg__meta">檢舉（未結案 {{ openReportCount }} 則）</p>
+          <p v-if="scriptReports.loading" class="admin-hint" role="status">載入檢舉中…</p>
+          <p v-if="scriptReports.error" class="admin-field-error" role="alert">{{ scriptReports.error }} <button type="button" class="admin-link-btn" @click="reloadScriptReports">重試</button></p>
+          <article v-for="(report, index) in scriptReportRows" :key="index" class="admin-msg" :class="{ 'admin-msg--flag': report.redLine }">
+            <p class="admin-msg__meta">{{ report.createdText }}　{{ report.statusText }}</p>
+            <p class="admin-msg__text">{{ report.reasonsText }}</p>
+            <p v-if="report.text" class="admin-msg__text">{{ report.text }}</p>
+          </article>
+        </div>
         <p v-if="scriptDoc.actionError" class="admin-field-error" role="alert">{{ scriptDoc.actionError }}</p>
         <p v-if="scriptDoc.busy" class="admin-hint" role="status">處理中…</p>
       </template>
@@ -461,6 +474,7 @@
       <button v-if="scriptDocActions.reject" type="button" class="ui-btn admin-btn--danger" :disabled="scriptDoc.busy" @click="askRejectFromDoc">退回</button>
       <button v-if="scriptDocActions.remove" type="button" class="ui-btn admin-btn--danger" :disabled="scriptDoc.busy" @click="askRemoveFromDoc">下架</button>
       <button v-if="scriptDocActions.restore" type="button" class="ui-btn" :disabled="scriptDoc.busy" @click="askRestoreFromDoc">恢復上架</button>
+      <button v-if="scriptDocActions.dismiss" type="button" class="ui-btn" :disabled="scriptDoc.busy || scriptReports.loading || !!scriptReports.error" @click="dismissOpenScript">不成立（結案）</button>
       <button v-if="scriptDocActions.approve" type="button" class="ui-btn ui-btn--primary" :disabled="scriptDoc.busy" @click="approveOpenScript">核可</button>
       <button type="button" class="ui-btn" @click="scriptOpen = false">關閉</button>
     </template>

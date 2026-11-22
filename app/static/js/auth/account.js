@@ -9,6 +9,7 @@
   var state = Auth.readInitialState(document);
   var lifecycle = Auth.lifecycle;
   var safeModeApi = Auth.safeMode;                          // account-safe-mode.js：安全模式區塊的純函式與狀態機
+  var retentionApi = Auth.scriptRetention;                  // account-script-retention.js：「匿名保留我已發佈的劇本」的開關與狀態機
   var TIER_LABELS = { free: '一般', plus: '進階', vip: '尊榮' };
   var STORY_PREFERENCES = ['all', 'male', 'female'];       // 全讀者、男頻、女頻（伺服器是唯一的驗證者，這裡只用來還原初始選取）
 
@@ -65,6 +66,21 @@
         later: function (fn, ms) { return window.setTimeout(fn, ms); },
         onError: function (info) { onError(info); }
       });
+
+      // ---- 匿名保留我已發佈的劇本（script-anonymous-retention）：狀態機在 account-script-retention.js，這裡只接線 ----
+      // 管理員（不能自助刪除）、等待刪除的帳號與尚未完成年齡確認者不載入；載入失敗區塊不顯示。送出中禁用、失敗時開關維持原狀，一律恢復。
+      var retention = retentionApi.createController({
+        reactive: Vue.reactive,
+        request: {
+          get: function () { return axios.get(retentionApi.ENDPOINT); },
+          put: function (body) { return axios.put(retentionApi.ENDPOINT, body); }
+        },
+        describeError: Auth.describeError,
+        toast: function (message, settings) { UI.toast(message, settings); },
+        onError: function (info) { onError(info); }
+      });
+      var deleteKeep = Vue.ref(false);                      // 刪除視窗內的核取方塊（開啟視窗時取目前的偏好）
+      if (!user.deletion_scheduled_at && user.role !== 'admin' && ageConfirmed.value) { retention.load(); }
 
       function logout() {
         return actions.run(function () {
@@ -185,13 +201,18 @@
         deleteForm.clearErrors();
         deleteForm.values.password = '';
         deleteForm.values.confirm_text = '';
+        deleteKeep.value = retention.view.keep;
       }
+
+      // 每次開啟刪除視窗，核取方塊都從目前的偏好開始（只有目前有上架劇本時才顯示，也才會送出）
+      Vue.watch(deleteOpen, function (open) { if (open) { deleteKeep.value = retention.view.keep; } });
 
       function deleteAccount() {
         deleteForm.clearErrors();
         var options = {
           hasPassword: !!user.has_password, password: deleteForm.values.password,
-          confirmText: deleteForm.values.confirm_text, expectedText: confirmText
+          confirmText: deleteForm.values.confirm_text, expectedText: confirmText,
+          keepPublished: deleteKeep.value, liveCount: retention.view.available ? retention.view.liveCount : 0
         };
         if (!lifecycle.canSubmitDeletion(options)) {
           if (user.has_password) { deleteForm.fieldErrors.password = '請輸入您的密碼。'; }
@@ -258,6 +279,10 @@
         storyForm: storyForm,
         safeMode: safeModePanel.view,
         safeModeCopy: safeModeApi.COPY,
+        scriptRetention: retention.view,
+        scriptRetentionCopy: retentionApi.COPY,
+        toggleScriptRetention: retention.toggle,
+        deleteKeep: deleteKeep,
         toggleSafeMode: safeModePanel.toggle,
         confirmSafeMode: safeModePanel.confirm,
         cancelSafeModeModal: safeModePanel.cancel,

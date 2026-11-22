@@ -309,6 +309,9 @@
 /* ---- 劇本全文 Modal 與退回／下架的備註 -------------------------------------- */
 .admin-script__title { margin: 0 0 0.5rem; font-size: 1.0625rem; font-weight: 500; overflow-wrap: anywhere; }
 .admin-script__sections { display: flex; flex-direction: column; gap: 0.625rem; max-height: 50vh; margin-top: 0.625rem; padding-right: 0.25rem; overflow-y: auto; }
+/* 檢舉面板（rpg-script-reports）：在劇本全文之後，每筆檢舉沿用對話訊息的純文字樣式；含紅線理由的那一筆用琥珀色細邊標示 */
+.admin-reports { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.875rem; padding-top: 0.75rem; border-top: var(--border-hairline); }
+.admin-msg--flag { border-color: var(--color-accent); border-left-width: 2px; }
 .admin-note { margin-top: 0.625rem; padding: 0.5rem 0.75rem; border: 1px solid var(--color-accent); border-left-width: 2px; background: var(--color-surface); }
 .admin-textarea { resize: vertical; min-height: 4.5rem; line-height: 1.6; }
 

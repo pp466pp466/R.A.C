@@ -105,9 +105,10 @@ def test_the_terms_version_names_the_new_draft_and_the_registration_records_it()
     # rpg-turn-revision 補了重新生成理由與遊戲幣帳本的告知（draft-6），之後又把編輯改為與重新生成共用免費次數（draft-7）；
     # adult-only-signup 加入僅限滿 18 歲、註冊時的年滿 18 歲聲明與謊報責任（draft-8，2026-11-18）；
     # safe-mode-toggle 加入露骨內容、安全模式兩種狀態與供應商留存或審閱的揭露（draft-9，2026-11-19）；
+    # rpg-script-reports 如實說明公開分享已開放、檢舉與刪除帳號時匿名保留劇本的選項（draft-10，2026-11-22）；
     # 版本隨內容提高（只影響之後新註冊者記錄的版本）
-    assert CURRENT_TERMS_VERSION == "2026-11-19-draft-9" and len(CURRENT_TERMS_VERSION) <= 40
-    assert CURRENT_TERMS_VERSION not in ("2026-11-16-draft-7", "2026-11-18-draft-8")            # 提高過：不是先前的版本
+    assert CURRENT_TERMS_VERSION == "2026-11-22-draft-10" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION not in ("2026-11-16-draft-7", "2026-11-18-draft-8", "2026-11-19-draft-9")            # 提高過：不是先前的版本
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
@@ -215,7 +216,7 @@ def test_the_rights_section_covers_the_exported_and_deleted_rpg_data(client):
 
 def test_the_privacy_policy_does_not_promise_features_that_do_not_exist_yet(client):
     html = client.get("/privacy").get_data(as_text=True)
-    assert "目前沒有公開分享" not in html and "現階段沒有公開分享" in html
+    assert "目前沒有公開分享" not in html and "現階段沒有公開分享" not in html and "公開分享尚未開放" not in html      # 公開分享已開放（rpg-script-reports）
     for forbidden in ("將提供", "後續版本提供", "將於"):
         assert forbidden not in html
 
@@ -225,7 +226,7 @@ def test_the_terms_describe_the_rpg_the_content_modes_and_the_absolute_prohibiti
     section = html.split("<h2>5. RPG、劇本創作與內容規範</h2>", 1)[1].split("<h2>6.", 1)[0]
     for needle in ("只有兩種狀態", "本服務含露骨內容", "謊報年齡者須自行承擔", "無論哪一種模式，一律禁止", "未成年（含看似未成年的角色）的性內容",
                    "性暴力", "非自願的性情節", "以真人名義的性內容", "我們只告知類別", "暫停而不是放行", "暫停送審權限", "申訴頁",
-                   "筆名", "先審後發", "授權本平台保存", "不含您的署名", "公開分享尚未開放", "AI 生成的主角與聯繫只是建議", "性奴等禁斷關係", "隨帳號一併刪除"):
+                   "筆名", "先審後發", "授權本平台保存", "不含您的署名", "可能由管理員審閱", "AI 生成的主角與聯繫只是建議", "性奴等禁斷關係", "隨帳號一併刪除"):
         assert needle in section, needle
     assert "RPG" in html.split("<h2>2.", 1)[0] and "劇本創作" in html.split("<h2>2.", 1)[0]          # 服務內容也提到了
 
@@ -372,3 +373,98 @@ def test_the_privacy_policy_still_does_not_promise_features_that_do_not_exist_af
     html = client.get("/privacy").get_data(as_text=True)
     for forbidden in ("將提供", "後續版本提供", "將於", "保證不會被留存", "保證不會被審閱"):
         assert forbidden not in html, forbidden
+
+
+# ---- 公開分享、檢舉與匿名保留（rpg-script-reports；auth-pages 規格）---------------------------------------------------
+
+def test_neither_policy_page_still_says_public_sharing_is_not_open(client):
+    for path in ("/terms", "/privacy"):
+        html = client.get(path).get_data(as_text=True)
+        for stale in ("公開分享尚未開放", "現階段沒有公開分享", "目前沒有公開分享", "現階段劇本只供您自己使用", "公開分享開放之後"):
+            assert stale not in html, (path, stale)
+
+
+def test_the_privacy_policy_says_the_pen_name_is_shown_publicly_the_script_is_ai_checked_and_may_be_read_by_an_admin(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>1. 我們蒐集哪些資料</h2>", 1)[1].split("<h2>2.", 1)[0]
+    assert "公開顯示在已發佈的劇本上" in section and "第一次發佈時鎖定" in section
+    assert "送審公開的劇本可能由管理員審閱" in section
+    purposes = html.split("<h2>2. 使用目的</h2>", 1)[1].split("<h2>3.", 1)[0]
+    assert "公開分享" in purposes and "複製進自己的存檔" in purposes and "不含您的署名" in purposes and "授權本平台保存" in purposes
+    assert "AI 檢查" in purposes and "稽核紀錄" in purposes
+
+
+def test_the_privacy_policy_says_the_report_goes_to_the_admin_only_never_to_the_ai_and_the_reporter_is_not_told(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>1. 我們蒐集哪些資料</h2>", 1)[1].split("<h2>2.", 1)[0]
+    (bullet,) = [item for item in section.split("<li>") if item.startswith("<strong>劇本檢舉</strong>")]
+    for needle in ("至多 200 字", "視為個人資料", "只有管理員在被檢舉的劇本下看得到", "不會傳送給 AI", "不會出現在日誌", "看不到檢舉人與檢舉內容", "不會收到處理結果的通知"):
+        assert needle in bullet, needle
+    model_section = html.split("<h2>4. RPG 與劇本的資料會傳送至 RPG 模型服務</h2>", 1)[1].split("<h2>5.", 1)[0]
+    assert "檢舉劇本時填寫的<strong>理由與說明同樣不會</strong>傳送至這個服務" in model_section
+
+
+def test_the_retention_table_lists_the_script_reports_with_the_period_the_purge_command_uses(client):
+    table = retention_table(client.get("/privacy").get_data(as_text=True))
+    (label,) = [key for key in table if key.startswith("劇本檢舉")]
+    assert f"結案後 {period_text(retention.SCRIPT_REPORT_RETENTION)}" in table[label]
+    assert "未結案者與所屬劇本相同" in table[label] and "一併刪除" in table[label]
+    assert "12 個月" not in table["管理稽核紀錄"] and "24 個月" not in table[label]                 # 每一列只含自己的期限
+
+
+def test_the_privacy_policy_describes_the_anonymous_retention_option_its_scope_and_its_known_limit(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>6. 您的權利</h2>", 1)[1].split("<h2>7.", 1)[0]
+    option = section.split("<h3>刪除帳號時，已發佈的劇本可以匿名保留</h3>", 1)[1].split("<p>其他請求", 1)[0]
+    for needle in ("匿名保留我已發佈的劇本", "預設為關閉", "再確認一次", "自己申請刪除帳號", "連續 12 個月未登入", "目前上架的版本", "已註銷的作者",
+                   "暱稱與短代號都不會留下", "審核備註也會清除", "草稿、送審中、被退回、已下架與舊的版本一律刪除", "不論是您自己或管理員下架",
+                   "仍然可以被其他玩家檢舉", "被管理員依規範下架", "一律全部刪除，不看這個偏好", "已知限制", "不區分這個偏好", "會被一併刪除"):
+        assert needle in option, needle
+    assert re.search(r"未滿 \d+ 歲而被抹除", option)                                                # 年齡數字來自年齡政策
+
+
+def test_the_rights_section_also_covers_the_exported_reports_and_the_exception_to_the_deletion(client):
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>6. 您的權利</h2>", 1)[1].split("<h2>7.", 1)[0]
+    assert "您送出的劇本檢舉" in section and "例外：您若開啟「匿名保留我已發佈的劇本」" in section
+
+
+def test_the_script_row_of_the_retention_table_points_to_the_option(client):
+    table = retention_table(client.get("/privacy").get_data(as_text=True))
+    (label,) = [key for key in table if key.startswith("劇本（")]
+    assert "刪除帳號時一併刪除" in table[label] and "匿名保留" in table[label] and "第 6 節" in table[label]
+
+
+def test_the_terms_describe_public_sharing_the_admin_review_the_report_rules_and_the_retention_option(client):
+    section = terms_section_five(client)
+    assert "先審後發" in section and "可能由管理員審閱" in section and "授權本平台保存" in section and "不含您的署名" in section
+    (report,) = [item for item in section.split("<li>") if item.startswith("<strong>檢舉</strong>")]
+    for needle in ("不能檢舉自己的劇本與內建劇本", "至多 200 字", "每人每天的檢舉次數有上限", "不會自動下架", "是否下架由管理員決定", "不會送給 AI",
+                   "不會收到處理結果的通知", "看不到檢舉人"):
+        assert needle in report, needle
+    (deletion,) = [item for item in section.split("<li>") if item.startswith("<strong>刪除帳號</strong>")]
+    for needle in ("選擇匿名保留已發佈的劇本", "預設為關閉", "自己申請刪除帳號", "連續 12 個月未登入", "已註銷的作者", "其餘劇本與版本一律刪除", "仍可被檢舉",
+                   "被管理員依規範下架", "逾時未完成年齡確認的帳號，一律全部刪除", "不區分這個偏好", "會被一併刪除", "隨帳號一併刪除"):
+        assert needle in deletion, needle
+
+
+def test_the_age_number_in_the_terms_retention_sentence_comes_from_the_age_policy(client, monkeypatch):
+    monkeypatch.setattr("app.controllers.auth_page_controller.get_age_policy", lambda: type("P", (), {
+        "min_register_age": 21, "adult_age": 21})())
+    html = client.get("/terms").get_data(as_text=True)
+    (deletion,) = [item for item in terms_section_five(client).split("<li>") if item.startswith("<strong>刪除帳號</strong>")]
+    assert "未滿 21 歲而被抹除" in deletion and "未滿 18 歲而被抹除" not in html
+
+
+def test_both_pages_show_the_current_terms_version_and_it_is_not_the_previous_one(client):
+    for path in ("/terms", "/privacy"):
+        html = client.get(path).get_data(as_text=True)
+        assert f"版本：{CURRENT_TERMS_VERSION}" in html and "2026-11-19-draft-9" not in html, path
+
+
+def test_the_new_policy_text_makes_no_promise_of_future_features_and_keeps_the_draft_notice(client):
+    for path in ("/terms", "/privacy"):
+        html = client.get(path).get_data(as_text=True)
+        for forbidden in ("將提供", "後續版本提供", "將於", "保證不會被留存", "保證不會被審閱", "保證匿名"):
+            assert forbidden not in html, (path, forbidden)
+        assert "草稿" in html

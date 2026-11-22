@@ -260,6 +260,15 @@ textarea.gw-input { resize: vertical; }
 .sd-list__name { font-size: 0.95rem; }
 .sd-list__note { color: var(--color-text-muted); font-size: 0.85rem; }
 
+/* 檢舉（rpg-script-reports）：入口在詳情最下方、不搶「開始冒險」；Modal 內的理由是七個核取方塊，窄螢幕單欄、文字可折行 */
+.sd-report { margin: 1.1rem 0 0; padding-top: 0.9rem; border-top: var(--border-hairline); }
+.sd-report .ui-btn:disabled { opacity: 0.6; cursor: default; }
+.sd-report__intro { margin: 0 0 0.8rem; color: var(--color-text-muted); font-size: 0.9rem; line-height: 1.7; }
+.sd-report__reasons { min-width: 0; margin: 0 0 0.9rem; padding: 0; border: 0; }
+.sd-report__reason { display: flex; align-items: baseline; gap: 0.5rem; margin: 0 0 0.35rem; font-size: 0.95rem; overflow-wrap: anywhere; cursor: pointer; }
+.sd-report__reason input { flex: none; accent-color: var(--color-accent); }
+.sd-report__hint { margin: 0.3rem 0 0; color: var(--color-text-muted); font-size: 0.8rem; line-height: 1.6; }
+
 @media (min-width: 768px) {
   .ge-cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

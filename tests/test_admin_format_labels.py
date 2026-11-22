@@ -14,6 +14,7 @@ from app.models.chat import MSG_STATUS_FALLBACK, MSG_STATUS_OK
 from app.models.llm_call_log import CALL_KINDS
 from app.models.lock_strike import STRIKE_KINDS
 from app.models.script import DECISION_CATEGORIES, ENDING_MODES, REMOVERS, REVIEW_VERDICTS, VERSION_STATUSES
+from app.models.script_report import CLOSED_RESULTS, REPORT_REASONS
 from app.models.user import AUDIENCES, MEMBER_TIERS, USER_STATUSES
 from app.models.wallet import BUCKETS
 from app.services.script_spec import TRIGGER_KINDS
@@ -53,6 +54,9 @@ def labels() -> dict[str, dict[str, str]]:
         ("audience", AUDIENCES),
         ("endingMode", ENDING_MODES),
         ("triggerKind", TRIGGER_KINDS),
+        # rpg-script-reports：被檢舉檢視的理由（玩家勾選的七個）與結案結果
+        ("reportReason", REPORT_REASONS),
+        ("reportResult", CLOSED_RESULTS),
     ],
 )
 def test_the_frontend_labels_cover_exactly_the_backend_values(labels, group, expected):

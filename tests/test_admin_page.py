@@ -147,13 +147,13 @@ def _script_section(template: str) -> str:
     return template.split("<!-- ===== 劇本審核 ===== -->", 1)[1].split("<!-- ===== 被鎖定的帳號 ===== -->", 1)[0]
 
 
-def test_the_console_has_the_script_review_tab_with_three_lists_loaded_from_the_script_endpoints():
+def test_the_console_has_the_script_review_tab_with_four_lists_loaded_from_the_script_endpoints():
     script, template = _frontend("script"), _frontend("template")
     assert "{ id: 'scripts', label: '劇本審核' }" in script
-    for status in ("pending_review", "published", "removed"):
+    for status in ("pending_review", "published", "reported", "removed"):                # 被檢舉（rpg-script-reports）與其他三個走同一個端點
         assert f"scripts_{status}: {{ path: '/scripts', key: 'versions', paged: true, params: {{ status: '{status}' }} }}" in script
     assert "tab === 'scripts'" in template
-    for label in ("待審", "上架中", "已下架"):
+    for label in ("待審", "上架中", "被檢舉", "已下架"):
         assert f"label: '{label}'" in script
 
 
@@ -238,7 +238,7 @@ def test_the_note_is_cleared_with_the_password_when_the_confirmation_closes_and_
 
 def test_a_409_closes_the_window_shows_the_reason_and_reloads_the_lists():
     script = _frontend("script")
-    for function in ("function approveOpenScript()", "function submitReject()", "function submitConfirm()"):
+    for function in ("function approveOpenScript()", "function dismissOpenScript()", "function submitReject()", "function submitConfirm()"):
         body = script.split(function, 1)[1].split("\n      function ", 1)[0] if function != "function submitConfirm()" else \
             script.split(function, 1)[1].split("// ---- 劇本審核", 1)[0]
         assert "status === 409" in body and "refreshScriptLists()" in body, function
@@ -251,3 +251,65 @@ def test_the_modals_are_driven_by_vue_state_and_use_no_bootstrap_javascript():
     for model in ("scriptOpen", "rejectOpen", "confirmOpen"):
         assert f'v-model="{model}"' in template
     assert "data-bs-" not in template and "bootstrap.bundle" not in template
+
+
+# ---- 被檢舉檢視與檢舉面板（rpg-script-reports；行為在 tests/js/admin.test.js 與 admin-format.test.js）----------------------------------------------
+
+def test_the_reported_view_lists_the_server_order_with_a_count_chip_and_a_red_line_marker_and_never_sorts_in_the_browser():
+    script, template = _frontend("script"), _frontend("template")
+    section = _script_section(template)
+    assert "{{ fmt.reportCountText(row) }}" in section and "'admin-chip--alert': row.red_line_reported" in section
+    assert ":empty-text=\"scriptEmptyText\"" in section                                  # 空清單的說明依檢視
+    assert "scriptView === 'reported'" in section and "不會自動下架" in section and "不需要密碼" in section
+    for sorting in (".sort(", ".reverse(", "orderBy"):
+        assert sorting not in script, sorting                                              # 排序由後端決定，前端不重排
+
+
+def test_the_script_window_reads_the_reports_after_the_full_text_and_only_for_a_published_version_with_open_reports():
+    script = _frontend("script")
+    opening = script.split("function openScript(publicId)", 1)[1].split("Vue.watch(scriptOpen", 1)[0]
+    assert opening.index("scriptDoc.version = data.version") < opening.index("loadScriptReports(publicId, token)")    # 先全文、再檢舉
+    assert "fmt.scriptActions(data.version).dismiss" in opening                                                       # 上架中且有未結案檢舉才讀
+    loading = script.split("function loadScriptReports(publicId, token)", 1)[1].split("function reloadScriptReports", 1)[0]
+    assert "'/reports'" in loading and "scriptReports.error = failureText(error)" in loading and ".finally(" in loading   # 失敗只在面板顯示
+    assert "clearScriptReports();" in script.split("Vue.watch(scriptOpen", 1)[1].split("function approveOpenScript", 1)[0]  # 關閉視窗就丟掉內容
+
+
+def test_dismissing_needs_no_password_and_is_blocked_until_the_reports_were_read():
+    script, template = _frontend("script"), _frontend("template")
+    dismiss = script.split("function dismissOpenScript()", 1)[1].split("/* 從全文視窗進入", 1)[0]
+    assert "password" not in dismiss and "'/reports/dismiss'" in dismiss and "{ data: {} }" in dismiss
+    assert "scriptReports.loading || scriptReports.error" in dismiss                        # 沒讀到檢舉就不能結案
+    modal = template.split("<!-- 劇本全文", 1)[1].split("<!-- 退回", 1)[0]
+    assert '@click="dismissOpenScript"' in modal and "不成立（結案）" in modal
+    assert 'v-if="scriptDocActions.dismiss"' in modal and "!!scriptReports.error" in modal
+
+
+def test_the_report_panel_shows_reasons_and_free_text_as_plain_text_and_has_no_reporter():
+    template, script = _frontend("template"), _frontend("script")
+    panel = template.split('<div v-if="scriptReports.shown"', 1)[1].split("scriptDoc.actionError", 1)[0]
+    for expression in ("{{ report.reasonsText }}", "{{ report.text }}", "{{ report.createdText }}", "{{ report.statusText }}", "{{ openReportCount }}", "{{ scriptReports.error }}"):
+        assert expression in panel, expression
+    assert "admin-msg__text" in panel                                                       # 與對話訊息相同的純文字樣式（保留換行）
+    for forbidden in ("v-html", "innerHTML", "reporter", "檢舉人身分"):
+        assert forbidden not in panel, forbidden
+    assert "reporter" not in script                                                          # 回應沒有檢舉人，前端也沒有任何讀取它的地方
+
+
+def test_removing_a_reported_script_drops_it_from_the_reported_list_and_approving_marks_that_list_stale():
+    script = _frontend("script")
+    submit = script.split("function submitConfirm()", 1)[1].split("// ---- 劇本審核", 1)[0]
+    assert "removeScriptRow('scripts_reported', targetId)" in submit
+    approve = script.split("function approveOpenScript()", 1)[1].split("/* 結案為", 1)[0]
+    assert "'scripts_reported'" in approve
+    refresh = script.split("function refreshScriptLists()", 1)[1].split("function removeScriptRow", 1)[0]
+    assert "'scripts_reported'" in refresh
+
+
+def test_every_report_panel_class_has_a_style_rule():
+    from app.config import PROJECT_ROOT
+
+    css = (PROJECT_ROOT / "app" / "static" / "css" / "admin.css").read_text(encoding="utf-8")
+    template = _frontend("template")
+    for name in ("admin-reports", "admin-msg--flag"):
+        assert name in template and f".{name}" in css, name

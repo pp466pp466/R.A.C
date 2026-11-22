@@ -269,6 +269,24 @@ a.ui-btn {
   font-weight: 500;
 }
 
+/* 帳號頁「暱稱與劇本創作」內的匿名保留開關：與上方的暱稱表單以細線區隔；刪除視窗內的核取方塊沿用同一組說明文字樣式 */
+.account-retention {
+  margin-top: 1.25rem;
+  padding-top: 1rem;
+  border-top: var(--border-hairline);
+}
+
+.account-retention--delete {
+  margin-top: 1rem;
+  padding-top: 0.75rem;
+}
+
+.account-subtitle {
+  margin: 0 0 0.5rem;
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+
 /* 帳號頁的單選群組（故事偏好）：沒有邊框的 fieldset，選項各佔一行，勾選色用主題的強調色 */
 .account-radios {
   margin: 0 0 0.75rem;
@@ -411,6 +429,12 @@ a.ui-btn {
 .legal h2 {
   margin: 1.5rem 0 0.5rem;
   font-size: 1.0625rem;
+  font-weight: 500;
+}
+
+.legal h3 {
+  margin: 1.25rem 0 0.5rem;
+  font-size: 0.9375rem;
   font-weight: 500;
 }
 
