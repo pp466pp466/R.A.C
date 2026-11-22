@@ -153,6 +153,12 @@ class AccessPolicy:
         if user.role != ROLE_ADMIN and user.publish_suspended_at is not None:
             raise PublishSuspended()
 
+    def require_can_report(self, user: CurrentUser) -> None:
+        """檢舉劇本的權限（script-reports 規格）：帳號可用且已完成年齡確認，**不論角色與會員等級**（管理員也一樣，未完成年齡確認
+        一律被擋）。不呼叫模型，只是沿用同一道閘門（`chat_gate`，拒絕的代碼與事件也相同）；被暫停發佈的作者仍可檢舉（暫停只停止送審）。
+        受限登入狀態（鎖定、等待刪除）在更早的登入檢查就被擋下，不會走到這裡。"""
+        self.require_chat_access(user)
+
     # ---- 是否可使用 AI 功能 -------------------------------------------------
 
     def _account_usable(self, user: CurrentUser) -> bool:

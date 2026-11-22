@@ -14,6 +14,9 @@
   `regenerations`，CSV 為 `turn_regenerations.csv`）：理由是玩家文字，視為個資；**不含**內部編號、預扣的冪等鍵與回合前快照，也沒有被取代的行動與劇情（本來就不保存）。
   **自己的送審紀錄**（結果、被拒絕的類別、時間；CSV 為 `script_submissions.csv`）：紀錄本來就只有固定列舉與時間，沒有任何劇本文字；
   劇本區塊也**不含**審查結果的欄位（判定、類別、審查時間與內容雜湊）——那是系統的判斷而不是使用者提供的資料。
+  **自己送出的劇本檢舉**（rpg-script-reports；被檢舉版本的對外識別碼、理由、自寫文字與送出時間；JSON 為 `script_reports`，CSV 為
+  `script_reports.csv`）：自寫文字是玩家文字，視為個資；**不含**結案欄位（檢舉人不會被通知結果，結案結果與時間不是他提供的資料）、版本標題與作者
+  （不洩漏被檢舉作者的任何資訊）、內部編號與別人的檢舉。帳號資料另含匿名保留偏好 `keep_published_scripts`。
   **自己的遊戲幣錢包**（game-wallet）：兩個餘額與**全部**帳本列（含已退回的預扣與退回列，與記錄頁不同）；每筆只有種類、免費與付費的增減量、
   異動後的兩個餘額、預扣的結算結果、關聯存檔的對外識別碼與時間，**不含**冪等鍵與內部編號；JSON 為 `wallet` 區塊，CSV 為 `wallet_entries.csv`。
   從未存取過錢包的使用者得到兩個 0 與空的帳本，**匯出本身不會建立錢包或發放贈幣**。
@@ -35,6 +38,7 @@ from app.models.user import PROVIDER_GOOGLE, User
 from app.observability import lifecycle_events
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
@@ -58,11 +62,12 @@ SPOOL_LIMIT_BYTES = 8 * 1024 * 1024
 ACCOUNT_COLUMNS = (
     "email", "display_name", "nickname", "nickname_code", "member_tier", "email_verified_at", "created_at", "last_login_at", "terms_version",
     "terms_accepted_at", "birth_date", "age_range", "age_confirmed_at", "age_policy_version", "adult_declared_at",
-    "adult_declaration_version", "google_linked", "story_preference",
+    "adult_declaration_version", "google_linked", "story_preference", "keep_published_scripts",
 )
 MESSAGE_COLUMNS = ("conversation_id", "conversation_title", "seq", "role", "content", "created_at")
 APPEAL_COLUMNS = ("appeal_id", "content", "created_at", "status")
 SUBMISSION_COLUMNS = ("outcome", "categories", "created_at")
+REPORT_COLUMNS = ("version_id", "reasons", "text", "created_at")          # 不含結案欄位、版本標題、作者與內部編號
 SCRIPT_COLUMNS = (
     "script_id", "version_no", "status", "spec_version", "title", "summary", "world_name", "content_tier", "background", "opening",
     "rules", "tags", "calendar_name", "calendar_start_year", "ending_mode", "ending_text", "ending_age", "audience", "characters",
@@ -113,6 +118,7 @@ class PersonalExportService:
         scripts: ScriptRepository,
         sessions: SessionRepository,
         submissions: ScriptSubmissionRepository,
+        reports: ScriptReportRepository,
         clock: Callable[[], datetime],
         wallets: WalletRepository | None = None,
         regenerations: TurnRegenerationRepository | None = None,
@@ -121,6 +127,7 @@ class PersonalExportService:
         self._regenerations = regenerations
         self._scripts = scripts
         self._submissions = submissions
+        self._reports = reports
         self._sessions = sessions
         self._appeals = appeals
         self._users = users
@@ -177,6 +184,7 @@ class PersonalExportService:
             "adult_declaration_version": user.adult_declaration_version,
             "google_linked": self._identities.get_for_user(user.id, PROVIDER_GOOGLE) is not None,
             "story_preference": normalize_audience(user.story_preference),
+            "keep_published_scripts": bool(user.keep_published_scripts),         # 刪除帳號時是否匿名保留已發佈的劇本（rpg-script-reports）
         }
 
     def _appeal_rows(self, user_id: int) -> list[dict[str, Any]]:
@@ -227,6 +235,14 @@ class PersonalExportService:
         """送審紀錄：結果、類別（固定列舉）與時間。"""
         for row in self._submissions.export_for_user(user_id):
             yield {"outcome": row["outcome"], "categories": row["categories"], "created_at": self._when(row["created_at"])}
+
+    def _report_rows(self, user_id: int) -> Iterator[dict[str, Any]]:
+        """自己送出的檢舉（由舊到新）：被檢舉版本的對外識別碼、理由、自寫文字與送出時間；沒有結案欄位、標題與作者。"""
+        for row in self._reports.export_for_reporter(user_id):
+            yield {
+                "version_id": row["version_public_id"], "reasons": row["reasons"], "text": row["text"],
+                "created_at": self._when(row["created_at"]),
+            }
 
     def _session_head(self, save: dict[str, Any], *, world_state: bool) -> dict[str, Any]:
         head = {key: value for key, value in save.items() if key not in ("world_state", "protagonist")}
@@ -318,6 +334,10 @@ class PersonalExportService:
         for index, row in enumerate(self._submission_rows(user.id)):
             put(("," if index else "") + dump(row))
         put(']')
+        put(',"script_reports":[')
+        for index, row in enumerate(self._report_rows(user.id)):
+            put(("," if index else "") + dump(row))
+        put(']')
         put(',"wallet":' + dump(self._wallet_balances(user.id))[:-1] + ',"entries":[')
         for index, row in enumerate(self._wallet_rows(user.id)):
             put(("," if index else "") + dump(row))
@@ -345,6 +365,12 @@ class PersonalExportService:
                     writer.writerow(SUBMISSION_COLUMNS)
                     for row in self._submission_rows(user.id):
                         writer.writerow([row["outcome"], csv_safe("、".join(row["categories"])), row["created_at"]])
+            with archive.open("script_reports.csv", "w") as raw:
+                with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
+                    writer = csv.writer(text)
+                    writer.writerow(REPORT_COLUMNS)
+                    for row in self._report_rows(user.id):
+                        writer.writerow([row["version_id"], csv_safe("、".join(row["reasons"])), csv_safe(row["text"]), row["created_at"]])
             with archive.open("scripts.csv", "w") as raw:
                 with io.TextIOWrapper(raw, encoding="utf-8-sig", newline="") as text:
                     writer = csv.writer(text)

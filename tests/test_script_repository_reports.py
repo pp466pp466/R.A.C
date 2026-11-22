@@ -267,3 +267,84 @@ def test_count_live_owned_counts_only_the_authors_published_versions(kit):
     assert kit.scripts.count_live_owned(kit.author.id) == 3
     assert kit.scripts.count_live_owned(kit.reporters[0].id) == 1
     assert kit.scripts.count_live_owned(kit.reporters[1].id) == 0
+
+
+# ---- 自動結案的日誌事件（script.reports_auto_closed）：轉移確定成功之後才記、只在筆數大於 0 時記 --------------------
+
+
+def auto_closed(log_lines) -> list[tuple[int, str]]:
+    return [(line["count"], line["outcome"]) for line in log_lines() if line.get("event") == "script.reports_auto_closed"]
+
+
+def test_an_authors_removal_logs_one_event_with_the_number_of_closed_reports(kit, log_lines):
+    version = published(kit)
+    report(kit, version, 0), report(kit, version, 1)
+    kit.scripts.remove_own(kit.author.id, version.public_id, at(10))
+    assert auto_closed(log_lines) == [(2, "removed")]
+
+
+def test_an_admins_removal_logs_the_same_event(kit, log_lines):
+    version = published(kit)
+    report(kit, version, 0), report(kit, version, 1), report(kit, version, 2)
+    kit.scripts.remove_by_admin(version.public_id, "other_policy", "備註", at(10))
+    assert auto_closed(log_lines) == [(3, "removed")]
+
+
+def test_a_removal_without_open_reports_logs_no_close_event(kit, log_lines):
+    version = published(kit)
+    kit.scripts.remove_own(kit.author.id, version.public_id, at(10))
+    assert auto_closed(log_lines) == []
+
+
+def test_a_removal_that_cannot_happen_logs_no_close_event(kit, log_lines):
+    version = published(kit)
+    kit.scripts.remove_own(kit.author.id, version.public_id, at(10))
+    report(kit, version, 0, now=at(11))
+    with pytest.raises(InvalidVersionTransitionError):
+        kit.scripts.remove_own(kit.author.id, version.public_id, at(12))
+    assert auto_closed(log_lines) == []
+
+
+def test_approving_a_new_version_logs_the_number_of_reports_closed_as_superseded(kit, log_lines):
+    old = published(kit)
+    report(kit, old, 0), report(kit, old, 1)
+    new = new_draft(kit.scripts, kit.author, script_public_id(kit.scripts, old), title="新版本")
+    kit.scripts.submit_for_review(kit.author.id, new.public_id, now=at(5))
+    kit.scripts.approve_version(new.public_id, now=at(10))
+    assert auto_closed(log_lines) == [(2, "superseded")]
+
+
+def test_approving_when_the_old_version_has_no_open_reports_logs_no_close_event(kit, log_lines):
+    old = published(kit)
+    new = new_draft(kit.scripts, kit.author, script_public_id(kit.scripts, old), title="新版本")
+    kit.scripts.submit_for_review(kit.author.id, new.public_id, now=at(5))
+    kit.scripts.approve_version(new.public_id, now=at(10))
+    assert auto_closed(log_lines) == []
+
+
+def test_a_failed_approval_logs_no_close_event(kit, log_lines):
+    """核可失敗、SAVEPOINT 回復時，不留下「已結案」的紀錄（事件在 SAVEPOINT 成功之後才記）。"""
+    old = published(kit)
+    report(kit, old, 0)
+    draft = new_draft(kit.scripts, kit.author, script_public_id(kit.scripts, old), title="還沒送審")
+    with pytest.raises(InvalidVersionTransitionError):
+        kit.scripts.approve_version(draft.public_id, now=at(10))
+    assert auto_closed(log_lines) == []
+
+
+def test_restoring_a_version_logs_no_close_event(kit, log_lines):
+    version = published(kit)
+    report(kit, version, 0)
+    kit.scripts.remove_own(kit.author.id, version.public_id, at(10))
+    kit.scripts.restore_own(kit.author.id, version.public_id)
+    assert auto_closed(log_lines) == [(1, "removed")]                    # 只有下架那一次；恢復不重開、不再記錄
+
+
+def test_the_close_event_carries_no_identifier_or_text(kit, log_lines):
+    version = published(kit, title="只該出現在資料庫的標題SCAN-CLOSE-TITLE")
+    kit.reports.add(kit.reporters[0].id, version.id, [REASON_OTHER], False, "檢舉文字SCAN-CLOSE-NOTE", now=at(1))
+    kit.scripts.remove_own(kit.author.id, version.public_id, at(10))
+    raw = log_lines.raw()
+    for secret in (version.public_id, "SCAN-CLOSE-TITLE", "SCAN-CLOSE-NOTE"):
+        assert secret not in raw, secret
+    assert auto_closed(log_lines) == [(1, "removed")]

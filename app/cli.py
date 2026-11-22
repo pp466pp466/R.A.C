@@ -24,8 +24,9 @@
   冪等地建立、更新（新增版本並取代舊版）或略過；`--dry-run` 只列出結果。輸出只有種子鍵與筆數，不含劇本內容；
   資料不合規時以非零代碼結束並指出檔名與欄位路徑，沒有寫入任何資料。
 - `set-script-limit`、`show-script-limits`：**人工類，不得排程**。營運限制（每位作者可擁有的劇本數、每個台灣日的送審次數、連續被
-  自動拒絕幾次就暫停發佈）存在資料庫，程式每次使用時現讀，所以調整不必重新部署。`set-script-limit KEY VALUE` 驗證鍵與範圍後寫入、
-  輸出舊值與新值，並寫一筆 `limit.set` 稽核（管理員欄位為空）；`show-script-limits` 列出全部十個鍵、目前生效的值與是否為保底預設。
+  自動拒絕幾次就暫停發佈、每位玩家每個台灣日可送出的劇本檢舉筆數 `script_report_daily`，0 表示暫停接受檢舉）存在資料庫，程式每次使用時現讀，
+  所以調整不必重新部署。`set-script-limit KEY VALUE` 驗證鍵與範圍後寫入、
+  輸出舊值與新值，並寫一筆 `limit.set` 稽核（管理員欄位為空）；`show-script-limits` 列出全部十一個鍵、目前生效的值與是否為保底預設。
   輸出只有鍵與數值。沒有任何 HTTP 端點可以修改限制。
 - `set-wallet-setting`、`show-wallet-settings`：**人工類，不得排程**（game-wallet）。遊戲幣的五個數值（每輪幣價、首次註冊贈幣、每日簽到、
   免費幣上限、預扣逾時秒數）與劇本限制存在同一張資料庫設定表，程式每次使用時現讀，調整不必重新部署。`set-wallet-setting KEY VALUE`
@@ -103,6 +104,7 @@ RETENTION_LABELS = {
     "turn_content": "中斷或被擋回合的部分內容",
     "sessions": "RPG 存檔與回合",
     "script_submissions": "劇本送審紀錄",
+    "script_reports": "劇本檢舉（已結案）",
 }
 
 

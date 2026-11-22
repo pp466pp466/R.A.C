@@ -91,10 +91,11 @@ def test_the_show_command_lists_exactly_the_five_keys_and_marks_the_fallback_def
     assert "範圍 1 至 10000" in by_key["coin.turn_cost.standard"]
 
 
-def test_show_script_limits_still_lists_only_the_ten_script_keys(app, runner):
+def test_show_script_limits_still_lists_only_the_eleven_script_keys(app, runner):
+    """劇本與主角組現在是十一個鍵（rpg-script-reports 新增檢舉的每日上限 `script_report_daily`）；遊戲幣的鍵不在這一組。"""
     result = runner.invoke(args=["show-script-limits"])
     keys = [line.split()[0] for line in result.output.splitlines() if line.strip()]
-    assert len(keys) == 10 and not any(key.startswith("coin.") for key in keys)
+    assert len(keys) == 11 and "script_report_daily" in keys and not any(key.startswith("coin.") for key in keys)
 
 
 def test_the_output_contains_only_keys_and_numbers(app, runner):

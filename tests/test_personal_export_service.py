@@ -15,6 +15,7 @@ from app.models.user import PROVIDER_GOOGLE, TOKEN_RESET_PASSWORD
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.script_repository import ScriptRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
@@ -40,7 +41,7 @@ def service_for(session) -> PersonalExportService:
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
         appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        submissions=ScriptSubmissionRepository(session), clock=FakeClock(),
+        submissions=ScriptSubmissionRepository(session), reports=ScriptReportRepository(session), clock=FakeClock(),
     )
 
 
@@ -215,7 +216,7 @@ def test_csv_is_a_zip_of_utf8_sig_files_that_excel_can_read(member_session):
     result = service_for(member_session).build(me(member_session, user), "csv")
     assert result.mimetype == "application/zip" and result.filename == "my-data-20261027.zip"
     files = read_zip(result)
-    assert sorted(files) == ["account.csv", "appeals.csv", "messages.csv", "script_submissions.csv", "scripts.csv", "sessions.csv", "turn_regenerations.csv", "turns.csv", "wallet_entries.csv"]
+    assert sorted(files) == ["account.csv", "appeals.csv", "messages.csv", "script_reports.csv", "script_submissions.csv", "scripts.csv", "sessions.csv", "turn_regenerations.csv", "turns.csv", "wallet_entries.csv"]
 
     account_rows = csv_rows(files["account.csv"])
     assert account_rows[0] == list(ACCOUNT_COLUMNS) and len(account_rows) == 2

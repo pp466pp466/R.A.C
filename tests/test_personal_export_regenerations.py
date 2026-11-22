@@ -16,6 +16,7 @@ from app.models.rpg_session import REGEN_APPLIED, REGEN_BLOCKED, REGEN_FAILED, R
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.script_repository import ScriptRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.turn_regeneration_repository import TurnRegenerationRepository
@@ -40,7 +41,8 @@ def service_for(session) -> PersonalExportService:
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
         appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        submissions=ScriptSubmissionRepository(session), clock=FakeClock(), regenerations=TurnRegenerationRepository(session),
+        submissions=ScriptSubmissionRepository(session), reports=ScriptReportRepository(session), clock=FakeClock(),
+        regenerations=TurnRegenerationRepository(session),
     )
 
 

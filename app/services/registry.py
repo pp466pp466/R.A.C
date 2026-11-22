@@ -27,6 +27,7 @@ from app.repositories.lock_strike_repository import LockStrikeRepository
 from app.repositories.alert_state_repository import AlertStateRepository
 from app.repositories.retention_repository import RetentionRepository
 from app.repositories.runtime_limit_repository import RuntimeLimitRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
@@ -66,6 +67,7 @@ from app.services.mail_sender import MailSender
 from app.services.password_hasher import PasswordHasherService, parameters_for_env
 from app.services.runtime_limits import RuntimeLimits
 from app.services.script_authoring_service import ScriptAuthoringService
+from app.services.script_report_service import ScriptReportService
 from app.services.script_submission_service import ScriptSubmissionService
 from app.services.script_review_prompt import review_marker
 from app.services.script_review_service import ScriptReviewService
@@ -397,6 +399,15 @@ def get_script_submission_service() -> ScriptSubmissionService:
     )
 
 
+def get_script_report_service() -> ScriptReportService:
+    """目前請求的劇本檢舉服務：只寫呼叫者本人送出的檢舉（不呼叫模型，所以不需要模型供應商；每日上限每次從資料庫現讀）。"""
+    session = get_session()
+    return ScriptReportService(
+        scripts=ScriptRepository(session), reports=ScriptReportRepository(session), policy=get_access_policy(),
+        limits=get_runtime_limits(), clock=get_clock(),
+    )
+
+
 def get_nickname_service() -> NicknameService:
     """目前請求的暱稱服務：只讀寫呼叫者本人的暱稱與短代號。"""
     return NicknameService(users=UserRepository(get_session()), policy=get_access_policy())
@@ -432,9 +443,13 @@ def get_session_service() -> SessionService:
 
 
 def get_game_entry_service() -> GameEntryService:
-    """目前請求的 RPG 入口服務：可玩劇本清單、自己的存檔清單與存檔摘要（唯讀；不呼叫模型、不碰錢包，所以不需要模型供應商）。"""
+    """目前請求的 RPG 入口服務：可玩劇本清單、自己的存檔清單與存檔摘要（唯讀；不呼叫模型、不碰錢包，所以不需要模型供應商）。
+    劇本詳情的 `report_state` 讀呼叫者本人是否已檢舉過該版本（只讀自己的檢舉，不回任何計數）。"""
     session = get_session()
-    return GameEntryService(scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy())
+    return GameEntryService(
+        scripts=ScriptRepository(session), sessions=SessionRepository(session), policy=get_access_policy(),
+        reports=ScriptReportRepository(session),
+    )
 
 
 def _rpg_llm_settings() -> LlmSettings:
@@ -523,8 +538,8 @@ def get_personal_export_service() -> PersonalExportService:
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
         appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        submissions=ScriptSubmissionRepository(session), clock=get_clock(), wallets=WalletRepository(session),
-        regenerations=TurnRegenerationRepository(session),
+        submissions=ScriptSubmissionRepository(session), reports=ScriptReportRepository(session), clock=get_clock(),
+        wallets=WalletRepository(session), regenerations=TurnRegenerationRepository(session),
     )
 
 

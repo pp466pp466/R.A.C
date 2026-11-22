@@ -176,7 +176,7 @@ def test_readme_script_authoring_tables_list_exactly_the_registered_routes_and_b
 
 
 def test_readme_protagonist_table_lists_exactly_the_registered_session_routes_and_the_timeout_advice():
-    """玩家主角、開存檔與 RPG 入口清單與公開目錄（`catalog`、`catalog/tags`、`catalog/<version_id>`、`GET /api/sessions`）的端點表必須與實際註冊的 `/api/sessions` 路由完全一致（共 7 條）；逾時提醒與新限制鍵、錯誤代碼都要記載。"""
+    """玩家主角、開存檔與 RPG 入口清單與公開目錄（`catalog`、`catalog/tags`、`catalog/<version_id>`、`GET /api/sessions`）的端點表必須與實際註冊的 `/api/sessions` 路由完全一致（共 8 條）；逾時提醒與新限制鍵、錯誤代碼都要記載。"""
     from app import create_app
     from app.config import load_config
 
@@ -193,9 +193,9 @@ def test_readme_protagonist_table_lists_exactly_the_registered_session_routes_an
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/sessions"):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 7, "沒有掃到預期數量的路由，比對可能是空洞的"
+    assert len(actual) == 8, "沒有掃到預期數量的路由，比對可能是空洞的"
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
-    for needed in ("protagonist_suggest_daily", "65 秒", "suggestion_unavailable", "suggestion_limit", "protagonist_rejected", "review_unavailable", "十個鍵"):
+    for needed in ("protagonist_suggest_daily", "65 秒", "suggestion_unavailable", "suggestion_limit", "protagonist_rejected", "review_unavailable", "十一個鍵"):
         assert needed in section, needed
 
 
@@ -377,6 +377,7 @@ def test_readme_privacy_lifecycle_section_documents_the_commands_the_periods_and
             retention.AUTH_TOKEN_RETENTION.days, retention.ADMIN_AUDIT_RETENTION.days, retention.LOCK_STRIKE_RETENTION.days) == (365, 365, 14, 7, 730, 7)
     assert set(RETENTION_LABELS) == {
         "conversations", "error_detail", "ledger", "auth_tokens", "admin_audit", "lock_strikes", "turn_content", "sessions", "script_submissions",
+        "script_reports",
     }
     for path in ("app/static/js/auth/account-lifecycle.js", "tests/js/account-lifecycle.test.js", "tests/test_restricted_session.py",
                  "tests/test_privacy_lifecycle_flow.py", "tests/architecture/test_account_erasure_coverage.py"):

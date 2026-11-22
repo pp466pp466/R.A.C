@@ -537,3 +537,32 @@ class RevisionInvalid(Unprocessable):
     def __init__(self, fields: dict[str, str], message: str | None = None) -> None:
         super().__init__((), message)
         self.fields = dict(fields)
+
+
+# ---- 劇本檢舉（rpg-script-reports；script-reports 規格）----------------------------------
+
+
+class ReportOwnScript(Forbidden):
+    """作者檢舉自己的劇本（403）：作者看得到自己的劇本，所以不用 404。內建劇本不走這裡（與不存在一樣是 `NotFound`）。"""
+
+    code = "report_own_script"
+    default_message = "不能檢舉自己的劇本。"
+
+
+class AlreadyReported(Conflict):
+    """同一位玩家已檢舉過這個版本（409）：不論先前的檢舉是否已結案；新版本核可上架後可以再檢舉。重複的請求不消耗每日上限。"""
+
+    code = "already_reported"
+    default_message = "您已經檢舉過這個劇本版本了。"
+
+
+class ReportLimit(TooManyRequests):
+    """今日（台灣日）的檢舉次數已達上限（429）。`retry_after` 是距離明日 00:00（台灣時間）的秒數。
+    訊息不含上限的數字（上限在資料庫，部署者可調整，上限為 0 表示暫停接受檢舉）。"""
+
+    code = "report_limit"
+    default_message = "您今日的檢舉次數已用完，將於明日 00:00（台灣時間）重置。"
+
+    def __init__(self, retry_after: int = 1, message: str | None = None) -> None:
+        super().__init__(message)
+        self.retry_after = max(1, int(retry_after))

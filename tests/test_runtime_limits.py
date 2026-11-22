@@ -22,7 +22,7 @@ SCRIPT_KEYS = (
     "script_limit.free", "script_limit.plus", "script_limit.vip",
     "script_submit_daily.free", "script_submit_daily.plus", "script_submit_daily.vip",
     "protagonist_suggest_daily.free", "protagonist_suggest_daily.plus", "protagonist_suggest_daily.vip",
-    "script_reject_streak",
+    "script_reject_streak", "script_report_daily",
 )
 WALLET_KEYS = ("coin.turn_cost.standard", "coin.signup_grant", "coin.checkin_grant", "coin.free_cap", "coin.hold_timeout_seconds")
 RPG_KEYS = ("rpg.max_months_per_turn", "rpg.free_regenerations")
@@ -39,12 +39,12 @@ def put(session, key, value):
 
 
 def migration_initial_limits() -> dict[str, int]:
-    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個、0015 的五個、0016 與 0018 各一個）。"""
+    """各遷移寫入的初始限制合計（0013 的七個、0014 的三個、0015 的五個、0016、0018 與 0022 各一個）。"""
     limits: dict[str, int] = {}
     for filename, name in (
         ("20261104_0013_rpg_script_authoring.py", "migration_0013"), ("20261104_0014_rpg_character_creation.py", "migration_0014"),
         ("20261105_0015_game_wallet.py", "migration_0015"), ("20261109_0016_rpg_turn_engine.py", "migration_0016"),
-        ("20261112_0018_rpg_turn_revision.py", "migration_0018"),
+        ("20261112_0018_rpg_turn_revision.py", "migration_0018"), ("20261121_0022_script_reports.py", "migration_0022"),
     ):
         spec = importlib.util.spec_from_file_location(name, PROJECT_ROOT / "migrations" / "versions" / filename)
         module = importlib.util.module_from_spec(spec)
@@ -57,7 +57,7 @@ def migration_initial_limits() -> dict[str, int]:
 # ---- 鍵、範圍與初始值 -----------------------------------------------------------------
 
 
-def test_the_seventeen_keys_are_fixed_in_three_groups():
+def test_the_eighteen_keys_are_fixed_in_three_groups():
     assert LIMIT_KEYS == ALL_KEYS and set(LIMIT_SPECS) == set(ALL_KEYS)
     assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "script"} == set(SCRIPT_KEYS)
     assert {key for key, spec in LIMIT_SPECS.items() if spec.group == "wallet"} == set(WALLET_KEYS)
@@ -120,11 +120,54 @@ def test_the_fallback_defaults_equal_the_values_the_migration_writes():
         "script_limit.free": 3, "script_limit.plus": 10, "script_limit.vip": 30,
         "script_submit_daily.free": 3, "script_submit_daily.plus": 5, "script_submit_daily.vip": 10,
         "protagonist_suggest_daily.free": 5, "protagonist_suggest_daily.plus": 15, "protagonist_suggest_daily.vip": 40,
-        "script_reject_streak": 3,
+        "script_reject_streak": 3, "script_report_daily": 5,
         "coin.turn_cost.standard": 30, "coin.signup_grant": 200, "coin.checkin_grant": 200, "coin.free_cap": 1000,
         "coin.hold_timeout_seconds": 180,
         "rpg.max_months_per_turn": 24, "rpg.free_regenerations": 2,
     }
+
+
+def test_the_report_daily_limit_ranges_from_0_to_100_with_a_default_of_5_in_the_script_group():
+    spec = LIMIT_SPECS["script_report_daily"]
+    assert (spec.default, spec.minimum, spec.maximum, spec.group) == (5, 0, 100, "script")
+
+
+def test_the_report_daily_limit_is_one_value_for_every_member_tier():
+    """檢舉的每日上限不分會員等級（等級只影響額度，而這個上限是防洗版，不是額度）：只有一個鍵，沒有 `.free|plus|vip` 的變體。"""
+    assert [key for key in LIMIT_SPECS if key.startswith("script_report_daily")] == ["script_report_daily"]
+
+
+def test_the_report_daily_limit_is_read_each_time_and_falls_back_to_the_default(member_session, log_lines):
+    limits = make_limits(member_session)
+    assert limits.report_daily() == 5                                                   # 缺值：保底預設，不是無上限
+    put(member_session, "script_report_daily", 8)
+    assert make_limits(member_session).report_daily() == 8                              # 下一次使用就是新值
+    assert limits.report_daily() == 8                                                   # 同一個實例也不快取
+    for invalid in (-1, 101):
+        member_session.query(RuntimeLimit).filter_by(key="script_report_daily").one().int_value = invalid
+        member_session.flush()
+        assert make_limits(member_session).report_daily() == 5                          # 範圍外：保底預設
+    member_session.query(RuntimeLimit).filter_by(key="script_report_daily").one().int_value = 0
+    member_session.flush()
+    assert make_limits(member_session).report_daily() == 0                              # 0 合法：暫停接受檢舉
+    member_session.query(RuntimeLimit).filter_by(key="script_report_daily").one().int_value = 100
+    member_session.flush()
+    assert make_limits(member_session).report_daily() == 100                            # 上限合法
+    events = [line for line in log_lines() if line.get("event") == "limits.invalid" and line["reason"] == "script_report_daily"]
+    assert events and all(set(line) <= {"timestamp", "time", "level", "logger", "message", "event", "reason", "request_id"} for line in events)
+
+
+def test_setting_the_report_daily_limit_is_validated_and_audited(member_session):
+    calls, audit = recording_audit()
+    limits = make_limits(member_session, audit)
+    assert limits.set("script_report_daily", 10, group="script") == (5, 10)
+    assert calls == [("limit.set", None, {"limit_key": "script_report_daily", "old_value": 5, "new_value": 10})]
+    for bad in (101, -1):
+        with pytest.raises(LimitError):
+            limits.set("script_report_daily", bad, group="script")
+    assert limits.report_daily() == 10 and len(calls) == 1                              # 被拒絕時原值不變、沒有稽核
+    with pytest.raises(LimitError, match="set-script-limit"):
+        limits.set("script_report_daily", 3, group="wallet")                            # 屬於劇本與主角組：別的指令要指出該用哪一個
 
 
 def test_every_default_is_inside_its_own_range():
@@ -346,7 +389,7 @@ def test_the_set_command_refuses_a_non_integer_value(app):
     assert result.exit_code != 0 and stored(app) == {}
 
 
-def test_the_show_command_lists_the_ten_keys_and_marks_the_fallback_defaults(app):
+def test_the_show_command_lists_the_eleven_keys_and_marks_the_fallback_defaults(app):
     runner = app.test_cli_runner()
     runner.invoke(args=["set-script-limit", "script_limit.plus", "12"])
     result = runner.invoke(args=["show-script-limits"])

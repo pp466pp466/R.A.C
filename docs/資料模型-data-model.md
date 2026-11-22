@@ -469,6 +469,8 @@ flowchart TD
     Turn["memory_logs 中斷或被擋回合的劇情內容"] -->|"14 天（purge-expired-data）"| Del9["llm_raw_response 清為空字串，回合紀錄保留"]
     Sub["script_submissions（送審紀錄）"] -->|"建立後 365 天（purge-expired-data）"| Del10["刪除，只刪紀錄 暫停旗標不受影響"]
     Sub -->|"隨帳號抹除 CASCADE"| Era
+    Rep["script_reports（劇本檢舉）"] -->|"結案後 365 天（purge-expired-data，未結案者不清）"| Del11["刪除，只刪檢舉本身 版本與帳號不受影響"]
+    Rep -->|"檢舉人的帳號抹除 CASCADE"| Era
     Scr["scripts、script_versions、script_version_tags"] -->|"隨作者的帳號抹除"| Era
     Wal["wallets、wallet_entries（錢包與帳本）"] -->|"隨帳號抹除 CASCADE，不匿名化保留"| Era
     Appeal["lock_appeals（申訴）"] -->|"與帳號同進退，不由期限清除"| Era

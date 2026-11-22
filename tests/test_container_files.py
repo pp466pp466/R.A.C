@@ -186,7 +186,7 @@ def test_the_container_acceptance_covers_the_protagonist_migration_schema_lexico
     flow = namespace["render_auth_flow"]("minted-session-value")
     compile(flow, "flow", "exec")
     assert flow.isascii() and flow.count('/api/sessions') >= 3
-    assert len(namespace["SCRIPT_LIMIT_KEYS"]) == 10
+    assert len(namespace["SCRIPT_LIMIT_KEYS"]) == 11                                           # 含 0022 的 script_report_daily
 
 
 def test_the_container_acceptance_covers_the_wallet_migration_tables_settings_and_login_gates():

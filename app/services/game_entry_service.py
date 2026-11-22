@@ -17,6 +17,9 @@
 **劇本詳情**（`script_detail`）：只對上架中的版本回傳，**公開的白名單欄位**（`DETAIL_FIELDS`）：給「決定要不要玩」的資訊，
 **不含**角色的隱藏特質與個性、里程碑、結局說明、規則、初始對話、審查結果、內容雜湊與任何內部整數編號；非上架的版本（含作者自己的草稿與下架的版本）
 與不存在的識別碼得到相同的 `NotFound`。與目錄一樣不過年齡閘門、唯讀、不寫日誌（標題、筆名等都是玩家文字衍生的內容）。
+`report_state`（rpg-script-reports）告訴畫面要不要顯示檢舉入口：`unavailable`（內建劇本，依種子鍵；或這是呼叫者自己的劇本，不顯示）、
+`reported`（呼叫者已檢舉過這個版本，不論是否已結案；顯示停用的「已檢舉」）、`available`（顯示「檢舉」）。只讀呼叫者**自己**的檢舉；
+**沒有任何檢舉數量或審核狀態**，也不論呼叫者是否通過年齡確認（沒通過的人按下去由檢舉端點回 403 `age_confirmation_required` 並引導補填）。
 
 **我的存檔**（`my_sessions`）：只有自己的、不含已封存者，依最後活動由新到舊；每筆只含白名單欄位（`SAVE_FIELDS`），其中
 `content_tier` 是**現算的生效模式**（玩家目前的設定、存檔複本的劇本綁定與緊急煞車，不是開存檔當下的值）。各存檔已完成的
@@ -33,6 +36,7 @@ from typing import Any
 
 from app.models.rpg_session import SESSION_ACTIVE, SESSION_ENDED, RpgSession
 from app.models.script import ENDING_CUSTOM, OFFICIAL_AUTHOR_NAME, Script, ScriptVersion
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
@@ -56,8 +60,9 @@ CARD_FIELDS = (
 )
 DETAIL_FIELDS = (
     "id", "title", "summary", "world_name", "tags", "author_name", "author_code", "content_tier", "audience", "version_no",
-    "published_at", "background", "characters", "locations", "has_custom_ending", "content_mode",
+    "published_at", "background", "characters", "locations", "has_custom_ending", "content_mode", "report_state",
 )
+REPORT_STATES = ("available", "reported", "unavailable")           # 檢舉入口的三種狀態（固定列舉；前端只接受這三個）
 DETAIL_CHARACTER_FIELDS = ("name", "occupation")           # 角色只公開姓名與職業；個性、外貌、隱藏特質與年齡都不公開
 SAVE_FIELDS = (
     "id", "title", "content_tier", "status", "player_name", "completed_turns", "last_active_at",
@@ -66,10 +71,13 @@ SUMMARY_FIELDS = ("id", "title", "content_tier", "player_name", "ended")
 
 
 class GameEntryService:
-    def __init__(self, *, scripts: ScriptRepository, sessions: SessionRepository, policy: AccessPolicy) -> None:
+    def __init__(
+        self, *, scripts: ScriptRepository, sessions: SessionRepository, policy: AccessPolicy, reports: ScriptReportRepository
+    ) -> None:
         self._scripts = scripts
         self._sessions = sessions
         self._policy = policy
+        self._reports = reports
 
     def catalog(
         self, current: CurrentUser, *, q: object = None, tag: object = None, audience: object = None, cursor: object = None,
@@ -124,8 +132,16 @@ class GameEntryService:
             "locations": [item for item in (version.locations_json or []) if isinstance(item, str)],
             "has_custom_ending": version.ending_mode == ENDING_CUSTOM,
             "content_mode": {"effective": mode.effective, "forced": mode.forced},
+            "report_state": self._report_state(current, version, script),
         })
         return detail
+
+    def _report_state(self, current: CurrentUser, version: ScriptVersion, script: Script) -> str:
+        """檢舉入口的狀態：內建劇本（種子鍵）與自己的劇本是 `unavailable`；呼叫者已檢舉過這個版本是 `reported`；其餘 `available`。
+        不依「沒有作者」判斷內建（匿名保留的玩家劇本同樣沒有作者，仍可被檢舉）。"""
+        if script.seed_key is not None or self._policy.is_owner(current, script.creator_id):
+            return "unavailable"
+        return "reported" if self._reports.exists(current.id, version.id) else "available"
 
     def my_sessions(self, current: CurrentUser, *, limit: object = SESSIONS_DEFAULT_LIMIT, offset: object = 0) -> dict[str, Any]:
         """呼叫者自己的存檔一頁（不含已封存者）：`{"sessions": [存檔…], "has_more": 布林}`。已完結的存檔仍在清單內。"""

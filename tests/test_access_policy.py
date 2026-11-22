@@ -358,3 +358,59 @@ def test_is_active_admin_is_only_true_for_an_active_admin_whatever_the_tier(role
     expected = role == ROLE_ADMIN and status == STATUS_ACTIVE
     assert user.is_active_admin is expected
     assert POLICY.is_admin(user) is expected          # 兩邊不能分歧：政策委派給同一個屬性
+
+
+# ---- 檢舉劇本（rpg-script-reports 的 script-reports 規格）------------------------------------
+
+def test_a_member_who_has_not_completed_the_age_check_cannot_report_and_is_pointed_to_the_age_step():
+    with pytest.raises(AgeConfirmationRequired) as denied:
+        POLICY.require_can_report(member(age=None))
+    assert denied.value.code == "age_confirmation_required"
+
+
+@pytest.mark.parametrize("tier", ["free", "vip"])
+def test_an_admin_who_has_not_completed_the_age_check_is_refused_too(tier):
+    """管理員與各會員等級都不豁免：沒有完成年齡確認就不能檢舉（與其他需要閘門的功能一致）。"""
+    with pytest.raises(AgeConfirmationRequired):
+        POLICY.require_can_report(member(age=None, role=ROLE_ADMIN, member_tier=tier))
+
+
+@pytest.mark.parametrize("status", [STATUS_SUSPENDED, STATUS_DELETION_PENDING])
+def test_an_account_that_is_not_active_cannot_report(status):
+    with pytest.raises(Forbidden) as denied:
+        POLICY.require_can_report(member(status=status))
+    assert denied.value.code == "forbidden"
+
+
+@pytest.mark.parametrize("age", [12, 17])
+def test_someone_below_the_minimum_use_age_cannot_report(age):
+    with pytest.raises(AgeRestricted):
+        POLICY.require_can_report(member(age=age))
+
+
+@pytest.mark.parametrize("role", [ROLE_USER, ROLE_ADMIN])
+@pytest.mark.parametrize("tier", MEMBER_TIERS)
+def test_an_active_confirmed_member_can_report_whatever_the_role_or_tier(role, tier, log_lines):
+    POLICY.require_can_report(member(role=role, member_tier=tier))
+    assert [line for line in log_lines() if line.get("event")] == []
+
+
+def test_a_member_whose_publishing_is_suspended_can_still_report():
+    """暫停發佈只停止送審，其餘功能照常（含檢舉）。"""
+    from app.models.base import utcnow
+
+    POLICY.require_can_report(member(publish_suspended_at=utcnow()))
+
+
+@pytest.mark.parametrize("age", [None, 12, 18])
+@pytest.mark.parametrize("status", USER_STATUSES)
+def test_the_report_gate_is_exactly_the_chat_gate(age, status):
+    """檢舉沿用 `chat_gate`：兩者對任何帳號的結論與拒絕的代碼一致，不會各自分歧。"""
+    user = member(age=age, status=status)
+    gate = POLICY.chat_gate(user)
+    if gate is None:
+        POLICY.require_can_report(user)
+    else:
+        with pytest.raises(Forbidden) as denied:
+            POLICY.require_can_report(user)
+        assert denied.value.code == gate

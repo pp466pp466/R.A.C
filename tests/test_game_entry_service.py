@@ -12,7 +12,9 @@ import pytest
 from app.models.script import (
     OFFICIAL_AUTHOR_NAME, VERSION_DRAFT, VERSION_PENDING, VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED,
 )
+from app.models.script_report import CLOSED_DISMISSED
 from app.models.user import ROLE_ADMIN, User
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.session_repository import SessionRepository
 from app.services.access_policy import AccessPolicy
@@ -22,7 +24,7 @@ from app.services.current_user import CurrentUser
 from app.services.errors import NotFound, ValidationError
 from app.services.registry import get_game_entry_service
 from app.services.game_entry_service import (
-    CARD_FIELDS, CATALOG_DEFAULT_LIMIT, CATALOG_MAX_LIMIT, DETAIL_FIELDS, OFFSET_MAX, SAVE_FIELDS, SESSIONS_DEFAULT_LIMIT,
+    CARD_FIELDS, CATALOG_DEFAULT_LIMIT, CATALOG_MAX_LIMIT, DETAIL_FIELDS, OFFSET_MAX, REPORT_STATES, SAVE_FIELDS, SESSIONS_DEFAULT_LIMIT,
     SESSIONS_MAX_LIMIT, SUMMARY_FIELDS, GameEntryService,
 )
 from tests.support.age import TODAY_UTC
@@ -39,7 +41,7 @@ GHOST = "00000000-0000-4000-8000-000000000000"
 def service_for(session, safe_mode_forced=False) -> GameEntryService:
     return GameEntryService(
         scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        policy=AccessPolicy(clock=FakeClock(), safe_mode_forced=safe_mode_forced),
+        policy=AccessPolicy(clock=FakeClock(), safe_mode_forced=safe_mode_forced), reports=ScriptReportRepository(session),
     )
 
 
@@ -586,6 +588,96 @@ def test_a_detail_costs_the_same_number_of_queries_whatever_the_size_of_the_scri
             service.script_detail(reader, public_id)
         counts.append(len(statements))
     assert counts[0] == counts[1] == 2
+
+
+# ---- 詳情的檢舉入口（rpg-script-reports 的 report_state）-----------------------------------------
+
+def report_it(session, reporter, version, closed=None):
+    """讓 `reporter` 檢舉過這個版本（直接寫入）；`closed` 非空時再把它結案。"""
+    repo = ScriptReportRepository(session)
+    repo.add(reporter.id, version.id, ["other"], False, None, now=TODAY_UTC)
+    if closed is not None:
+        repo.close_open(version.id, closed, TODAY_UTC)
+    session.commit()
+
+
+def test_report_state_is_one_of_three_values_and_the_detail_has_no_report_counts():
+    assert "report_state" in DETAIL_FIELDS and REPORT_STATES == ("available", "reported", "unavailable")
+    assert not any("count" in field or field.startswith("report_") and field != "report_state" for field in DETAIL_FIELDS)
+
+
+def test_another_players_script_can_be_reported(member_session):
+    version = publish(member_session, player(member_session, 2), title="他人的")
+    assert service_for(member_session).script_detail(player(member_session), version.public_id)["report_state"] == "available"
+
+
+def test_a_builtin_script_cannot_be_reported(member_session):
+    version = publish(member_session, title="內建")
+    assert service_for(member_session).script_detail(player(member_session), version.public_id)["report_state"] == "unavailable"
+
+
+def test_the_authors_own_script_cannot_be_reported(member_session):
+    author = player(member_session, 2)
+    version = publish(member_session, author, title="我的")
+    assert service_for(member_session).script_detail(author, version.public_id)["report_state"] == "unavailable"
+
+
+def test_a_script_the_reader_already_reported_shows_as_reported_even_after_it_was_closed(member_session):
+    author, reader = player(member_session, 2), player(member_session, 3)
+    version = publish(member_session, author, title="被檢舉")
+    report_it(member_session, reader, version, closed=CLOSED_DISMISSED)
+    assert service_for(member_session).script_detail(reader, version.public_id)["report_state"] == "reported"
+
+
+def test_only_the_readers_own_report_counts_not_other_players_reports(member_session):
+    """別人檢舉過不影響我的狀態（也不洩漏有人檢舉過）：A 檢舉後，B 看到的仍是 `available`、回應也沒有任何計數。"""
+    author, first, second = player(member_session, 2), player(member_session, 3), player(member_session, 4)
+    version = publish(member_session, author, title="被檢舉")
+    report_it(member_session, first, version)
+    service = service_for(member_session)
+    assert service.script_detail(first, version.public_id)["report_state"] == "reported"
+    detail = service.script_detail(second, version.public_id)
+    assert detail["report_state"] == "available" and set(detail) == set(DETAIL_FIELDS)
+    assert service.script_detail(author, version.public_id)["report_state"] == "unavailable"       # 作者看不到有人檢舉
+
+
+def test_a_new_version_starts_available_again_for_someone_who_reported_the_old_one(member_session):
+    author, reader = player(member_session, 2), player(member_session, 3)
+    repo = ScriptRepository(member_session)
+    first = publish(member_session, author, title="第一版")
+    report_it(member_session, reader, first)
+    script_id = repo.get_script_of(first).public_id
+    second = repo.create_draft_version(
+        author.id, script_id, content=validated(title="第二版").content, content_hash=validated(title="第二版").content_hash,
+        total_chars=validated(title="第二版").total_chars,
+    )
+    repo.submit_for_review(author.id, second.public_id, now=TODAY_UTC)
+    repo.approve_version(second.public_id, now=TODAY_UTC + timedelta(minutes=1))
+    member_session.commit()
+    assert service_for(member_session).script_detail(reader, second.public_id)["report_state"] == "available"
+
+
+def test_a_retained_anonymous_script_can_be_reported_and_is_not_shown_as_builtin(member_session):
+    """匿名保留的玩家劇本沒有作者關聯、但沒有種子鍵：它是 `available`（不是 `unavailable`），筆名是「已註銷的作者」而不是「官方」。"""
+    author = player(member_session, 2)
+    version = publish(member_session, author, title="保留的")
+    ScriptRepository(member_session).retain_published_anonymously(author.id)
+    member_session.commit()
+    detail = service_for(member_session).script_detail(player(member_session, 3), version.public_id)
+    assert detail["report_state"] == "available" and detail["author_name"] == "已註銷的作者" and detail["author_name"] != OFFICIAL_AUTHOR_NAME
+
+
+def test_a_players_script_detail_costs_one_extra_query_for_the_report_state_whatever_the_size(member_session):
+    service, reader, author = service_for(member_session), player(member_session, 3), player(member_session, 2)
+    small = publish(member_session, author, title="小", tags=["甲"], characters=[{"name": "甲", "personality": "x", "age": 1, "appearance": "y"}])
+    big = publish(member_session, author, now=TODAY_UTC + timedelta(seconds=1), **hidden_script(title="大", tags=["甲", "乙", "丙", "丁", "戊"]))
+    counts = []
+    for public_id in (small.public_id, big.public_id):
+        member_session.expire_all()
+        with count_statements(member_session) as statements:
+            service.script_detail(reader, public_id)
+        counts.append(len(statements))
+    assert counts[0] == counts[1] == 3                                           # 版本與劇本、標籤、自己是否檢舉過（內建劇本不用查）
 
 
 # ---- 我的存檔清單 ---------------------------------------------------------------------------------

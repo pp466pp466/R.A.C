@@ -19,6 +19,7 @@ LOG_FUNCTIONS = {
 ALLOWED_PARAMETERS = {
     "user_id", "total_chars", "flagged", "stage", "layer", "categories", "model", "verdict", "attempt", "reason", "key",
     "category", "remover",             # 審核與下架（rpg-script-publishing）：固定類別與下架者的列舉，傳入列舉以外的值會立刻出錯
+    "reason_count", "text_length", "count", "result",     # 檢舉（rpg-script-reports）：整數與固定列舉的結案結果
 }
 
 
@@ -65,6 +66,10 @@ def test_the_extra_fields_are_all_in_the_log_whitelist(caplog):
     script_events.log_rejected(user_id=1, category="other_policy")
     script_events.log_removed(user_id=1, remover="admin", category="minor_sexual")
     script_events.log_restored(user_id=1, remover="author")
+    script_events.log_report_submitted(user_id=1, reason_count=2, text_length=30)
+    script_events.log_report_limited(user_id=1)
+    script_events.log_reports_dismissed(user_id=1, count=3)
+    script_events.log_reports_auto_closed(count=2, result="removed")
     script_events.log_limit_invalid(key="script_limit.free")
     script_events.log_limit_changed(key="script_limit.free")
     records = capture(caplog)
@@ -151,6 +156,72 @@ def test_a_takedown_category_outside_the_enumeration_is_refused_but_none_means_n
     with pytest.raises(ValueError):
         script_events.log_removed(user_id=1, remover="admin", category=category)
     script_events.log_removed(user_id=1, remover="author", category=None)          # 作者自行下架沒有類別
+
+
+# ---- 檢舉（rpg-script-reports）：只有內部編號、整數與固定列舉，文字與識別碼放不進來 ---------------------------------
+
+
+def test_the_report_events_have_no_parameter_that_could_carry_text_or_an_identifier():
+    for name in ("log_report_submitted", "log_report_limited", "log_reports_dismissed", "log_reports_auto_closed"):
+        parameters = set(inspect.signature(LOG_FUNCTIONS[name]).parameters)
+        assert not parameters & {
+            "text", "note", "reasons", "reason", "title", "content", "message", "version_id", "version", "script", "public_id", "author", "reporter",
+        }, (name, parameters)
+
+
+def test_a_submitted_report_logs_the_reporter_and_two_integers_only(caplog):
+    script_events.log_report_submitted(user_id=7, reason_count=3, text_length=120)
+    (record,) = capture(caplog)
+    assert (record.event, record.user_id, record.count, record.chars) == (script_events.EVENT_REPORT_SUBMITTED, 7, 3, 120)
+    standard = set(logging.makeLogRecord({}).__dict__) | {"message", "asctime"}
+    assert set(record.__dict__) - standard == {"event", "user_id", "count", "chars"}
+
+
+def test_a_limited_report_logs_only_the_user_id_at_warning_level(caplog):
+    script_events.log_report_limited(user_id=7)
+    (record,) = capture(caplog)
+    assert (record.event, record.user_id, record.levelno) == (script_events.EVENT_REPORT_LIMITED, 7, logging.WARNING)
+    assert set(record.__dict__) - set(logging.makeLogRecord({}).__dict__) - {"message", "asctime"} == {"event", "user_id"}
+
+
+def test_a_dismissal_logs_the_admin_and_the_count_only(caplog):
+    script_events.log_reports_dismissed(user_id=9, count=4)
+    (record,) = capture(caplog)
+    assert (record.event, record.user_id, record.count) == (script_events.EVENT_REPORTS_DISMISSED, 9, 4)
+
+
+@pytest.mark.parametrize("result", ["removed", "superseded"])
+def test_an_auto_close_logs_the_count_and_the_fixed_result(caplog, result):
+    script_events.log_reports_auto_closed(count=3, result=result)
+    (record,) = capture(caplog)
+    assert (record.event, record.count, record.outcome) == (script_events.EVENT_REPORTS_AUTO_CLOSED, 3, result)
+    assert not hasattr(record, "user_id") or record.user_id is None                # 系統自動結案，事件本身不帶任何人（請求內由日誌過濾器補上目前的使用者）
+
+
+def test_an_auto_close_of_zero_reports_logs_nothing(caplog):
+    """只在 `count > 0` 時記錄：這個條件在函式內，呼叫端不可能漏掉。"""
+    script_events.log_reports_auto_closed(count=0, result="removed")
+    script_events.log_reports_auto_closed(count=0, result="superseded")
+    assert capture(caplog) == []
+
+
+@pytest.mark.parametrize("result", ["dismissed", "REMOVED", "", "some free text", None])
+def test_an_auto_close_result_outside_the_enumeration_is_refused(result):
+    """「不成立」是管理員的決定（另有事件），不屬於系統自動結案；列舉以外的值立即出錯，自由文字進不了日誌。"""
+    with pytest.raises(ValueError):
+        script_events.log_reports_auto_closed(count=1, result=result)
+
+
+@pytest.mark.parametrize("value", [-1, True, 1.5, "3", None])
+def test_a_count_that_is_not_a_non_negative_integer_is_refused(value):
+    with pytest.raises(ValueError):
+        script_events.log_report_submitted(user_id=1, reason_count=value, text_length=0)
+    with pytest.raises(ValueError):
+        script_events.log_report_submitted(user_id=1, reason_count=1, text_length=value)
+    with pytest.raises(ValueError):
+        script_events.log_reports_dismissed(user_id=1, count=value)
+    with pytest.raises(ValueError):
+        script_events.log_reports_auto_closed(count=value, result="removed")
 
 
 @pytest.mark.parametrize("remover", ["", "root", "ADMIN", None])

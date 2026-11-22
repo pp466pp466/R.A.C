@@ -18,6 +18,7 @@ from app.models import RpgSession, ScriptVersion, User
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.lock_appeal_repository import LockAppealRepository
 from app.repositories.script_repository import ScriptRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
@@ -37,7 +38,7 @@ def service_for(session) -> PersonalExportService:
     return PersonalExportService(
         users=UserRepository(session), identities=UserIdentityRepository(session), chats=ChatRepository(session),
         appeals=LockAppealRepository(session), scripts=ScriptRepository(session), sessions=SessionRepository(session),
-        submissions=ScriptSubmissionRepository(session), clock=FakeClock(),
+        submissions=ScriptSubmissionRepository(session), reports=ScriptReportRepository(session), clock=FakeClock(),
     )
 
 

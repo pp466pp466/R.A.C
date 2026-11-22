@@ -1,10 +1,12 @@
 """存放在資料庫的營運限制（見 runtime-limits 規格與 rpg-script-authoring 的 design D10）。
 
-三組共十六個限制。**劇本與主角組**（十個）：每位作者可擁有的劇本數（依會員等級）、每個台灣日的送審次數（依會員等級）、
-每個台灣日的主角生成與重新生成次數（依會員等級，rpg-character-creation）、連續被自動拒絕幾次就暫停發佈。
+三組共十八個限制。**劇本與主角組**（十一個）：每位作者可擁有的劇本數（依會員等級）、每個台灣日的送審次數（依會員等級）、
+每個台灣日的主角生成與重新生成次數（依會員等級，rpg-character-creation）、連續被自動拒絕幾次就暫停發佈、
+每位玩家每個台灣日可送出的劇本檢舉筆數（`script_report_daily`，不分會員等級，rpg-script-reports）。
 **遊戲幣組**（五個，game-wallet）：每輪幣價（以模型鍵區分）、首次註冊贈幣、每日簽到、免費幣上限、預扣逾時秒數。
-**RPG 組**（一個，rpg-turn-engine）：單一回合最多推進幾個遊戲內月份。
-三組由各自的指令修改（`set-script-limit`／`set-wallet-setting`／`set-rpg-setting`），指令只接受自己那一組的鍵。
+**RPG 組**（兩個，rpg-turn-engine、rpg-turn-revision）：單一回合最多推進幾個遊戲內月份、每個回合前幾次修訂免費。
+三組由各自的指令修改（`set-script-limit`／`set-wallet-setting`／`set-rpg-setting`），指令只接受自己那一組的鍵
+（檢舉的每日上限屬劇本與主角組，以 `set-script-limit script_report_daily N` 修改，寫入 `limit.set` 稽核；0 表示暫停接受檢舉）。
 - **每次使用時現讀**，沒有模組層快取、也不放進行程內變數（AGENTS.md 第 9 節）：改了資料庫，下一個請求就用新值，多個 worker 一致。
 - 缺值、不是整數或在合法範圍外時使用內建的保底預設（與遷移 `0013` 寫入的初始值相同，由測試比對），並記一筆只含鍵名的警告
   事件；不會因此放行無上限，也不會讓創作與送審全部失敗。不認得的會員等級套用最保守的 free（同 `quota_policy`）。
@@ -26,6 +28,7 @@ SCRIPT_LIMIT_PREFIX = "script_limit"                 # 每位作者可擁有的�
 SUBMIT_DAILY_PREFIX = "script_submit_daily"          # 每個台灣日的送審次數
 SUGGEST_DAILY_PREFIX = "protagonist_suggest_daily"   # 每個台灣日的主角生成與重新生成次數
 REJECT_STREAK_KEY = "script_reject_streak"           # 連續被自動拒絕幾次就暫停發佈
+REPORT_DAILY_KEY = "script_report_daily"             # 每位玩家每個台灣日可送出的劇本檢舉筆數（0 表示暫停接受檢舉；不分會員等級）
 
 GROUP_SCRIPT = "script"                              # 劇本與主角組：set-script-limit／show-script-limits
 GROUP_WALLET = "wallet"                              # 遊戲幣組：set-wallet-setting／show-wallet-settings
@@ -62,6 +65,7 @@ LIMIT_SPECS: dict[str, LimitSpec] = {
     **_per_tier(SUBMIT_DAILY_PREFIX, {TIER_FREE: 3, TIER_PLUS: 5, TIER_VIP: 10}, 0, 100),
     **_per_tier(SUGGEST_DAILY_PREFIX, {TIER_FREE: 5, TIER_PLUS: 15, TIER_VIP: 40}, 0, 100),
     REJECT_STREAK_KEY: LimitSpec(REJECT_STREAK_KEY, 3, 1, 20),
+    REPORT_DAILY_KEY: LimitSpec(REPORT_DAILY_KEY, 5, 0, 100),
     **{
         f"{COIN_TURN_COST_PREFIX}.{model}": LimitSpec(f"{COIN_TURN_COST_PREFIX}.{model}", 30, 1, 10_000, GROUP_WALLET)
         for model in WALLET_MODEL_KEYS
@@ -126,6 +130,10 @@ class RuntimeLimits:
 
     def reject_streak(self) -> int:
         return self.get(REJECT_STREAK_KEY)
+
+    def report_daily(self) -> int:
+        """每位玩家每個台灣日可送出的劇本檢舉筆數（不分會員等級）；0 表示暫停接受檢舉。每次現讀；缺值或不合法時用保底預設 5，不會放行無上限。"""
+        return self.get(REPORT_DAILY_KEY)
 
     # ---- 遊戲幣（game-wallet）：每次都現讀 ------------------------------------------------
 

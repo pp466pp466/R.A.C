@@ -649,16 +649,16 @@ def verify_seed_command(name: str) -> None:
     check("[內建劇本] 重複執行沒有任何變動", code == 0 and f"建立 0、更新 0、沒有變動 {total}" in again, again.strip()[-160:].replace("\n", " | "))
 
 
-# 營運限制的十個鍵（與 app/services/runtime_limits.py 的 LIMIT_SPECS 相同；這支腳本在主機上執行，不匯入應用程式）
+# 營運限制的十一個鍵（與 app/services/runtime_limits.py 的 LIMIT_SPECS 相同；這支腳本在主機上執行，不匯入應用程式）
 SCRIPT_LIMIT_KEYS = (
     "script_limit.free", "script_limit.plus", "script_limit.vip", "script_submit_daily.free", "script_submit_daily.plus",
     "script_submit_daily.vip", "protagonist_suggest_daily.free", "protagonist_suggest_daily.plus", "protagonist_suggest_daily.vip",
-    "script_reject_streak",
+    "script_reject_streak", "script_report_daily",
 )
 
 
 def verify_script_authoring_commands(name: str) -> None:
-    """劇本創作的維運指令（script-limits 規格）：限制存在資料庫，`flask show-script-limits` 列出十個鍵，`flask set-script-limit` 修改後
+    """劇本創作的維運指令（script-limits 規格）：限制存在資料庫，`flask show-script-limits` 列出十一個鍵，`flask set-script-limit` 修改後
     可立即讀回；`purge-expired-data` 的預覽含劇本送審紀錄。輸出只有鍵、數值與筆數。資料庫已由前面的 alembic 升級到 head。"""
     flask = ("exec", name, "python", "-m", "flask", "--app", "wsgi")
     code, listing = docker("exec", name, "sh", "-c", "ls /app/app/data/review")
@@ -676,7 +676,7 @@ def verify_script_authoring_commands(name: str) -> None:
     check("[玩家主角] sessions 有可為空的 protagonist_json 欄位", code == 0 and "protagonist-column-ok" in schema, schema.strip()[-160:])
     code, shown = docker(*flask, "show-script-limits", timeout=120)
     listed = [key for key in SCRIPT_LIMIT_KEYS if f"  {key} = " in shown]
-    check("[劇本創作] show-script-limits 列出全部十個鍵（含主角生成的三個），且都來自遷移寫入的資料（沒有保底預設）",
+    check("[劇本創作] show-script-limits 列出全部十一個鍵（含主角生成的三個與檢舉的每日上限），且都來自遷移寫入的資料（沒有保底預設）",
           code == 0 and len(listed) == len(SCRIPT_LIMIT_KEYS) and "保底預設" not in shown, shown.strip()[-200:].replace("\n", " | "))
     code, changed = docker(*flask, "set-script-limit", "script_limit.free", "5", timeout=120)
     check("[劇本創作] set-script-limit 修改後輸出舊值與新值", code == 0 and "script_limit.free：3 → 5" in changed, changed.strip()[-160:])

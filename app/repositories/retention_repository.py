@@ -23,6 +23,7 @@ from app.models.chat import ChatConversation
 from app.models.llm_call_log import LlmCallLog
 from app.models.lock_strike import LockStrike
 from app.models.rpg_session import TURN_BLOCKED, TURN_INTERRUPTED, MemoryLog, RpgSession
+from app.models.script_report import ScriptReport
 from app.models.script_submission import ScriptSubmission
 from app.models.user import AuthToken
 
@@ -116,6 +117,24 @@ class RetentionRepository:
         if not ids:
             return 0
         return self._run(delete(ScriptSubmission).where(ScriptSubmission.id.in_(ids)))
+
+    # ---- 劇本檢舉：**結案**早於 cutoff（結案後保存 12 個月）。未結案的檢舉不清（與所屬版本同壽命）：`closed_at IS NOT NULL` 在 find、count
+    # 與 purge 三處都有，所以預覽與實際執行一致，也不可能因為傳入錯誤的編號而刪到未結案的檢舉。玩家文字（理由與自寫文字）視為個資 ----
+
+    @staticmethod
+    def _closed_reports_before(cutoff: datetime):
+        return (ScriptReport.closed_at.is_not(None), ScriptReport.closed_at < cutoff)
+
+    def find_script_reports(self, cutoff: datetime, limit: int) -> list[int]:
+        return self._ids(select(ScriptReport.id).where(*self._closed_reports_before(cutoff)).order_by(ScriptReport.id), limit)
+
+    def count_script_reports(self, cutoff: datetime) -> int:
+        return self._count(select(func.count(ScriptReport.id)).where(*self._closed_reports_before(cutoff)))
+
+    def purge_script_reports(self, ids: Sequence[int]) -> int:
+        if not ids:
+            return 0
+        return self._run(delete(ScriptReport).where(ScriptReport.id.in_(ids), ScriptReport.closed_at.is_not(None)))
 
     # ---- 用量帳本：建立早於 cutoff --------------------------------------------------------
 

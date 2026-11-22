@@ -58,6 +58,7 @@ from app.models.script import (
 )
 from app.models.script_report import CLOSED_REMOVED, CLOSED_SUPERSEDED
 from app.models.user import AUDIENCE_ALL, AUDIENCE_FEMALE, AUDIENCE_MALE
+from app.observability import script_events
 from app.repositories.base import BaseRepository
 from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.errors import (
@@ -228,9 +229,9 @@ class ScriptRepository(BaseRepository[Script]):
         """結案檢舉用（只呼叫它的 `close_open`、`delete_for_versions`；結案欄位只在它那個檔案寫入）。"""
         return ScriptReportRepository(self._session)
 
-    def _close_reports(self, version_ids: Sequence[int], result: str, now: datetime) -> None:
-        for version_id in version_ids:
-            self._reports.close_open(version_id, result, now)
+    def _close_reports(self, version_ids: Sequence[int], result: str, now: datetime) -> int:
+        """把這些版本未結案的檢舉全部結案，回傳筆數（呼叫端在轉移**確定成功之後**才記錄事件，SAVEPOINT 回復時不會留下不實的紀錄）。"""
+        return sum(self._reports.close_open(version_id, result, now) for version_id in version_ids)
 
     def _expire(self, model: type, primary_key: int) -> None:
         """條件式 UPDATE 繞過了 ORM：讓已載入的物件在下次存取時重新讀取。"""
@@ -498,9 +499,10 @@ class ScriptRepository(BaseRepository[Script]):
                 .execution_options(synchronize_session=False)
             )
             self._transition(version, VERSION_PUBLISHED, sources=(VERSION_PENDING,), published_at=now)   # 不是待審就拋出，上面的取代與結案一併回復
-            self._close_reports(superseded_ids, CLOSED_SUPERSEDED, now)
+            closed = self._close_reports(superseded_ids, CLOSED_SUPERSEDED, now)
             self._lock_author_name(script_id, now)
         self._session.expire_all()
+        script_events.log_reports_auto_closed(count=closed, result=CLOSED_SUPERSEDED)    # SAVEPOINT 成功之後才記；沒有檢舉（0 筆）就不產生事件
         return version
 
     def reject_version(self, version_public_id: str, category: str, note: str | None, now: datetime) -> ScriptVersion | None:
@@ -570,7 +572,7 @@ class ScriptRepository(BaseRepository[Script]):
             version, VERSION_REMOVED, sources=(VERSION_PUBLISHED,),
             removed_by=remover, decision_category=category, decision_note=note, decided_at=now,
         )
-        self._reports.close_open(version.id, CLOSED_REMOVED, now)
+        script_events.log_reports_auto_closed(count=self._reports.close_open(version.id, CLOSED_REMOVED, now), result=CLOSED_REMOVED)
 
     def _restore(self, version: ScriptVersion, remover: str) -> None:
         """恢復：條件式 UPDATE（`status = 'removed'` 且 `removed_by` 等於恢復者）在 SAVEPOINT 內執行。沒有命中時讀回現況，
