@@ -201,7 +201,7 @@ def entry_diagram() -> Svg:
     groups = [
         ("ANONYMOUS ‧ 匿名可進", [("GET /（已登入者導向 landing_for）", ()), ("/login", ()), ("/auth/google/callback", ()), ("/terms", ()), ("/privacy", ()), ("/healthz", ()), ("/readyz", ()),
                                   ("/favicon.ico（204）", ()), ("/register → /login（舊書籤）", ()), ("/reset-password（管理員重設信的連結）", ())]),
-        ("SIGNED IN ‧ login_required_page", [("/game（RPG 入口，DEFAULT_AFTER_LOGIN）", ()), ("/game/start/<version>", ()), ("/game/<session>", ()), ("/scripts（劇本工作坊）", ()),
+        ("SIGNED IN ‧ login_required_page", [("/game（RPG 入口，DEFAULT_AFTER_LOGIN）", ()), ("/game/start/<version>", ()), ("/game/script/<version>（劇本詳情與檢舉）", ()), ("/game/<session>", ()), ("/wallet（錢包）", ()), ("/scripts（劇本工作坊）", ()),
                                            ("/cs（客服）", ()), ("/account", ()), ("/admin（非管理員回 404）", ())]),
         ("RESTRICTED ‧ 受限登入狀態（預設拒絕）", [("待確認年齡 → /age", ()), ("被鎖定或暫停發佈 → /appeal", ()), ("等待刪除 → /account", ()),
                                                   ("其餘頁面一律導向上述頁面", ()), ("API 一律 403", ()), ("age_confirmation_required", ()), ("account_locked", ()), ("account_deletion_pending", ())]),
@@ -438,7 +438,7 @@ def safety_diagram() -> Svg:
     svg.text(54, by + 28, "不變的底線", size=17, fill=P["accent"], weight=700)
     svg.text(170, by + 28, "無論哪一種模式，一律禁止：涉及未成年（含看似未成年）的性內容、性暴力、非自願的性情節，以及以真人名義的性內容。", size=17)
     svg.text(170, by + 54, "判定依年齡紀錄與文字的明確線索（年齡紀錄未滿 18 歲，或文字明確寫出未成年的年齡或身分）；沒有明確年齡的角色，露骨場景也不因此被擋。", size=17, fill=P["muted"])
-    svg.text(170, by + 80, "規範（AGENTS.md，2026-11-17 修訂）：內容模式為「安全模式開（預設）／關」兩種；程式現況仍是 safe／standard／adult 三種，改為兩種與緊急煞車屬 safe-mode-toggle（尚未實作）。", size=17, fill=P["muted"])
+    svg.text(170, by + 80, "內容模式只有兩種：安全模式開（safe，預設）與關（adult，須同意安全規範）；部署層另有緊急煞車 SAFE_MODE_FORCED（safe-mode-toggle，2026-11-19 已實作並封存）。", size=17, fill=P["muted"])
 
     n = 6
     cw, xs = columns_layout(n)
@@ -448,8 +448,8 @@ def safety_diagram() -> Svg:
             "全站只限滿 18 歲：AgePolicy 最低註冊與使用年齡都是 18，年齡由 birth_date 於當下計算", "未滿 18 歲：立即抹除帳號與全部個資（erase_underage）；管理員只拒絕、不抹除",
             "AccessPolicy.chat_gate：age_confirmation_required、age_restricted（呼叫模型的功能）", "新帳號的內容模式偏好一律 safe，之後不自動調高"]),
         dict(icon="app-registrations", azure="App Registrations", title="② 生效的內容模式", badges=(2,), body=[
-            "effective_tier ＝ 玩家偏好、年齡上限、劇本宣告、存檔記錄中最保守者（most_conservative）", "無法判定一律視為 safe，寧可少給",
-            "劇本宣告的模式也參與：宣告 safe 的劇本一律以安全模式遊玩（規範的「綁定安全模式」與創作頁提示屬 safe-mode-toggle）", "現況的成人模式須部署開關、模型許可清單與玩家確認；規範的緊急煞車由 safe-mode-toggle 取代"]),
+            "effective_mode ＝ 玩家偏好（缺少目前版本的同意視為 safe）、劇本綁定安全模式、緊急煞車三者中最保守者；每次現算，存檔不釘住模式", "無法判定一律視為 safe，寧可少給；舊值 standard 讀作 adult",
+            "劇本可綁定安全模式：綁定的劇本不論玩家設定一律以安全模式遊玩；玩家在目錄點選未綁定的劇本時，系統詢問是否修改", "關閉安全模式須在個人頁同意安全規範（記錄版本與時間）；緊急煞車 SAFE_MODE_FORCED 啟用時全站一律 safe"]),
         dict(icon="function-apps", azure="Function Apps", title="③ 輸入規則層", badges=(3,), body=[
             "script_rules（詞表 app/data/review/lexicon.json），伺服器端、不呼叫模型", "玩家的行動：只擋確定違規，預扣與呼叫模型之前就拒絕（422 input_blocked，不消耗遊戲幣）",
             "劇本、主角、記事簿與對話人設：每次儲存或送出都過規則層", "拒絕只告知類別，不指出內容；性關係與性奴等禁斷關係不得作為錨定事實"]),
@@ -492,7 +492,7 @@ def safety_diagram() -> Svg:
             "15 分鐘內 Google 登入被拒 5 次，或被每分鐘訊息數上限擋下 10 次 → 自動鎖定", "只有管理員能解除；被鎖定者仍可登入，但只能進申訴頁（其他一律 403 account_locked）",
             "申訴：單則上限 1000 字、每小時最多 3 則、同時最多 1 則待處理"]),
         dict(icon="key-vaults", azure="Key Vaults", title="暫停發佈與劇本審核", badges=(4,), body=[
-            "連續被自動拒絕達門檻 → 暫停發佈（只停止送審，其餘功能照常）；暫停者可使用申訴頁", "解除須管理員重新輸入密碼並寫入稽核", "公開劇本先審後發：每個送審公開的劇本須管理員核可才上架（RC-8，規劃中）"]),
+            "連續被自動拒絕達門檻 → 暫停發佈（只停止送審，其餘功能照常）；暫停者可使用申訴頁", "解除須管理員重新輸入密碼並寫入稽核", "公開劇本先審後發：須管理員核可才上架；玩家可檢舉上架版本（只升高優先度、不自動下架），由管理員決定下架（RC-8，已實作並封存）"]),
         dict(icon="app-services", azure="App Services", title="管理員的可見範圍與稽核", badges=(6,), body=[
             "預設只能看統計、使用者主動提交的意見回饋、被鎖定或暫停者的申訴、被內容安全過濾標記的對話、送審或被檢舉的劇本", "不得任意讀取其他對話全文；每次讀取都寫入 admin_audit_logs",
             "停權、刪除內容、調整等級與遊戲幣等高風險操作須重新輸入密碼"]),
@@ -518,8 +518,8 @@ def safety_diagram() -> Svg:
          "AgePolicy（app/services/age_policy.py）→ AuthService.verify_age／_age_step_error → AccountErasureService.erase_underage；AccessPolicy.chat_gate、require_chat_access",
          "R users（birth_date 於當下計算年齡）；未滿 18 歲 D users（CASCADE）＋W deletion_tombstones"),
         ("2", "生效的內容模式",
-         "AccessPolicy.content_access、effective_tier；content_tier.most_conservative、parse_tier；ContentModeService；GET／PUT /api/account/content-mode",
-         "R／W users.content_tier_preference；R sessions.content_tier（開存檔當下的生效模式，只能往保守調）、script_versions.content_tier（作者宣告）"),
+         "AccessPolicy.effective_mode、save_mode、mode_state；content_tier.most_conservative、parse_tier；ContentModeService；GET／PUT /api/account/content-mode",
+         "R／W users.content_tier_preference（同意紀錄 adult_confirmed_at、adult_rules_version）；R script_versions.content_tier（作者綁定安全模式）、sessions.content_tier（存檔複本的劇本綁定）"),
         ("3", "輸入規則層",
          "script_rules.check_rules、check_text_rules、check_protagonist_rules（詞表載入 load_lexicon）；rpg_output_rules.evaluate；GameService.begin_turn 的行動檢查",
          "不碰資料庫；被拒的送審只記類別與時間（script_submissions，保存 12 個月）"),
@@ -560,11 +560,11 @@ def deploy_diagram() -> Svg:
         dict(icon="users", azure="Users", title="開發者", body_size=14, body=[
             "本機 development：Flask 開發伺服器（正式環境不得使用 app.run）", "SQLite 或本機 SQL Server；.env 不進版本庫，.env.example 只列變數名稱"]),
         dict(icon="function-apps", azure="Function Apps", title="自動測試", body_size=14, body=[
-            "pytest 11,541 案例（含連 project_test 的 SQL Server 整合測試）", "Node 1,121 案例", "tests/architecture：分層、無 Raw SQL、前端規則", "test_design_docs：文件與程式一致"]),
+            "pytest 14,677 案例（含連 project_test 的 SQL Server 整合測試）", "Node 1,610 案例", "tests/architecture：分層、無 Raw SQL、前端規則", "test_design_docs：文件與程式一致"]),
         dict(icon="app-services", azure="App Services", title="容器驗收", body_size=14, body=[
-            "scripts/verify_container.py（WSL Docker）", "非 root、映像沒有 .env、各環境啟動、缺機密只列變數名稱", "會員與客服流程、保存期限指令（160／160）"]),
+            "scripts/verify_container.py（WSL Docker）", "非 root、映像沒有 .env、各環境啟動、缺機密只列變數名稱", "會員與客服流程、保存期限指令（最近一次 160／160）"]),
         dict(icon="app-registrations", azure="App Registrations", title="OpenSpec 規格流程", body_size=14, body=[
-            "propose → apply → archive；87 份主規格、26 個 change 已封存", "每批做完才 commit，驗收後才封存"]),
+            "propose → apply → archive；99 份主規格、32 個 change 已封存", "每批做完才 commit，驗收後才封存"]),
     ])
     a_bottom = bottom_of(a)
 
@@ -674,7 +674,7 @@ def deploy_diagram() -> Svg:
         ("1", "預檢與找主機", "deploy_plan 的 prepare 組：deploy-find-host（build_plan 另有 check-identity）", "確認帳號與主機；不符即停止，不放寬"),
         ("2", "遷移前手動快照", "snapshot-db、wait-snapshot-db", "每個提交短碼一個 RDS 快照；2026-11-17 已對真實 RDS 執行並驗證"),
         ("3", "建置映像", "archive-source、upload-source、build-image、check-image（derived_dockerfile）", "主機上分兩段建置；檢查非 root（uid 10001）、沒有 .env 與 .git、憑證庫張數；已驗證"),
-        ("4", "遷移與種子", "migrate-db、check-migration-head、seed-scripts（alembic upgrade head；展示環境的 RDS 已於 2026-11-18 由 0018 升到 0019，adult-only-signup，已驗證）", "遷移是部署的獨立步驟，不在應用程式啟動時執行；舊版程式必須在新結構上可運作（expand／contract）"),
+        ("4", "遷移與種子", "migrate-db、check-migration-head、seed-scripts（alembic upgrade head；展示環境的 RDS 已依序升到 0019（2026-11-18）、0020（11-19）、0021（11-20），皆已驗證；0022 尚未部署）", "遷移是部署的獨立步驟，不在應用程式啟動時執行；舊版程式必須在新結構上可運作（expand／contract）"),
         ("5", "換版與重啟", "switch-release、wait-switch-release（release.env、release.previous.env）", "只重啟兩個池；標籤不存在就失敗；已驗證"),
         ("6", "驗證", "check-pools、check-pool-hardening（容器內 /readyz、行程 UID、gunicorn 設定、埠只在回送位址）", "已對真實主機驗證；公開 /healthz 與 /readyz 回 200，本文只有 {\"status\":\"ok\"}"),
         ("7", "一次性群組與營運", "db-init、create-admin、ingress、routing、schedule；告警與寄信（task 7.x）", "Caddy 憑證簽發、路徑分流、五個計時器、EC2 狀態告警演練與營運告警信已驗證；寄信進垃圾郵件匣"),

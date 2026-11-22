@@ -12,6 +12,7 @@
 | `docs/部署與營運架構圖解.png` | `build_diagrams_system.py` 的 `deploy_diagram()` | `python -X utf8 docs/diagrams/build_diagrams_system.py deploy` |
 | `docs/2.0簡報.pdf` | `docs/2.0簡報.md` | `python -X utf8 docs/diagrams/build_deck.py --libs <資料夾>` |
 | `docs/2.1簡報.pptx` | `docs/2.0簡報.md`（與 PDF 同一份內容） | `python -X utf8 docs/diagrams/build_pptx.py --libs <資料夾> --pptx-libs <資料夾>` |
+| `docs/4.0簡報.pptx` | `build_pptx_40.py` 內手工編排的 15 張重點版（給主管與評審；數字以 `--check` 對照 `docs/2.0簡報.md`） | `python -X utf8 docs/diagrams/build_pptx_40.py --pptx-libs <資料夾>` |
 
 `build_diagrams.py` 與 `build_diagrams_system.py` 不帶參數（或帶 `all`）時產生各自負責的全部圖。上一版簡報（`1.0簡報.md` 與 PDF）保留為歷史版本，要重新產生用 `--source docs/1.0簡報.md --output docs/1.0簡報.pdf`。
 
@@ -40,6 +41,15 @@ python -X utf8 docs/diagrams/build_pptx.py --libs $env:TEMP\deck-libs\node_modul
 
 pptx 與 PDF 是**同一份** `docs/2.0簡報.md`：分頁與版面指令沿用 `build_deck.py` 的解析；6 張 4K 圖解用原本的 PNG（含 `crop`），Mermaid 圖是與 PDF 相同的渲染結果（由 Chrome 把每張圖的 SVG 截成 PNG）；標題、段落、項目符號與表格是 PowerPoint 的原生元素，可以編輯。封面的版本字樣是 `--label`（預設 2.1），內文裡的「2.0」是歷史事實，不改。字型用 Microsoft JhengHei（Noto Sans TC 是網頁用的自託管切片，無法內嵌）。版面以字數估算後排進 1280 x 720，放不下時會逐步縮小字級（最小 0.62 倍），仍放不下的頁面會列在輸出裡、結束代碼為 3：**有版面問題時不要自己改版面，先回報**。產生後建議用 PowerPoint 實際開啟檢查（PowerShell 的 `$ppt.Presentations.Open(...)` 加 `Export(資料夾, "PNG", 1280, 720)` 可以匯出每一頁的圖片）。
 
+**4.0 簡報（`4.0簡報.pptx`）** 是把 2.0 簡報縮成 15 張、只放重點的 PowerPoint，給主管與評審：內文不小於 24 pt、標題 44 pt、深色高對比（不用偏淡的次要灰），投影幕上也看得清楚。與 2.1 不同，它是**手工編排**（內容寫在 `build_pptx_40.py` 的各個 `slide_*` 函式，不解析 Markdown）：圖是 PowerPoint 的原生形狀（不嵌入 4K 圖解，圖中的字太小），每張有講者備忘放被刪掉的細節。只需要 `python-pptx`（同上，不放進版本庫）：
+
+```powershell
+python -X utf8 docs/diagrams/build_pptx_40.py --pptx-libs $env:TEMP\pptx-libs
+python -X utf8 docs/diagrams/build_pptx_40.py --pptx-libs $env:TEMP\pptx-libs --check   # 只檢查，不寫檔
+```
+
+`--check` 檢查兩件事：①以字數估算每個文字框的高度，放不下的列出來（結束代碼 3；**不要自己縮字級，先回報**）；②`FACTS` 裡的數字與說法是否都出現在 `docs/2.0簡報.md`。2.0 簡報的數字改了（測試案例數、規格數、版本、部署狀態）之後，先跑 `--check`，再改 `build_pptx_40.py` 並重產。
+
 ## 檔案
 
 | 檔案 | 用途 |
@@ -50,6 +60,7 @@ pptx 與 PDF 是**同一份** `docs/2.0簡報.md`：分頁與版面指令沿用 
 | `svg_kit.py` | 手寫 SVG 的小工具（卡片、膠囊標籤、箭頭、步驟徽章、自動換行） |
 | `build_deck.py` | 把 `docs/2.0簡報.md` 依 `---` 分頁，渲染成 16:9 的 PDF（版面指令見檔案開頭的說明） |
 | `build_pptx.py` | 把同一份簡報轉成 16:9 的 PowerPoint（`docs/2.1簡報.pptx`）：沿用 `build_deck.py` 的解析與 Mermaid 渲染，文字與表格是原生元素 |
+| `build_pptx_40.py` | 手工編排的 15 張重點版 PowerPoint（`docs/4.0簡報.pptx`）：大字級、深色高對比、原生形狀與講者備忘；`--check` 對照 2.0 簡報的數字 |
 | `render_tools.py` | 共用：找 Chrome、HTML 轉 PNG 或 PDF、色彩規範 |
 | `icons/` | 圖解用到的 19 個 Azure 圖示（SVG，未經修改） |
 
