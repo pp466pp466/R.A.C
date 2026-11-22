@@ -318,7 +318,7 @@ def ensure_ending_script(app) -> bool:
         repository = ScriptRepository(session)
         if repository.get_builtin(ENDING_SEED_KEY) is not None:
             return False
-        result = validate_script(ending_script_content(), max_tier="adult")
+        result = validate_script(ending_script_content())
         repository.publish_builtin(
             ENDING_SEED_KEY, content=result.content, content_hash=result.content_hash, total_chars=result.total_chars, now=datetime.now(timezone.utc),
         )
