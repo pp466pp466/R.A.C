@@ -28,9 +28,20 @@
 
 **刪除版本與存檔的參照**：`sessions.source_version_id` 是無動作的外鍵（SQL Server 不允許多重串聯路徑），所以刪除版本之前先把
 參照它的存檔清為空值；存檔本身不受影響（它有自己的劇本複本）。
+
+**檢舉的自動結案**（rpg-script-reports 的 design D2）：版本離開上架時，未結案的檢舉在**同一個交易**內由
+`ScriptReportRepository.close_open` 結案——下架（作者或管理員，共用 `_remove`）結為 `removed`；被新的上架版本取代
+（核可 `approve_version`、內建劇本重新上架 `publish_builtin`，兩者都在轉移的 SAVEPOINT 內）結為 `superseded`。結案放在轉移內部而不是
+Service：離開上架的入口有四個，放在 Service 每個入口都得記得呼叫，漏一個就留下孤兒的未結案檢舉。轉移失敗時結案不會發生，
+SAVEPOINT 內失敗則結案一併回復。恢復上架（`_restore`）**不**重開檢舉：結案是歷史事實。這個檔案只呼叫 `close_open`，
+不自己寫結案欄位（`tests/architecture/test_script_report_writes.py`）。
+
+**匿名保留**（`retain_published_anonymously`，rpg-script-reports 的 design D6）：作者選擇保留時，抹除流程在刪除使用者之前呼叫它，
+只留下目前上架的版本並解除作者關聯；其餘一律刪除。**「沒有作者」不等於「內建劇本」**：判斷內建一律看 `seed_key`。
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Iterator, Mapping, Sequence
 
@@ -42,11 +53,13 @@ from app.models.base import utcnow
 from app.models.rpg_session import RpgSession
 from app.models.script import (
     DECISION_CATEGORIES, ENDING_NONE, MAX_DECISION_NOTE_CHARS, OFFICIAL_AUTHOR_NAME, OPEN_VERSION_STATUSES, REMOVER_ADMIN,
-    REMOVER_AUTHOR, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED,
-    VERSION_REMOVED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
+    REMOVER_AUTHOR, RETIRED_AUTHOR_NAME, REVIEW_CATEGORIES, REVIEW_VERDICTS, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED,
+    VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED, Script, ScriptVersion, ScriptVersionTag,
 )
+from app.models.script_report import CLOSED_REMOVED, CLOSED_SUPERSEDED
 from app.models.user import AUDIENCE_ALL, AUDIENCE_FEMALE, AUDIENCE_MALE
 from app.repositories.base import BaseRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.errors import (
     AuthorNameLockedError, BuiltinNotRemovableError, DraftChangedError, DuplicateSeedKeyError, InvalidVersionTransitionError,
     LiveVersionExistsError, OpenVersionExistsError, RemovalLockedError, RemovedByAuthorError, VersionNotDraftError,
@@ -187,10 +200,37 @@ def _published_window(statement: Any, *, limit: int, offset: int, preference: st
     )
 
 
+_ID_CHUNK = 500      # SQL Server 單一語句最多約 2100 個參數；以編號集合為單位的更新與刪除分批執行
+
+
+def _chunks(ids: Sequence[int]) -> Iterator[list[int]]:
+    ordered = list(dict.fromkeys(ids))
+    for start in range(0, len(ordered), _ID_CHUNK):
+        yield ordered[start:start + _ID_CHUNK]
+
+
+@dataclass(frozen=True)
+class RetainResult:
+    """匿名保留的結果（只有整數）：`kept` 保留的版本數（每份保留的劇本一個，即上架中的那個）、`deleted` 刪除的版本數
+    （含整份被刪的劇本的全部版本）。給日誌事件用；沒有劇本時兩者皆為 0。"""
+
+    kept: int
+    deleted: int
+
+
 class ScriptRepository(BaseRepository[Script]):
     model = Script
 
     # ---- 內部工具 ---------------------------------------------------------------
+
+    @property
+    def _reports(self) -> ScriptReportRepository:
+        """結案檢舉用（只呼叫它的 `close_open`、`delete_for_versions`；結案欄位只在它那個檔案寫入）。"""
+        return ScriptReportRepository(self._session)
+
+    def _close_reports(self, version_ids: Sequence[int], result: str, now: datetime) -> None:
+        for version_id in version_ids:
+            self._reports.close_open(version_id, result, now)
 
     def _expire(self, model: type, primary_key: int) -> None:
         """條件式 UPDATE 繞過了 ORM：讓已載入的物件在下次存取時重新讀取。"""
@@ -299,6 +339,14 @@ class ScriptRepository(BaseRepository[Script]):
     def count_owned(self, user_id: int) -> int:
         """作者擁有的劇本數（含只有草稿的劇本）；劇本數量上限用它。"""
         return self._session.execute(select(func.count(Script.id)).where(Script.creator_id == user_id)).scalar_one()
+
+    def count_live_owned(self, user_id: int) -> int:
+        """作者目前上架中的版本數（`live_script_id` 非空；下架的不算）。帳號頁據此決定要不要顯示「匿名保留」的選項。"""
+        return self._session.execute(
+            select(func.count(ScriptVersion.id))
+            .join(Script, Script.id == ScriptVersion.script_id)
+            .where(Script.creator_id == user_id, ScriptVersion.live_script_id.is_not(None))
+        ).scalar_one()
 
     def get_open_version(self, user_id: int, script_public_id: str) -> ScriptVersion | None:
         """自己劇本目前進行中的版本（草稿或待審），沒有（或不是自己的劇本）回傳 `None`。"""
@@ -427,14 +475,21 @@ class ScriptRepository(BaseRepository[Script]):
 
     def approve_version(self, version_public_id: str, *, now: datetime) -> ScriptVersion | None:
         """核可（審核流程專用，不是玩家路徑）：`pending_review` → `published`；同一劇本原本上架的版本（與下架的版本）在同一個
-        SAVEPOINT 內改為 `superseded`（下架之後出了新的上架版本，舊的下架版就不可再恢復）；第一次核可時鎖定筆名。
-        失敗時兩者都保持原狀態。找不到版本回傳 `None`。"""
+        SAVEPOINT 內改為 `superseded`（下架之後出了新的上架版本，舊的下架版就不可再恢復），它們未結案的檢舉同時結為
+        `superseded`（下架的版本在下架時就已結案，所以實際上只有原本上架的那個會有未結案的檢舉）；第一次核可時鎖定筆名。
+        失敗時三者（轉移、結案、筆名）都保持原狀。找不到版本回傳 `None`。"""
         version = self._session.scalar(select(ScriptVersion).where(ScriptVersion.public_id == version_public_id))
         if version is None:
             return None
         script_id = version.script_id
         replaced = (VERSION_PUBLISHED, VERSION_REMOVED)
         _check_pairs(replaced, VERSION_SUPERSEDED)
+        # 被取代的版本：它們未結案的檢舉隨之結為「被取代」。**在 SAVEPOINT 之前讀**：SAVEPOINT 之內的第一個語句必須是寫入——
+        # 先讀會在（本機 SQLite 檔案資料庫）取得共用鎖，之後升級成寫入鎖時，並行的另一個寫入者會讓它直接 `database is locked`
+        # （不會等待 busy_timeout；`tests/test_admin_service_scripts.py` 的並行核可與退回測試守著）。讀到之後才被改變的版本都已結案或不會變成上架。
+        superseded_ids = list(self._session.scalars(
+            select(ScriptVersion.id).where(ScriptVersion.script_id == script_id, ScriptVersion.status.in_(replaced))
+        ))
         with self._session.begin_nested():
             self._session.execute(                      # 先讓出上架的位置（部分唯一索引：同一劇本至多一個上架版本）
                 update(ScriptVersion)
@@ -442,7 +497,8 @@ class ScriptRepository(BaseRepository[Script]):
                 .values(status=VERSION_SUPERSEDED, **_helper_columns(script_id, VERSION_SUPERSEDED))
                 .execution_options(synchronize_session=False)
             )
-            self._transition(version, VERSION_PUBLISHED, sources=(VERSION_PENDING,), published_at=now)   # 不是待審就拋出，上面的取代一併回復
+            self._transition(version, VERSION_PUBLISHED, sources=(VERSION_PENDING,), published_at=now)   # 不是待審就拋出，上面的取代與結案一併回復
+            self._close_reports(superseded_ids, CLOSED_SUPERSEDED, now)
             self._lock_author_name(script_id, now)
         self._session.expire_all()
         return version
@@ -474,13 +530,14 @@ class ScriptRepository(BaseRepository[Script]):
 
     def remove_by_admin(self, version_public_id: str, category: str, note: str | None, now: datetime) -> ScriptVersion | None:
         """管理員下架（審核流程專用）：`published` → `removed`，下架者為 `admin`，記錄固定類別與只供管理員的備註。
-        內建劇本（沒有作者）拋出 `BuiltinNotRemovableError`；類別或備註不合拋出 `ValueError`；找不到回傳 `None`；
+        內建劇本（有種子鍵）拋出 `BuiltinNotRemovableError`——**以種子鍵判斷，不是「沒有作者」**：匿名保留的劇本同樣沒有作者，
+        它仍是玩家創作的劇本，管理員可以下架；類別或備註不合拋出 `ValueError`；找不到回傳 `None`；
         不是上架中拋出 `InvalidVersionTransitionError`。"""
         category, note = _checked_decision(category, note)
         version = self._session.scalar(select(ScriptVersion).where(ScriptVersion.public_id == version_public_id))
         if version is None:
             return None
-        if self.get_script_of(version).creator_id is None:
+        if self.get_script_of(version).seed_key is not None:
             raise BuiltinNotRemovableError
         self._remove(version, REMOVER_ADMIN, category, note, now)
         return version
@@ -505,10 +562,15 @@ class ScriptRepository(BaseRepository[Script]):
         return version
 
     def _remove(self, version: ScriptVersion, remover: str, category: str | None, note: str | None, now: datetime) -> None:
+        """下架（作者與管理員共用）：轉移成功之後，同一個（請求）交易內把這個版本未結案的檢舉結為 `removed`。轉移沒成功
+        （不是上架中、並行搶先）時拋出例外、不會結案；結案本身失敗時例外使請求交易整個回復，不會留下「已下架但檢舉還開著」。
+        刻意**不**另開 SAVEPOINT：這裡只有兩個單一語句的 UPDATE，請求交易已提供原子性，而多包一層會踩到 pysqlite 在沒有進行中的
+        交易時 RELEASE 直接提交的已知行為（只影響本機 SQLite，見 `tests/test_admin_service_scripts.py` 的註解）。"""
         self._transition(
             version, VERSION_REMOVED, sources=(VERSION_PUBLISHED,),
             removed_by=remover, decision_category=category, decision_note=note, decided_at=now,
         )
+        self._reports.close_open(version.id, CLOSED_REMOVED, now)
 
     def _restore(self, version: ScriptVersion, remover: str) -> None:
         """恢復：條件式 UPDATE（`status = 'removed'` 且 `removed_by` 等於恢復者）在 SAVEPOINT 內執行。沒有命中時讀回現況，
@@ -555,6 +617,9 @@ class ScriptRepository(BaseRepository[Script]):
         回傳 `(版本, 是否新建立劇本)`。
         """
         existing = self._session.scalar(select(Script).where(Script.seed_key == seed_key))
+        superseded_ids = [] if existing is None else list(self._session.scalars(     # 在 SAVEPOINT 之前讀（理由見 `approve_version`）
+            select(ScriptVersion.id).where(ScriptVersion.script_id == existing.id, ScriptVersion.status == VERSION_PUBLISHED)
+        ))
         with self._session.begin_nested():
             created = existing is None
             if existing is None:
@@ -570,11 +635,64 @@ class ScriptRepository(BaseRepository[Script]):
                 .values(status=VERSION_SUPERSEDED, **_helper_columns(existing.id, VERSION_SUPERSEDED))
                 .execution_options(synchronize_session=False)
             )
+            self._close_reports(superseded_ids, CLOSED_SUPERSEDED, now)   # 內建劇本不可被檢舉，通常沒有；與其他入口同一個不變量
             version = self._insert_version(
                 existing.id, self._next_version_no(existing.id), VERSION_PUBLISHED, content, content_hash, total_chars, published_at=now
             )
         self._session.expire_all()
         return version, created
+
+    # ---- 匿名保留（rpg-script-reports 的 design D6）-------------------------------------------------
+
+    def retain_published_anonymously(self, user_id: int) -> RetainResult:
+        """作者的帳號即將被抹除、且選擇保留時：只留下**目前上架**的版本並解除作者關聯，其餘一律刪除。回傳保留與刪除的版本數。
+
+        只由 `AccountErasureService` 在**刪除使用者之前、同一個交易內**呼叫（失敗與條件式刪除沒刪到時由呼叫端回復整個交易）。
+        保留集合 K：作者的劇本中 `published` 的版本（`live_script_id` 非空；下架的版本不論下架者是誰都不算上架）；
+        刪除集合 D：作者其餘所有版本（草稿、待審、被退回、被取代、已下架）。步驟的**順序不能換**，因為兩個無動作外鍵會擋下反過來的刪除：
+        ① D 的版本被存檔參照的來源參照清為空值、D 的檢舉刪除 → ② 刪除 D 的版本（標籤串聯）→ ③ 刪除沒有保留版本的劇本 →
+        ④ 保留的劇本解除作者關聯（筆名「已註銷的作者」、短代號清空）並清除 K 的審核備註。保留版本的檢舉與別人存檔對它的參照原樣保留。
+        沒有任何劇本時什麼都不做。全部是 ORM 表達式，編號集合分批以避開 SQL Server 的參數上限。
+        """
+        self._session.flush()
+        rows = self._session.execute(
+            select(ScriptVersion.id, ScriptVersion.script_id, ScriptVersion.status)
+            .join(Script, Script.id == ScriptVersion.script_id)
+            .where(Script.creator_id == user_id)
+        ).all()
+        kept_ids = [row.id for row in rows if row.status == VERSION_PUBLISHED]
+        kept_scripts = {row.script_id for row in rows if row.status == VERSION_PUBLISHED}
+        deleted_ids = [row.id for row in rows if row.status != VERSION_PUBLISHED]
+        all_scripts = list(self._session.scalars(select(Script.id).where(Script.creator_id == user_id)))
+        if not all_scripts:
+            return RetainResult(kept=0, deleted=0)
+        for chunk in _chunks(deleted_ids):                                           # ① 無動作外鍵：先清參照與檢舉
+            self._session.execute(
+                update(RpgSession).where(RpgSession.source_version_id.in_(chunk)).values(source_version_id=None)
+                .execution_options(synchronize_session=False)
+            )
+        self._reports.delete_for_versions(deleted_ids)
+        for chunk in _chunks(deleted_ids):                                           # ② 刪除 D 的版本（標籤串聯）
+            self._session.execute(
+                delete(ScriptVersion).where(ScriptVersion.id.in_(chunk)).execution_options(synchronize_session=False)
+            )
+        for chunk in _chunks([script_id for script_id in all_scripts if script_id not in kept_scripts]):
+            self._session.execute(                                                   # ③ 沒有保留版本的劇本（此時已沒有版本）
+                delete(Script).where(Script.id.in_(chunk)).execution_options(synchronize_session=False)
+            )
+        for chunk in _chunks(sorted(kept_scripts)):                                  # ④ 保留的劇本解除作者關聯
+            self._session.execute(
+                update(Script).where(Script.id.in_(chunk))
+                .values(creator_id=None, author_name=RETIRED_AUTHOR_NAME, author_code=None)
+                .execution_options(synchronize_session=False)
+            )
+        for chunk in _chunks(kept_ids):
+            self._session.execute(
+                update(ScriptVersion).where(ScriptVersion.id.in_(chunk)).values(decision_note=None)
+                .execution_options(synchronize_session=False)
+            )
+        self._session.expire_all()
+        return RetainResult(kept=len(kept_ids), deleted=len(deleted_ids))
 
     # ---- 公開讀取：只回傳上架中的版本 ----------------------------------------------------------
 

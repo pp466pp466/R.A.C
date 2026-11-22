@@ -224,6 +224,23 @@ class UserRepository(BaseRepository[User]):
         changed = self._run_update(user, update(User).where(User.id == user.id).values(story_preference=value))
         return changed == 1
 
+    # ---- 匿名保留我已發佈的劇本（script-anonymous-retention 規格）-------------------------------
+
+    def keep_published_scripts_of(self, user_id: int) -> bool:
+        """這位使用者**目前**的「匿名保留」偏好（直接從資料庫讀，不用已載入的物件：抹除流程要在刪除當下、同一個交易內讀取）。
+        帳號不存在回傳 `False`（偏向全刪）。"""
+        self._session.flush()
+        value = self._session.execute(select(User.keep_published_scripts).where(User.id == user_id)).scalar_one_or_none()
+        return bool(value)
+
+    def set_keep_published_scripts(self, user: User, keep: bool) -> bool:
+        """設定偏好。條件式 UPDATE 只針對這個使用者，回傳是否真的寫入（帳號已不存在時為 False）；設成目前的值同樣成功（冪等）。
+        `keep` 必須是布林，否則拋出 `ValueError`（程式錯誤；使用者輸入由 Service 先驗證）。"""
+        if not isinstance(keep, bool):
+            raise ValueError("匿名保留偏好必須是布林。")
+        changed = self._run_update(user, update(User).where(User.id == user.id).values(keep_published_scripts=keep))
+        return changed == 1
+
     def record_adult_confirmation(self, user: User, *, confirmed_at: datetime, rules_version: str, method: str) -> bool:
         """記錄成人模式的成年確認（時間、安全規範的版本、方式）。條件同 `set_content_preference`。
 

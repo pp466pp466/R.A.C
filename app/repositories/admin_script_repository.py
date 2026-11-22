@@ -40,7 +40,8 @@ class ScriptVersionRow:
     """清單的一列：標題與簡介等目錄資訊與狀態中繼資料，**沒有**劇本內文、審核備註與任何內部編號。
 
     `review_verdict` 與 `review_categories` 只有在審查雜湊等於目前內容雜湊時才有值（內容有變動就失效）；
-    `author_public_id` 為空代表內建劇本（沒有作者）；`has_note` 只說明有沒有審核備註。
+    `author_public_id` 為空代表沒有作者：內建劇本，或**匿名保留**的劇本（作者已註銷帳號，rpg-script-reports）；
+    **是不是內建劇本看 `is_builtin`（種子鍵非空）**，不要用有沒有作者推論；`has_note` 只說明有沒有審核備註。
     """
 
     version_public_id: str
@@ -62,6 +63,7 @@ class ScriptVersionRow:
     removed_by: str | None
     decision_category: str | None
     has_note: bool
+    is_builtin: bool
 
 
 @dataclass(frozen=True)
@@ -82,8 +84,8 @@ class ScriptVersionRef:
     script_public_id: str
     status: str
     removed_by: str | None
-    author_public_id: str | None         # 空：內建劇本
-    is_builtin: bool
+    author_public_id: str | None         # 空：內建劇本或匿名保留的劇本（沒有作者）
+    is_builtin: bool                     # 種子鍵非空；不是「沒有作者」
 
 
 def _review_valid(version: Any) -> Any:
@@ -106,6 +108,8 @@ class AdminScriptRepository:
             ScriptVersion.removed_by, ScriptVersion.decision_category,
             # 「有沒有備註」以 CASE 取得 0／1（SQL Server 不接受把比較式直接當作值回傳）
             case((ScriptVersion.decision_note.is_not(None), 1), else_=0),
+            # 內建劇本＝種子鍵非空（同一個 CASE 做法）；沒有作者的劇本可能是匿名保留的，不能用作者推論
+            case((Script.seed_key.is_not(None), 1), else_=0),
         )
 
     def _joined(self, statement: Any) -> Any:
@@ -115,12 +119,13 @@ class AdminScriptRepository:
     @staticmethod
     def _row(values: Any) -> ScriptVersionRow:
         (version_id, script_id, version_no, status, title, summary, author_name, author_code, author_public_id, audience, tier,
-         submitted_at, published_at, decided_at, verdict, categories, removed_by, category, has_note) = values
+         submitted_at, published_at, decided_at, verdict, categories, removed_by, category, has_note, is_builtin) = values
         # 位置參數：欄位名稱（送審時間、下架者、決定…）出現在關鍵字引數會被架構守門當成「寫入」（tests/architecture/test_script_state_writes.py），
         # 而這裡只是組出唯讀的資料列；順序與 `ScriptVersionRow` 的欄位、`_columns()` 的選取順序相同。
         return ScriptVersionRow(
             version_id, script_id, version_no, status, title, summary, author_name, author_code, author_public_id, audience, tier,
             submitted_at, published_at, decided_at, verdict, tuple(categories or ()), removed_by, category, bool(has_note),
+            bool(is_builtin),
         )
 
     # ---- 清單 ------------------------------------------------------------------------------------
@@ -160,10 +165,11 @@ class AdminScriptRepository:
         """任何狀態（含草稿）的最小參照。給核可、退回、下架與恢復的前置判斷與稽核目標；不含內容。"""
         found = self._session.execute(
             self._joined(
-                select(ScriptVersion.public_id, Script.public_id, ScriptVersion.status, ScriptVersion.removed_by, User.public_id, Script.creator_id)
+                select(ScriptVersion.public_id, Script.public_id, ScriptVersion.status, ScriptVersion.removed_by, User.public_id, Script.seed_key)
             ).where(ScriptVersion.public_id == version_public_id)
         ).first()
         if found is None:
             return None
-        version_id, script_id, status, removed_by, author_public_id, creator_id = found
-        return ScriptVersionRef(version_id, script_id, status, removed_by, author_public_id, creator_id is None)   # 位置參數：見 `_row`
+        version_id, script_id, status, removed_by, author_public_id, seed_key = found
+        # 內建劇本＝種子鍵非空；沒有作者（`author_public_id` 為空）的匿名保留劇本不是內建，管理員可以下架它
+        return ScriptVersionRef(version_id, script_id, status, removed_by, author_public_id, seed_key is not None)   # 位置參數：見 `_row`

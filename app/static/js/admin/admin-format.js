@@ -266,15 +266,16 @@
     return '';
   }
 
-  /* 這一筆能做哪些操作（只決定要不要顯示按鈕；後端仍會逐項驗證）：待審才能核可與退回、上架中且有作者的才能下架（內建劇本沒有作者，
-     後端回 409）、只有「管理員下架」的才能由管理員恢復（作者自己下架的是作者自己的決定）。 */
+  /* 這一筆能做哪些操作（只決定要不要顯示按鈕；後端仍會逐項驗證）：待審才能核可與退回、上架中且不是內建劇本的才能下架（內建劇本後端回 409；
+     「沒有作者」不等於內建：匿名保留的劇本也沒有作者，但它是玩家創作的，管理員可以下架）、
+     只有「管理員下架」的才能由管理員恢復（作者自己下架的是作者自己的決定）。 */
   function scriptActions(item) {
     var it = plainObject(item);
     var pending = it.status === 'pending_review';
     return {
       approve: pending,
       reject: pending,
-      remove: it.status === 'published' && !!it.author_id,
+      remove: it.status === 'published' && !it.is_builtin,
       restore: it.status === 'removed' && it.removed_by === 'admin'
     };
   }

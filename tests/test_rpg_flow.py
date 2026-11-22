@@ -229,7 +229,7 @@ def test_a_players_whole_journey_leaves_wallet_ledger_logs_and_data_consistent(w
     with db(app) as s:
         user_id = s.scalar(select(User.id))
         service = AccountErasureService(
-            users=UserRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
+            users=UserRepository(s), scripts=ScriptRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
         )
         assert service.erase_pending_due(user_id, cutoff=FakeClock()() + timedelta(days=8), now=FakeClock()() + timedelta(days=8))
     with db(app) as s:

@@ -71,6 +71,9 @@ ALLOWED_FIELDS = (
     "version",
     "over_entries",
     "over_chars",
+    # 抹除時匿名保留劇本（lifecycle_events.py）：保留與刪除的版本數（整數），沒有任何識別碼或劇本文字
+    "kept",
+    "deleted",
 )
 
 MAX_TEXT_LENGTH = 300

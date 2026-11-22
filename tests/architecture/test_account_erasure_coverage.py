@@ -106,6 +106,42 @@ def test_the_erasure_service_clears_every_no_action_reference_before_deleting_th
     )
 
 
+def test_the_anonymous_retention_runs_before_the_refs_are_cleared_and_before_the_user_is_deleted():
+    """rpg-script-reports 的 design D6：匿名保留要先於 `clear_script_version_refs`（解除作者關聯之後，那一步才不會連對保留版本的
+    來源參照一起清掉），也要先於刪除使用者；`retain_published_anonymously` 內部則先清參照與檢舉、再刪版本與劇本、最後解除作者關聯
+    （兩個無動作外鍵會擋下反過來的順序）。"""
+    import inspect
+
+    from app.repositories.script_repository import ScriptRepository
+    from app.services.account_erasure_service import AccountErasureService
+
+    erase = inspect.getsource(AccountErasureService.erase)
+    assert erase.index("retain_published_anonymously") < erase.index("clear_script_version_refs") < erase.index("delete(user_id)")
+    assert erase.index("keep_published_scripts_of") < erase.index("retain_published_anonymously")      # 偏好在交易內、刪除之前讀取
+
+    retain = inspect.getsource(ScriptRepository.retain_published_anonymously)
+    order = [
+        retain.index("update(RpgSession)"), retain.index("delete_for_versions"), retain.index("delete(ScriptVersion)"),
+        retain.index("delete(Script)"), retain.index("creator_id=None"),
+    ]
+    assert order == sorted(order), "匿名保留的步驟順序不可更動：清參照、刪檢舉、刪版本、刪劇本、解除作者關聯"
+
+
+def test_only_the_two_reasons_that_honour_the_preference_pass_retain_scripts():
+    """未滿 18 歲抹除、逾時未確認年齡與備份還原後的重新抹除一律全刪：這三處的原始碼不得出現 `retain_scripts`（預設 False 偏向刪除）。"""
+    import inspect
+
+    from app.services import deletion_replay_service
+    from app.services.account_erasure_service import AccountErasureService
+
+    for name in ("erase_inactive", "erase_pending_due"):
+        assert "retain_scripts=True" in inspect.getsource(getattr(AccountErasureService, name)), name
+    for name in ("erase_underage", "erase_unconfirmed"):
+        assert "retain_scripts" not in inspect.getsource(getattr(AccountErasureService, name)), name
+    assert "retain_scripts" not in inspect.getsource(deletion_replay_service)
+    assert inspect.signature(AccountErasureService.erase).parameters["retain_scripts"].default is False
+
+
 # ---- 自我驗證：用暫時的 metadata 證明分類真的偵測得到 ----------------------------------------
 
 def _metadata(*child_columns) -> MetaData:

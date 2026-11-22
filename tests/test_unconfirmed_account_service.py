@@ -8,6 +8,7 @@ import pytest
 
 from app.models import DeletionTombstone, User
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_retention_service import AccountRetentionService
 from tests.support.age import age_columns
@@ -18,7 +19,8 @@ OVERDUE = START - timedelta(hours=1)
 
 def make_service(session, users=None, **kwargs):
     return AccountRetentionService(
-        users=users or UserRepository(session), tombstones=DeletionTombstoneRepository(session),
+        users=users or UserRepository(session), scripts=ScriptRepository(session),
+        tombstones=DeletionTombstoneRepository(session),
         clock=FakeClock(), commit=session.commit, rollback=session.rollback, **kwargs,
     )
 

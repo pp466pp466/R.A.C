@@ -30,7 +30,7 @@ CUTOFF = START + timedelta(days=1)
 
 def erase_inactive(session, user_id: int) -> bool:
     service = AccountErasureService(
-        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback,
+        users=UserRepository(session), scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback,
     )
     return service.erase_inactive(user_id, cutoff=CUTOFF, now=START)
 
@@ -220,7 +220,7 @@ def test_the_feedback_rows_of_a_restored_account_are_erased_again_by_the_tombsto
     DeletionTombstoneRepository(s).record(user_id=reader_id, reason="user_requested", deleted_at=START + timedelta(days=2))   # 還原後備份裡又出現已刪除的帳號
     s.commit()
     users, tombstones = UserRepository(s), DeletionTombstoneRepository(s)
-    erasure = AccountErasureService(users=users, tombstones=tombstones, commit=s.commit, rollback=s.rollback)
+    erasure = AccountErasureService(users=users, scripts=ScriptRepository(s), tombstones=tombstones, commit=s.commit, rollback=s.rollback)
 
     report = DeletionReplayService(users=users, tombstones=tombstones, erasure=erasure).run()
 

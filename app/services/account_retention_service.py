@@ -6,6 +6,8 @@
 - 判斷在刪除當下再確認一次（條件式 DELETE）：清除期間剛好登入的帳號不會被刪。
 - 實際的抹除交給 `AccountErasureService`（與使用者自助刪除共用同一個出口）：先把用量帳本的對話編號清為空值，
   再刪除使用者，與「刪除紀錄」在同一個交易提交；提交後才記錄事件（事件只含內部編號，沒有任何個資）。
+- 閒置清除（`purge_inactive`）依帳號的「匿名保留我已發佈的劇本」偏好保留目前上架的劇本版本（rpg-script-reports）；逾時未確認年齡的
+  帳號（`purge_unconfirmed`）一律全部刪除，不看偏好。
 - 預覽模式只計數，不刪除、不寫紀錄、不記事件。
 - 逾時未完成年齡確認（`purge_unconfirmed`）：玩家首次以 Google 登入建立的帳號有 24 小時的補填期限（`age_deadline_at`），
   期限到了仍沒有生日就直接刪除，連同其 Google 綁定與信箱；管理員、已完成年齡確認的帳號、沒有期限記錄的舊帳號都不納入。
@@ -20,6 +22,7 @@ from datetime import datetime, timedelta
 from typing import Callable
 
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 
@@ -39,6 +42,7 @@ class AccountRetentionService:
         self,
         *,
         users: UserRepository,
+        scripts: ScriptRepository,
         tombstones: DeletionTombstoneRepository,
         clock: Callable[[], datetime],
         commit: Callable[[], None] = lambda: None,
@@ -47,7 +51,7 @@ class AccountRetentionService:
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> None:
         self._users = users
-        self._erasure = AccountErasureService(users=users, tombstones=tombstones, commit=commit, rollback=rollback)
+        self._erasure = AccountErasureService(users=users, scripts=scripts, tombstones=tombstones, commit=commit, rollback=rollback)
         self._clock = clock
         self._period = period
         self._batch_size = batch_size

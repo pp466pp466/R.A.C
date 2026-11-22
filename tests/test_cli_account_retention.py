@@ -10,6 +10,7 @@ from app.config import load_config
 from app.models import Base, ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User, UserIdentity
 from app.models.user import AuthToken, PROVIDER_GOOGLE, TOKEN_RESET_PASSWORD
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_retention_service import INACTIVITY_PERIOD, AccountRetentionService
 from tests.support.age import age_fields, birth_date_for_age
@@ -148,7 +149,8 @@ def test_an_empty_database_is_fine(app, runner):
 
 def make_service(session, users=None, **kwargs):
     return AccountRetentionService(
-        users=users or UserRepository(session), tombstones=DeletionTombstoneRepository(session),
+        users=users or UserRepository(session), scripts=ScriptRepository(session),
+        tombstones=DeletionTombstoneRepository(session),
         clock=FakeClock(), commit=session.commit, **kwargs,
     )
 

@@ -12,6 +12,7 @@ from app import create_app
 from app.config import load_config
 from app.models import Base, DeletionTombstone, User, Wallet, WalletEntry
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 from app.services.current_user import CurrentUser
@@ -23,7 +24,7 @@ CUTOFF = START + timedelta(days=1)
 
 def erasure(session) -> AccountErasureService:
     return AccountErasureService(
-        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback,
+        users=UserRepository(session), scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback,
     )
 
 

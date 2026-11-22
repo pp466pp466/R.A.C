@@ -18,6 +18,7 @@ from app.config import load_config
 from app.models import AdminAuditLog, Base, User, Wallet, WalletEntry
 from app.observability.json_logging import ALLOWED_FIELDS
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 from app.services.current_user import CurrentUser
@@ -146,7 +147,7 @@ def test_the_whole_wallet_lifecycle_adds_up_and_leaves_no_secret_in_the_logs(wor
     s.get(User, pid).deletion_requested_at = START - timedelta(days=8)
     s.commit()
     erased = AccountErasureService(
-        users=UserRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
+        users=UserRepository(s), scripts=ScriptRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
     ).erase_pending_due(pid, cutoff=START - timedelta(days=7), now=START)
     assert erased is True
     s.expire_all()

@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 
 from app.models import Base, RpgSession, User
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.retention_repository import RetentionRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_repository import UserRepository
@@ -48,7 +49,7 @@ def test_erasing_a_player_removes_the_protagonist_with_the_save(member_session):
     s.commit()
     assert "LIFECYCLE-NAME" in everything_in_the_database(s)
     service = AccountErasureService(
-        users=UserRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
+        users=UserRepository(s), scripts=ScriptRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
     )
     assert service.erase_inactive(user.id, cutoff=START - 365 * DAY, now=START) is True
     text = everything_in_the_database(s)
@@ -65,7 +66,7 @@ def test_erasing_one_player_leaves_another_players_protagonist_alone(member_sess
     make_save(s, kept, name="留下來的主角")
     s.commit()
     service = AccountErasureService(
-        users=UserRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
+        users=UserRepository(s), scripts=ScriptRepository(s), tombstones=DeletionTombstoneRepository(s), commit=s.commit, rollback=s.rollback,
     )
     assert service.erase_inactive(gone.id, cutoff=START - 365 * DAY, now=START) is True
     s.expire_all()

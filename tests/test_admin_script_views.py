@@ -17,7 +17,7 @@ def make_row(**changes) -> ScriptVersionRow:
         author_public_id="33333333-3333-3333-3333-333333333333", audience="female", content_tier="safe",
         submitted_at=datetime(2026, 11, 20, 8, 30, 15, 123456, tzinfo=timezone.utc), published_at=None, decided_at=None,
         review_verdict="flag", review_categories=("minor_suspected", "other_concern"), removed_by=None, decision_category=None,
-        has_note=False,
+        has_note=False, is_builtin=False,
     )
     values.update(changes)
     return ScriptVersionRow(**values)
@@ -44,6 +44,16 @@ def test_no_internal_integer_ids_email_or_password_fields_can_appear():
     assert not forbidden & set(views.DETAIL_KEYS)
     item = views.list_item(make_row())
     assert all(not isinstance(value, int) or key in {"version_no"} or isinstance(value, bool) for key, value in item.items())
+
+
+def test_is_builtin_comes_from_the_row_and_has_nothing_to_do_with_having_an_author():
+    """內建劇本與「沒有作者」是兩回事（匿名保留的劇本沒有作者但不是內建）：兩個鍵各自忠實反映資料列。"""
+    builtin = views.list_item(make_row(author_public_id=None, is_builtin=True))
+    assert builtin["author_id"] is None and builtin["is_builtin"] is True
+    retained = views.list_item(make_row(author_public_id=None, is_builtin=False))
+    assert retained["author_id"] is None and retained["is_builtin"] is False
+    assert views.list_item(make_row())["is_builtin"] is False
+    assert views.detail(make_detail(make_row(is_builtin=True)))["is_builtin"] is True
 
 
 def test_the_list_item_values_come_from_the_row():

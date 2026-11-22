@@ -210,7 +210,7 @@
             <p class="admin-row__line">
               <span class="admin-row__muted">{{ fmt.scriptTimeText(row) }}</span>
               <span class="admin-row__muted">版本</span> <code :title="row.id">{{ fmt.shortId(row.id) }}</code>
-              <span v-if="row.status === 'published' && !row.author_id" class="admin-row__muted">內建劇本不可下架</span>
+              <span v-if="row.status === 'published' && row.is_builtin" class="admin-row__muted">內建劇本不可下架</span>
             </p>
           </div>
           <div class="admin-row__actions">

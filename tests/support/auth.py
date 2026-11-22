@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.models.user import STATUS_ACTIVE, User
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
@@ -64,7 +65,7 @@ def make_auth_service(
         age_policy=age_policy,
         # 與正式組裝相同的協作者：補填年齡時的抹除與鎖定計次
         erasure=AccountErasureService(
-            users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
+            users=users, scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
         ),
         lock=build_account_lock_service(session, clock=clock),
         on_age_verified=on_age_verified,

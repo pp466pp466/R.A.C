@@ -251,11 +251,14 @@ test('each row shows a time that matches its state, in Taipei time, and a dash w
   assert.equal(Format.scriptTimeText(null), '');
 });
 
-test('the action buttons follow the status: only pending can be approved, only authored published versions can be removed, only admin takedowns can be restored', () => {
+test('the action buttons follow the status: only pending can be approved, only non-builtin published versions can be removed, only admin takedowns can be restored', () => {
   assert.deepEqual(Format.scriptActions({ status: 'pending_review' }), { approve: true, reject: true, remove: false, restore: false });
-  assert.deepEqual(Format.scriptActions({ status: 'published', author_id: 'a1' }), { approve: false, reject: false, remove: true, restore: false });
-  assert.equal(Format.scriptActions({ status: 'published', author_id: null }).remove, false);          // 內建劇本沒有作者，後端回 409
-  assert.equal(Format.scriptActions({ status: 'published' }).remove, false);
+  assert.deepEqual(Format.scriptActions({ status: 'published', author_id: 'a1', is_builtin: false }), { approve: false, reject: false, remove: true, restore: false });
+  assert.equal(Format.scriptActions({ status: 'published', author_id: null, is_builtin: true }).remove, false);   // 內建劇本（種子鍵），後端回 409
+  assert.equal(Format.scriptActions({ status: 'published', author_id: 'a1', is_builtin: true }).remove, false);
+  // 匿名保留的劇本沒有作者，但不是內建劇本：有下架按鈕（「沒有作者」不等於內建）
+  assert.equal(Format.scriptActions({ status: 'published', author_id: null, is_builtin: false }).remove, true);
+  assert.equal(Format.scriptActions({ status: 'removed', author_id: null, is_builtin: false }).remove, false);
   assert.deepEqual(Format.scriptActions({ status: 'removed', removed_by: 'admin' }), { approve: false, reject: false, remove: false, restore: true });
   assert.equal(Format.scriptActions({ status: 'removed', removed_by: 'author' }).restore, false);        // 作者自己的決定
   assert.equal(Format.scriptActions({ status: 'removed', removed_by: null }).restore, false);

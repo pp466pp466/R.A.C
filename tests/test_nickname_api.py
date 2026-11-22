@@ -19,6 +19,7 @@ from app.config import load_config
 from app.models import Base, LockStrike, User
 from app.services.nickname import CODE_ALPHABET
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 from tests.support.age import TEST_NICKNAME, age_fields
@@ -289,7 +290,8 @@ def test_erasing_the_account_removes_the_nickname_and_the_code_everywhere(member
 
     user = add_user(member_session, 1, last_login_at=datetime(2025, 1, 1, tzinfo=timezone.utc), nickname="雲遊者", nickname_code="7K2M")
     service = AccountErasureService(
-        users=UserRepository(member_session), tombstones=DeletionTombstoneRepository(member_session),
+        users=UserRepository(member_session), scripts=ScriptRepository(member_session),
+        tombstones=DeletionTombstoneRepository(member_session),
         commit=member_session.commit, rollback=member_session.rollback,
     )
     assert service.erase_inactive(user.id, cutoff=datetime(2026, 1, 1, tzinfo=timezone.utc), now=datetime(2026, 11, 4, tzinfo=timezone.utc))

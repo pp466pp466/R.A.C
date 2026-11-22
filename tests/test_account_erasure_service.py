@@ -12,6 +12,7 @@ from app.models.base import utcnow
 from app.models.deletion_tombstone import REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED
 from app.models.user import STATUS_ACTIVE, STATUS_DELETION_PENDING
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 from app.services.account_retention_service import INACTIVITY_PERIOD
@@ -24,7 +25,7 @@ SECRET_NAME = "待抹除姓名"
 
 def make_service(session, **overrides) -> AccountErasureService:
     return AccountErasureService(
-        users=overrides.pop("users", UserRepository(session)), tombstones=DeletionTombstoneRepository(session),
+        users=overrides.pop("users", UserRepository(session)), scripts=overrides.pop("scripts", ScriptRepository(session)), tombstones=DeletionTombstoneRepository(session),
         commit=overrides.pop("commit", session.commit), rollback=overrides.pop("rollback", session.rollback), **overrides,
     )
 
@@ -146,7 +147,7 @@ def test_an_exception_rolls_back_and_propagates_without_committing():
         raise RuntimeError("資料庫暫時失敗")
 
     service = AccountErasureService(
-        users=Users(), tombstones=Tombstones(), commit=lambda: calls.append("commit"), rollback=lambda: calls.append("rollback")
+        users=Users(), scripts=object(), tombstones=Tombstones(), commit=lambda: calls.append("commit"), rollback=lambda: calls.append("rollback")
     )
     with pytest.raises(RuntimeError):
         service.erase(1, delete=boom, reason=REASON_USER_REQUESTED, now=START)
@@ -167,7 +168,7 @@ def test_the_event_is_emitted_only_after_the_commit_and_carries_the_id_only():
         def record(self, **kwargs):
             order.append("record")
 
-    service = AccountErasureService(users=Users(), tombstones=Tombstones(), commit=lambda: order.append("commit"))
+    service = AccountErasureService(users=Users(), scripts=object(), tombstones=Tombstones(), commit=lambda: order.append("commit"))
     assert service.erase(9, delete=lambda uid: True, reason=REASON_USER_REQUESTED, now=START, on_erased=lambda uid: order.append(f"event:{uid}"))
     assert order == ["script-refs", "clear", "record", "commit", "event:9"]
 
@@ -181,3 +182,117 @@ def test_inactive_erasure_logs_the_existing_event_and_no_personal_data(member_se
     events = [line for line in log_lines() if line.get("event") == "account.inactive_purged"]
     assert [line["user_id"] for line in events] == [stale_id]
     assert SECRET_EMAIL not in log_lines.raw() and SECRET_NAME not in log_lines.raw()
+
+
+# ---- 匿名保留的順序（rpg-script-reports 的 design D6）-------------------------------------------------
+
+
+class RecordingUsers:
+    """記錄呼叫順序的假 Repository；偏好由建構時決定。"""
+
+    def __init__(self, order: list[str], keep: bool) -> None:
+        self.order, self.keep = order, keep
+
+    def keep_published_scripts_of(self, user_id):
+        self.order.append("preference")
+        return self.keep
+
+    def clear_script_version_refs(self, user_id):
+        self.order.append("script-refs")
+
+    def clear_ledger_conversation_refs(self, user_id):
+        self.order.append("clear")
+
+
+class RecordingScripts:
+    def __init__(self, order: list[str]) -> None:
+        self.order = order
+
+    def retain_published_anonymously(self, user_id):
+        from app.repositories.script_repository import RetainResult
+
+        self.order.append("retain")
+        return RetainResult(kept=1, deleted=2)
+
+
+class RecordingTombstones:
+    def __init__(self, order: list[str]) -> None:
+        self.order = order
+
+    def record(self, **kwargs):
+        self.order.append("record")
+
+
+def retaining_service(order: list[str], *, keep: bool) -> AccountErasureService:
+    return AccountErasureService(
+        users=RecordingUsers(order, keep), scripts=RecordingScripts(order), tombstones=RecordingTombstones(order),
+        commit=lambda: order.append("commit"), rollback=lambda: order.append("rollback"),
+    )
+
+
+def test_the_preference_is_read_and_the_scripts_are_retained_before_anything_else_is_cleared():
+    """匿名保留必須先於清除存檔對作者版本的來源參照：解除作者關聯之後，那一步才不會把對「保留版本」的參照也清掉；
+    也必須先於刪除使用者（兩個無動作外鍵會擋下反過來的順序）。"""
+    order: list[str] = []
+    assert retaining_service(order, keep=True).erase(
+        1, delete=lambda uid: order.append("delete") or True, reason=REASON_USER_REQUESTED, now=START, retain_scripts=True
+    )
+    assert order == ["preference", "retain", "script-refs", "clear", "delete", "record", "commit"]
+
+
+def test_with_the_preference_off_the_scripts_are_not_touched():
+    order: list[str] = []
+    assert retaining_service(order, keep=False).erase(
+        1, delete=lambda uid: order.append("delete") or True, reason=REASON_USER_REQUESTED, now=START, retain_scripts=True
+    )
+    assert order == ["preference", "script-refs", "clear", "delete", "record", "commit"]
+
+
+def test_when_the_caller_does_not_ask_to_retain_the_preference_is_not_even_read():
+    """預設（備份還原後的重新抹除、未滿 18 歲、逾時未確認）不讀偏好：偏好開啟也沒有影響。"""
+    order: list[str] = []
+    assert retaining_service(order, keep=True).erase(
+        1, delete=lambda uid: order.append("delete") or True, reason=REASON_USER_REQUESTED, now=START
+    )
+    assert order == ["script-refs", "clear", "delete", "record", "commit"]
+
+
+def test_when_the_delete_misses_the_whole_transaction_is_rolled_back_including_the_retention_and_no_event_follows(caplog):
+    order: list[str] = []
+    events: list[int] = []
+    with caplog.at_level("INFO", logger="app.lifecycle"):
+        assert retaining_service(order, keep=True).erase(
+            1, delete=lambda uid: order.append("delete") or False, reason=REASON_USER_REQUESTED, now=START,
+            retain_scripts=True, on_erased=events.append,
+        ) is False
+    assert order == ["preference", "retain", "script-refs", "clear", "delete", "rollback"]
+    assert events == [] and not [r for r in caplog.records if getattr(r, "event", "") == "account.scripts_retained"]
+
+
+def test_a_failure_while_retaining_rolls_back_and_propagates():
+    order: list[str] = []
+
+    class Exploding(RecordingScripts):
+        def retain_published_anonymously(self, user_id):
+            self.order.append("retain")
+            raise RuntimeError("資料庫暫時失敗")
+
+    service = AccountErasureService(
+        users=RecordingUsers(order, True), scripts=Exploding(order), tombstones=RecordingTombstones(order),
+        commit=lambda: order.append("commit"), rollback=lambda: order.append("rollback"),
+    )
+    with pytest.raises(RuntimeError):
+        service.erase(1, delete=lambda uid: True, reason=REASON_USER_REQUESTED, now=START, retain_scripts=True)
+    assert order == ["preference", "retain", "rollback"]                  # 沒有繼續刪除、沒有提交
+
+
+def test_the_event_is_emitted_after_the_commit_and_before_the_caller_callback(caplog):
+    order: list[str] = []
+    with caplog.at_level("INFO", logger="app.lifecycle"):
+        assert retaining_service(order, keep=True).erase(
+            7, delete=lambda uid: True, reason=REASON_USER_REQUESTED, now=START, retain_scripts=True,
+            on_erased=lambda uid: order.append("callback"),
+        )
+    (record,) = [r for r in caplog.records if getattr(r, "event", "") == "account.scripts_retained"]
+    assert (record.user_id, record.kept, record.deleted) == (7, 1, 2)
+    assert order[-2:] == ["commit", "callback"]                          # 事件在 commit 之後（callback 在事件之後）

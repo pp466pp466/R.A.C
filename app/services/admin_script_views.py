@@ -20,7 +20,7 @@ from app.models.user import AUDIENCE_ALL
 LIST_KEYS = (
     "id", "script_id", "version_no", "status", "title", "summary", "author_name", "author_code", "author_id", "audience",
     "content_tier", "submitted_at", "published_at", "decided_at", "review_verdict", "review_categories", "removed_by",
-    "decision_category", "has_note",
+    "decision_category", "has_note", "is_builtin",
 )
 # 詳情在清單的鍵之外多出的兩個：完整的標準化內容與只供管理員的審核備註
 DETAIL_KEYS = LIST_KEYS + ("decision_note", "content")
@@ -41,7 +41,7 @@ def _base(row: Any, *, with_review: bool) -> dict[str, Any]:
         "summary": row.summary,
         "author_name": row.author_name,
         "author_code": row.author_code,
-        "author_id": row.author_public_id,                              # 空：內建劇本（沒有作者）
+        "author_id": row.author_public_id,                              # 空：沒有作者（內建劇本，或匿名保留的劇本）
         "audience": row.audience or AUDIENCE_ALL,                       # 空值是遷移之前的版本，視同全讀者
         "content_tier": row.content_tier,
         "submitted_at": _iso(row.submitted_at),
@@ -52,6 +52,7 @@ def _base(row: Any, *, with_review: bool) -> dict[str, Any]:
         "removed_by": row.removed_by,
         "decision_category": row.decision_category,
         "has_note": bool(row.has_note),
+        "is_builtin": bool(row.is_builtin),                             # 種子鍵非空；前端不可用「沒有作者」推論內建
     }
 
 

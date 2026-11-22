@@ -1911,6 +1911,8 @@ check_endpoint(app, spec, owner=alice, intruder=bob)
 | `version` | 記事簿的版本（整數；`rpg.notebook_captured`、`rpg.notebook_saved`） |
 | `over_entries` | 記事簿一次追加中「超出提示詞要求」的條數（整數，超過每次 5 條的部分；`rpg.notebook_captured`），條目仍完整寫入，只供調整提示詞 |
 | `over_chars` | 記事簿一次追加中各條「超出提示詞要求」的字數加總（整數，每條超過 50 字的部分；`rpg.notebook_captured`） |
+| `kept` | 帳號抹除時匿名保留的劇本版本數（整數；`account.scripts_retained`，rpg-script-reports），只有內部使用者編號與筆數，沒有劇本識別碼、標題或筆名 |
+| `deleted` | 帳號抹除時匿名保留流程刪除的劇本版本數（整數；`account.scripts_retained`） |
 
 **模型呼叫日誌**（`app/observability/llm_events.py`）每次呼叫一筆，函式沒有接收任何文字內容的參數，所以提示詞、使用者訊息、回覆與金鑰「放不進來」。層級：成功與被安全過濾阻擋為資訊；驗證失敗與暫時性錯誤為警告；供應商回應設定錯誤（請求不合法、無權限）為**錯誤**，需要人工處理（多半是金鑰被撤銷或設定錯誤）。`llm.breaker_opened` 在主要模型因逾時或伺服器錯誤而將被暫時跳過時記一筆警告（只有模型名稱與分類），窗口內被跳過的請求不再記錄。驗證失敗的模型原文**不在日誌**，只存在用量帳本 `llm_call_logs.error_detail`（截斷至 2000 字、保存 14 天、僅管理員可讀）。
 

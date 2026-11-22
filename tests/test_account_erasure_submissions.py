@@ -12,6 +12,7 @@ from sqlalchemy import func, select
 
 from app.models import DeletionTombstone, ScriptSubmission, User
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.script_submission_repository import ScriptSubmissionRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
@@ -22,7 +23,7 @@ CUTOFF = START + timedelta(days=1)
 
 def erase_inactive(session, user_id: int) -> bool:
     service = AccountErasureService(
-        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback,
+        users=UserRepository(session), scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback,
     )
     return service.erase_inactive(user_id, cutoff=CUTOFF, now=START)
 

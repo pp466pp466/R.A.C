@@ -332,6 +332,21 @@ def test_a_builtin_script_cannot_be_removed_over_http(world):
     assert response.status_code == 409 and error_of(response)["code"] == "builtin_not_removable" and world.status(public_id) == "published"
 
 
+def test_a_published_script_whose_author_is_gone_can_be_removed_by_an_admin(world):
+    """匿名保留的劇本沒有作者但沒有種子鍵：管理員可以下架（稽核的目標使用者為空），不是 409 builtin_not_removable。"""
+    from sqlalchemy import update
+
+    from app.models import Script
+
+    version = world.make("published")
+    with Session(world.engine) as s:
+        script_id = ScriptRepository(s).get_published(version).script_id
+        s.execute(update(Script).where(Script.id == script_id).values(creator_id=None, author_name="已註銷的作者", author_code=None))
+        s.commit()
+    response = world.client("admin").post(action_url(version, "remove"), json={"category": "other_policy", **PASSWORD_BODY})
+    assert response.status_code == 200 and world.status(version) == "removed"
+
+
 def test_removing_or_restoring_with_an_invalid_body_is_a_400(world):
     version = world.make("published")
     client = world.client("admin")

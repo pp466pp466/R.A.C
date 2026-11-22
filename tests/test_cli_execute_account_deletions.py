@@ -12,6 +12,7 @@ from app.models import (
 )
 from app.models.user import PROVIDER_GOOGLE, STATUS_ACTIVE, STATUS_DELETION_PENDING, TOKEN_RESET_PASSWORD
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_deletion_executor import AccountDeletionExecutor
 from app.services.account_erasure_service import AccountErasureService
@@ -134,7 +135,8 @@ def test_an_empty_database_is_fine(app, runner):
 def make_executor(session, users=None, **kwargs) -> AccountDeletionExecutor:
     users = users or UserRepository(session)
     erasure = AccountErasureService(
-        users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
+        users=users, scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session),
+        commit=session.commit, rollback=session.rollback,
     )
     return AccountDeletionExecutor(users=users, erasure=erasure, clock=FakeClock(), **kwargs)
 

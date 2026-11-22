@@ -175,7 +175,26 @@ def test_a_builtin_script_has_no_author(member_session, repo, admin_repo):
     )
     row = next(r for r in admin_repo.list_by_status(VERSION_PUBLISHED, limit=50, offset=0) if r.version_public_id == version.public_id)
     assert row.author_public_id is None and row.author_name == "官方"
-    assert admin_repo.find_ref(version.public_id).is_builtin is True
+    assert admin_repo.find_ref(version.public_id).is_builtin is True and row.is_builtin is True
+
+
+def test_a_script_without_an_author_is_builtin_only_when_it_has_a_seed_key(member_session, repo, admin_repo, author):
+    """匿名保留的劇本沒有作者（`creator_id` 為空、筆名「已註銷的作者」）但沒有種子鍵：`is_builtin` 為假；有作者的劇本也為假。"""
+    from app.models import Script
+    from app.models.script import RETIRED_AUTHOR_NAME
+
+    mine = put_in_status(repo, author, VERSION_PUBLISHED, title="有作者")
+    retained = put_in_status(repo, author, VERSION_PUBLISHED, title="匿名保留")
+    member_session.execute(
+        update(Script).where(Script.id == repo.get_script_of(retained).id)
+        .values(creator_id=None, author_name=RETIRED_AUTHOR_NAME, author_code=None).execution_options(synchronize_session=False)
+    )
+    member_session.expire_all()
+    rows = {r.version_public_id: r for r in admin_repo.list_by_status(VERSION_PUBLISHED, limit=50, offset=0)}
+    assert (rows[mine.public_id].is_builtin, rows[mine.public_id].author_public_id is None) == (False, False)
+    assert (rows[retained.public_id].is_builtin, rows[retained.public_id].author_public_id is None) == (False, True)
+    assert admin_repo.find_ref(retained.public_id).is_builtin is False and admin_repo.find_ref(retained.public_id).author_public_id is None
+    assert admin_repo.get_reviewable(retained.public_id).row.is_builtin is False
 
 
 def test_an_old_version_without_an_audience_reads_as_unset(repo, admin_repo, author, member_session):

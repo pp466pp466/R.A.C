@@ -49,7 +49,8 @@ class LiveVersionExistsError(Exception):
 
 
 class BuiltinNotRemovableError(Exception):
-    """內建劇本（沒有作者）不可下架：它由種子與部署流程管理。Service 轉成 409 `builtin_not_removable`。版本不變。"""
+    """內建劇本（種子鍵非空）不可下架：它由種子與部署流程管理。Service 轉成 409 `builtin_not_removable`。版本不變。
+    判斷依據是種子鍵，**不是**「沒有作者」：匿名保留的劇本同樣沒有作者，但它是玩家創作的，管理員可以下架。"""
 
 
 class AlreadyReportedError(Exception):

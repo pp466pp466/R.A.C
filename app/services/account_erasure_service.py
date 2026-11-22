@@ -4,6 +4,11 @@
 新增資料表時由 `tests/architecture/test_account_erasure_coverage.py` 要求登記，不必每個功能各做一套刪除。
 
 每個帳號在**一個交易**內依序做：
+0'. （只有 `retain_scripts=True` 且帳號的「匿名保留我已發佈的劇本」偏好在**這一刻**開啟時）只留下目前上架的劇本版本並解除作者關聯，
+   其餘劇本與版本一律刪除（`ScriptRepository.retain_published_anonymously`）。必須在第 0 步之前：解除關聯之後，第 0 步找不到以這位使用者為
+   作者的劇本，就不會把別人的存檔對**保留版本**的來源參照也清掉。偏好在交易內讀取（申請之後、寬限期內改的偏好以期滿當下為準）。
+   只有「使用者自己申請刪除」與「連續 12 個月未登入」兩條路傳 `True`；未滿 18 歲抹除、逾時未確認年齡與備份還原後的重新抹除
+   一律不傳（預設 `False`，使新增呼叫者時漏傳偏向全刪）。
 0. 把別人的存檔對這位使用者創作的劇本版本的來源參照清為空值（`sessions.source_version_id` 是無動作的外鍵，
    SQL Server 不允許多重串聯路徑；不先清掉會擋住刪除）。存檔本身保留，它有自己的劇本複本。
 1. 把用量帳本中該使用者的對話編號清為空值。帳本的 `conversation_id` 沒有外鍵（SQL Server 錯誤 1785），不先清掉的話，
@@ -14,7 +19,8 @@
 4. 提交。
 
 第 2 步沒有刪到任何列（使用者剛好登入、或剛撤銷刪除）時**回復整個交易**，把第 0、1 步也復原：使用者還活著，
-不能讓他的帳本失去對話連結、他的劇本也不能被別人的存檔「遺忘」。事件在提交之後才記錄，且只含內部編號，沒有任何個資。
+不能讓他的帳本失去對話連結、他的劇本也不能被別人的存檔「遺忘」；匿名保留（0'）同樣整個復原，劇本與作者關聯維持原狀。
+事件在提交之後才記錄，且只含內部編號與整數筆數，沒有任何個資。
 """
 from __future__ import annotations
 
@@ -24,8 +30,9 @@ from typing import Callable
 from app.models.deletion_tombstone import (
     REASON_AGE_UNCONFIRMED, REASON_INACTIVE_12_MONTHS, REASON_UNDERAGE, REASON_USER_REQUESTED,
 )
-from app.observability import security_events
+from app.observability import lifecycle_events, security_events
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import RetainResult, ScriptRepository
 from app.repositories.user_repository import UserRepository
 
 
@@ -34,11 +41,13 @@ class AccountErasureService:
         self,
         *,
         users: UserRepository,
+        scripts: ScriptRepository,
         tombstones: DeletionTombstoneRepository,
         commit: Callable[[], None],
         rollback: Callable[[], None] = lambda: None,
     ) -> None:
         self._users = users
+        self._scripts = scripts
         self._tombstones = tombstones
         self._commit = commit
         self._rollback = rollback
@@ -52,12 +61,19 @@ class AccountErasureService:
         now: datetime,
         on_erased: Callable[[int], None] = lambda _user_id: None,
         write_tombstone: bool = True,
+        retain_scripts: bool = False,
     ) -> bool:
         """抹除一個帳號；`delete` 是條件式刪除，回傳是否真的刪到。回傳是否抹除成功（條件不成立則不留任何痕跡）。
 
         `write_tombstone=False` 只用於備份還原後的重新抹除：該編號已有不早於這次的刪除紀錄，不必再寫一筆（見 deletion-replay 規格）。
+
+        `retain_scripts=True` 只給「使用者申請刪除（寬限期滿）」與「連續 12 個月未登入」兩條路：偏好在交易內、刪除之前讀取，
+        開啟時先做匿名保留（見模組說明 0'）；預設 `False` 表示全部刪除。
         """
+        retained: RetainResult | None = None
         try:
+            if retain_scripts and self._users.keep_published_scripts_of(user_id):
+                retained = self._scripts.retain_published_anonymously(user_id)
             self._users.clear_script_version_refs(user_id)
             self._users.clear_ledger_conversation_refs(user_id)
             if not delete(user_id):
@@ -69,6 +85,8 @@ class AccountErasureService:
         except Exception:
             self._rollback()
             raise
+        if retained is not None and (retained.kept or retained.deleted):      # 提交之後才記錄；只有內部編號與整數筆數
+            lifecycle_events.log_scripts_retained(user_id=user_id, kept=retained.kept, deleted=retained.deleted)
         on_erased(user_id)
         return True
 
@@ -79,6 +97,7 @@ class AccountErasureService:
             delete=lambda uid: self._users.delete_inactive(uid, cutoff),
             reason=REASON_INACTIVE_12_MONTHS,
             now=now,
+            retain_scripts=True,
             on_erased=lambda uid: security_events.log_event(security_events.ACCOUNT_INACTIVE_PURGED, user_id=uid),
         )
 
@@ -112,4 +131,5 @@ class AccountErasureService:
             reason=REASON_USER_REQUESTED,
             now=now,
             on_erased=on_erased,
+            retain_scripts=True,
         )

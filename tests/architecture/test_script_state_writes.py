@@ -149,7 +149,8 @@ def test_the_decision_columns_are_written_only_by_the_named_transition_methods()
     assert written["submitted_at"] == {"submit_for_review", "withdraw"}
     assert written["removed_by"] == {"_remove", "_restore"}
     assert written["decision_category"] == {"reject_version", "_remove", "_restore"}
-    assert written["decision_note"] == {"reject_version", "_remove", "_restore"}
+    # rpg-script-reports：匿名保留時清除保留版本的審核備註（上架版本本來就沒有，防禦用），所以多一個寫入者
+    assert written["decision_note"] == {"reject_version", "_remove", "_restore", "retain_published_anonymously"}
     assert written["decided_at"] == {"reject_version", "_remove", "_restore"}
 
 

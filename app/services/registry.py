@@ -113,7 +113,8 @@ def build_auth_service(
         persist_failures=persist_failures,
         age_policy=age_policy,
         erasure=AccountErasureService(
-            users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
+            users=users, scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session),
+            commit=session.commit, rollback=session.rollback,
         ),
         lock=build_account_lock_service(session, clock=clock, persist=persist_failures),
         on_age_verified=_grant_signup_coins_on_age_verified(session, clock),
@@ -549,7 +550,8 @@ def build_account_deletion_executor(session: Session, *, clock: Callable[[], dat
     """命令列用：寬限期已滿的帳號逐一抹除；每個帳號一個交易，條件不成立時整個回復。"""
     users = UserRepository(session)
     erasure = AccountErasureService(
-        users=users, tombstones=DeletionTombstoneRepository(session), commit=session.commit, rollback=session.rollback
+        users=users, scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session),
+        commit=session.commit, rollback=session.rollback,
     )
     return AccountDeletionExecutor(users=users, erasure=erasure, clock=clock)
 
@@ -558,15 +560,17 @@ def build_deletion_replay_service(session: Session) -> DeletionReplayService:
     """命令列用：備份還原後依刪除紀錄重新抹除；走同一個單一抹除出口，每個帳號一個交易。"""
     users = UserRepository(session)
     tombstones = DeletionTombstoneRepository(session)
-    erasure = AccountErasureService(users=users, tombstones=tombstones, commit=session.commit, rollback=session.rollback)
+    erasure = AccountErasureService(
+        users=users, scripts=ScriptRepository(session), tombstones=tombstones, commit=session.commit, rollback=session.rollback
+    )
     return DeletionReplayService(users=users, tombstones=tombstones, erasure=erasure)
 
 
 def build_account_retention_service(session: Session, *, clock: Callable[[], datetime]) -> AccountRetentionService:
     """命令列用：每個帳號的「清帳本對話參照＋刪除＋刪除紀錄」在同一個交易，立刻提交；條件不成立時整個回復。"""
     return AccountRetentionService(
-        users=UserRepository(session), tombstones=DeletionTombstoneRepository(session), clock=clock,
-        commit=session.commit, rollback=session.rollback,
+        users=UserRepository(session), scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session),
+        clock=clock, commit=session.commit, rollback=session.rollback,
     )
 
 

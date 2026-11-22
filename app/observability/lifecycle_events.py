@@ -4,6 +4,8 @@
 - `account.deletion_requested`、`account.deletion_cancelled`、`account.deleted_by_request`：使用者申請、撤銷與被抹除。
 - `account.exported`：匯出個人資料，`reason` 是格式（`json` 或 `csv`）。
 - `account.deletion_replayed`：備份還原後重新抹除了這個帳號（只有內部編號；預覽不記）。
+- `account.scripts_retained`：抹除時依偏好匿名保留了劇本（rpg-script-reports）：只有內部使用者編號與保留、刪除的**版本數**（整數）；
+  沒有劇本與版本的任何識別碼、標題或筆名。提交之後才記錄。
 - `retention.purged`：期限清除某一類完成，`reason` 是類別、`count` 是筆數；`retention.purge_failed`：某一類失敗（警告層級）。
 **絕不含** email、名稱、生日、年齡區間、密碼、確認文字、任何對話或模型原文——函式根本沒有接收這些的參數。
 列舉以外的值會立刻出錯，所以日誌裡不會出現自由文字。（既有的閒置清除事件 `account.inactive_purged` 在 `security_events.py`。）
@@ -19,6 +21,7 @@ EVENT_DELETION_CANCELLED = "account.deletion_cancelled"
 EVENT_DELETED_BY_REQUEST = "account.deleted_by_request"
 EVENT_EXPORTED = "account.exported"
 EVENT_DELETION_REPLAYED = "account.deletion_replayed"
+EVENT_SCRIPTS_RETAINED = "account.scripts_retained"
 EVENT_RETENTION_PURGED = "retention.purged"
 EVENT_RETENTION_FAILED = "retention.purge_failed"
 
@@ -53,6 +56,17 @@ def log_deleted_by_request(*, user_id: int) -> None:
 
 def log_deletion_replayed(*, user_id: int) -> None:
     logger.info("帳號：還原後重新抹除", extra={"event": EVENT_DELETION_REPLAYED, "user_id": user_id})
+
+
+def log_scripts_retained(*, user_id: int, kept: int, deleted: int) -> None:
+    """抹除時匿名保留了劇本：保留與刪除的版本數（整數；不是整數或為負數立即出錯，日誌裡不會出現自由文字）。"""
+    for name, value in ("kept", kept), ("deleted", deleted):
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} 必須是非負整數。")
+    logger.info(
+        "帳號：抹除時匿名保留了已發佈的劇本",
+        extra={"event": EVENT_SCRIPTS_RETAINED, "user_id": user_id, "kept": kept, "deleted": deleted},
+    )
 
 
 def log_exported(*, user_id: int, fmt: str) -> None:

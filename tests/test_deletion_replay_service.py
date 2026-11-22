@@ -11,6 +11,7 @@ from sqlalchemy import func, select
 from app.models import ChatConversation, ChatMessage, DeletionTombstone, LlmCallLog, User
 from app.models.base import utcnow
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
+from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.services.account_erasure_service import AccountErasureService
 from app.services.deletion_replay_service import (
@@ -24,7 +25,9 @@ LONG_AGO = DELETED_AT - timedelta(days=90)
 
 def make_service(session, replayed=None):
     users, tombstones = UserRepository(session), DeletionTombstoneRepository(session)
-    erasure = AccountErasureService(users=users, tombstones=tombstones, commit=session.commit, rollback=session.rollback)
+    erasure = AccountErasureService(
+        users=users, scripts=ScriptRepository(session), tombstones=tombstones, commit=session.commit, rollback=session.rollback
+    )
     kwargs = {"on_replayed": replayed.append} if replayed is not None else {}
     return DeletionReplayService(users=users, tombstones=tombstones, erasure=erasure, **kwargs)
 
@@ -181,7 +184,7 @@ def test_each_erased_account_logs_one_event_with_only_the_internal_id(member_ses
     tombstone(s, ids[0])
     tombstone(s, ids[1])
     users, tombstones = UserRepository(s), DeletionTombstoneRepository(s)
-    erasure = AccountErasureService(users=users, tombstones=tombstones, commit=s.commit, rollback=s.rollback)
+    erasure = AccountErasureService(users=users, scripts=ScriptRepository(s), tombstones=tombstones, commit=s.commit, rollback=s.rollback)
     DeletionReplayService(users=users, tombstones=tombstones, erasure=erasure).run()   # 預設的 on_replayed 就是真正的日誌事件
     events = [line for line in log_lines() if line.get("event") == "account.deletion_replayed"]
     assert [e["user_id"] for e in events] == ids
