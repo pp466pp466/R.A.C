@@ -16,6 +16,7 @@ from app.repositories.chat_repository import ChatRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.runtime_limit_repository import RuntimeLimitRepository
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.wallet_repository import WalletRepository
@@ -66,7 +67,7 @@ class AdminKit:
         self.service = AdminService(
             policy=AccessPolicy(clock=self.clock), admins=self.admins, audit=self.audit,
             usage=usage, age_stats=AgeStatsService(users=UserRepository(session)), usage_settings=self.settings,
-            scripts=self.scripts, admin_scripts=AdminScriptRepository(session),
+            scripts=self.scripts, admin_scripts=AdminScriptRepository(session), reports=ScriptReportRepository(session),
             confirm_password=self.auth.confirm_password,
             persist_on_error=self.persisted, clock=self.clock,
             wallet=WalletService(

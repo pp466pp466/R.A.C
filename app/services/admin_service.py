@@ -9,6 +9,9 @@
 劇本審核（rpg-script-publishing）：送審過的版本全文可讀（草稿讀不到，每次讀取先寫 `script.read` 稽核），核可與退回不需要密碼，
 下架與恢復須重新輸入密碼；審核備註只在管理員讀取版本的回應中，不進稽核、日誌與事件。
 
+劇本檢舉（rpg-script-reports）：「被檢舉」清單依優先度列出上架中且有未結案檢舉的版本；讀取檢舉內容每次先寫 `report.read` 稽核
+（內容沒有檢舉人）；結案為「不成立」不需要密碼（寫 `report.dismiss`）；結案為「下架」沿用 `remove_script`（須密碼）。
+
 可讀範圍最小：清單只有識別碼、次數與時間；只有「意見回饋」與「被內容安全過濾標記」兩類對話可讀全文；使用者資料沒有任何
 個別的年齡資料（生日、年齡區間、年齡群組），年齡只有總覽的各區間人數彙總。回傳的資料一律是明確組出來的字典，不是 ORM 物件，
 所以內部編號、密碼雜湊與 `token_version` 不可能意外外露。
@@ -22,14 +25,15 @@ from app.config import UsageSettings
 from app.models.admin_audit_log import (
     ACTION_ACCOUNT_UNLOCK, ACTION_APPEAL_READ, ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ,
     ACTION_PUBLISH_LIFT,
-    ACTION_REAUTH_FAILED, ACTION_SCRIPT_APPROVE, ACTION_SCRIPT_READ, ACTION_SCRIPT_REJECT, ACTION_SCRIPT_REMOVE,
-    ACTION_SCRIPT_RESTORE, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
+    ACTION_REAUTH_FAILED, ACTION_REPORT_DISMISS, ACTION_REPORT_READ, ACTION_SCRIPT_APPROVE, ACTION_SCRIPT_READ, ACTION_SCRIPT_REJECT,
+    ACTION_SCRIPT_REMOVE, ACTION_SCRIPT_RESTORE, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
     ACTION_WALLET_ADJUST, MAX_REASON_CHARS,
 )
 from app.models.script import (
-    DECISION_CATEGORIES, MAX_DECISION_NOTE_CHARS, REMOVER_ADMIN, REMOVER_AUTHOR, VERSION_PENDING, VERSION_PUBLISHED,
+    DECISION_CATEGORIES, MAX_DECISION_NOTE_CHARS, REMOVER_ADMIN, REMOVER_AUTHOR, VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED,
     VERSION_REJECTED, VERSION_REMOVED,
 )
+from app.models.script_report import CLOSED_DISMISSED
 from app.models.user import (
     MEMBER_TIERS, ROLE_USER, STATUS_ACTIVE, STATUS_DELETION_PENDING, STATUS_SUSPENDED,
     USER_STATUSES, User,
@@ -42,6 +46,7 @@ from app.repositories.admin_script_repository import LISTABLE_STATUSES, AdminScr
 from app.repositories.errors import (
     BuiltinNotRemovableError, InvalidVersionTransitionError, LiveVersionExistsError, RemovedByAuthorError,
 )
+from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.services import admin_script_views
 from app.services.access_policy import AccessPolicy
@@ -96,7 +101,8 @@ class AdminService:
         age_stats: AgeStatsService,
         usage_settings: UsageSettings,
         scripts: ScriptRepository,                          # 劇本審核的狀態轉移（唯一寫入版本狀態的 Repository）
-        admin_scripts: AdminScriptRepository,               # 劇本審核的唯讀查詢（清單、全文、參照）
+        admin_scripts: AdminScriptRepository,               # 劇本審核的唯讀查詢（清單、全文、參照、檢舉內容）
+        reports: ScriptReportRepository,                    # 檢舉結案為「不成立」（唯一寫入結案欄位的 Repository）
         confirm_password: Callable[[CurrentUser, object], None],
         persist_on_error: Callable[[], None],
         clock: Callable[[], datetime],
@@ -111,6 +117,7 @@ class AdminService:
         self._usage_settings = usage_settings
         self._scripts = scripts
         self._admin_scripts = admin_scripts
+        self._reports = reports
         self._confirm_password = confirm_password
         self._persist_on_error = persist_on_error          # 「這個請求即使以 4xx 結束也保留變更」（與登入失敗計數同一個機制）
         self._clock = clock
@@ -355,7 +362,8 @@ class AdminService:
     def script_queue(
         self, admin: CurrentUser, *, status: object = DEFAULT_SCRIPT_STATUS, limit: int = DEFAULT_PAGE_SIZE, offset: int = 0
     ) -> list[dict[str, Any]]:
-        """審核清單（待審、上架中、已下架）。沒有劇本內文與審核備註全文（只有 `has_note`），所以列出不寫稽核。"""
+        """審核清單（待審、上架中、已下架，以及「被檢舉」：上架中且有未結案檢舉，依優先度排序）。沒有劇本內文、審核備註全文與
+        檢舉的任何文字（只有 `has_note`、`report_count`、`red_line_reported`），所以列出不寫稽核。"""
         self._policy.require_admin(admin)
         errors: dict[str, str] = {}
         if not isinstance(status, str) or status not in LISTABLE_STATUSES:
@@ -475,6 +483,39 @@ class AdminService:
         script_events.log_restored(user_id=admin.id, remover=REMOVER_ADMIN)
         return {"version": self._script_item(ref)}
 
+    # ---- 劇本檢舉（rpg-script-reports）-----------------------------------------------------------------
+    # 檢舉只升高「被檢舉」檢視的優先度，**不自動下架**；是否下架由管理員決定。讀取檢舉內容（理由與自寫文字，玩家文字）每次先寫
+    # `report.read` 稽核；結案為「不成立」不需要密碼（AGENTS.md 第 10 節的高風險清單沒有列入，與核可、退回同級），寫 `report.dismiss`；
+    # 結案為「下架」沿用 `remove_script`（須密碼），由 `ScriptRepository` 的下架轉移在同一個交易自動結案，這裡不提供免密碼的下架捷徑。
+    # 管理員**拿不到檢舉人**：讀取檢舉的資料列沒有這個欄位。稽核與事件只有識別碼與整數筆數，不含自寫文字、理由與標題。
+
+    def script_reports(self, admin: CurrentUser, public_id: str) -> dict[str, Any]:
+        """讀取一個版本的全部檢舉（含已結案；理由、自寫文字、建立與結案時間、結案結果，**沒有檢舉人**）。先寫 `report.read` 稽核
+        再回傳，稽核寫入失敗就不回傳。草稿與不存在的識別碼得到完全相同的 404，且沒有任何寫入。"""
+        self._policy.require_admin(admin)
+        ref = self._readable_script_ref(public_id)
+        rows = self._admin_scripts.list_reports(ref.version_public_id)
+        self._record(
+            admin, ACTION_REPORT_READ, target_user_public_id=ref.author_public_id, detail=self._report_detail(ref, len(rows)),
+        )
+        return {"reports": [admin_script_views.report_item(row) for row in rows]}
+
+    def dismiss_script_reports(self, admin: CurrentUser, public_id: str) -> dict[str, Any]:
+        """把這個版本全部未結案的檢舉一次結為「不成立」：版本狀態與公開目錄不變、不需要密碼、與稽核同一個交易。
+        沒有未結案的檢舉（包含被另一位管理員搶先結案或下架）回 409 `no_open_reports`，沒有任何寫入；草稿與不存在回 404。
+        結案之後新的玩家仍可檢舉這個版本。"""
+        self._policy.require_admin(admin)
+        ref = self._readable_script_ref(public_id)
+        closed = self._reports.close_open_by_public_id(ref.version_public_id, CLOSED_DISMISSED, self._clock())
+        if closed == 0:
+            raise Conflict("這個版本目前沒有未結案的檢舉，可能已被其他管理員處理。請重新整理後再試。", code="no_open_reports")
+        self._record(
+            admin, ACTION_REPORT_DISMISS, target_user_public_id=ref.author_public_id, detail=self._report_detail(ref, closed),
+            changed=True,
+        )
+        script_events.log_reports_dismissed(user_id=admin.id, count=closed)
+        return {"version": self._script_item(ref)}
+
     # =========================================================================
     # 對話與模型失敗的原文
     # =========================================================================
@@ -592,6 +633,18 @@ class AdminService:
         if ref is None:
             raise NotFound()
         return ref
+
+    def _readable_script_ref(self, public_id: object) -> ScriptVersionRef:
+        """檢舉的目標：送審過的版本（非草稿）。草稿與不存在的識別碼得到完全相同的 404（草稿是作者還在編輯的內容，不是管理員的事）。"""
+        ref = self._script_ref(public_id)
+        if ref.status == VERSION_DRAFT:
+            raise NotFound()
+        return ref
+
+    @staticmethod
+    def _report_detail(ref: ScriptVersionRef, count: int) -> dict[str, Any]:
+        """檢舉稽核的細節：版本與劇本的對外識別碼與整數筆數；沒有自寫文字、理由、檢舉人、標題與筆名。"""
+        return {"version_id": ref.version_public_id, "script_id": ref.script_public_id, "count": count}
 
     def _script_item(self, ref: ScriptVersionRef) -> dict[str, Any]:
         """動作完成之後這個版本的清單項目（版本此時一定是送審過的狀態，所以一定讀得到）。"""

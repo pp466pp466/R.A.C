@@ -358,7 +358,7 @@ def get_admin_service() -> AdminService:
         policy=get_access_policy(), admins=AdminRepository(session), audit=AdminAuditRepository(session),
         usage=get_usage_service(), age_stats=build_age_stats_service(session, age_policy=get_age_policy()),
         usage_settings=config.usage, scripts=ScriptRepository(session), admin_scripts=AdminScriptRepository(session),
-        confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
+        reports=ScriptReportRepository(session), confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
         wallet=get_wallet_service(),
     )
 

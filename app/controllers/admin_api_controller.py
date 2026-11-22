@@ -181,6 +181,24 @@ def restore_script(public_id: str):
     return jsonify(service.restore_script(admin, public_id, password=body.get("password")))
 
 
+# ---- 劇本檢舉（rpg-script-reports）-----------------------------------------------------------------------
+# 先 `_admin()` 才處理其他事（非管理員一律 404）。讀取檢舉內容先寫 `report.read` 稽核再回傳，回應沒有檢舉人；結案為「不成立」
+# 不需要密碼也不讀本文（沒有欄位要帶）。結案為「下架」沒有另外的端點：用上面的 `remove`（須密碼），檢舉由下架轉移自動結案。
+
+@admin_api_bp.get("/scripts/versions/<public_id>/reports")
+def script_reports(public_id: str):
+    """一個版本的全部檢舉（含已結案）：理由、自寫文字、時間與結案結果；沒有檢舉人。草稿與不存在一律 404。"""
+    admin, service = _admin()
+    return jsonify(service.script_reports(admin, public_id))
+
+
+@admin_api_bp.post("/scripts/versions/<public_id>/reports/dismiss")
+def dismiss_script_reports(public_id: str):
+    """把這個版本未結案的檢舉全部結為「不成立」（版本狀態不變）；沒有未結案的回 409 `no_open_reports`。"""
+    admin, service = _admin()
+    return jsonify(service.dismiss_script_reports(admin, public_id))
+
+
 # ---- 對話與模型失敗的原文 ---------------------------------------------------------------------------
 
 @admin_api_bp.get("/feedback")

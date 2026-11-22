@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from app.models.script import VERSION_PENDING, VERSION_PUBLISHED, VERSION_REMOVED
-from app.repositories.admin_script_repository import ScriptVersionDetail, ScriptVersionRow
+from app.repositories.admin_script_repository import ScriptReportRow, ScriptVersionDetail, ScriptVersionRow
 from app.services import admin_script_views as views
 
 
@@ -17,10 +17,19 @@ def make_row(**changes) -> ScriptVersionRow:
         author_public_id="33333333-3333-3333-3333-333333333333", audience="female", content_tier="safe",
         submitted_at=datetime(2026, 11, 20, 8, 30, 15, 123456, tzinfo=timezone.utc), published_at=None, decided_at=None,
         review_verdict="flag", review_categories=("minor_suspected", "other_concern"), removed_by=None, decision_category=None,
-        has_note=False, is_builtin=False,
+        has_note=False, is_builtin=False, report_count=0, red_line_reported=False,
     )
     values.update(changes)
     return ScriptVersionRow(**values)
+
+
+def make_report(**changes) -> ScriptReportRow:
+    values = dict(
+        reasons=("plagiarism", "other"), text="自寫的檢舉文字", created_at=datetime(2026, 11, 22, 9, 5, 7, 999999, tzinfo=timezone.utc),
+        closed_at=None, closed_result=None,
+    )
+    values.update(changes)
+    return ScriptReportRow(**values)
 
 
 def make_detail(row=None, **changes) -> ScriptVersionDetail:
@@ -43,7 +52,8 @@ def test_no_internal_integer_ids_email_or_password_fields_can_appear():
     forbidden = {"user_id", "creator_id", "email", "password_hash", "token_version", "birth_date", "age_range", "review_hash", "content_hash"}
     assert not forbidden & set(views.DETAIL_KEYS)
     item = views.list_item(make_row())
-    assert all(not isinstance(value, int) or key in {"version_no"} or isinstance(value, bool) for key, value in item.items())
+    # 整數只有版本序號與未結案檢舉數（計數，不是內部編號）；其餘都不是整數
+    assert all(not isinstance(value, int) or key in {"version_no", "report_count"} or isinstance(value, bool) for key, value in item.items())
 
 
 def test_is_builtin_comes_from_the_row_and_has_nothing_to_do_with_having_an_author():
@@ -103,6 +113,57 @@ def test_the_list_item_never_contains_the_body_or_the_note_but_the_detail_does()
 @pytest.mark.parametrize("has_note", [True, False, 1, 0])
 def test_has_note_is_always_a_boolean(has_note):
     assert views.list_item(make_row(has_note=has_note))["has_note"] is bool(has_note)
+
+
+# ---- 檢舉（rpg-script-reports）-----------------------------------------------------------------------
+
+
+def test_the_list_item_and_the_detail_carry_the_report_count_and_the_red_line_flag():
+    assert {"report_count", "red_line_reported"} <= set(views.LIST_KEYS) <= set(views.DETAIL_KEYS)
+    quiet = views.list_item(make_row())
+    assert (quiet["report_count"], quiet["red_line_reported"]) == (0, False)
+    hot = views.list_item(make_row(status=VERSION_PUBLISHED, report_count=3, red_line_reported=True))
+    assert (hot["report_count"], hot["red_line_reported"]) == (3, True)
+    assert views.detail(make_detail(make_row(report_count=2)))["report_count"] == 2
+
+
+def test_the_two_report_keys_are_a_number_and_a_real_boolean_and_nothing_else_about_reports_is_in_the_list():
+    item = views.list_item(make_row(report_count=1, red_line_reported=1))
+    assert type(item["report_count"]) is int and item["red_line_reported"] is True
+    # 清單只有「數字」與「旗標」，沒有檢舉的任何文字、理由與檢舉人
+    assert not {"reasons", "text", "note", "reporter", "reporter_id", "reports"} & set(views.DETAIL_KEYS)
+
+
+def test_a_report_item_has_exactly_the_documented_keys_and_no_reporter():
+    item = views.report_item(make_report())
+    assert set(item) == set(views.REPORT_KEYS) == {"reasons", "text", "created_at", "closed_at", "closed_result"}
+    assert not any("report" in key or "user" in key or "id" == key for key in item)
+
+
+def test_a_report_item_values_come_from_the_row_and_times_are_iso_to_the_second():
+    open_item = views.report_item(make_report())
+    assert open_item["reasons"] == ["plagiarism", "other"] and open_item["text"] == "自寫的檢舉文字"
+    assert open_item["created_at"] == "2026-11-22T09:05:07+00:00"
+    assert open_item["closed_at"] is None and open_item["closed_result"] is None
+    closed = views.report_item(make_report(
+        text=None, closed_at=datetime(2026, 11, 23, 1, 2, 3, tzinfo=timezone.utc), closed_result="dismissed",
+    ))
+    assert closed["text"] is None and closed["closed_at"] == "2026-11-23T01:02:03+00:00" and closed["closed_result"] == "dismissed"
+
+
+def test_a_report_items_reasons_are_a_fresh_list_not_the_rows_tuple():
+    row = make_report()
+    item = views.report_item(row)
+    assert isinstance(item["reasons"], list)
+    item["reasons"].append("changed")
+    assert row.reasons == ("plagiarism", "other")
+
+
+def test_the_report_row_dataclass_cannot_carry_a_reporter():
+    import dataclasses
+
+    names = {field.name for field in dataclasses.fields(ScriptReportRow)}
+    assert names == {"reasons", "text", "created_at", "closed_at", "closed_result"}
 
 
 def test_the_category_list_is_a_fresh_list_not_the_rows_tuple():

@@ -2,7 +2,8 @@
 理由陣列的內容、劇本標題與標籤與內容、筆名與短代號、版本的對外識別碼，而且每一行的欄位都在日誌的白名單內。
 
 流程（全部走 HTTP 與 flask 指令）：玩家檢舉（含壞的理由、重複、被每日上限擋下、找不到、自己的劇本）→ 新版本核可，舊版本的檢舉自動結為「被取代」→
-又有玩家檢舉新版本 → 作者自行下架，檢舉自動結為「下架」。管理員的讀取與結案（④ 批）與匿名保留的抹除（`test_account_erasure_retain.py`）各自在那裡掃描。
+又有玩家檢舉新版本 → 作者自行下架，檢舉自動結為「下架」。管理員的讀取與結案（`report.read`、`report.dismiss`、管理員下架）的掃描在
+`tests/test_admin_report_flow.py`（日誌、稽核與全部回應）；匿名保留的抹除在 `test_account_erasure_retain.py`。
 """
 import json
 from datetime import timedelta

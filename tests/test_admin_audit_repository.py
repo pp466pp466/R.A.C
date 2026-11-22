@@ -44,7 +44,7 @@ def test_a_row_keeps_every_documented_field(repo, member_session, admin):
     assert stored.detail_json == {"from_tier": "free", "to_tier": "plus", "count": 3}
 
 
-def test_the_documented_actions_are_exactly_the_twenty_one_in_the_specification():
+def test_the_documented_actions_are_exactly_the_twenty_three_in_the_specification():
     assert set(AUDIT_ACTIONS) == {
         "user.lookup", "user.suspend", "user.unsuspend", "user.change_tier",
         "conversation.read", "conversation.delete", "failures.read", "reauth.failed",
@@ -52,7 +52,9 @@ def test_the_documented_actions_are_exactly_the_twenty_one_in_the_specification(
         "limit.set", "publish.suspend", "publish.lift",         # rpg-script-authoring
         "wallet.adjust",                                        # game-wallet
         "script.read", "script.approve", "script.reject", "script.remove", "script.restore",     # rpg-script-publishing
+        "report.read", "report.dismiss",                        # rpg-script-reports
     }
+    assert len(AUDIT_ACTIONS) == len(set(AUDIT_ACTIONS)) == 23
 
 
 @pytest.mark.parametrize("action", AUDIT_ACTIONS)
@@ -105,6 +107,22 @@ def test_details_with_enumerated_values_and_integers_are_accepted(repo, member_s
     repo.add(admin_user_id=admin.id, action="failures.read", now=NOW, detail={"count": 0})
     repo.add(admin_user_id=admin.id, action="user.suspend", now=NOW, detail={"from_status": "pending_verification"})
     assert count(member_session) == 3
+
+
+@pytest.mark.parametrize("action", ["report.read", "report.dismiss"])
+def test_a_report_audit_row_keeps_the_identifiers_and_the_integer_count_and_nothing_else(repo, member_session, admin, action):
+    """rpg-script-reports：細節只有版本與劇本的對外識別碼與整數筆數（`count` 本來就是允許的整數鍵）；自寫文字放不進來。"""
+    version, script = "33333333-3333-4333-8333-333333333333", "44444444-4444-4444-8444-444444444444"
+    repo.add(admin_user_id=admin.id, action=action, now=NOW, target_user_public_id=TARGET,
+             detail={"version_id": version, "script_id": script, "count": 3})
+    member_session.commit()
+    member_session.expire_all()
+    stored = member_session.scalars(select(AdminAuditLog)).one()
+    assert stored.action == action and stored.detail_json == {"version_id": version, "script_id": script, "count": 3}
+    for text in ("檢舉的自寫文字", "has a space", "<b>x</b>"):
+        with pytest.raises(ValueError):
+            repo.add(admin_user_id=admin.id, action=action, now=NOW, detail={"version_id": version, "note": text})
+    assert count(member_session) == 1
 
 
 def test_a_missing_detail_is_stored_as_an_empty_object(repo, member_session, admin):

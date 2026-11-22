@@ -35,7 +35,8 @@
       'reauth.failed': '重新輸入密碼失敗',
       'limit.set': '修改營運限制', 'publish.suspend': '暫停發佈', 'publish.lift': '解除暫停發佈', 'wallet.adjust': '調整遊戲幣',
       'account.lock': '帳號自動鎖定', 'appeal.submit': '玩家送出申訴', 'appeal.read': '檢視申訴', 'account.unlock': '解除帳號鎖定',
-      'script.read': '讀取劇本全文', 'script.approve': '核可劇本', 'script.reject': '退回劇本', 'script.remove': '下架劇本', 'script.restore': '恢復上架劇本'
+      'script.read': '讀取劇本全文', 'script.approve': '核可劇本', 'script.reject': '退回劇本', 'script.remove': '下架劇本', 'script.restore': '恢復上架劇本',
+      'report.read': '讀取劇本檢舉', 'report.dismiss': '結案劇本檢舉（不成立）'
     },
     /* 鎖定原因（app/models/lock_strike.py 的計次類別，也是 users.lock_reason 的值） */
     lockReason: { identity_rejected: '登入或年齡確認多次被拒', rate_limited: '短時間內訊息過多' },

@@ -210,6 +210,43 @@ def test_close_open_rejects_a_result_outside_the_fixed_list_without_touching_any
     assert states(member_session, version) == [(None, None)]
 
 
+# ---- 以對外識別碼結案（管理員端只有對外識別碼）---------------------------------------------
+
+def test_close_open_by_public_id_closes_that_versions_open_reports_only(repo, world, member_session):
+    author, (alice, bob, carol), version = world
+    other = make_version(member_session, author, title="另一個版本")
+    for reporter in (alice, bob, carol):
+        add_report(repo, reporter, version)
+    add_report(repo, alice, other)
+    assert repo.close_open_by_public_id(version.public_id, CLOSED_DISMISSED, NOW) == 3
+    assert states(member_session, version) == [(NOW, CLOSED_DISMISSED)] * 3
+    assert states(member_session, other) == [(None, None)]                    # 別的版本不受影響
+    assert repo.close_open_by_public_id(version.public_id, CLOSED_DISMISSED, NOW) == 0
+
+
+def test_close_open_by_public_id_never_rewrites_a_closed_report_and_ignores_an_unknown_id(repo, world, member_session):
+    _, (alice, bob, _), version = world
+    add_report(repo, alice, version)
+    assert repo.close_open_by_public_id(version.public_id, CLOSED_REMOVED, NOW) == 1
+    add_report(repo, bob, version)
+    later = NOW + timedelta(days=1)
+    assert repo.close_open_by_public_id(version.public_id, CLOSED_DISMISSED, later) == 1
+    assert states(member_session, version) == [(NOW, CLOSED_REMOVED), (later, CLOSED_DISMISSED)]
+    for unknown in ("00000000-0000-4000-8000-000000000000", "not-a-uuid", ""):
+        assert repo.close_open_by_public_id(unknown, CLOSED_DISMISSED, later) == 0
+
+
+@pytest.mark.parametrize("bad", ["", "closed", "REMOVED", None])
+def test_close_open_by_public_id_rejects_a_result_outside_the_fixed_list(repo, world, member_session, bad):
+    _, (alice, *_), version = world
+    add_report(repo, alice, version)
+    with pytest.raises(ValueError):
+        repo.close_open_by_public_id(version.public_id, bad, NOW)
+    assert states(member_session, version) == [(None, None)]
+    with pytest.raises(ValueError):                                           # 識別碼不存在時也不靜默吞掉程式錯誤
+        repo.close_open_by_public_id("00000000-0000-4000-8000-000000000000", bad, NOW)
+
+
 # ---- 刪除 -------------------------------------------------------------------------
 
 def test_delete_for_versions_removes_open_and_closed_reports_of_those_versions_only(repo, world, member_session):

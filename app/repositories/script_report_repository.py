@@ -80,6 +80,17 @@ class ScriptReportRepository(BaseRepository[ScriptReport]):
         )
         return outcome.rowcount
 
+    def close_open_by_public_id(self, version_public_id: str, result: str, now: datetime) -> int:
+        """同 `close_open`，目標以版本的**對外識別碼**給（管理員端只有對外識別碼，沒有內部編號）；回傳結案筆數。
+
+        只把識別碼換成內部編號再呼叫 `close_open`（結案欄位的寫入點仍只有 `close_open` 一個，見
+        `tests/architecture/test_script_report_writes.py`）。識別碼不存在時一筆都不結（回傳 0），與「沒有未結案的檢舉」同一種結果；
+        結果不合列舉時不論版本是否存在都拋出 `ValueError`（程式錯誤，不靜默）。"""
+        if result not in CLOSED_RESULTS:
+            raise ValueError("檢舉的結案結果必須是固定列舉。")
+        version_id = self._session.scalar(select(ScriptVersion.id).where(ScriptVersion.public_id == version_public_id))
+        return 0 if version_id is None else self.close_open(version_id, result, now)
+
     def delete_for_versions(self, version_ids: Sequence[int]) -> int:
         """刪除這些版本的全部檢舉（不論是否結案），回傳刪除筆數。
 

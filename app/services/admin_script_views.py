@@ -20,10 +20,12 @@ from app.models.user import AUDIENCE_ALL
 LIST_KEYS = (
     "id", "script_id", "version_no", "status", "title", "summary", "author_name", "author_code", "author_id", "audience",
     "content_tier", "submitted_at", "published_at", "decided_at", "review_verdict", "review_categories", "removed_by",
-    "decision_category", "has_note", "is_builtin",
+    "decision_category", "has_note", "is_builtin", "report_count", "red_line_reported",
 )
 # 詳情在清單的鍵之外多出的兩個：完整的標準化內容與只供管理員的審核備註
 DETAIL_KEYS = LIST_KEYS + ("decision_note", "content")
+# 一筆檢舉（管理員讀取檢舉內容）的鍵：沒有檢舉人（身分、帳號、內部編號都不在其中）；固定的集合，新增須先改規格
+REPORT_KEYS = ("reasons", "text", "created_at", "closed_at", "closed_result")
 
 
 def _iso(moment: datetime | None) -> str | None:
@@ -53,6 +55,8 @@ def _base(row: Any, *, with_review: bool) -> dict[str, Any]:
         "decision_category": row.decision_category,
         "has_note": bool(row.has_note),
         "is_builtin": bool(row.is_builtin),                             # 種子鍵非空；前端不可用「沒有作者」推論內建
+        "report_count": int(row.report_count),                          # 未結案的檢舉數：只有數字，沒有檢舉的文字與檢舉人
+        "red_line_reported": bool(row.red_line_reported),               # 未結案的檢舉中是否有人勾選紅線理由
     }
 
 
@@ -65,3 +69,13 @@ def detail(found: Any) -> dict[str, Any]:
     """單一版本的詳情：清單那一筆的欄位（模型層結果只要與目前內容對應就帶，由 Repository 在雜湊不符時給空值），
     加上完整的標準化內容與審核備註。這是唯一含劇本文字與備註的形狀。"""
     return {**_base(found.row, with_review=True), "decision_note": found.decision_note, "content": found.content}
+
+
+def report_item(row: Any) -> dict[str, Any]:
+    """讀取檢舉內容時的一筆：理由（固定列舉的陣列）、自寫文字（純文字，玩家文字，只出現在這條先寫稽核的路徑）、
+    建立與結案時間、結案結果（`removed`／`dismissed`／`superseded`，未結案為空）。**沒有檢舉人**：資料列本來就沒有這個欄位。
+
+    以 `REPORT_KEYS` 與值配對來組，不寫字典字面值：結案欄位的結構守門（tests/architecture/test_script_report_writes.py）
+    會把帶有 `closed_at` 鍵的字典字面值視為「繞過 Repository 寫入」的可疑寫法；這裡只是讀取，不該為此放寬守門。"""
+    values = (list(row.reasons), row.text, _iso(row.created_at), _iso(row.closed_at), row.closed_result)
+    return dict(zip(REPORT_KEYS, values, strict=True))

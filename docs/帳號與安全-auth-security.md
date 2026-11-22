@@ -234,10 +234,11 @@ flowchart TD
 | 非管理員 | 一律 404，不是 403（否則會告訴一般使用者後台存在）；順序是「登入 → 管理員檢查 → 才解析請求本文」，所以格式錯誤的本文也只得到 404 |
 | 可讀範圍 | 清單沒有訊息內容；只有「意見回饋」（助理回覆的意圖是 `complaint_feedback` 或 `human_handoff`）與「被內容安全過濾標記」兩類對話可讀全文，不符資格與不存在得到同一個 404；**劇本全文只限使用者送審過的版本**（`pending_review`、`published`、`removed`、`rejected` 與被取代者；草稿與不存在得到同一個 404），**每次讀取都先寫 `script.read` 稽核**；使用者資料沒有任何個別的年齡資料，年齡只有總覽的區間人數 |
 | 劇本審核與下架（rpg-script-publishing） | 核可與人工退回**不需要重新輸入密碼**，但寫稽核（`script.approve`、`script.reject`）；管理員下架與恢復是高風險操作：須重新輸入密碼並寫稽核（`script.remove`、`script.restore`）。**只有下架者能恢復**：作者自行下架的，管理員不能恢復（那是作者自己的決定）；管理員下架的，作者不能自行恢復；內建劇本（沒有作者）不可下架。審核備註只有管理員看得到：不進稽核細節、日誌與事件，不出現在作者端的任何回應與個人資料匯出；稽核細節只有版本與劇本的對外識別碼、狀態與固定類別。核可、退回與下架的結果只顯示在作者的 `/scripts` 頁面，**不寄信**；管理員下架的說明導向客服的意見回饋（申訴頁只開放被鎖定或被暫停發佈的帳號） |
+| 劇本檢舉（rpg-script-reports） | 檢舉只升高「被檢舉」檢視的優先度（紅線理由者最前，其次未結案人數多者，再其次最早檢舉者），**不自動下架**。管理員讀取一個版本的檢舉內容每次先寫 `report.read` 稽核再回傳，**拿不到檢舉人**（查詢根本不選取）；結案為「不成立」**不需要密碼**（高風險清單不含檢舉結案，與核可、退回同級；寫 `report.dismiss`），結案為「下架」沿用 `script.remove`（須密碼，檢舉在同一個交易自動結為 `removed`），**不提供免密碼的下架捷徑**；版本被新版本取代時未結案的檢舉由系統結為 `superseded`；稽核細節與事件只有識別碼與整數筆數，不含自寫文字、理由、檢舉人與標題 |
 | 找使用者 | 主要入口是警告（總覽的今日警告 → 被標記對話 → 看使用者）；信箱精確查詢是次要入口、供客服反應時使用；沒有使用者清單與模糊搜尋 |
 | 重新輸入密碼 | `AuthService.confirm_password`：與登入共用失敗計數與鎖定（連續 5 次鎖定 15 分鐘），鎖定中即使正確也拒絕且訊息相同；成功不重設計數；沒有設定密碼的管理員不能執行（`no_password`） |
 | 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
-| 稽核 | `admin_audit_logs`：21 個固定動作（含劇本審核的 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`），只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
+| 稽核 | `admin_audit_logs`：23 個固定動作（含劇本審核的 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`，與劇本檢舉的 `report.read`、`report.dismiss`），只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
 | 回應 | `/admin` 與 `/api/admin/` 一律 `Cache-Control: no-store`；非 GET 須通過 CSRF |
 
 `/api/admin/*` 端點（全部需要登入且是管理員；`POST` 另需 CSRF）：
@@ -262,12 +263,14 @@ flowchart TD
 | `/api/admin/publish-suspended` | GET | 目前被暫停發佈的玩家帳號（識別碼、顯示名稱、暫停時間；不含 email 與暱稱） |
 | `/api/admin/users/<public_id>/lift-publish-suspension` | POST | 解除暫停發佈（重新輸入密碼）；補一筆 `lifted` 送審紀錄使連續被拒中斷、申訴標為已處理、寫 `publish.lift` |
 | `/api/admin/users/<public_id>/wallet/adjust` | POST | 調整玩家的遊戲幣餘額（`bucket`、`delta`、`reason`、密碼）；不受免費幣上限限制，不能使餘額低於 0（409 `insufficient_coins`）；稽核 `wallet.adjust` 與調整同一個交易 |
-| `/api/admin/scripts` | GET | 劇本審核清單（待審、上架中、已下架；待審有疑慮的排最前）：只有目錄資訊與狀態，沒有內文與審核備註全文，不寫稽核 |
+| `/api/admin/scripts` | GET | 劇本審核清單（待審、上架中、已下架，以及 `status=reported` 的被檢舉檢視：上架中且有未結案檢舉，依紅線、人數、最早檢舉時間排序；待審有疑慮的排最前）：只有目錄資訊、狀態與檢舉的兩個計數（`report_count`、`red_line_reported`），沒有內文、審核備註全文與檢舉文字，不寫稽核 |
 | `/api/admin/scripts/versions/<public_id>` | GET | 讀取送審過的版本全文與審核備註（先寫 `script.read` 稽核再回傳；草稿與不存在一律 404） |
 | `/api/admin/scripts/versions/<public_id>/approve` | POST | 核可（不需要密碼）；取代同劇本原本上架或下架的版本，寫 `script.approve` |
 | `/api/admin/scripts/versions/<public_id>/reject` | POST | 人工退回（固定類別加只有管理員看得到的備註，不需要密碼）；寫 `script.reject`，備註不進稽核與日誌 |
 | `/api/admin/scripts/versions/<public_id>/remove` | POST | 管理員下架（類別、備註與密碼）；內建劇本不可下架；寫 `script.remove` |
 | `/api/admin/scripts/versions/<public_id>/restore` | POST | 管理員恢復自己下架的版本（密碼）；作者自行下架的不恢復；寫 `script.restore` |
+| `/api/admin/scripts/versions/<public_id>/reports` | GET | 讀取一個版本的全部檢舉（理由、自寫文字、時間、結案結果；**沒有檢舉人**）；先寫 `report.read`（細節只有識別碼與筆數）再回傳；草稿與不存在一律 404（rpg-script-reports） |
+| `/api/admin/scripts/versions/<public_id>/reports/dismiss` | POST | 把未結案的檢舉全部結為「不成立」（不需要密碼與本文）；沒有未結案的 409 `no_open_reports`；寫 `report.dismiss`；結案為「下架」沿用 `remove`（密碼） |
 
 頁面：`/admin`（只有管理員的顯示名稱，所有資料經由 API 取得；前端見 [前端結構-frontend.md](前端結構-frontend.md)）。
 

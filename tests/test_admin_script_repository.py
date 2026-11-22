@@ -18,6 +18,10 @@ from app.repositories.script_repository import ScriptRepository
 from tests.support.script_review import at, make_author, new_script, put_in_status
 
 
+# 「依版本狀態」的三個清單；`LISTABLE_STATUSES` 另有「被檢舉」檢視（上架中且有未結案檢舉，見 test_admin_script_repository_reports.py）
+STATE_LISTS = (VERSION_PENDING, VERSION_PUBLISHED, VERSION_REMOVED)
+
+
 @pytest.fixture()
 def repo(member_session):
     return ScriptRepository(member_session)
@@ -115,7 +119,7 @@ def test_removed_is_newest_decision_first_and_carries_who_and_why(repo, admin_re
 def test_each_list_only_has_its_own_status_and_never_drafts_rejected_or_superseded(repo, admin_repo, author):
     for status in (VERSION_DRAFT, VERSION_PENDING, VERSION_PUBLISHED, VERSION_REJECTED, VERSION_REMOVED, VERSION_SUPERSEDED):
         put_in_status(repo, author, status, title=f"狀態{status}"[:30])
-    for status in LISTABLE_STATUSES:
+    for status in STATE_LISTS:
         rows = admin_repo.list_by_status(status, limit=50, offset=0)
         assert {row.status for row in rows} == {status}
         assert f"狀態{VERSION_DRAFT}" not in titles(rows) and f"狀態{VERSION_REJECTED}" not in titles(rows)
@@ -157,7 +161,7 @@ def test_a_row_has_the_catalog_fields_and_the_author_public_id_but_no_internal_i
 
 def test_the_list_has_no_script_body_and_only_says_whether_a_note_exists(repo, admin_repo, author):
     put_in_status(repo, author, VERSION_REJECTED, title="被退回")           # put_in_status 以備註「管理員的備註」退回
-    rows = [row for status in LISTABLE_STATUSES for row in admin_repo.list_by_status(status, limit=50, offset=0)]
+    rows = [row for status in STATE_LISTS for row in admin_repo.list_by_status(status, limit=50, offset=0)]
     for row in rows:
         text = repr(row)
         assert "靈氣復甦" not in text and "林曉" not in text and "管理員的備註" not in text and "下架的備註" not in text
@@ -274,7 +278,7 @@ def test_find_ref_follows_the_state_after_a_transition(repo, admin_repo, author,
 
 def test_the_admin_script_repository_is_read_only():
     public = {name for name, member in inspect.getmembers(AdminScriptRepository, inspect.isfunction) if not name.startswith("_")}
-    assert public == {"list_by_status", "get_reviewable", "find_ref"}
+    assert public == {"list_by_status", "get_reviewable", "find_ref", "list_reports"}
 
 
 def test_reading_changes_nothing(repo, admin_repo, author, member_session):
