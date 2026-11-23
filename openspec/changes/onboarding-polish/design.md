@@ -37,7 +37,7 @@
 - `STEPS`：`[{ id: 'welcome' }, { id: 'age' }, { id: 'preference' }]`；進度條段數、「第 N 步，共 M 步」、「上一步」與「下一步／開始」的判斷都由清單長度與索引算出，新增一步（例如喜歡的類型）只需加一項與對應樣板。
 - `canAdvance(stepId, values, acknowledged)` → `{ ok, reason }`：`welcome` 要暱稱去頭尾後非空且已確認守則；`age` 要生日與區間都有；`preference` 永遠可以。`reason` 是固定的繁體中文說明。**不檢查暱稱格式**（長度、網址、電話、署名只由伺服器判斷，避免前後端兩份規則；代價是格式錯誤要到最後才知道，由 D4 的「回到第 1 步」補償）。
 - `stepForFailure(outcome)`：把 `Auth.ageOutcome` 的結果對應到步驟：欄位錯誤含 `nickname` → `welcome`；含 `birth_date` 或 `age_range`，或 `age_mismatch` → `age`；其他留在 `preference`。
-- `createOnboarding({ http, navigate, destination, storage })`：封裝送出順序。`http.post`、`http.put` 與導向函式都由外部注入，所以 Node 測試不需要瀏覽器：先 `post('/api/auth/verify-age', body)`；成功後若偏好不是 `all` 才 `put('/api/account/story-preference', …)`，其失敗（任何錯誤）只吞掉不拋出；最後 `navigate(destination)`。`storage` 只供測試斷言零寫入。
+- `createOnboarding({ http, navigate, destination, delay })`：封裝送出順序。`http.post`、`http.put`、導向函式與計時器都由外部注入，所以 Node 測試不需要瀏覽器：先 `post('/api/auth/verify-age', body)`；成功後若偏好是 `male` 或 `female`（不是預設的 `all`）才 `put('/api/account/story-preference', …)`，其失敗或超過 5 秒（任何情形）只吞掉不拋出；最後 `navigate(destination)`。模組不接受也不存取任何儲存區，測試以讀原始碼證明。
 `age.js` 只剩 Vue 接線（步驟索引、欄位、Modal 開關、焦點）。
 
 ### D3. 故事偏好在年齡確認成功之後才存

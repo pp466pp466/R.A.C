@@ -4,10 +4,18 @@
 
 ## 1. 純函式與流程控制器（批 1）
 
-- [ ] 1.1 新增 `app/static/js/auth/onboarding.js`（UMD）：`STEPS`、進度與「第 N 步，共 M 步」的計算、`canAdvance(stepId, values, acknowledged)`（含固定的繁體中文 `reason`）、`stepForFailure(outcome)`；驗證：新增 `tests/js/onboarding.test.js` 涵蓋 `onboarding-wizard` 規格的「三個步驟與進度」「各步驟的可前進條件」，並有「在清單加第四步，進度與前進後退自動涵蓋」的測試
-- [ ] 1.2 `onboarding.js` 加 `createOnboarding({ http, navigate, destination, storage })` 的送出流程：先 `verify-age`、成功後偏好不是 `all` 才 `story-preference`（失敗被吞掉）、最後導向；處理中旗標與重複點擊只送一次；驗證：Node 測試涵蓋「一次送出，成功之後才存故事偏好」「錯誤回到對應的步驟」的每個情境（含 `age_not_eligible`、401、`account_locked`、欄位錯誤對應步驟、偏好失敗不影響、`verify-age` 失敗不呼叫偏好），並以假 `storage` 斷言整個流程對儲存區零寫入
-- [ ] 1.3 `auth-flows.js` 只在必要處補小修（若 `ageOutcome` 需要帶出欄位名稱供 `stepForFailure` 使用）；驗證：既有 `tests/js/auth-flows.test.js` 全部維持通過
-- [ ] 1.4 跑 Node 測試與全域守門子集（`tests/architecture`、`test_service_errors`、`test_design_docs`、`test_readme`、`test_restricted_session`、`test_legal_pages`、`test_agents_skill_sync`）；驗證：通過，新檔沒有 CDN、`v-html`、Bootstrap JavaScript
+- [x] 1.1 新增 `app/static/js/auth/onboarding.js`（UMD）：`STEPS`、進度與「第 N 步，共 M 步」的計算、`canAdvance(stepId, values, acknowledged)`（含固定的繁體中文 `reason`）、`stepForFailure(outcome)`；驗證：新增 `tests/js/onboarding.test.js` 涵蓋 `onboarding-wizard` 規格的「三個步驟與進度」「各步驟的可前進條件」，並有「在清單加第四步，進度與前進後退自動涵蓋」的測試
+- [x] 1.2 `onboarding.js` 加 `createOnboarding({ http, navigate, destination, delay })` 的送出流程：先 `verify-age`、成功後偏好不是 `all` 才 `story-preference`（失敗被吞掉）、最後導向；處理中旗標與重複點擊只送一次；驗證：Node 測試涵蓋「一次送出，成功之後才存故事偏好」「錯誤回到對應的步驟」的每個情境（含 `age_not_eligible`、401、`account_locked`、欄位錯誤對應步驟、偏好失敗不影響、`verify-age` 失敗不呼叫偏好），並以讀原始碼（去掉註解）與「沒有任何瀏覽器全域物件也能執行」證明對儲存區零存取
+- [x] 1.3 `auth-flows.js` 只在必要處補小修（若 `ageOutcome` 需要帶出欄位名稱供 `stepForFailure` 使用）；驗證：既有 `tests/js/auth-flows.test.js` 全部維持通過
+- [x] 1.4 跑 Node 測試與全域守門子集（`tests/architecture`、`test_service_errors`、`test_design_docs`、`test_readme`、`test_restricted_session`、`test_legal_pages`、`test_agents_skill_sync`）；驗證：通過，新檔沒有 CDN、`v-html`、Bootstrap JavaScript
+
+### 批 1 完成註記（2026-11-23；只跑相關測試加全域守門子集，**未跑全套 pytest**——本批沒有後端改動，全套留到批 3）
+
+- **1.1、1.2**：新增 `app/static/js/auth/onboarding.js`（UMD，全域名稱 `Onboarding`）與 `tests/js/onboarding.test.js`（33 項）。`STEPS`、`progress`（段數、「第 N 步，共 M 步」、首尾與主要按鈕文字）、`nextIndex`／`previousIndex`、`canAdvance`、`stepForFailure`、`createOnboarding().submit`。
+- **與 design D2 的出入（兩處）**：①**沒有 `storage` 參數**：測試改以「讀原始碼、去掉註解後沒有任何瀏覽器儲存、cookie、`document`、`window` 字樣」與「沒有任何瀏覽器全域物件也能完整執行一次送出」證明零存取，比注入一個永遠不會被呼叫的替身更直接；②**多了 `delay(ms)` 注入與 5 秒逾時**：規格寫「偏好請求失敗**或逾時**不阻擋導向」，所以偏好請求以 `Promise.race` 與計時器競速；選預設值（不發請求）時不啟動計時器。`submit` 的結果是 `'done'`（已導向）或 `'busy'`（上一次還在處理）；`verify-age` 失敗時拒絕原本的錯誤，好讓 `Auth.useForm` 照舊處理欄位錯誤與提示。
+- **1.3**：確認**不需要改** `auth-flows.js`：`Auth.ageOutcome` 的結果已帶 `fields`（欄位錯誤）與 `clear`（`age_mismatch` 清空的欄位），`stepForFailure` 直接使用；既有 `auth-flows.test.js` 與 `auth-common.test.js` 44 項維持通過。
+- **1.4**：Node 全套 **1822 通過、0 失敗**（原 1789，加上本批 33）；pytest 守門子集（`tests/architecture`、`test_service_errors`、`test_design_docs`、`test_readme`、`test_restricted_session`、`test_legal_pages`、`test_agents_skill_sync`）加 `test_assets_manifest`、`test_js_unit_tests`、`test_age_page`、`test_auth_pages` **1211 通過、2 略過（既有）、0 失敗**；唯一警告是既有的 `test_assets_manifest` 子行程輸出 cp950 解碼執行緒例外，與本 change 無關。
+- **未驗證**：瀏覽器實機（批 2）；變異驗證與全套 pytest（批 3）。
 
 ## 2. 樣板、樣式與登入頁（批 2）
 
