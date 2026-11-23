@@ -28,9 +28,9 @@ STATE = json.dumps({"elapsed_months": 2, "current_location": "祕密山谷", "np
 
 # ---- 事件模組本身 -----------------------------------------------------------------------------
 
-def test_there_are_twenty_two_unique_events():
+def test_there_are_twenty_four_unique_events():
     names = [value for key, value in vars(rpg_events).items() if key.startswith("EVENT_") and isinstance(value, str)]
-    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 22          # 12 個回合與第 0 幕事件 + 6 個記事簿事件 + 3 個修訂事件 + 1 個遊戲內提示事件
+    assert len(names) == len(set(names)) == len(rpg_events.EVENT_NAMES) == 24          # 12 個回合與第 0 幕事件 + 6 個記事簿事件 + 3 個修訂事件 + 1 個遊戲內提示事件 + 2 個行動建議事件
 
 
 def test_no_logging_function_takes_a_free_text_parameter():
@@ -41,6 +41,8 @@ def test_no_logging_function_takes_a_free_text_parameter():
         "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars", "calls",
         # 修訂：種類（列舉）、是否免費（布林）、預扣的幣數（整數）；沒有理由、分類、行動與劇情的參數
         "kind", "is_free", "cost",
+        # 行動建議：項數（整數）與結果（列舉）；沒有任何文字參數
+        "count", "outcome",
     }
     for name, function in inspect.getmembers(rpg_events, inspect.isfunction):
         if name.startswith("log_"):
@@ -79,12 +81,14 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
         rpg_events.log_revision_completed(user_id=1, session_id=2, kind="edit", attempt=3, chars=480, latency_ms=4200, world_updated=True, ended=False)
         rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=2, reason="blocked")
         rpg_events.log_safe_mode_hint(user_id=1, session_id=2, reason="input")
+        rpg_events.log_suggestion_served(user_id=1, session_id=2, count=3, outcome="generated", model="m")
+        rpg_events.log_suggestion_failed(user_id=1, session_id=2, reason="validation", calls=2)
     records = [r for r in caplog.records if r.name == "app.rpg"]
     assert {r.event for r in records} == set(rpg_events.EVENT_NAMES)
     extra_keys = {"event", "user_id", "session_id", "turn_number", "attempt", "outcome", "reason", "model", "chars", "latency_ms",
                   "first_chunk_ms", "finish_reason", "dropped", "categories",
                   "boundary", "entries", "longest", "added", "total", "version", "over_entries", "over_chars",
-                  "kind", "coins"}
+                  "kind", "coins", "count"}
     for record in records:
         emitted = {key for key in record.__dict__ if key in ALLOWED_FIELDS or key == "event"}
         assert emitted <= extra_keys | set(ALLOWED_FIELDS)
@@ -145,6 +149,16 @@ def test_every_event_logs_only_whitelisted_fields(caplog):
     lambda: rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=1, reason="這一輪的劇情寫了什麼"),
     lambda: rpg_events.log_revision_failed(user_id=1, session_id=2, kind="regenerate", attempt=1, reason="blocked_by_provider"),
     lambda: rpg_events.log_revision_failed(user_id=1, session_id=2, kind="unknown", attempt=1, reason="blocked"),
+    # 行動建議：結果與原因必須是列舉；項數與呼叫次數必須是整數（建議的文字放不進任何欄位）
+    lambda: rpg_events.log_suggestion_served(user_id=1, session_id=2, count=1, outcome="她提議去找林曉", model=None),
+    lambda: rpg_events.log_suggestion_served(user_id=1, session_id=2, count=1, outcome="saved", model=None),
+    lambda: rpg_events.log_suggestion_served(user_id=1, session_id=2, count="三項", outcome="generated", model=None),
+    lambda: rpg_events.log_suggestion_served(user_id=1, session_id=2, count=True, outcome="reused", model=None),
+    lambda: rpg_events.log_suggestion_served(user_id=1, session_id=True, count=1, outcome="reused", model=None),
+    lambda: rpg_events.log_suggestion_failed(user_id=1, session_id=2, reason="模型回了一段話", calls=1),
+    lambda: rpg_events.log_suggestion_failed(user_id=1, session_id=2, reason="unavailable", calls=1),
+    lambda: rpg_events.log_suggestion_failed(user_id=1, session_id=2, reason="stale", calls="兩次"),
+    lambda: rpg_events.log_suggestion_failed(user_id=1, session_id="2", reason="stale", calls=1),
 ])
 def test_values_outside_the_enumerations_are_refused(call):
     with pytest.raises(ValueError):

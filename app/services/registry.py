@@ -84,6 +84,7 @@ from app.services.rpg_prompt import rpg_marker
 from app.services.rpg_runner_base import RunnerDeps
 from app.services.rpg_opening_runner import OpeningRunner
 from app.services.rpg_revision_runner import RevisionRunner
+from app.services.rpg_suggest_service import SuggestionService
 from app.services.rpg_turn_runner import TurnRunner
 from app.services.session_service import SessionService
 from app.services.startable import StartableVersions
@@ -480,6 +481,18 @@ def get_game_service() -> GameService:
 def get_notebook_service() -> NotebookService:
     """目前請求的記事簿服務：玩家檢視與儲存自己存檔的記事簿（不呼叫模型，所以沒有 RPG 供應商也能用）。"""
     return NotebookService(sessions=SessionRepository(get_session()), policy=get_access_policy())
+
+
+def get_suggestion_service() -> SuggestionService:
+    """目前請求的行動建議服務（玩家點圖示才呼叫模型；不碰錢包）。模型名稱取 RPG 用途的首選模型；沒有 RPG 供應商時 `llm` 為 None（讀取已保存的建議
+    照常，要呼叫模型時回 503）。`release` 是 `session.commit`：模型呼叫之後立刻提交，讓最後一筆帳本在之後的錯誤回應下仍保留。"""
+    session, config, clock = get_session(), get_config(), get_clock()
+    usage = build_usage_service(session, settings=config.usage, clock=clock)
+    return SuggestionService(
+        sessions=SessionRepository(session), policy=get_access_policy(), limits=get_runtime_limits(), llm=get_rpg_llm_service(),
+        budget_exhausted=usage.global_budget_exhausted, marker=rpg_marker(config.secret_key.reveal()), model=_rpg_llm_settings().primary_model,
+        clock=clock, release=session.commit,
+    )
 
 
 def has_rpg_provider() -> bool:

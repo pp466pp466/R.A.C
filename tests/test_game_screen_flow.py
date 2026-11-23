@@ -52,7 +52,7 @@ BASE_KEYS = {"time", "level", "logger", "message"}
 # 前端 game-state.js 的 worldView／turn_view 白名單：後端回的欄位必須剛好是這些（多了或少了，前端的對照都會悄悄失效）
 WORLD_KEYS = {"elapsed_months", "location", "summary", "goals", "places", "protagonist_age"}
 TURN_KEYS = {"seq", "client_msg_id", "turn_number", "status", "action", "story", "revision"}
-SNAPSHOT_KEYS = {"id", "title", "content_tier", "status", "ended", "protagonist", "version", "completed_turns", "opening", "world", "notebook", "last_turn"}
+SNAPSHOT_KEYS = {"id", "title", "content_tier", "status", "ended", "protagonist", "version", "completed_turns", "opening", "world", "notebook", "last_turn", "suggestions"}
 NOTEBOOK_SUMMARY_KEYS = {"version", "length", "capacity", "full"}               # 快照的摘要（全文與預備空間只在 GET …/notebook）
 
 
@@ -240,6 +240,7 @@ def test_the_game_screen_flow_in_the_order_the_frontend_calls_the_backend(world,
     assert set(first["world"]) == WORLD_KEYS                                      # 前端 worldView 的白名單
     assert set(first["notebook"]) == NOTEBOOK_SUMMARY_KEYS                        # 快照只有記事簿的用量摘要，沒有全文
     assert first["opening"] == {"state": "pending", "text": None} and first["completed_turns"] == 0 and first["ended"] is False
+    assert first["suggestions"] == []                                             # rpg-story-view：新存檔沒有行動建議（預設不產生，點圖示才呼叫）
 
     # ---- 3) 第 0 幕串流（pending -> 呼叫開場串流）；此時還不能送第一輪 ---------------------------------------------
     early = play(client, save_id, "too-early", ACTION_ONE)

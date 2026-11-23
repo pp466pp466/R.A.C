@@ -627,6 +627,26 @@ class SessionRepository(BaseRepository[RpgSession]):
         reason = self._not_revisable_reason(save.id, last, cutoff=now - timedelta(seconds=stale_after_seconds), include_claim=True)
         return RevisionState(last.client_msg_id, last.seq, last.turn_number, last.revision, last.regen_count, reason is None, reason)
 
+    def turn_in_progress(
+        self, user_id: int, public_id: str, *, now: datetime, stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS
+    ) -> bool | None:
+        """存檔是否有進行中（未逾時）的回合或修訂：有未逾時的 `streaming` 回合，或任一回合有未逾時的修訂認領。與 `start_turn`、`claim_revision`
+        拒絕並行的判斷相同。**不需要有完成的回合**：第一輪正在串流、還沒有任何完成回合時也回傳真（`revision_state` 在這種情形沒有回合可以判斷，
+        所以行動建議不靠它）。不是自己的存檔回傳 `None`。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        cutoff = now - timedelta(seconds=stale_after_seconds)
+        return bool(self._session.scalar(
+            select(func.count()).select_from(MemoryLog).where(
+                MemoryLog.session_id == save.id,
+                sa.or_(
+                    sa.and_(MemoryLog.turn_status == TURN_STREAMING, MemoryLog.updated_at >= cutoff),
+                    sa.and_(MemoryLog.revising_started_at.is_not(None), MemoryLog.revising_started_at >= cutoff),
+                ),
+            )
+        ))
+
     def claim_revision(
         self, user_id: int, public_id: str, client_msg_id: str, *, expected_revision: int, now: datetime,
         stale_after_seconds: int = DEFAULT_TURN_STALE_SECONDS,

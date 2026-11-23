@@ -132,3 +132,17 @@ def test_codes_are_random_not_derived_from_anything():
 
 def test_the_public_display_is_nickname_hash_code():
     assert display_name("雲遊者", "7K2M") == "雲遊者#7K2M"
+
+
+@pytest.mark.parametrize(("text", "hit"), [
+    ("聯絡 abc@example.com", True), ("看 www.example.tw", True), ("撥 0912345678", True), ("撥０９１２３４５６７８", True),
+    ("e x a m p l e . c o m", True), ("旅人 3 號", False), ("Mr.Smith", False), ("阿福", False),
+])
+def test_the_shared_contact_pattern_check_is_the_one_the_nickname_rule_uses(text, hit):
+    """`has_contact_pattern` 是暱稱與行動建議共用的判斷（網址、電子郵件、電話的樣式；全形轉半形、不分大小寫、以空白拆開的網址也算）。"""
+    from app.services.nickname import MESSAGE_PATTERN, check_nickname, has_contact_pattern
+
+    assert has_contact_pattern(text) is hit
+    if len(text) <= 20 and hit:
+        assert check_nickname(text) == (None, MESSAGE_PATTERN)
+

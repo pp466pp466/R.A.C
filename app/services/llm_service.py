@@ -29,8 +29,8 @@ from app.llm.types import (
     LLMRequest, LLMResponse, LLMTransientError, LLMValidationError,
 )
 from app.models.llm_call_log import (
-    BREAKER_STATUSES, KIND_CHAT, KIND_PROTAGONIST_GEN, KIND_RPG_NOTEBOOK, KIND_RPG_STATE, STATUS_BLOCKED, STATUS_CONFIG_ERROR, STATUS_OK,
-    STATUS_VALIDATION_FAILED,
+    BREAKER_STATUSES, KIND_CHAT, KIND_PROTAGONIST_GEN, KIND_RPG_NOTEBOOK, KIND_RPG_STATE, KIND_RPG_SUGGEST, STATUS_BLOCKED, STATUS_CONFIG_ERROR,
+    STATUS_OK, STATUS_VALIDATION_FAILED,
 )
 from app.observability.llm_events import log_breaker_opened, log_call
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
@@ -42,7 +42,7 @@ MIN_CALL_SECONDS = 2.0
 MAX_CALLS = 2
 
 # 結構化輸出的文字會顯示給玩家的 RPG 用途：解析前先把簡體轉成繁體（模型不一定遵守提示詞；見 zh_text）。審查類的輸出只有判定，不需要
-TRADITIONAL_KINDS = frozenset({KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN})
+TRADITIONAL_KINDS = frozenset({KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN, KIND_RPG_SUGGEST})
 
 # 降級的原因（呼叫端依此決定降級文案的語氣與是否計入安全過濾的次數）
 DEGRADED_VALIDATION = "validation"

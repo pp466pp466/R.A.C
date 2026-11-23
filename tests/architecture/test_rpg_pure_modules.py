@@ -15,6 +15,7 @@ APP = PROJECT_ROOT / "app"
 PURE_MODULES = (
     "rpg_context.py", "rpg_world.py", "rpg_output_guard.py", "rpg_output_rules.py", "rpg_prompt.py",
     "notebook_policy.py", "rpg_notebook_prompt.py",             # rpg-notebook：容量、清理、視窗、追加與抓取提示詞
+    "rpg_suggest_prompt.py",                                    # rpg-story-view：行動建議的提示詞、結構描述與逐項驗證
 )
 FORBIDDEN_IMPORTS = (
     "app.models", "app.repositories", "app.db", "app.controllers", "app.security", "app.observability", "app.llm.openai_compatible",

@@ -246,7 +246,7 @@ def test_readme_rpg_turn_engine_section_lists_exactly_the_registered_game_routes
         (rule.rule.replace("<session_id>", "<id>"), method) for rule in app.url_map.iter_rules() if rule.rule.startswith("/api/game")
         for method in rule.methods - {"HEAD", "OPTIONS"}
     }
-    assert len(actual) == 8, "沒有掃到預期數量的路由，比對可能是空洞的"       # 4 個回合與唯讀端點，加上記事簿的 GET 與 PUT（rpg-notebook），以及修訂的兩個串流端點（rpg-turn-revision）
+    assert len(actual) == 9, "沒有掃到預期數量的路由，比對可能是空洞的"       # 4 個回合與唯讀端點，加上記事簿的 GET 與 PUT（rpg-notebook）、修訂的兩個串流端點（rpg-turn-revision），以及行動建議的 POST（rpg-story-view）
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
     for event in ("meta", "token", "ping", "transition", "state", "done", "error"):
         assert f"| `{event}` |" in section, event
@@ -279,6 +279,25 @@ def test_readme_rpg_notebook_section_documents_the_numbers_errors_and_every_log_
     ):
         assert f"| `{event}` |" in section, event
     assert "/api/game/sessions/<id>/notebook" in section and "rpg_notebook" in section and "不需要資料庫遷移" in section
+
+
+def test_readme_story_view_section_documents_the_suggestion_backend_and_both_log_events():
+    """行動建議一節：端點、前提檢查的錯誤代碼、保存與重用的規則、帳本用途、推進常數，以及兩種日誌事件與失敗原因列舉都要記載，且與程式的常數一致。"""
+    from app.models.llm_call_log import KIND_RPG_SUGGEST
+    from app.observability import rpg_events
+    from app.services import rpg_prompt
+    from app.services.rpg_suggest_prompt import SUGGEST_MAX_CHARS, SUGGEST_MAX_ITEMS, SUGGEST_MIN_CHARS
+
+    section = readme_section("RPG 行動建議與推進劇情（rpg-story-view）")
+    for event in (rpg_events.EVENT_SUGGESTION_SERVED, rpg_events.EVENT_SUGGESTION_FAILED):
+        assert f"| `{event}` |" in section, event
+    for reason in rpg_events.SUGGESTION_FAIL_REASONS + rpg_events.SUGGESTION_OUTCOMES:
+        assert f"`{reason}`" in section, reason
+    for code in ("session_ended", "opening_pending", "turn_in_progress", "suggestions_stale", "suggestions_unavailable", "system_busy", "service_unavailable"):
+        assert f"`{code}`" in section or f"`{code}`" in readme_section("RPG 回合引擎（rpg-turn-engine）"), code
+    assert "/api/game/sessions/<id>/suggestions" in section and f"`{KIND_RPG_SUGGEST}`" in section
+    assert f"{SUGGEST_MIN_CHARS} 至 {SUGGEST_MAX_CHARS} 字" in section and f"至多保留 {SUGGEST_MAX_ITEMS} 項" in section
+    assert rpg_prompt.ADVANCE_ACTION in section and "suggestions_json" in section and "不改存檔的 `version`" in section
 
 
 def test_readme_cs_endpoint_tables_list_exactly_the_registered_routes():

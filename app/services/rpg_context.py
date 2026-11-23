@@ -14,6 +14,8 @@
 - 在場人物切片最多 6 位：最近 3 輪出現過的、名稱出現在本次文字的，加上主角錨定事實所指的人物（一律優先）；每位特質至多 6 項、每項 8 字內，錨定事實 100 字內。
   劇本的 `hidden_trait` **不放進劇本資料區塊**，只透過角色卡切片（帶階段）進入上下文，使隱藏特質隨弧線階段逐步呈現。
 - 不截斷任何區塊；大小由各欄位的上限保證，測試以全部上限組裝並斷言字數上界。
+- **行動建議另用精簡的上下文**（`build_suggest_context`，rpg-suggestions）：只有玩家看得到的資訊（地點、局勢與目標、主角角色卡與來歷、最近 3 輪或第 0 幕），
+  不帶記事簿、在場人物切片與劇本資料，所以隱藏特質與弧線階段不會出現；建議本身也不進入回合、狀態與記事簿抓取的上下文。
 """
 from __future__ import annotations
 
@@ -22,6 +24,7 @@ from typing import Any, Mapping, Sequence
 
 from app.llm.types import LLMContent
 from app.services import rpg_prompt as prompt
+from app.services import rpg_suggest_prompt as suggest_prompt
 from app.services.protagonist import ANCHOR_CHARACTER, ANCHOR_LOCATION, ANCHOR_MILESTONE, origin_of
 from app.services.rpg_world import (
     ANCHOR_FACT_MAX, ENDING_CUSTOM, LAYER_HIDDEN, LAYER_SURFACE, TRAIT_LABEL_MAX, TRAIT_MAX_COUNT, WorldState, calendar_year, card_age,
@@ -32,6 +35,7 @@ TURN_COMPLETE = "complete"              # 與 `app.models.rpg_session.TURN_COMPL
 HISTORY_TURNS = 10
 NPC_SLICE_MAX = 6
 NPC_RECENT_TURNS = 3
+SUGGEST_TURNS = 3                       # 行動建議的上下文只帶最近 3 輪（rpg-suggestions）
 EMPTY_NOTEBOOK = "（目前是空的）"
 EMPTY_LIST = "（無）"
 
@@ -318,4 +322,38 @@ def build_state_context(
         _block(prompt.LABEL_ENDING, "\n".join(_ending_lines(script, ending_due))),
     ]
     return system, (LLMContent("user", ("\n\n".join(blocks),)),)
+
+
+def _suggest_protagonist_lines(world: WorldState, script: Mapping[str, Any], protagonist: Mapping[str, Any]) -> list[str]:
+    """建議用的主角資料：玩家自己撰寫的角色卡與來歷，以及與劇本的聯繫（地點、里程碑與人物三種都帶；回合的上下文把人物的聯繫放在在場人物切片）。"""
+    lines = _protagonist_lines(world, script, protagonist)
+    anchor = _anchor_of(protagonist)
+    if anchor and anchor.get("kind") == ANCHOR_CHARACTER:
+        lines.append(f"- 與劇本的聯繫：{_anchor_target_text(anchor, script)}：{neutralize(anchor.get('text') or '')}")
+    return lines
+
+
+def build_suggest_context(
+    *, script: Mapping[str, Any], world: WorldState, protagonist: Mapping[str, Any], history: Sequence[HistoryTurn], opening_text: str | None,
+    tier: str, marker: str, language: str = prompt.DEFAULT_LANGUAGE,
+) -> tuple[str, tuple[LLMContent, ...]]:
+    """行動建議的 `(系統指令, 內容)`（rpg-suggestions）：**只有玩家看得到的資訊**——所在地點、目前局勢與進行中的目標、主角的角色卡與來歷，
+    以及最近 3 個完成回合的行動與劇情（尚無完成回合時為第 0 幕文字；有完成回合時第 0 幕不帶）。**不帶**記事簿、在場人物的角色卡切片（特質、
+    表層或隱藏的歸屬、弧線階段、錨定事實）、劇本資料（含狀態轉移規則與角色的隱藏特質）與里程碑進度，所以「不洩漏隱藏資訊」由資料來源保證，
+    不靠模型自律。`history` 可含任何狀態的回合，這裡只取最近 3 個完成的。最後一個使用者內容是平台常數的請求句。"""
+    system = suggest_prompt.build_suggest_system(tier, language, marker)
+    recent = window_turns(history)[-SUGGEST_TURNS:]
+    world_lines = [f"所在地點：{neutralize(world.current_location) or '（尚未確定）'}", _field("目前局勢", world.status_summary), "進行中的目標：", *_goal_lines(world)]
+    data = "\n\n".join([
+        prompt.DATA_NOTE, _block(prompt.LABEL_STATE, "\n".join(line for line in world_lines if line)),
+        _block(prompt.LABEL_OPENING_PROTAGONIST, "\n".join(_suggest_protagonist_lines(world, script, protagonist))),
+    ])
+    messages: list[tuple[str, str]] = [("user", data)]
+    if not recent and isinstance(opening_text, str) and opening_text.strip():
+        messages.append(("model", neutralize(opening_text)))
+    for turn in recent:
+        messages.append(("user", _block(prompt.LABEL_PAST_ACTION, neutralize(turn.action))))
+        messages.append(("model", neutralize(turn.narration)))
+    messages.append(("user", _block(suggest_prompt.LABEL_REQUEST, suggest_prompt.REQUEST_TEXT)))
+    return system, _merge(messages)
 

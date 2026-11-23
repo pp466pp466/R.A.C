@@ -43,6 +43,13 @@ def _compare_form(value: str) -> str:
     return text.replace("。", ".").replace("．", ".")
 
 
+def has_contact_pattern(value: str) -> bool:
+    """文字是否含網址、電子郵件或電話的樣式（比對前全形轉半形、不分大小寫；以空白拆開的網址也算）。暱稱與行動建議共用，不回傳命中的片段。"""
+    compare = _compare_form(value)
+    squeezed = re.sub(r"\s+", "", compare)               # 以空白拆開的網址也要擋住
+    return bool(_URL.search(compare) or _URL.search(squeezed) or _EMAIL.search(compare) or _PHONE.search(compare))
+
+
 def check_nickname(raw: object) -> tuple[str | None, str | None]:
     """回傳（標準化後的暱稱, None）或（None, 錯誤說明）。"""
     if not isinstance(raw, str):
@@ -56,10 +63,9 @@ def check_nickname(raw: object) -> tuple[str | None, str | None]:
         return None, MESSAGE_REQUIRED
     if not NICKNAME_MIN <= len(text) <= NICKNAME_MAX:
         return None, MESSAGE_LENGTH
-    compare = _compare_form(text)
-    squeezed = re.sub(r"\s+", "", compare)               # 以空白拆開的網址也要擋住
-    if _URL.search(compare) or _URL.search(squeezed) or _EMAIL.search(compare) or _PHONE.search(compare):
+    if has_contact_pattern(text):
         return None, MESSAGE_PATTERN
+    squeezed = re.sub(r"\s+", "", _compare_form(text))
     if _compare_form(OFFICIAL_AUTHOR_NAME) in squeezed:
         return None, MESSAGE_OFFICIAL
     if _compare_form(RETIRED_AUTHOR_NAME) in squeezed:

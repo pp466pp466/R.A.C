@@ -425,6 +425,22 @@ class SuggestionUnavailable(ServiceUnavailable):
     default_message = "AI 目前無法生成主角，請稍後再試，或自己填寫主角。"
 
 
+class ActionSuggestionsUnavailable(ServiceUnavailable):
+    """行動建議目前無法產生（503，rpg-suggestions）：模型失敗、兩次輸出都不合格、被供應商過濾，或逐項驗證後沒有任何有效項目。
+    **沒有保存任何東西、不佔每個畫面一次的次數**，玩家可以再按圖示重試；文案是通用的，不含模型原文。與創角的 `SuggestionUnavailable`（代碼 `suggestion_unavailable`，單數）是不同的錯誤。"""
+
+    code = "suggestions_unavailable"
+    default_message = "建議暫時無法產生，可以自己輸入行動。"
+
+
+class ActionSuggestionsStale(Conflict):
+    """行動建議產生期間劇情已經前進（409，rpg-suggestions）：模型呼叫的期間完成了新的一輪或最後一輪被修訂，這組建議對應的是舊的畫面，所以不保存、不回傳。
+    玩家重新按圖示就會依最新的畫面產生。"""
+
+    code = "suggestions_stale"
+    default_message = "劇情已經往前進展，這組建議不再適用，請再按一次建議圖示。"
+
+
 class ReviewUnavailable(ServiceUnavailable):
     """劇本審查的模型層目前無法給出結果（503）。送審與開存檔一律擋下（不放行），也不計入送審次數。"""
 

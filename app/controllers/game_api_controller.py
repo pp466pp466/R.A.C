@@ -11,6 +11,9 @@
 - `GET  /api/game/sessions/<id>/notebook`：記事簿全文、版本、字數、容量、預備空間與是否已滿（已完結的存檔仍可讀）。
 - `PUT  /api/game/sessions/<id>/notebook`：本文 `{"text": "…", "expected_version": 1}`，玩家儲存編輯後的記事簿（不呼叫模型、不改已處理到的輪次）；
   版本不符回 409 `notebook_conflict` 並附後端最新的記事簿，太長 422、規則層命中 422（只有類別）、已完結 409 `session_ended`。
+- `POST /api/game/sessions/<id>/suggestions`：玩家點建議圖示才呼叫（rpg-suggestions），沒有本文；回 JSON `{suggestions: [1 至 3 項純文字], reused}`。
+  同一個畫面最多產生一次（已保存且錨點相同者直接重用，不呼叫模型）；不扣遊戲幣、不是事件串流。開始前的失敗：404、409 `session_ended`、
+  `opening_pending`、`turn_in_progress`、`suggestions_stale`，503 `system_busy`、`service_unavailable`（沒有供應商）、`suggestions_unavailable`。
 
 Controller 只讀取請求並回傳 `Response`：閘門、驗證、擁有者（非擁有者與不存在同為 404）、預扣與搶佔都在 `GameService`。
 **開始前的失敗**（驗證、閘門、餘額不足、衝突、404、沒有供應商）都在建立 `Response` 之前由 `GameService` 拋出，
@@ -36,7 +39,7 @@ from app.services.errors import ServiceUnavailable
 from app.services.game_service import KIND_EDIT, KIND_REGENERATE, TURNS_PAGE_MAX
 from app.services.registry import (
     build_notebook_capturer, build_opening_runner, build_revision_runner, build_turn_runner, get_game_service, get_notebook_service,
-    has_rpg_provider,
+    get_suggestion_service, has_rpg_provider,
 )
 from app.services.rpg_replay import opening_replay_events, turn_replay_events
 from app.services.rpg_runner_base import SseEvent
@@ -177,3 +180,11 @@ def put_notebook(session_id: str):
     user = require_login()
     body = read_json_object()
     return jsonify(notebook=get_notebook_service().save(user, session_id, text=body.get("text"), expected_version=body.get("expected_version")))
+
+
+@game_api_bp.post("/sessions/<session_id>/suggestions")
+def suggest_actions(session_id: str):
+    """行動建議（沒有本文）。權限、前提檢查、重用、模型呼叫與保存都在 `SuggestionService`；Controller 只回傳 JSON。失敗一律是一般的 JSON 錯誤。"""
+    user = require_login()
+    result = get_suggestion_service().suggest(user, session_id)
+    return jsonify(suggestions=list(result.items), reused=result.reused)

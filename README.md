@@ -1336,8 +1336,9 @@ change `rpg-turn-engine`（RC-2a）。把「開存檔之後的一切」接起來
 | `/api/game/sessions/<session_id>/turns` | GET | 回合清單，依 `seq` 遞增。查詢參數 `since_seq`（預設 0，增量同步）與 `limit`（預設與上限 200）；回應 `{turns, has_more}`。只有 `complete` 的回合含劇情；被擋、中斷與生成中的回合只有狀態（`story: null`），被擋的文字永遠不離開伺服器 |
 | `/api/game/sessions/<session_id>/notebook` | GET | 記事簿（見「RPG 記事簿（rpg-notebook）」）：`{notebook: {text, version, length, capacity, reserve, full}}`。已完結的存檔仍可讀；不呼叫模型，沒有 RPG 供應商也能用 |
 | `/api/game/sessions/<session_id>/notebook` | PUT | 玩家儲存編輯後的記事簿。本文 `{"text": "…", "expected_version": 1}`，成功回傳同形的 `{notebook}`（版本加 1）。`notebook_too_long`（422，附 `length`、`capacity`）、`notebook_blocked`（422，只附 `categories`）、`notebook_conflict`（409，附後端最新的 `notebook`）、`session_ended`（409）、`validation_error`（400） |
+| `/api/game/sessions/<session_id>/suggestions` | POST | 行動建議（rpg-story-view，見「RPG 行動建議與推進劇情」）：玩家點建議圖示才呼叫，**沒有本文**、不是事件串流，回 JSON `{suggestions: [1 至 3 項純文字], reused}`。同一個畫面最多產生一次（已保存且錨點相同者直接重用，不呼叫模型）；不扣遊戲幣、不用免費次數，計入全站每日 token 上限 |
 
-開始前的錯誤代碼：`insufficient_coins`（409，附 `balance`、`needed`）、`session_ended`（409）、`opening_pending`（409，第 0 幕尚未完成）、`opening_in_progress`（409）、`turn_in_progress`（409，同一編號仍在處理，或最後一輪正在被修訂）、`revision_conflict`（409，修訂的 `expected_revision` 與後端不一致，以後端為準）、`not_revisable`（409，附 `reason`：`ended`、`not_last`、`in_progress`、`no_snapshot`）、`input_blocked`（422，行動命中必須拒絕的類別，只附類別）、`system_busy`（503，全站今日用量用盡，附 `Retry-After`）、`service_unavailable`（503，沒有設定 RPG 模型供應商：在預扣之前就回應，不扣幣、不搶佔）、`age_confirmation_required`／`account_locked`（403）。
+開始前的錯誤代碼：`insufficient_coins`（409，附 `balance`、`needed`）、`session_ended`（409）、`opening_pending`（409，第 0 幕尚未完成）、`opening_in_progress`（409）、`turn_in_progress`（409，同一編號仍在處理，或最後一輪正在被修訂）、`revision_conflict`（409，修訂的 `expected_revision` 與後端不一致，以後端為準）、`not_revisable`（409，附 `reason`：`ended`、`not_last`、`in_progress`、`no_snapshot`）、`input_blocked`（422，行動命中必須拒絕的類別，只附類別）、`system_busy`（503，全站今日用量用盡，附 `Retry-After`）、`service_unavailable`（503，沒有設定 RPG 模型供應商：在預扣之前就回應，不扣幣、不搶佔）、`age_confirmation_required`／`account_locked`（403）。行動建議端點另有 `suggestions_stale`（409，產生期間劇情已前進，不保存）與 `suggestions_unavailable`（503，通用文案、沒有保存、可重試；注意與創角的 `suggestion_unavailable` 單數不同）。
 
 ### 事件協定
 
@@ -1565,6 +1566,36 @@ change `rpg-notebook`（RC-2b）。RPG 以記事簿取代對話摘要：每個�
 **全套測試（任務 5.5，2026-11-10）**：`pytest -q` **9412 項通過、0 失敗、1 略過**（略過的是 `grp`，只在 Linux 才跑，容器驗收中實際執行過），含真實 SQL Server `project_test`（968.7 秒）；`node --test` **246 項通過**；`openspec validate rpg-notebook --strict` 通過。第一次全套（9411 通過）有 1 項失敗：`test_project_db_schema_doc` 發現 `docs/project資料結構文件.md` 的固定值字典漏寫 `llm_call_logs.kind` 的新值 `rpg_notebook`（批次 1 新增，之前只跑相關測試，到全套才發現）；補上字典、欄位說明與第 14 節的異動紀錄（沒有結構變更、沒有遷移）後重跑全套全過。
 
 尚未驗證：瀏覽器中的記事簿面板（畫面屬 RC-3）；付費模型與備援模型的抓取品質；邊界內容（親子、校園日常）與放棄、已滿、驗證失敗等路徑在真實模型上的表現（只由假模型與單元測試覆蓋）；5.3 的提示詞調整建議尚未套用（見 `docs/RPG.md` 7.16.5）。
+
+## RPG 行動建議與推進劇情（rpg-story-view）
+
+change `rpg-story-view`（視覺小說式遊戲畫面）。**本節只記錄已實作的後端**（批 2、批 3）；分段閱讀器、劇情卡版面與前端的建議圖示屬後面的批次，完成後再補在這裡。規範在 AGENTS.md 第 5、6、7、10、11 節（批 1 已修訂）；設計見 `openspec/changes/rpg-story-view/design.md`（D4 至 D7）。
+
+### 直接推進劇情
+
+前端以固定文字「推進劇情」（後端常數 `rpg_prompt.ADVANCE_ACTION`）送出**一般行動**：預扣 30 幣、可重新生成與編輯、同一 `client_msg_id` 重送不重複扣幣，**後端沒有任何針對這四個字的特例**；只有回合敘事的系統指令多一條固定的平台規則（讓劇情依最近 10 輪、記事簿與世界狀態自然推進，不放寬任何內容界線），第 0 幕、狀態呼叫、記事簿抓取與行動建議的系統指令都沒有這條規則。
+
+### 行動建議
+
+| 項目 | 內容 |
+|---|---|
+| 端點 | `POST /api/game/sessions/<id>/suggestions`（見「RPG 回合引擎」的端點表）：需要登入、CSRF 與 Origin、帳號與年齡閘門；非擁有者與不存在同為 404。沒有本文、不是事件串流 |
+| 預設不產生 | 載入存檔、第 0 幕完成與回合完成都不會呼叫模型，**不增加每輪的呼叫次數**；只有玩家點圖示且該畫面沒有已保存的有效建議時才呼叫一次 |
+| 前提檢查（依序） | 閘門 → 擁有者（404）→ 已完結（409 `session_ended`）→ 第 0 幕未完成（409 `opening_pending`）→ 有進行中或修訂中的回合（409 `turn_in_progress`；第一輪正在串流而尚無完成回合時也成立）→ 已保存且錨點相同者**重用**（`reused: true`，不呼叫模型）→ 沒有 RPG 供應商（503 `service_unavailable`）→ 全站每日 token 上限（503 `system_busy`） |
+| 錨點與保存 | 錨點是最後一個完成回合的 `seq` 與 `revision`（第 0 幕為 0、0）；`sessions.suggestions_json` 保存 `{seq, revision, items}`，錨點相等才有效：新回合完成與修訂成功都使舊建議自動過期（不需要在回合引擎中清除）。寫入由 `SessionRepository.save_suggestions` 在鎖內重新確認，**不改存檔的 `version`**；呼叫期間錨點已改變回 409 `suggestions_stale`、不保存；並行的另一個請求先寫入則回傳已存的那一組 |
+| 失敗不保存 | 模型失敗、驗證兩次都不合格、被供應商過濾，或逐項驗證後沒有任何有效項目：503 `suggestions_unavailable`（通用文案，不含模型原文），**不保存、不佔每個畫面一次的次數**，玩家可再按圖示重試。模型呼叫之後立刻提交交易，所以最後一筆帳本在錯誤回應之後仍保留 |
+| 提示詞與上下文 | 固定的 `system_instruction`（`rpg_suggest_prompt.build_suggest_system`：繁體中文、生效模式的界線每次現算、只提議主角可做的行動、資料區塊聲明、不公開標記字串；**沒有**回合敘事的行動規則與推進規則）；使用者內容區只有玩家看得到的資訊（`rpg_context.build_suggest_context`：地點、局勢與目標、主角角色卡與來歷、最近 3 輪，尚無完成回合時為第 0 幕），**不帶**記事簿、在場人物的角色卡切片（隱藏特質、弧線階段）與劇本資料，所以不洩漏隱藏資訊由資料來源保證 |
+| 逐項驗證 | 結構化輸出 `{"suggestions": [...]}`（最多 5 項，多的丟棄）；每項 NFC、去除控制字元與零寬字元、2 至 30 字、不含網址、電子郵件或電話的樣式、不重複、不含標記字串與設定用語，並通過與玩家行動相同的規則層（四類紅線一律丟棄；安全模式開時性內容丟棄）；至多保留 3 項，沒有任何有效項視為驗證失敗（同一模型重試一次）。純文字渲染，嚴禁 `v-html` |
+| 帳本與錢包 | 帳本用途 `rpg_suggest`（記入實際使用的模型，後台標籤「行動建議」，輸出簡轉繁）；**不碰錢包**（不預扣、不扣款、不用免費次數），不計輪數，計入全站每日 token 上限；管理員與各會員等級行為相同 |
+
+### 日誌與隱私
+
+建議由玩家的角色卡與近期劇情衍生，視為個資：與存檔同期限（`sessions.suggestions_json` 同一資料列，隨存檔與帳號刪除）、納入個人資料匯出（目前保存的文字，不含錨點）、不在管理員預設可檢視的範圍。日誌只有兩種事件，欄位只有內部編號、整數與列舉，絕不含建議、劇情、行動或角色卡的文字：
+
+| 事件 | 時機 |
+|---|---|
+| `rpg.suggestion_served` | 建議已回給玩家（項數 `count`、結果 `generated` 或 `reused`、實際使用的模型） |
+| `rpg.suggestion_failed` | 沒有產生（原因列舉：`no_provider`、`validation`、`transient`、`blocked`、`config`、`budget`、`empty`、`stale`；`attempt` 為實際發出的模型呼叫次數） |
 
 ## 故事偏好與讀者頻道（story-preference）
 

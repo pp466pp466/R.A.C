@@ -38,6 +38,8 @@ EVENT_REVISION_STARTED = "rpg.revision_started"
 EVENT_REVISION_COMPLETED = "rpg.revision_completed"
 EVENT_REVISION_FAILED = "rpg.revision_failed"
 EVENT_SAFE_MODE_HINT = "rpg.safe_mode_hint"
+EVENT_SUGGESTION_SERVED = "rpg.suggestion_served"
+EVENT_SUGGESTION_FAILED = "rpg.suggestion_failed"
 
 EVENT_NAMES = frozenset(
     value for name, value in dict(globals()).items() if name.startswith("EVENT_") and isinstance(value, str)
@@ -72,6 +74,11 @@ NOTEBOOK_REJECT_REASONS = ("too_long", "blocked", "conflict", "ended")          
 
 # 重新生成與編輯最後一輪（rpg-turn-revision 的 design D10）。**不記錄**理由、分類、行動、劇情與快照：函式沒有接收它們的參數
 REVISION_FAIL_REASONS = ("blocked", "timeout", "model_failed", "state_failed", "superseded", "disconnected", "internal")
+
+
+# 行動建議（rpg-story-view 的 design D5）：結果與沒有結果的原因。**不記錄**建議、劇情、行動與角色卡：函式沒有接收它們的參數
+SUGGESTION_OUTCOMES = ("generated", "reused")
+SUGGESTION_FAIL_REASONS = ("no_provider", "validation", "transient", "blocked", "config", "budget", "empty", "stale")
 
 
 # 遊戲內「可以嘗試關閉安全模式」提示（safe-mode-upgrade-hint）的觸發原因：玩家輸入被規則層判為性內容、模型輸出被審查層因性內容擋下
@@ -346,4 +353,24 @@ def log_safe_mode_hint(*, user_id: int, session_id: int, reason: str) -> None:
     _info(
         EVENT_SAFE_MODE_HINT, "RPG 安全模式提示", user_id=user_id, session_id=_integer("session_id", session_id),
         reason=_choice("原因", reason, HINT_REASONS), outcome="shown",
+    )
+
+
+# ---- 行動建議 ---------------------------------------------------------------------------------------------
+
+
+def log_suggestion_served(*, user_id: int, session_id: int, count: int, outcome: str, model: str | None) -> None:
+    """行動建議已回給玩家：項數、是剛產生（`generated`，記實際使用的模型）或重用已保存的（`reused`，沒有模型呼叫）。只有內部編號、整數與列舉，沒有建議的文字。"""
+    _info(
+        EVENT_SUGGESTION_SERVED, "RPG 行動建議", user_id=user_id, session_id=_integer("session_id", session_id), count=_integer("count", count),
+        outcome=_choice("結果", outcome, SUGGESTION_OUTCOMES), model=model,
+    )
+
+
+def log_suggestion_failed(*, user_id: int, session_id: int, reason: str, calls: int) -> None:
+    """行動建議沒有產生（沒有供應商、驗證失敗、暫時性錯誤、被供應商過濾、設定錯誤、單次預算用盡、沒有有效項目、產生期間劇情已前進）：
+    沒有保存任何東西，玩家可以重試。`calls` 是實際發出的模型呼叫次數。"""
+    _warning(
+        EVENT_SUGGESTION_FAILED, "RPG 行動建議失敗", user_id=user_id, session_id=_integer("session_id", session_id),
+        reason=_choice("原因", reason, SUGGESTION_FAIL_REASONS), attempt=_integer("calls", calls), outcome="failed",
     )

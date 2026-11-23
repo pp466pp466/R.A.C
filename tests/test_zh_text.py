@@ -7,7 +7,7 @@ import json
 import pytest
 
 from app.models.llm_call_log import (
-    KIND_CHAT, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW, KIND_RPG_NOTEBOOK, KIND_RPG_STATE, KIND_SCRIPT_REVIEW,
+    KIND_CHAT, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW, KIND_RPG_NOTEBOOK, KIND_RPG_STATE, KIND_RPG_SUGGEST, KIND_SCRIPT_REVIEW,
 )
 from app.services import rpg_prompt
 from app.services.rpg_output_guard import OutputGuard
@@ -173,7 +173,7 @@ def test_a_simplified_story_is_streamed_and_stored_as_traditional(member_session
 SIMPLIFIED_JSON = json.dumps({"reply": "他踏进了雾气之中。"}, ensure_ascii=False)
 
 
-@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN])
+@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN, KIND_RPG_SUGGEST])
 def test_structured_output_that_players_read_is_converted_before_it_is_parsed(member_session, kind):
     provider = FakeLLMProvider()
     provider.script(SIMPLIFIED_JSON)
@@ -181,7 +181,7 @@ def test_structured_output_that_players_read_is_converted_before_it_is_parsed(me
     assert outcome.ok and outcome.value == {"reply": "他踏進了霧氣之中。"}
 
 
-@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN])
+@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN, KIND_RPG_SUGGEST])
 def test_structured_output_keeps_the_name_jie_while_converting_the_rest(member_session, kind):
     provider = FakeLLMProvider()
     provider.script(json.dumps({"reply": "李杰踏进了雾气之中，杰说：「我们走。」"}, ensure_ascii=False))
@@ -189,7 +189,7 @@ def test_structured_output_keeps_the_name_jie_while_converting_the_rest(member_s
     assert outcome.ok and outcome.value == {"reply": "李杰踏進了霧氣之中，杰說：「我們走。」"}
 
 
-@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN])
+@pytest.mark.parametrize("kind", [KIND_RPG_STATE, KIND_RPG_NOTEBOOK, KIND_PROTAGONIST_GEN, KIND_RPG_SUGGEST])
 def test_structured_output_keeps_english_words_as_they_are(member_session, kind):
     provider = FakeLLMProvider()
     provider.script(json.dumps({"reply": ENGLISH_STORY}, ensure_ascii=False))

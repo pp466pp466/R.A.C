@@ -178,6 +178,8 @@ def test_every_service_error_type_maps_to_a_deliberate_status():
         "BuiltinNotRemovable": 409,
         # rpg-script-reports（script-reports 規格：自己的劇本 403、重複 409、每日上限 429）
         "ReportOwnScript": 403, "AlreadyReported": 409, "ReportLimit": 429,
+        # rpg-story-view（rpg-suggestions 規格：產生期間劇情已前進 409、目前無法產生 503）
+        "ActionSuggestionsStale": 409, "ActionSuggestionsUnavailable": 503,
     }
     needs_arguments = {
         errors.VersionConflict: ({"id": "x"},), errors.InsufficientCoins: (20, 30), errors.CheckinOverflow: (100, 100),

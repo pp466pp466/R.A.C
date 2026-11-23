@@ -37,15 +37,27 @@
 
 ## 4. 後端：建議的提示詞、服務與端點
 
-- [ ] 4.1 新增純函式模組 `rpg_suggest_prompt.py`（固定系統指令樣板、`SUGGEST_SCHEMA`、`clean_items`、洩漏標記語意規則）並列入架構測試的純模組清單；驗證：單元測試覆蓋 NFC 與控制字元、長度 2 至 30、網址與電話與 email 樣式、去重、標記、至多 3 項、全部無效時回空
-- [ ] 4.2 在 `rpg_context.py` 新增 `build_suggest_context`（玩家可見世界、角色卡與來歷、最近 3 輪或第 0 幕；不含記事簿、NPC 切片、隱藏欄位）；驗證：測試以含隱藏特質與弧線階段的存檔組裝，斷言不出現；玩家文字只在使用者內容區；生效模式現算
-- [ ] 4.3 `llm_call_log.py` 新增 `KIND_RPG_SUGGEST`、加入 `CALL_KINDS` 與 `TRADITIONAL_KINDS`；驗證：既有的帳本與用途列舉測試更新後通過，且帳本不含文字
-- [ ] 4.4 新增 `SuggestionService`（前提檢查順序、重用、預算檢查、`run_structured`、規則層與安全模式過濾、寫回前再比對錨點、`suggestions_stale`）；驗證：服務測試覆蓋 `design.md` D5 的十個步驟，包含失敗不保存、重用不呼叫模型、不扣幣、備援模型、管理員相同行為
-- [ ] 4.5 在 `game_api_controller.py` 新增 `POST /api/game/sessions/<id>/suggestions`（JSON、CSRF、閘門）；驗證：端點測試覆蓋 404、`session_ended`、`opening_pending`、`turn_in_progress`、`system_busy`、沒有供應商、`suggestions_unavailable`、`suggestions_stale` 與成功回應的欄位；`/api/*` 回應不洩漏內部細節
-- [ ] 4.6 在 `rpg_events.py` 新增建議事件（白名單：內部編號、項數、是否重用、結果列舉）；驗證：日誌測試收集一輪建議流程，找不到任何建議、劇情或行動的文字
-- [ ] 4.7 確認呼叫的狀態：一個進行中（`streaming`）的回合而尚無完成回合時，錨點與 `turn_in_progress` 判斷正確；驗證：新增對應測試
-- [ ] 4.8 更新 `README.md` 的端點表與路由數，以及事件白名單、用途列舉等別處寫死的數量；驗證：`test_readme`、`test_design_docs` 與守門子集通過
-- [ ] 4.9 跑後端相關測試（`tests/test_rpg_*`、`tests/test_game_*`、帳本與遷移）與全域守門子集，並補跑一次全套 pytest（涵蓋第 3 與第 4 組；背景執行、輸出存檔）；驗證：全部通過並記錄筆數
+- [x] 4.1 新增純函式模組 `rpg_suggest_prompt.py`（固定系統指令樣板、`SUGGEST_SCHEMA`、`clean_items`、洩漏標記語意規則）並列入架構測試的純模組清單；驗證：單元測試覆蓋 NFC 與控制字元、長度 2 至 30、網址與電話與 email 樣式、去重、標記、至多 3 項、全部無效時回空
+- [x] 4.2 在 `rpg_context.py` 新增 `build_suggest_context`（玩家可見世界、角色卡與來歷、最近 3 輪或第 0 幕；不含記事簿、NPC 切片、隱藏欄位）；驗證：測試以含隱藏特質與弧線階段的存檔組裝，斷言不出現；玩家文字只在使用者內容區；生效模式現算
+- [x] 4.3 `llm_call_log.py` 新增 `KIND_RPG_SUGGEST`、加入 `CALL_KINDS` 與 `TRADITIONAL_KINDS`；驗證：既有的帳本與用途列舉測試更新後通過，且帳本不含文字
+- [x] 4.4 新增 `SuggestionService`（前提檢查順序、重用、預算檢查、`run_structured`、規則層與安全模式過濾、寫回前再比對錨點、`suggestions_stale`）；驗證：服務測試覆蓋 `design.md` D5 的十個步驟，包含失敗不保存、重用不呼叫模型、不扣幣、備援模型、管理員相同行為
+- [x] 4.5 在 `game_api_controller.py` 新增 `POST /api/game/sessions/<id>/suggestions`（JSON、CSRF、閘門）；驗證：端點測試覆蓋 404、`session_ended`、`opening_pending`、`turn_in_progress`、`system_busy`、沒有供應商、`suggestions_unavailable`、`suggestions_stale` 與成功回應的欄位；`/api/*` 回應不洩漏內部細節
+- [x] 4.6 在 `rpg_events.py` 新增建議事件（白名單：內部編號、項數、是否重用、結果列舉）；驗證：日誌測試收集一輪建議流程，找不到任何建議、劇情或行動的文字
+- [x] 4.7 確認呼叫的狀態：一個進行中（`streaming`）的回合而尚無完成回合時，錨點與 `turn_in_progress` 判斷正確；驗證：新增對應測試
+- [x] 4.8 更新 `README.md` 的端點表與路由數，以及事件白名單、用途列舉等別處寫死的數量；驗證：`test_readme`、`test_design_docs` 與守門子集通過
+- [x] 4.9 跑後端相關測試（`tests/test_rpg_*`、`tests/test_game_*`、帳本與遷移）與全域守門子集，並補跑一次全套 pytest（涵蓋第 3 與第 4 組；背景執行、輸出存檔）；驗證：全部通過並記錄筆數
+
+### 批 3 完成註記（2026-11-23；後端：建議的提示詞、服務與端點；**補跑了一次全套 pytest**，沒有跑 Node 專屬的新測試——本批沒有前端）
+
+- **4.1**：`app/services/rpg_suggest_prompt.py`（純函式，已列入 `tests/architecture/test_rpg_pure_modules.py`）：固定系統指令（沒有回合敘事的行動規則與推進規則）、`SUGGEST_SCHEMA`（最多 5 項，單項寬鬆上界 200 字）、`clean_items`（NFC、去控制與零寬字元、2 至 30 字、網址／信箱／電話樣式、去重、標記、設定用語與區塊標題、規則層、安全模式的性內容）、`suggest_rules`（洩漏標記；至少一個有效項）。網址／信箱／電話的判斷從 `nickname.py` 抽出共用的 `has_contact_pattern`（暱稱行為不變）。
+- **4.2**：`rpg_context.build_suggest_context`（只有地點、局勢、目標、主角角色卡與來歷、最近 3 輪或第 0 幕；不帶記事簿、在場人物切片、劇本資料）。主角的錨定事實（地點、里程碑、人物三種）都帶。
+- **4.3**：`KIND_RPG_SUGGEST = "rpg_suggest"`（11 字，放得進 `NVARCHAR(20)`，**沒有遷移**）、加入 `CALL_KINDS` 與 `TRADITIONAL_KINDS`（輸出簡轉繁）、後台標籤「行動建議」、`docs/project資料結構文件.md` 的兩處允許值與第 14 節紀錄。
+- **4.4**：`app/services/rpg_suggest_service.py`（`SuggestionService`）。**與 design D5 的出入（我選的做法，可推翻）**：①`revision_state` 在「尚無完成回合」時沒有回合可判斷，所以新增 `SessionRepository.turn_in_progress`（未逾時的 `streaming` 回合或修訂認領，與 `start_turn`、`claim_revision` 拒絕並行的判斷相同），4.7 的情形由它判斷；②**重用先於「沒有供應商」與全站預算**（沒有模型呼叫就不需要它們；設計的順序把預算放在重用之後、沒有提到供應商）；③沒有供應商由 Service 判斷而不是 Controller 的 `_require_provider`，原因同②；④所有項目都無效時，語意規則把它當驗證失敗，所以會**以同一模型重試一次**才回 503（規格只寫「視為失敗」）；⑤**模型呼叫之後立刻 `release`（提交）**：請求在 4xx／5xx 時整個交易回復，而 `LlmService` 的最後一筆帳本只寫入、不提交，沒有這一步，失敗與 `suggestions_stale` 的呼叫會在回應之後從帳本消失（HTTP 與兩軌測試都驗證帳本留存）。
+- **4.5**：`POST /api/game/sessions/<id>/suggestions`（沒有本文、回 `{suggestions, reused}`）；新增錯誤 `ActionSuggestionsUnavailable`（503 `suggestions_unavailable`）與 `ActionSuggestionsStale`（409 `suggestions_stale`），**刻意不叫 `SuggestionUnavailable`**（那是創角的 `suggestion_unavailable`，單數）。閘門與缺 CSRF 的參數化已把這個端點加進 `tests/test_game_api.py`。
+- **4.6**：`rpg_events` 新增 `rpg.suggestion_served`（項數、`generated`｜`reused`、模型）與 `rpg.suggestion_failed`（八個原因列舉、呼叫次數）；事件由 22 個變 24 個。HTTP 測試掃整段日誌，找不到建議、劇情、行動、存檔識別碼與標記。
+- **4.7**：`turn_in_progress` 的測試涵蓋：第一輪串流中而尚無完成回合、完成回合之後又有串流中的回合、逾時不再算、修訂認領中、他人與不存在回 `None`。
+- **4.8**：README 端點表（`/api/game` 由 8 條變 9 條）、錯誤代碼、新章節「RPG 行動建議與推進劇情」與 `tests/test_readme.py` 的守門；設計文件（系統架構、前端結構、RPG.md、模型呼叫層等）仍留到 9.2。
+- **4.9 與驗證**：新增測試 `tests/test_rpg_suggest_prompt.py`（72）、`tests/test_rpg_suggest_service.py`（39 項×SQLite 與 SQL Server 兩軌）、`tests/test_game_suggestions_api.py`（17）；修改 `test_rpg_events`、`test_service_errors`、`test_readme`、`test_zh_text`、`test_llm_call_log_repository`、`test_nickname`、`test_rpg_advance_prompt`（補斷言：建議的系統指令也不含推進規則）、`test_admin_format_labels`（自動涵蓋新標籤）。**全套 pytest（14:08 起、約 25 分鐘）：14995 通過、5 略過、2 失敗**——失敗是 `tests/test_game_screen_flow.py` 兩軌，硬寫的快照欄位集合少了批 2 新增的 `suggestions`（批 2 只跑相關測試與守門子集，所以當時沒有發現），已把它加進預期並補一項「新存檔的建議為空陣列」；修好後與 7.5 的樣式修正一併重跑相關測試、頁面測試與守門子集 **1468 通過、2 略過**，`node --test` **1610 通過**。**誠實的限制**：全套是在 7.5 的樣式修正與這項測試修正之前（或之中）開始的，所以「單一一次涵蓋最終樹的全套」還沒有；最後一批（8.2）的全套會補上。
 
 ## 5. 前端純函式：分頁與閱讀器
 
@@ -67,6 +79,7 @@
 - [ ] 7.2 `game.css`：純 CSS 氛圍背景層（專案色彩、無圖片、無純白）、劇情卡大字、桌機左欄與手機的按鈕位置、icon 與 chips 樣式（沿用既有 chips 規格）、`prefers-reduced-motion`；驗證：用無頭 Chrome 在 1280 與 360 寬度截圖逐張目視，360px 沒有橫向捲軸、輸入區不遮住劇情卡
 - [ ] 7.3 建議圖示使用內嵌 SVG 並含可及性標籤；劇情卡的完整文字另提供給輔助科技（打字中不重複朗讀）；驗證：頁面測試斷言標籤與屬性存在
 - [ ] 7.4 跑 Node、頁面測試與全域守門子集；驗證：通過；並以假模型的驗收環境實際操作一輪（翻頁、回看、歷史、推進、建議、重新生成、編輯），記錄結果給使用者
+- [x] 7.5 修正（2026-11-23 展示環境發現）：遊戲主畫面載入較慢時露出原始的 `{{ }}` 範本文字（`{{ title }}`、所有 Modal 與提示）。原因：`game.css` 的 `.gm-shell { display: flex }` 與 `[v-cloak] { display: none }` 特異性相同、寫在後面，把遮蔽規則蓋掉；修法：`game`、`cs`、`admin`、`scripts`、`wallet` 五個樣式檔的規則一律改為 `display: none !important`（`auth.css` 本來就是）；7.1 改寫 `session.html` 時須保留根元素的 `v-cloak` 與這條規則；驗證：新增的 `tests/test_v_cloak_rule.py`（3 項）通過——每個樣式檔的遮蔽規則都有 `!important`、遊戲根元素確實自己設定了 `display`（所以必須有）、每個有 `v-cloak` 的範本都載入含遮蔽規則的樣式檔（含繼承的父範本）；**尚未部署到展示環境**（只改了樣式檔，但目前的工作樹已含批 2 與批 3，須隨遷移 `0023` 之後的下一次部署一起上線）
 
 ## 8. 整體驗證
 

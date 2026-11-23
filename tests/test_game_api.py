@@ -125,6 +125,7 @@ ENDPOINTS = [
     ("POST", "/api/game/sessions/{id}/opening/stream", {}),
     ("GET", "/api/game/sessions/{id}", None),
     ("GET", "/api/game/sessions/{id}/turns", None),
+    ("POST", "/api/game/sessions/{id}/suggestions", {}),         # rpg-story-view：行動建議
 ]
 
 
@@ -158,7 +159,9 @@ def test_posts_without_the_csrf_token_are_refused_and_hold_nothing(app):
     save_id = make_save(app, uid)
     client = raw_client(app)
     sign_in_as(client, uid, tv)
-    for path in (f"/api/game/sessions/{save_id}/turns/stream", f"/api/game/sessions/{save_id}/opening/stream"):
+    for path in (
+        f"/api/game/sessions/{save_id}/turns/stream", f"/api/game/sessions/{save_id}/opening/stream", f"/api/game/sessions/{save_id}/suggestions",
+    ):
         response = client.post(path, json={"client_msg_id": "m", "action": "a"}, headers={"Origin": "http://localhost"})
         assert response.status_code == 403, path
     assert turn_rows(app) == 0 and total(app, uid) == 0         # 沒有預扣（錢包甚至還沒建立）

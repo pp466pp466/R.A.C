@@ -242,3 +242,18 @@ def test_the_new_call_kinds_fit_the_kind_column_and_are_registered():
 
     assert KIND_PROTAGONIST_GEN in CALL_KINDS and KIND_PROTAGONIST_REVIEW in CALL_KINDS
     assert LlmCallLog.kind.type.length >= max(len(kind) for kind in CALL_KINDS)          # SQL Server 會拒絕超長的字串，SQLite 不會
+
+
+def test_the_rpg_suggest_kind_is_registered_fits_the_column_and_its_rows_count_toward_the_site_totals(ledger, member_session, two_users):
+    """rpg-suggestions「不扣遊戲幣但計入用量帳本」：行動建議的呼叫以 `rpg_suggest` 記帳（記入實際使用的模型與 token，沒有任何文字），
+    計入全站每日 token 與呼叫次數；不計入任何人的每日對話輪數（`counted` 為否，`count_counted_chat_calls` 只數客服對話）。"""
+    from app.models.llm_call_log import CALL_KINDS, KIND_RPG_SUGGEST
+
+    assert KIND_RPG_SUGGEST == "rpg_suggest" and KIND_RPG_SUGGEST in CALL_KINDS and len(KIND_RPG_SUGGEST) <= LlmCallLog.kind.type.length
+    alice, _ = two_users
+    record(ledger, user_id=alice, kind=KIND_RPG_SUGGEST, provider="openrouter", model="rpg-primary", prompt_tokens=800, completion_tokens=40, at=DURING)
+    member_session.commit()
+    stored = member_session.scalars(select(LlmCallLog)).one()
+    assert (stored.kind, stored.model, stored.counted, stored.error_detail) == ("rpg_suggest", "rpg-primary", False, None)
+    assert ledger.usage_totals(start=DAY_START, end=DAY_END) == (840, 1)
+    assert ledger.count_counted_chat_calls(alice, start=DAY_START, end=DAY_END) == 0

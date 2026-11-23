@@ -1,7 +1,7 @@
 """rpg-advance-action 規格「系統指令的推進規則」：回合敘事的系統指令含一條固定的平台規則；第 0 幕、狀態呼叫與記事簿抓取都不含；
 安全模式的界線與四類絕對禁止項不因此放寬；行動文字本身只出現在使用者內容區。純函式，不需要資料庫。
 
-（建議呼叫的系統指令在批 3 的 `rpg_suggest_prompt.py`，那一批的測試再斷言它也不含這條規則。）
+建議呼叫的系統指令（`rpg_suggest_prompt.py`，rpg-story-view 批 3）同樣不含這條規則，也不含回合敘事的行動規則。
 """
 import inspect
 import itertools
@@ -10,6 +10,7 @@ import pytest
 
 from app.services import rpg_notebook_prompt as notebook_prompt
 from app.services import rpg_prompt as rp
+from app.services import rpg_suggest_prompt as suggest_prompt
 
 MARKER = "0123456789abcdef01234567"
 TIERS = ("safe", "adult")
@@ -40,11 +41,12 @@ def test_the_advance_rule_sits_in_the_writing_principles_before_the_content_boun
     assert "優先於其他一切" in turn_system().split("## 內容界線")[1].split("\n")[0]
 
 
-def test_the_advance_rule_is_not_in_the_opening_state_or_notebook_instructions():
+def test_the_advance_rule_is_not_in_the_opening_state_notebook_or_suggestion_instructions():
     opening = [rp.build_opening_system(tier, LANGUAGE, origin, MARKER) for tier, origin in itertools.product(TIERS, ORIGINS)]
     state = [rp.build_state_system(LANGUAGE, MARKER)]
     capture = [notebook_prompt.build_capture_system(tier, LANGUAGE, MARKER) for tier in TIERS]
-    for text in opening + state + capture:
+    suggest = [suggest_prompt.build_suggest_system(tier, LANGUAGE, MARKER) for tier in TIERS]
+    for text in opening + state + capture + suggest:
         assert rp._ADVANCE_RULE not in text
         assert rp.ADVANCE_ACTION not in text and "自然地往下推進" not in text
 

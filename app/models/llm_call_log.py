@@ -28,9 +28,10 @@ KIND_RPG_STREAM = "rpg_stream"                    # RPG 回合的劇情串流（
 KIND_RPG_STATE = "rpg_state"                      # RPG 回合結束後的狀態呼叫（結構化輸出；rpg-world-state 規格）
 KIND_RPG_OPENING = "rpg_opening"                  # 第 0 幕的串流（rpg-opening 規格）
 KIND_RPG_NOTEBOOK = "rpg_notebook"                # 每 10 輪的記事簿重點抓取（結構化輸出；rpg-notebook-capture 規格）
+KIND_RPG_SUGGEST = "rpg_suggest"                  # 玩家點圖示才產生的行動建議（結構化輸出；rpg-suggestions 規格）
 CALL_KINDS = (
     KIND_CHAT, KIND_SUMMARY, KIND_SCRIPT_REVIEW, KIND_PROTAGONIST_GEN, KIND_PROTAGONIST_REVIEW,
-    KIND_RPG_STREAM, KIND_RPG_STATE, KIND_RPG_OPENING, KIND_RPG_NOTEBOOK,
+    KIND_RPG_STREAM, KIND_RPG_STATE, KIND_RPG_OPENING, KIND_RPG_NOTEBOOK, KIND_RPG_SUGGEST,
 )
 
 STATUS_OK = "ok"
