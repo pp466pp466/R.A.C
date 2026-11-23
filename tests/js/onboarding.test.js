@@ -79,6 +79,14 @@ test('moving forward and back stays inside the list', () => {
   }
 });
 
+test('a fractional index is rounded down to a whole step instead of pointing between two steps', () => {
+  assert.equal(Onboarding.progress(1.7).index, 1);
+  assert.equal(Onboarding.progress(1.7).step, 'age');
+  assert.equal(Onboarding.progress(0.2).index, 0);
+  assert.equal(Onboarding.nextIndex(0.9), 1);
+  assert.equal(Onboarding.previousIndex(2.5), 1);
+});
+
 test('adding a fourth step needs no change to the progress, forward or back logic', () => {
   const steps = [...Onboarding.STEPS, { id: 'genres', title: '喜歡的類型' }];
   assert.equal(Onboarding.progress(0, steps).segments.length, 4);
@@ -166,6 +174,18 @@ test('the other failures stay where they are', () => {
   }
 });
 
+test('clearing only the age range still goes back to step 2', () => {
+  assert.equal(Onboarding.stepForFailure({ action: 'message', clear: ['ageRange'] }), 'age');
+  assert.equal(Onboarding.stepForFailure({ action: 'message', clear: ['birthDate'] }), 'age');
+});
+
+test('only a fields outcome is read for field names and only an array is read for cleared fields', () => {
+  assert.equal(Onboarding.stepForFailure({ action: 'message', fields: { nickname: 'x' } }), null);
+  assert.equal(Onboarding.stepForFailure({ action: 'redirect', fields: { birth_date: 'x' } }), null);
+  assert.equal(Onboarding.stepForFailure({ action: 'message', clear: 'birthDate' }), null);               // 不是陣列：不拋出，也不換步驟
+  assert.equal(Onboarding.stepForFailure({ action: 'message', clear: { 0: 'birthDate' } }), null);
+});
+
 test('an error for a step the list no longer has changes nothing', () => {
   const steps = [{ id: 'welcome' }, { id: 'preference' }];
   assert.equal(Onboarding.stepForFailure({ action: 'fields', fields: { birth_date: 'x' } }, steps), null);
@@ -233,6 +253,10 @@ test('a preference request that never answers is cut off by the timeout and the 
   timers[0].resolve();
   assert.equal(await pending, 'done');
   assert.deepEqual(calls.map((c) => c[0]), ['post', 'put', 'navigate']);
+});
+
+test('the preference request is cut off after five seconds', () => {
+  assert.equal(Onboarding.PREFERENCE_TIMEOUT_MS, 5000);                                                  // design D2 與 README 寫的 5 秒
 });
 
 test('no timer is started when there is no preference request', async () => {

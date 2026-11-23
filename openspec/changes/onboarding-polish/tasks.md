@@ -38,11 +38,21 @@
 
 ## 3. 整體驗證與文件（批 3）
 
-- [ ] 3.1 變異驗證：對 `canAdvance`、`stepForFailure`、`createOnboarding`（送出順序、偏好只在非預設時呼叫、失敗被吞掉、對儲存區零寫入）與登入頁總開關的關鍵判斷做變異，設定測試逾時與行程逾時，在專案副本上執行；驗證：每個變異都被測試殺死（存活者以差分模糊測試分類為測試缺口或等價），專案原始碼未動
-- [ ] 3.2 全套 pytest 與全套 Node 測試（背景執行、輸出存檔）；驗證：全部通過，記錄通過與略過的數量
-- [ ] 3.3 `openspec validate onboarding-polish --strict`；驗證：通過
-- [ ] 3.4 依 `deck-conflict-watch` 檢查是否與 `docs/2.0簡報.md`、六張圖解、`docs/4.0簡報.pptx` 衝突，只通知使用者、不自行修改；驗證：把衝突位置與選項列給使用者
-- [ ] 3.5 更新 `docs/` 對應的設計文件（`docs/前端結構-frontend.md`、`docs/帳號與安全-auth-security.md`、`docs/路線圖-roadmap.md`、`README.md` 的頁面表與驗收紀錄），並讓 `tests/test_design_docs.py`、`tests/test_readme.py` 通過；驗證：`pytest tests/test_design_docs.py tests/test_readme.py` 通過
+- [x] 3.1 變異驗證：對 `canAdvance`、`stepForFailure`、`createOnboarding`（送出順序、偏好只在非預設時呼叫、失敗被吞掉、對儲存區零寫入）與登入頁總開關的關鍵判斷做變異，設定測試逾時與行程逾時，在專案副本上執行；驗證：每個變異都被測試殺死（存活者以差分模糊測試分類為測試缺口或等價），專案原始碼未動
+- [x] 3.2 全套 pytest 與全套 Node 測試（背景執行、輸出存檔）；驗證：全部通過，記錄通過與略過的數量
+- [x] 3.3 `openspec validate onboarding-polish --strict`；驗證：通過
+- [x] 3.4 依 `deck-conflict-watch` 檢查是否與 `docs/2.0簡報.md`、六張圖解、`docs/4.0簡報.pptx` 衝突，只通知使用者、不自行修改；驗證：把衝突位置與選項列給使用者
+- [x] 3.5 更新 `docs/` 對應的設計文件（`docs/前端結構-frontend.md`、`docs/帳號與安全-auth-security.md`、`docs/路線圖-roadmap.md`、`README.md` 的頁面表與驗收紀錄），並讓 `tests/test_design_docs.py`、`tests/test_readme.py` 通過；驗證：`pytest tests/test_design_docs.py tests/test_readme.py` 通過
+
+### 批 3 完成註記（2026-11-24；**全套 pytest 與全套 Node 都跑過**）
+
+- **新增的自動測試（變異驗證前先補）**：`tests/js/age-wizard.test.js`（22 項）與 `tests/js/support/age-sandbox.js`——以真的 Vue、真的 Auth 與真的 `onboarding.js` 在 `vm` 沙盒執行 `age.js` 的 `setup()`（做法同 `wizard.test.js`），把 `age.js` 的 Vue 接線（步驟與條件、守則確認、一次送出與順序、偏好只在非預設時存、各種錯誤回到對應步驟、導向安全檢查、重複點擊、零儲存與零主控台輸出）也納入自動測試；原本這一層只有字串斷言與 2.4 的手動實機檢查。
+- **3.1 變異驗證**：腳本在 scratchpad 的專案副本上執行（專案原始碼未動；每個變異有 `node --test --test-timeout=15000` 或 pytest 的行程逾時，逾時算被抓到，結束時比對副本與專案逐檔相同），共 **107 個變異**：`onboarding.js` 67（步驟與進度、可前進條件、錯誤對應步驟、送出順序與偏好、處理中旗標）、`auth-flows.js` 的全部同意 10、`login.js`／`login.html` 5、`age.js` 19、`age.html` 15。第一輪 **99 個被殺死、8 個存活**；逐個分類：**6 個是測試缺口**——`O05`（索引不取整：補「小數索引取整」）、`O44`（不一致只清空區間時對應第 2 步）、`O47`（只有 `fields` 結果才讀欄位名稱）、`O48`（清空欄位必須是陣列、字串不拋出）、`O81`（逾時常數：補 `PREFERENCE_TIMEOUT_MS === 5000`，設計與 README 寫的 5 秒）、`H14`（第 1 步本身的暱稱公開提示：原本只靠守則 Modal 裡同一句話撐住）；**2 個是等價變異**——`O65`（拿掉 `value === DEFAULT_PREFERENCE`：`'all'` 本來就通不過後面的 `male`／`female` 判斷，邏輯上恆等價）、`A13`（`onPrimary` 的處理中防護：`form.run` 自己已有同一個防護，且處理中時所有控制項都被禁用）。補測試後重跑那 8 個：6 個全被殺死，2 個仍存活（正是等價的那 2 個），副本沒有殘留。
+- **3.2 全套測試**（輸出存檔於 scratchpad）：pytest **15030 通過、5 略過、0 失敗**（37 分 28 秒，含 SQL Server `project_test` 兩軌；5 個略過皆既有）、Node **1853 通過、0 失敗**（原 1827，加上本批 26）。唯一警告仍是既有的 `tests/test_assets_manifest.py` 子行程輸出 cp950 解碼的執行緒例外，與本 change 無關。
+- **3.3**：`openspec validate onboarding-polish --strict` 通過；`openspec validate --specs` 99 項通過。**沒有遷移、沒有模型改動，不需要 `alembic check`。**
+- **3.4 簡報衝突（只通知、沒改）**：與註冊流程有關的敘述（`docs/2.0簡報.md` 第 68、419、432、438、483 行；`build_diagrams.py` 第 37、167、185 行；`build_pptx_40.py` 第 422、424 行）仍然正確——「登入須勾選條款與我確認已滿 18 歲」「年齡確認」依然成立，「全部同意」只是方便操作的總開關。**沒有新衝突**；既有的數字漂移（pytest 14,677→15,035 案例、Node 1,610→1,853、`docs/2.0簡報.md` 第 32、60、918 行）與先前 `rpg-story-view` 列出的部署狀態過時仍待使用者決定。
+- **3.5 文件**：`docs/前端結構-frontend.md`（3a 的流程圖與兩條新說明、`onboarding.js` 的模組表列）、`docs/帳號與安全-auth-security.md`（分步精靈沒有放寬任何限制、頁面清單）、`README.md`（新增「登入後設定精靈」一節與驗收紀錄、更新舊句）；`pytest tests/test_design_docs.py tests/test_readme.py tests/test_project_db_schema_doc.py` 107 通過。
+- **未驗證**：真實 Google 登入整條路、手機實機觸控；使用守則文案與第 3 步選項文字待使用者過目。
 
 ## Workflow follow-up
 

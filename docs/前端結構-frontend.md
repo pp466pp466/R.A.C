@@ -1,12 +1,14 @@
 # 前端架構
 
-> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-23 ｜ 對應 change：rpg-story-view（遊戲主畫面改為視覺小說式的劇情卡：依句分段的 `story-pages.js` 與閱讀器 `story-reader.js`、點圖示才產生的行動建議、直接推進劇情、歷史 Modal、動態流星氛圍層；見第 3e-2 節）、rpg-script-reports（RC-8 的 8b：劇本詳情頁的檢舉入口與 Modal〔`script-report.js`〕、帳號頁「匿名保留我已發佈的劇本」開關與刪除視窗的核取方塊〔`account-script-retention.js`〕、`/admin` 劇本審核的「被檢舉」檢視與檢舉面板）、rpg-script-publishing（`/admin` 的「劇本審核」分頁、`/scripts` 的審核結果與下架畫面〔`script-status.js`〕、`/game` 目錄的搜尋與篩選〔`catalog-state.js`〕、共用的安全模式詢問 Modal〔`mode-prompt.js`〕、詳情頁 `/game/script/<版本>`〔`script-detail.js`〕）、safe-mode-toggle（第 3、4 組：`/account` 的安全模式開關與同意 Modal〔`account-safe-mode.js`〕、返回位置、目錄點選未綁定劇本的詢問、卡片綁定標籤、創作頁「綁定安全模式」勾選框、遊戲頁現算的生效模式）、wallet-hub（批 ①：共用的餘額標籤與錢包狀態庫；批 ②：簽到狀態機抽成 `ui/wallet-checkin.js`；批 ③：錢包頁 `/wallet` 的骨架與免費分頁；批 ④：儲值示意、紀錄與使用說明，見第 3f 節）、歡迎頁（未立案的小修正，首頁取代 C-1 占位頁）、admin-unlimited-coins、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
+> 狀態：已實作（`/game` 入口與存檔頁外殼已上線；開存檔精靈〔樣板、純函式、API 封裝與 Vue 掛載的 `wizard.js`〕已實作但尚未在瀏覽器驗收；遊戲主畫面〔rpg-game-ui〕第 1 至 4 批已實作：串流核心、本機暫存、同步與 API 封裝，加上樣板、樣式、`game-wallet.js`、`game-notebook.js`、`game-session.js`、`game.js`、後端對前端契約的整合測試與 `/game` 的預設分頁，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 6.1：①至⑤、⑨、⑩ 使用者親自確認，⑥至⑧ Claude 以腳本驗證〕，2026-11-12 封存；重新生成與編輯最後一輪〔rpg-turn-revision 批次④〕已實作 `game-revision.js`、樣板與樣式，編輯與重新生成共用免費次數的規則修訂〔2026-11-16，B 批〕已改 `game-labels.js`、`game-state.js`、`game-revision.js` 與 `session.html`，通過 Node 與 pytest 測試，並已完成瀏覽器實測〔任務 5.3 與規則修訂後的 6.5 重驗，皆由使用者親自做：首輪回報除編輯費用規則外沒有問題（該規則因此修訂），重驗回報沒有問題；兩次都沒有逐項列舉細節與截圖，結果見 README「驗收紀錄（rpg-turn-revision）」〕） ｜ 最後更新：2026-11-23 ｜ 對應 change：onboarding-polish（`/age` 改三步精靈：新增 `auth/onboarding.js`，登入頁加「全部同意」，見 3a）、rpg-story-view（遊戲主畫面改為視覺小說式的劇情卡：依句分段的 `story-pages.js` 與閱讀器 `story-reader.js`、點圖示才產生的行動建議、直接推進劇情、歷史 Modal、動態流星氛圍層；見第 3e-2 節）、rpg-script-reports（RC-8 的 8b：劇本詳情頁的檢舉入口與 Modal〔`script-report.js`〕、帳號頁「匿名保留我已發佈的劇本」開關與刪除視窗的核取方塊〔`account-script-retention.js`〕、`/admin` 劇本審核的「被檢舉」檢視與檢舉面板）、rpg-script-publishing（`/admin` 的「劇本審核」分頁、`/scripts` 的審核結果與下架畫面〔`script-status.js`〕、`/game` 目錄的搜尋與篩選〔`catalog-state.js`〕、共用的安全模式詢問 Modal〔`mode-prompt.js`〕、詳情頁 `/game/script/<版本>`〔`script-detail.js`〕）、safe-mode-toggle（第 3、4 組：`/account` 的安全模式開關與同意 Modal〔`account-safe-mode.js`〕、返回位置、目錄點選未綁定劇本的詢問、卡片綁定標籤、創作頁「綁定安全模式」勾選框、遊戲頁現算的生效模式）、wallet-hub（批 ①：共用的餘額標籤與錢包狀態庫；批 ②：簽到狀態機抽成 `ui/wallet-checkin.js`；批 ③：錢包頁 `/wallet` 的骨架與免費分頁；批 ④：儲值示意、紀錄與使用說明，見第 3f 節）、歡迎頁（未立案的小修正，首頁取代 C-1 占位頁）、admin-unlimited-coins、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、game-wallet、rpg-script-authoring、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、google-first-login ｜ 規範依據：AGENTS.md 第 1、2、5、6、7、10 節
 > 注意（2026-11-18）：本文件已納入 change `adult-only-signup` 的前端變化（登入頁第二個勾選框「我確認已滿 18 歲」、請求多一個 `declare_adult`、年齡確認頁的僅限滿 18 歲提示、帳號頁移除未成年的安全模式提示），以及 change `admin-unlimited-coins` 的前端變化（錢包回應的 `coin_exempt`：`game-wallet.js` 暴露 `exempt`、`game-labels.js` 與 `game-revision.js` 的「不消耗遊戲幣」文字，見第 3e 節）。
 > 注意（2026-11-19）：本文件已納入 change `wallet-hub` 的前端變化（全站共用的餘額標籤與錢包狀態庫、簽到狀態機抽成 `ui/wallet-checkin.js`、新頁面 `/wallet` 的免費簽到、儲值示意與紀錄；**沒有後端 API、資料表與 migration 異動**），見第 2 節的 `wallet-*.js` 列、第 1 節的載入順序與第 3f 節。
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的前端變化（登入頁只有 Google 與條款、新增 `/age`、`/appeal`、`/login/password`、移除註冊頁、管理員後台新增「被鎖定的帳號」與「申訴」）與 change ② `remove-player-password-auth`（刪除 `forgot-password`、`verify-email` 的頁面與腳本；`reset-password` 只服務管理員；帳號頁沒有「尚未驗證」提示與重寄按鈕）。
 > 注意（2026-11-20）：本文件已納入 change `rpg-script-publishing` 第 ⑥ 批的前端變化（`/scripts` 的審核結果與下架畫面、新增 `script-status.js`）與第 ⑦ 批的載入順序（`/game` 新增 `mode-prompt.js`、`catalog-state.js`；新頁面 `/game/script/<版本>` 載入 `script-detail.js`）；入口目錄的搜尋與篩選、共用的安全模式詢問 Modal 與詳情頁的模組關係（3d）、`/admin` 的「劇本審核」分頁（3a）已由 8.6 補齊。
 > 注意（2026-11-22）：本文件已納入 change `rpg-script-reports` 第 ⑥ 批的前端變化：劇本詳情頁的檢舉（新增 `script-report.js`、`game-api.js` 的 `reportScript`、詳情頁的檢舉 Modal）、帳號頁的「匿名保留我已發佈的劇本」開關與刪除視窗的核取方塊（新增 `account-script-retention.js`）、後台劇本審核的「被檢舉」檢視與檢舉面板（`admin.js`、`admin-format.js`）。
 > 注意（2026-11-23）：本文件已納入 change `rpg-story-view` 的前端變化（遊戲主畫面改為劇情卡：新增 `story-pages.js`、`story-reader.js`，`game-state.js`、`game-api.js`、`game-session.js`、`game-revision.js`、`game.js`、`session.html`、`game.css` 都有擴充；歷史改為 Modal；**沒有新的頁面**），見第 3e-2 節。
+
+> 注意（2026-11-23）：本文件已納入 change `onboarding-polish` 的前端變化（`/age` 改為三步精靈：新增純函式模組 `auth/onboarding.js`〔步驟、進度、可前進條件、錯誤回到對應步驟、一次送出〕與 Vue 接線 `age.js`、使用守則 Modal、取向步驟；登入頁加「全部同意」總開關；**沒有後端改動**，見 3a）。
 
 本文件說明前端的資產載入、共用元件、會員頁面、客服頁面、RPG 入口與管理員後台的模組關係，以及客服的離線暫存與同步。伺服器端的對應流程見 [客服對話-chat-service.md](客服對話-chat-service.md) 與 [帳號與安全-auth-security.md](帳號與安全-auth-security.md)。
 
@@ -49,6 +51,7 @@ flowchart TD
 | `js/ui/typewriter.js` | 打字機緩衝區：以字素為單位、積壓越多越快、`finish()` 後加速補完、可 `flush()` 與 `cancel()` | `tests/js/typewriter.test.js` |
 | `js/auth/auth-common.js` | CSRF 標頭、初始狀態讀取、錯誤整理（`describeError`）、登入導向 | `tests/js/auth-common.test.js` |
 | `js/auth/auth-flows.js` | 登入、年齡確認、申訴與管理員密碼驗證頁的判斷邏輯（純函式，`Auth.*`）：安全的導向位置、Google 發起的請求內容（只有條款旗標與 `next`）、檢查輸入、每種錯誤代碼的處理結果（顯示欄位錯誤、清空欄位、導向、結束流程）、申訴字數以 Unicode 字元計 | `tests/js/auth-flows.test.js`（22 項） |
+| `js/auth/onboarding.js` | 登入後設定精靈的純函式與流程控制器（`Onboarding.*`，UMD，與框架無關，依賴注入，Node 可測；onboarding-polish）：`STEPS`（資料驅動的步驟清單，新增一步不必改前進與後退的邏輯）、`progress`（進度條段數、「第 N 步，共 M 步」、首尾與主要按鈕文字）、`nextIndex`／`previousIndex`、`canAdvance`（各步可前進的條件與固定的繁體中文說明；**不檢查暱稱格式**，格式只由伺服器判斷）、`stepForFailure`（暱稱錯誤回第 1 步，生日、區間與 `age_mismatch` 回第 2 步）、`createOnboarding({ http, navigate, destination, delay }).submit`（先 `POST /api/auth/verify-age`，成功之後偏好為男頻或女頻才 `PUT /api/account/story-preference`，失敗或超過 5 秒只吞掉不阻擋導向；`verify-age` 失敗時拒絕原本的錯誤）；整個模組不碰任何瀏覽器儲存 | `tests/js/onboarding.test.js`、`tests/js/age-wizard.test.js` |
 | `js/auth/account-lifecycle.js` | 帳號頁匯出與刪除的純函式（`Auth.lifecycle`）：確認文字比對、送出條件、檔名、預定刪除時間（台灣時間）、錯誤代碼說明、Blob 錯誤整理 | `tests/js/account-lifecycle.test.js` |
 | `js/auth/account-safe-mode.js` | 帳號頁「安全模式」區塊的純函式與狀態機（`Auth.safeMode`，safe-mode-toggle）：`safeReturnPath`（返回位置驗證，與伺服器 `safe_return_path` 同一份規則與同一張案例表）、`normalize`（初始狀態只有 `effective`、`confirmed`、`forced`、`returnPath`）、`planToggle`（開→關未同意先開 Modal、已同意直接送出、關→開直接送出、煞車或忙碌時不動作）、`createController`（請求期間禁用並於 `finally` 恢復、失敗不樂觀更新、成功後帶有效返回位置則 Toast 後導向）與固定的繁體中文文案 `COPY`、`MESSAGES` | `tests/js/account-safe-mode.test.js`（30 項）、`tests/js/account-safe-mode-page.test.js`（12 項）、`tests/test_account_safe_mode_page.py` |
 | `js/auth/account-script-retention.js` | 帳號頁「匿名保留我已發佈的劇本」的純函式與狀態機（`Auth.scriptRetention`，rpg-script-reports）：`parse`（`{ keep, live_count }`，型別不對回傳 null）、固定文案 `COPY`、`createController`（`load()` 只讀一次、成功才顯示區塊；`toggle()` 不做樂觀更新、送出中禁用、失敗時開關維持原狀並顯示固定說明、`finally` 恢復）。刪除視窗的欄位由 `account-lifecycle.js` 的 `deletionBody` 決定（只在 `live_count > 0` 且值是布林時才帶 `keep_published_scripts`）。 |
@@ -106,24 +109,27 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Login["login.js<br/>Google 按鈕＋兩個勾選框"] -->|"POST /api/auth/google/start<br/>只送 accept_terms、declare_adult 與 next"| Provider["導向 Google（https 才導向）"]
+    Login["login.js<br/>Google 按鈕＋兩個勾選框＋全部同意"] -->|"POST /api/auth/google/start<br/>只送 accept_terms、declare_adult 與 next"| Provider["導向 Google（https 才導向）"]
     Provider --> Callback["/auth/google/callback"]
-    Callback -->|"新帳號"| Age["age.js<br/>生日＋年齡區間"]
+    Callback -->|"新帳號"| Age["age.js＋onboarding.js<br/>三步精靈：暱稱與守則、生日與區間、故事偏好"]
     Callback -->|"被鎖定"| Appeal["appeal.js<br/>申訴＋自己的申訴狀態"]
     Callback -->|"管理員"| Pw["login-password.js<br/>密碼＋忘記密碼按鈕"]
     Callback -->|"其他"| Cs["/cs（預設頁面）"]
-    Age -->|"POST /api/auth/verify-age"| Done["導向 next 或 /cs"]
+    Age -->|"POST /api/auth/verify-age<br/>成功後偏好非預設才 PUT story-preference"| Done["導向 next 或 /game"]
     Age -.->|"age_not_eligible：帳號已抹除"| Final["只留說明與回登入頁的連結"]
     Pw -->|"POST /api/auth/admin-password"| Done
     Pw -.->|"忘記密碼：信中的連結"| Reset["reset-password.js<br/>新密碼＋確認（只服務管理員）"]
     Reset -->|"POST /api/auth/reset-password"| Back["前往登入"]
     Flows["auth-flows.js（純函式）"] -.-> Login
     Flows -.-> Age
+    Onb["onboarding.js（純函式）"] -.-> Age
     Flows -.-> Appeal
     Flows -.-> Pw
 ```
 
 - **登入頁只有 Google 與兩個勾選框**（「同意服務條款與隱私權政策」、「我確認已滿 18 歲」）：沒有電子郵件、密碼、生日與年齡欄位，也沒有註冊與忘記密碼的連結；按鈕在勾選框沒勾時仍可按（回訪的使用者不必勾選，新使用者缺任一項由伺服器擋下並導回提示：`terms_required`、`adult_required`，提示文字是伺服器固定的 `LOGIN_ERROR_MESSAGES`，前端不另存一份），只在送出中禁用；請求只送兩個布林與 `next`（`googleStartBody`）。範本與腳本不寫死年齡數字：勾選框與說明用 Vue 插值 `ageRules.minRegisterAge`（`login.js` 回傳 `ageRules`，由伺服器放進初始狀態）。`/register` 與註冊頁的範本、腳本已移除。
+- **登入頁的「全部同意」**（onboarding-polish）：兩個勾選框上方的總開關，`login.js` 以可寫入的 `computed` 接上 `Auth.allAgreed`／`Auth.setAllAgreed`（`auth-flows.js`，純函式）：讀取是兩個旗標的 AND（只有明確的 `true` 才算），寫入同時設定兩個旗標；它不是第三項同意，送出時仍只讀原本的 `acceptTerms` 與 `declareAdult` 兩個旗標，所以 `googleStartBody` 與伺服器契約不變。
+- **年齡確認頁是三步精靈**（onboarding-polish，`age.html`＋`age.js`＋`onboarding.js`）：頂端三段進度條（`.onb-progress`，已填滿的用強調色）與「第 N 步，共 M 步」（`aria-live`）；**第 1 步**暱稱，加一列「使用守則」（點開自製的 `ui-modal`，內容是 AGENTS.md 第 10、11 節既有規則的白話摘要，純文字；只有按「我已知悉」才算確認，Esc 與「關閉」都不算，確認後該列顯示「已確認使用守則」；**確認狀態只在前端，不送伺服器、不寫任何儲存**）；**第 2 步**生日與年齡區間（附「本服務僅限滿 N 歲者使用」）；**第 3 步**取向（全讀者、男頻、女頻，原生單選鈕，預設全讀者）。「下一步」在條件不足時 `disabled` 並以文字說明缺什麼；第 2、3 步有「上一步」，欄位保留；步驟切換後焦點移到該步標題。**一次送出**：最後一步按「開始」才送出，`verify-age` 的請求內容與改版前相同（暱稱、生日、區間，全有或全無）；**偏好因受限登入狀態不能呼叫 `story-preference`，所以一定在確認成功之後才存**（選預設的全讀者不發請求；失敗或超過 5 秒不阻擋導向，玩家仍可在 `/account` 設定）。**錯誤回到對的步驟**：暱稱不合格回第 1 步並顯示在暱稱欄位（其餘欄位保留）、`age_mismatch` 回第 2 步並清空生日與區間、`age_not_eligible` 結束精靈、登入逾時導向登入頁、被鎖定導向申訴頁。整個精靈不寫 `localStorage`、`sessionStorage`、IndexedDB 或 cookie（生日是個資），重新整理從第 1 步重新開始（24 小時期限不變）。已知行為：步驟切換後焦點在標題上，那時按 Enter 不會送出表單（欄位內按 Enter 可前進，最後一步用「開始」）。
 - **年齡確認頁**：伺服器提供年齡規則（區間選項與範圍）放在初始狀態，沒有任何個人資料；`age_mismatch` 顯示通用說明並清空兩個欄位；頁面有「本服務僅限滿 N 歲者使用」的提示（`#adults-only-note`，N 取自年齡規則）；`age_not_eligible`（帳號已抹除，說明依 `AgePolicy` 的最低年齡組成）只顯示說明與回登入頁的連結；登入逾時導向登入頁。生日只存在輸入框的響應式欄位，不寫入任何瀏覽器儲存體。
 - **申訴頁**：字數提示（以 Unicode 字元計）、自己的申訴與處理狀態、已有待處理的申訴時不顯示表單；申訴內容一律純文字；沒有被鎖定時 API 回 404，頁面導向預設頁面。
 - **管理員密碼驗證頁**：密碼在送出的當下立即清空；沒有或已過期的中間狀態導回 `/login?error=google_state`；「忘記密碼」只在伺服器說有寄信設定時顯示。

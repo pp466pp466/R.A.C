@@ -215,6 +215,8 @@ def test_step_one_has_the_nickname_and_the_guideline_row_and_step_two_the_age_fi
     welcome = html.split("progress.step === 'welcome'", 1)[1].split("progress.step === 'age'", 1)[0]
     assert 'id="nickname"' in welcome and "使用守則" in welcome and "已確認使用守則" in welcome and 'aria-haspopup="dialog"' in welcome
     assert 'id="birth_date"' not in welcome and 'id="age_range"' not in welcome
+    hint = welcome.split('id="nickname-hint"', 1)[1].split("</p>", 1)[0]
+    assert "暱稱會公開顯示於您創作的劇本，請勿使用真實姓名" in hint                      # 第 1 步本身就有公開顯示的提示（不只在守則 Modal 裡）
     age = html.split("progress.step === 'age'", 1)[1].split('<section v-else class="onb-step"', 1)[0]
     assert 'id="birth_date"' in age and 'id="age_range"' in age and 'id="adults-only-note"' in age and 'id="nickname"' not in age
     preference = html.split('<section v-else class="onb-step"', 1)[1].split("</section>", 1)[0]

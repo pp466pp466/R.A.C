@@ -1647,7 +1647,7 @@ change `story-preference`（RC-3 的第一步，在 `rpg-entry-ui`、`rpg-game-u
 ### 已知限制
 
 - 排序的 Repository 方法（`list_published`、`list_published_by_tag` 的 `preference` 參數）目前**沒有任何玩家端點使用**，只由 Repository 測試（SQLite 與真實 SQL Server）證明；端到端的效果在 `rpg-entry-ui` 接上清單之後才看得到。
-- `/age` 年齡確認頁沒有偏好步驟（屬 `onboarding-polish`）；偏好與頻道沒有統計、審查或依頻道篩選的功能。
+- `/age` 年齡確認頁的偏好步驟已由 `onboarding-polish` 加入（見「登入後設定精靈」一節）；偏好與頻道沒有統計、審查或依頻道篩選的功能。
 
 ### 驗收紀錄（story-preference，A、B、C、D 批已實作，20／20 項完成，已封存）
 
@@ -1774,6 +1774,26 @@ change `rpg-script-reports`（RC-8 的 8b，**已實作並完成驗證與代為�
 | 代為驗收（tasks 6.4；使用者 2026-11-22 指示改由 Claude 代為驗收，確認功能正常即可） | **44／44**：①玩家檢舉的各種錯誤訊息——另一分頁先檢舉（「已經檢舉過」並改為「已檢舉」）、每日上限（說明留在 Modal、按鈕恢復）、開著 Modal 時劇本被下架（「找不到這個劇本」並停用送出）、斷線（「連線不穩」、重送成功）、作者看自己的劇本沒有入口、未登入與未完成年齡確認被拒；②管理員——被檢舉清單的優先度排序（紅線理由者在前，即使另一份的檢舉較多）、未結案筆數、兩位管理員同時處理（後按者得到說明、清單重載）、紅線理由的醒目標示、下架時錯誤密碼不下架與正確密碼下架、檢舉自動結為「下架」、稽核分頁有 `report.read` 與 `report.dismiss` 且沒有自寫文字；③帳號頁——保留開關的開、關、儲存失敗時維持原狀、刪除視窗只有目前有上架劇本才出現核取方塊、取消不送任何刪除請求、管理員沒有這個區塊；④`/privacy` 與 `/terms`（桌面與 393 px）的新文字、舊文字已不存在、沒有橫向溢出；全程沒有主控台錯誤 |
 
 **這個驗收不是使用者本人完成的**，下列項目仍是「未驗證」：真實手機與其他瀏覽器（Chrome 無頭模擬 393 px 與觸控，不是真機）、真實的審查模型（冒煙用假模型）、真實的 Google 登入、作者建立與送審的編輯器畫面（冒煙走 API，畫面行為已在 `rpg-script-publishing` 的冒煙驗證）、共用 Modal 的按鈕高度（全站共用元件約 36 px，不屬這個 change 的範圍，沒有更動）、遷移 `0022` 套用到展示環境與雲端、`/privacy` 與 `/terms` 的法務覆核。**遷移 `0022` 已於 2026-11-22 先備份（`project_pre_0022_20261122_141621.bak`，`RESTORE VERIFYONLY` 通過）再套用到本機 `project`**：`alembic current` 為 `0022_script_reports (head)`、`alembic check` 沒有差異、22 張資料表與 268 個欄位、既有資料列數不變、`/healthz` 與 `/readyz` 回 200；沒有對 `project` 實跑 downgrade。另發現並已修正 `scripts/rpg_acceptance_harness.py` 的 `ensure_ending_script` 仍傳已移除的 `max_tier` 參數（`safe-mode-toggle` 之後失效，驗收環境 `acceptance.py serve` 會因此啟動失敗）：刪掉該參數，並在拋棄式資料庫確認第一次呼叫建立、第二次冪等略過，`tests/test_acceptance_rpg_scripts.py` 115 通過。
+
+## 登入後設定精靈（onboarding-polish）
+
+change `onboarding-polish`。玩家第一次以 Google 登入之後的 `/age` 由單頁表單改為**三步精靈**，登入頁加「全部同意」總開關。**純前端：沒有新端點、沒有遷移、沒有設定，AGENTS.md 也沒有修訂**（`/age` 的存取規則、`POST /api/auth/verify-age` 與 `PUT /api/account/story-preference` 的契約都不變），所以上面的端點表與路由數不變。
+
+| 項目 | 內容 |
+|---|---|
+| 步驟 | ①歡迎：暱稱，加「使用守則」列（自製 Modal，只有「我已知悉」才算確認）；②年齡確認：生日與年齡區間；③故事偏好：取向（全讀者、男頻、女頻，預設全讀者） |
+| 送出 | 最後一步按「開始」一次送出 `verify-age`；**成功之後**才在偏好為男頻或女頻時 `PUT /api/account/story-preference`（受限登入狀態不能呼叫它）；偏好失敗或超過 5 秒不阻擋導向 |
+| 錯誤 | 暱稱不合格回第 1 步（顯示在暱稱欄位，其餘保留）；`age_mismatch` 回第 2 步並清空生日與區間；未滿 18 歲結束精靈；登入逾時回登入頁；被鎖定去申訴頁 |
+| 不做 | 頭像、性別、通知權限、圖片類型多選、行銷同意、記錄「已確認使用守則」（它只是前端引導，不送出、不保存） |
+| 隱私 | 精靈不寫 `localStorage`、`sessionStorage`、IndexedDB 或 cookie（生日是個資），重新整理從第 1 步開始；24 小時期限不變 |
+| 程式 | `app/static/js/auth/onboarding.js`（純函式與流程控制器）、`age.js`（Vue 接線）、`age.html`、`auth.css` 的 `.onb-*`；登入頁 `login.js` 與 `auth-flows.js` 的 `allAgreed`／`setAllAgreed` |
+| 測試 | `tests/js/onboarding.test.js`、`tests/js/age-wizard.test.js`（沙盒執行 `age.js` 的 `setup()`）、`tests/js/auth-flows.test.js`、`tests/test_age_page.py`、`tests/test_auth_pages.py` |
+
+### 驗收紀錄（onboarding-polish，批 1 至 3）
+
+- **自動測試**：見 `openspec/changes/onboarding-polish/tasks.md` 的各批完成註記（Node 與 pytest 的筆數、變異驗證的結果）。
+- **無頭 Chrome 實機檢查**（自有實例：全新 SQLite、假模型、`127.0.0.1:5012`）：1280 與 360 寬度各 49／49 通過——每一步的進度與標籤、守則 Modal 的焦點與確認規則、各步的停用與說明、上一步保留欄位、送出順序（`verify-age` → `story-preference` → `/game`）、預設不發偏好請求、暱稱不合格回第 1 步、`age_mismatch` 回第 2 步並清空、未滿 18 歲結束精靈、重新整理回第 1 步、偏好減少動態、登入頁總開關、每一步無橫向捲軸；瀏覽器儲存為空。
+- **未驗證**：真實 Google 登入整條路、手機實機觸控；使用守則文案與第 3 步選項文字待使用者過目。
 
 ## AWS 展示環境（aws-demo-environment）
 
