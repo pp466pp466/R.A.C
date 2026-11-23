@@ -59,7 +59,7 @@
 單一 expand 步驟：`op.add_column('sessions', sa.Column('suggestions_json', sa.JSON(), nullable=True))`，無預設值；downgrade 以 `recreate="never"` 直接 DROP（沿用 0010 以後的做法，避免 SQLite 重建資料表時串聯刪除）。純 ASCII 規則只限 `alembic.ini` 與 `script.py.mako`，遷移腳本用 UTF-8 繁體中文註解。同步 `docs/project資料結構文件.md`（欄位表、ERD 若有、第 14 節異動紀錄；有測試守門與列骨架工具）。`personal_export_service` 的 `SESSION_COLUMNS` 加 `suggestions`。開發 SQL Server 的實際升級不在這個 change（部署步驟，須先備份）。
 
 ### D8. 前端結構與檔案分工
-新增：`story-pages.js`、`story-reader.js`（純函式，Node 測試）。修改：`game-state.js`（`ADVANCE_ACTION`、`timelineFrom` 之外的 `cardView`、建議的前置條件 `canSuggest` 與錯誤對照）、`game-session.js`（餵 reader、推進與建議動作、鍵盤）、`game-store.js`（快照的 `suggestions`；**不**把建議寫入 IndexedDB）、`game-api.js`（建議端點）、`game-revision.js`（按鈕改掛劇情卡；還原與重新從第一段閱讀）、`turn-stream.js`（事件照舊，只改接收端）、`game.css`（氛圍層、劇情卡、左欄捷徑、icon 與 chips）、`session.html`。建議圖示用內嵌 SVG（不引入圖示字型）。鍵盤事件掛在頁面層，判斷焦點元素與是否有開啟的 Modal。
+新增：`story-pages.js`、`story-reader.js`（純函式，Node 測試）。修改：`game-state.js`（`ADVANCE_ACTION`、`timelineFrom` 之外的 `cardView`、建議的前置條件 `canSuggest` 與錯誤對照）、`game-session.js`（餵 reader、推進與建議動作、鍵盤）、`game-store.js`（快照的 `suggestions`；**不**把建議寫入 IndexedDB）、`game-api.js`（建議端點）、`game-revision.js`（按鈕改掛劇情卡；還原與重新從第一段閱讀）、`turn-stream.js`（事件照舊，只改接收端）、`game.css`（氛圍層與流星動態（見 D11）、劇情卡、左欄捷徑、icon 與 chips）、`session.html`。建議圖示用內嵌 SVG（不引入圖示字型）。鍵盤事件掛在頁面層，判斷焦點元素與是否有開啟的 Modal。
 
 ### D9. AGENTS.md 與 skill 的最小修訂（apply 第一批，須使用者確認後才寫）
 草案（逐節，皆為增補或改寫一句，不動既有條文的其他部分）：
@@ -69,6 +69,14 @@
 - 第 10 節：建議與歷史純文字渲染；建議須通過與玩家行動相同的規則層。
 - 第 11 節：建議由玩家文字衍生，與存檔同期限、隨存檔與帳號刪除、納入匯出、日誌不記內容。
 同步 `python-flask-skill` 的對應 reference，並在 `tests/test_agents_skill_sync.py` 補守門句。
+
+### D11. 氛圍背景層：純 CSS 的流星動態（2026-11-23 使用者要求氛圍層是動態的，並指定流星）
+- **結構**：`session.html` 根容器最底層一個 `<div class="gm-sky" aria-hidden="true">`，內含 5 個空的 `<span class="gm-meteor">`；容器 `position: absolute; inset: 0; overflow: hidden; pointer-events: none`，`z-index` 低於劇情卡與行動區。底色是疊在 `#0F1012` 上的多層 `radial-gradient`（專案色彩，無圖片、無純白）。每顆流星的位置、角度、延遲與週期由 `:nth-child()` 規則寫在 `game.css`，不寫行內樣式。
+- **動畫**：每顆是一條細長的 `linear-gradient`（頭 `#E2E4E9`、尾漸層到透明；其中約五分之一的尾巴帶 `#FF6B35` 暖色，不使用純白），以固定斜角由一側劃向另一側；`@keyframes` 只改變 `transform` 與 `opacity`（合成層動畫，不觸發排版與重繪）。一個週期（約 6 至 14 秒，各顆不同）只有前段約 15% 可見，其餘時間 `opacity: 0`，所以畫面上通常只有 0 至 2 顆；延遲用負值，開頁就錯開、不同步。透明度上限約 0.6。
+- **不干擾閱讀與操作**：流星在劇情卡之下（卡片是半透明毛玻璃，流星經過時只是柔和的光影，文字對比由卡片層決定）；`pointer-events: none`、`aria-hidden="true"`、沒有可聚焦的內容。
+- **省電與減少動態**：手機與平板（寬度未滿 992px）以 `:nth-child(n + 4) { display: none }` 只留 3 顆；`@media (prefers-reduced-motion: reduce)` 時 `.gm-meteor { display: none; animation: none }`，背景維持靜態漸層。分頁在背景時由瀏覽器自行節流動畫。
+- **替代案**：①`canvas` 或 JavaScript 粒子迴圈——否決（要常駐的動畫迴圈、耗電、難以測試，也超出「純 CSS 氛圍層」）；②GIF、影片或 SVG 動畫檔——否決（圖片 v1 不實作，且是外部資源）；③單一元素以 `box-shadow` 畫多顆流星——否決（一個元素只有一組動畫時序，無法錯開）。
+- **驗證**：靜態斷言（`@keyframes` 只動 `transform` 與 `opacity`、`prefers-reduced-motion` 規則關閉動畫、背景規則沒有 `url(` 與純白、`pointer-events: none`、容器 `aria-hidden`、手機數量）；無頭 Chrome 在 1280 與 360 寬度截圖，另以間隔數秒的連續截圖確認流星確實移動；動態的觀感由使用者在 7.4 目視確認（靜態截圖看不出動態）。
 
 ### D10. 測試策略
 - Node：`story-pages`（含引號、換行、超長句、字素、還原不丟字的性質測試）、`story-reader`（假時鐘：補完／翻頁／回看／串流釋出／修訂還原／減少動態）、`game-state`（卡片視圖、可用條件、錯誤對照）、`game-session`（沙盒跑完整一輪且攔截 `console`）。
@@ -84,6 +92,8 @@
 - [建議內容被玩家視為劇情劇透或洩漏隱藏設定] → 上下文只含玩家可見資訊，從資料來源保證；測試以含隱藏特質的存檔驗證不出現。
 - [建議含性內容或絕對禁止項] → 逐項過規則層與安全模式界線；模型提議的行動送出時仍會再過一次規則層（玩家可修改後送出），所以不是唯一防線。
 - [重寫主畫面的回歸風險：重新生成、編輯、重送、被擋轉場、離線、已完結都依賴舊氣泡結構] → 時間軸資料層（`items`、同步、IndexedDB）不動，只換呈現；`game-revision.js` 的還原與覆寫邏輯以 reader 的 `restore` 銜接；Node 與頁面測試逐項覆蓋；改版完成前保留舊版畫面測試的對照。
+- [流星分散閱讀注意力或耗電] → 數量少（桌機 5、手機 3）、疏落（週期 6 至 14 秒、可見時間短）、半透明、位於劇情卡之下；減少動態一律關閉；數量與透明度是 CSS 常數，使用者覺得干擾時只改樣式。
+- [動態效果無法被自動化測試完整驗證] → 靜態斷言加連續截圖確認會動，觀感由使用者在 7.4 目視；不為了可測試而改成 JavaScript 動畫。
 - [AGENTS.md 與 skill 逐字同步遺漏] → `test_agents_skill_sync` 守門；在同一批修改兩邊。
 - [遊戲畫面相關示範影片與簡報過時] → 不在這個 change 修；依 `deck-conflict-watch` 通知，影片於改版完成後重錄。
 
