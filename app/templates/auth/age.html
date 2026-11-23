@@ -1,8 +1,9 @@
 {% extends "auth/auth_base.html" %}
 {% block title %}年齡確認{% endblock %}
 {% block status_code %}AUTH_AGE{% endblock %}
-{% block heading %}年齡確認{% endblock %}
+{% block heading %}開始設定{% endblock %}
 {% block page_body %}
+{# 登入後設定的三步精靈（onboarding-wizard 規格）：步驟、進度與前進條件在 onboarding.js，這裡只負責呈現；Vue 範本放在 raw 區塊內，內容一律以插值渲染為純文字。 #}
 {% raw %}
 <div id="app" v-cloak>
   <div v-if="finished">
@@ -10,43 +11,74 @@
     <div class="auth-actions"><a class="ui-btn ui-btn--primary" :href="finished.to">回到登入頁</a></div>
   </div>
 
-  <form v-else @submit.prevent="submit" novalidate>
-    <p class="auth-lead">請填寫生日、選擇年齡區間並取一個暱稱，完成之後才能使用其他功能。生日與年齡區間由您自行聲明，我們不會要求證件。</p>
-    <p id="adults-only-note" class="auth-hint">本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用。</p>
+  <form v-else @submit.prevent="onPrimary" novalidate>
+    <div class="onb-progress" role="img" :aria-label="progress.label">
+      <span v-for="(filled, position) in progress.segments" :key="position" class="onb-progress__seg" :class="{ 'onb-progress__seg--on': filled }"></span>
+    </div>
+    <p class="onb-step-label" aria-live="polite">{{ progress.label }}</p>
+
     <p v-if="form.state.formError" class="auth-form-error" role="alert">{{ form.state.formError }}</p>
 
-    <div class="auth-field">
-      <label class="auth-label" for="birth_date">生日</label>
-      <input id="birth_date" name="birth_date" type="date" class="auth-input" autocomplete="bday" required
-             :min="ageRules.birthDateMin" :max="ageRules.birthDateMax"
-             v-model="form.values.birthDate" :disabled="form.state.submitting"
-             :aria-invalid="form.fieldErrors.birth_date ? 'true' : 'false'" :aria-describedby="form.fieldErrors.birth_date ? 'birth_date-error' : null">
-      <p v-if="form.fieldErrors.birth_date" id="birth_date-error" class="auth-error" role="alert">{{ form.fieldErrors.birth_date }}</p>
-    </div>
+    <section v-if="progress.step === 'welcome'" class="onb-step" aria-labelledby="onb-heading">
+      <h2 id="onb-heading" ref="heading" class="onb-heading" tabindex="-1">歡迎！請設定您的暱稱</h2>
+      <div class="auth-field">
+        <label class="auth-label" for="nickname">暱稱（2 至 20 字）</label>
+        <input id="nickname" name="nickname" type="text" class="auth-input" autocomplete="nickname" required
+               v-model="form.values.nickname" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.nickname ? 'true' : 'false'" :aria-describedby="form.fieldErrors.nickname ? 'nickname-error' : 'nickname-hint'">
+        <p id="nickname-hint" class="auth-hint">暱稱會公開顯示於您創作的劇本，請勿使用真實姓名。</p>
+        <p v-if="form.fieldErrors.nickname" id="nickname-error" class="auth-error" role="alert">{{ form.fieldErrors.nickname }}</p>
+      </div>
+      <button type="button" class="onb-guide" :class="{ 'onb-guide--done': acknowledged }" aria-haspopup="dialog" :disabled="form.state.submitting" @click="openGuide">
+        <span class="onb-guide__text">{{ acknowledged ? '已確認使用守則' : '使用守則' }}</span>
+        <span class="onb-guide__mark" aria-hidden="true">{{ acknowledged ? '✓' : '›' }}</span>
+      </button>
+    </section>
 
-    <div class="auth-field">
-      <label class="auth-label" for="age_range">年齡區間</label>
-      <select id="age_range" name="age_range" class="auth-input" required
-              v-model="form.values.ageRange" :disabled="form.state.submitting"
-              :aria-invalid="form.fieldErrors.age_range ? 'true' : 'false'" :aria-describedby="form.fieldErrors.age_range ? 'age_range-error' : null">
-        <option value="" disabled>請選擇</option>
-        <option v-for="range in ageRules.ranges" :key="range.code" :value="range.code">{{ range.label }}</option>
-      </select>
-      <p v-if="form.fieldErrors.age_range" id="age_range-error" class="auth-error" role="alert">{{ form.fieldErrors.age_range }}</p>
-    </div>
+    <section v-else-if="progress.step === 'age'" class="onb-step" aria-labelledby="onb-heading">
+      <h2 id="onb-heading" ref="heading" class="onb-heading" tabindex="-1">年齡確認</h2>
+      <p class="auth-lead">請填寫生日並選擇年齡區間，完成之後才能使用其他功能。生日與年齡區間由您自行聲明，我們不會要求證件。</p>
+      <p id="adults-only-note" class="auth-hint">本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用。</p>
+      <div class="auth-field">
+        <label class="auth-label" for="birth_date">生日</label>
+        <input id="birth_date" name="birth_date" type="date" class="auth-input" autocomplete="bday" required
+               :min="ageRules.birthDateMin" :max="ageRules.birthDateMax"
+               v-model="form.values.birthDate" :disabled="form.state.submitting"
+               :aria-invalid="form.fieldErrors.birth_date ? 'true' : 'false'" :aria-describedby="form.fieldErrors.birth_date ? 'birth_date-error' : null">
+        <p v-if="form.fieldErrors.birth_date" id="birth_date-error" class="auth-error" role="alert">{{ form.fieldErrors.birth_date }}</p>
+      </div>
+      <div class="auth-field">
+        <label class="auth-label" for="age_range">年齡區間</label>
+        <select id="age_range" name="age_range" class="auth-input" required
+                v-model="form.values.ageRange" :disabled="form.state.submitting"
+                :aria-invalid="form.fieldErrors.age_range ? 'true' : 'false'" :aria-describedby="form.fieldErrors.age_range ? 'age_range-error' : null">
+          <option value="" disabled>請選擇</option>
+          <option v-for="range in ageRules.ranges" :key="range.code" :value="range.code">{{ range.label }}</option>
+        </select>
+        <p v-if="form.fieldErrors.age_range" id="age_range-error" class="auth-error" role="alert">{{ form.fieldErrors.age_range }}</p>
+      </div>
+    </section>
 
-    <div class="auth-field">
-      <label class="auth-label" for="nickname">暱稱（2 至 20 字）</label>
-      <input id="nickname" name="nickname" type="text" class="auth-input" autocomplete="nickname" required
-             v-model="form.values.nickname" :disabled="form.state.submitting"
-             :aria-invalid="form.fieldErrors.nickname ? 'true' : 'false'" :aria-describedby="form.fieldErrors.nickname ? 'nickname-error' : 'nickname-hint'">
-      <p id="nickname-hint" class="auth-hint">暱稱會公開顯示於您創作的劇本，請勿使用真實姓名。</p>
-      <p v-if="form.fieldErrors.nickname" id="nickname-error" class="auth-error" role="alert">{{ form.fieldErrors.nickname }}</p>
-    </div>
+    <section v-else class="onb-step" aria-labelledby="onb-heading">
+      <h2 id="onb-heading" ref="heading" class="onb-heading" tabindex="-1">您喜歡哪一種故事？</h2>
+      <p class="auth-lead">選擇偏好的劇本取向，符合的劇本會排在目錄前面；其餘劇本仍然都能瀏覽。之後可以在帳號設定修改。</p>
+      <fieldset class="onb-options" :disabled="form.state.submitting">
+        <legend class="auth-label">取向</legend>
+        <label v-for="option in preferenceOptions" :key="option.value" class="onb-option" :class="{ 'onb-option--on': form.values.storyPreference === option.value }">
+          <input class="onb-option__input" type="radio" name="story_preference" :value="option.value" v-model="form.values.storyPreference">
+          <span class="onb-option__text">{{ option.label }}</span>
+          <span class="onb-option__mark" aria-hidden="true">{{ form.values.storyPreference === option.value ? '✓' : '' }}</span>
+        </label>
+      </fieldset>
+    </section>
 
-    <div class="auth-actions">
-      <button type="submit" class="ui-btn ui-btn--primary" :disabled="form.state.submitting" :aria-busy="form.state.submitting ? 'true' : 'false'">
-        {{ form.state.submitting ? '送出中…' : '確認' }}
+    <p v-if="!gate.ok" id="onb-gate" class="auth-hint onb-gate">{{ gate.reason }}</p>
+
+    <div class="auth-actions onb-actions">
+      <button v-if="!progress.isFirst" type="button" class="ui-btn" :disabled="form.state.submitting" @click="goBack">上一步</button>
+      <button type="submit" class="ui-btn ui-btn--primary" :disabled="!gate.ok || form.state.submitting" :aria-busy="form.state.submitting ? 'true' : 'false'"
+              :aria-describedby="gate.ok ? null : 'onb-gate'">
+        {{ form.state.submitting ? '送出中…' : progress.primaryLabel }}
       </button>
     </div>
     <div class="auth-links">
@@ -55,11 +87,25 @@
     </div>
   </form>
 
+  <ui-modal v-model="guideOpen" status-code="USER_GUIDELINES" title="使用守則" confirm-text="我已知悉" cancel-text="關閉" @confirm="confirmGuide">
+    <p class="auth-hint">開始之前，請花一分鐘了解以下幾點：</p>
+    <ul class="account-bullets">
+      <li>本服務僅限滿 {{ ageRules.minRegisterAge }} 歲者使用。</li>
+      <li>暱稱會公開顯示於您創作的劇本，請勿使用真實姓名。</li>
+      <li>請勿輸入真實個資：您的角色描述、劇本與對話會經 AI 處理，輸入與輸出可能被模型供應商留存或審閱。</li>
+      <li>無論任何模式，一律禁止涉及未成年角色的性內容、性暴力、非自願的性情節，以及以真人名義的性內容。</li>
+      <li>安全模式預設開啟；您可以在帳號設定中選擇關閉，關閉後可能出現成年角色之間合意的露骨內容。</li>
+      <li>故事內容皆為虛構，AI 的回應也可能不完全正確。</li>
+    </ul>
+    <p class="auth-hint">完整規範請見<a href="/terms" target="_blank" rel="noopener">服務條款</a>與<a href="/privacy" target="_blank" rel="noopener">隱私權政策</a>。這裡的確認只是提醒您讀過，不會另外留下紀錄。</p>
+  </ui-modal>
+
   <ui-toast-region></ui-toast-region>
 </div>
 {% endraw %}
 {% endblock %}
 {% block page_script %}
   <script src="{{ url_for('static', filename='js/auth/auth-flows.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/auth/onboarding.js') }}"></script>
   <script src="{{ url_for('static', filename='js/auth/age.js') }}"></script>
 {% endblock %}

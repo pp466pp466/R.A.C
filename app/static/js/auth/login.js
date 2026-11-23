@@ -24,8 +24,15 @@
         });
       }
 
+      // 「全部同意」總開關：讀取時是兩個旗標的 AND，寫入時同時設定兩個旗標；送出時仍只讀原本的兩個旗標（見 Auth.googleStartBody）
+      var allAgreed = Vue.computed({
+        get: function () { return Auth.allAgreed(google.values); },
+        set: function (checked) { Auth.setAllAgreed(google.values, checked); }
+      });
+
       return {
         google: google,
+        allAgreed: allAgreed,
         notice: state.notice || '',
         info: state.info || '',
         googleEnabled: !!state.googleEnabled,

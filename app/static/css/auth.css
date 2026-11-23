@@ -562,3 +562,154 @@ a.ui-btn {
   border-color: var(--color-accent);
   color: var(--color-accent);
 }
+
+/* ---- 登入後設定的分步精靈（/age，onboarding-wizard 規格）--------------------------------------------- */
+.onb-progress {
+  display: flex;
+  gap: 0.375rem;
+  margin: 0 0 0.5rem;
+}
+
+.onb-progress__seg {
+  flex: 1 1 0;
+  height: 3px;
+  background: var(--color-border);
+}
+
+.onb-progress__seg--on {
+  background: var(--color-accent);
+}
+
+.onb-step-label {
+  margin: 0 0 1.25rem;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+}
+
+.onb-heading {
+  margin: 0 0 1rem;
+  font-size: 1.125rem;
+  font-weight: 500;
+  outline: none;
+}
+
+/* 步驟切換的淡入：偏好減少動態時完全不套用 */
+@media (prefers-reduced-motion: no-preference) {
+  .onb-progress__seg {
+    transition: background-color 0.2s ease;
+  }
+
+  .onb-step {
+    animation: onb-fade-in 0.2s ease both;
+  }
+}
+
+@keyframes onb-fade-in {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+/* 使用守則列：看起來像一個整列可點的按鈕；確認之後框線與勾號改為強調色 */
+.onb-guide {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.5rem 0.875rem;
+  margin: 0 0 0.5rem;
+  background: transparent;
+  color: var(--color-text);
+  border: var(--border-hairline);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.onb-guide:hover:not(:disabled),
+.onb-guide:focus-visible {
+  border-color: var(--color-accent);
+  outline: none;
+}
+
+.onb-guide--done {
+  border-color: var(--color-accent);
+}
+
+.onb-guide--done .onb-guide__mark {
+  color: var(--color-accent);
+}
+
+.onb-guide__mark {
+  color: var(--color-text-muted);
+}
+
+.onb-guide:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+/* 取向：三個互斥的選項卡（原生的單選鈕，視覺上隱藏但仍可用鍵盤與輔助科技操作） */
+.onb-options {
+  margin: 0 0 1rem;
+  padding: 0;
+  border: 0;
+}
+
+.onb-options legend {
+  float: none;
+  width: auto;
+  padding: 0;
+}
+
+.onb-option {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 2.75rem;
+  margin-bottom: 0.5rem;
+  padding: 0.5rem 0.875rem;
+  border: var(--border-hairline);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.onb-option__input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.onb-option:hover,
+.onb-option:focus-within {
+  border-color: var(--color-accent);
+}
+
+.onb-option--on {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 1px var(--color-accent);
+}
+
+.onb-option__mark {
+  color: var(--color-accent);
+}
+
+.onb-gate {
+  margin: 0 0 0.75rem;
+}
+
+/* 上一步與主要按鈕並排；手機上各佔一半，按鈕不被擠出視窗 */
+.onb-actions .ui-btn {
+  flex: 1 1 0;
+  min-width: 0;
+}

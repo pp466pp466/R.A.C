@@ -250,8 +250,8 @@ def test_the_login_page_has_only_the_google_button_and_the_two_checkboxes(full_a
     for forbidden in ('type="email"', 'type="password"', 'type="date"', "<select", 'id="birth', 'id="age_range"', 'for="email"',
                       'for="password"', 'href="/register"', 'href="/forgot-password"', "confirm_adult"):
         assert forbidden not in html, forbidden
-    assert html.count('type="checkbox"') == 2                                          # 條款與年滿 18 歲聲明，恰好兩個勾選框
-    assert 'id="accept-terms"' in html and 'id="declare-adult"' in html
+    assert html.count('type="checkbox"') == 3                                          # 條款與年滿 18 歲聲明，加上「全部同意」總開關（不是第三項同意）
+    assert 'id="accept-all"' in html and 'id="accept-terms"' in html and 'id="declare-adult"' in html
     assert 'href="/terms"' in html and 'href="/privacy"' in html                       # 勾選框旁有條款與隱私權政策的連結
     assert "使用 Google 登入" in html and html.count("第一次使用時必須勾選") == 2
 
@@ -614,3 +614,16 @@ def test_the_legal_pages_follow_the_policy_numbers():
     strict = make_app(age_policy=AgePolicy(min_register_age=18, min_use_age=18, adult_age=18, version="test"))
     privacy = strict.test_client().get("/privacy").get_data(as_text=True)
     assert "發現未滿 18 歲者" in privacy and "未滿 13 歲" not in privacy
+
+
+def test_the_master_switch_sits_above_the_two_checkboxes_is_a_derived_state_and_adds_no_third_consent(full_app):
+    """auth-pages 規格「全部同意」：總開關只是同時勾選兩個勾選框，送出的仍是兩個獨立的旗標。"""
+    from app.config import PROJECT_ROOT
+
+    html = full_app.test_client().get("/login").get_data(as_text=True)
+    assert html.index('id="accept-all"') < html.index('id="accept-terms"') < html.index('id="declare-adult"')
+    master = html.split('for="accept-all"', 1)[1].split("</label>", 1)[0]
+    assert 'v-model="allAgreed"' in master and "全部同意" in master
+    script = (PROJECT_ROOT / "app" / "static" / "js" / "auth" / "login.js").read_text(encoding="utf-8")
+    assert "Auth.allAgreed(google.values)" in script and "Auth.setAllAgreed(google.values, checked)" in script and "allAgreed: allAgreed" in script
+    assert "allAgreed" not in script.split("Auth.googleStartBody(", 1)[1].split(")", 1)[0]         # 送出時只讀原本的兩個旗標

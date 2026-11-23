@@ -19,11 +19,22 @@
 
 ## 2. 樣板、樣式與登入頁（批 2）
 
-- [ ] 2.1 改寫 `age.html` 與 `age.js` 的接線：三段進度條與「第 N 步，共 M 步」、三個步驟的欄位、上一步與下一步或開始、使用守則列與自製 Modal（`ui-modal`，`v-if`、純文字、Esc 與關閉鈕、焦點進出）、取向三選項（預設全讀者）、處理中禁用、錯誤顯示與回到對應步驟、步驟切換後移焦點；全部以 `{{ }}` 渲染，沒有 `v-html` 與 `data-bs-*`；驗證：`tests/test_age_page.py` 更新後通過（樣板內容、守則關鍵語句、`/age` 的存取規則不變、載入新腳本），架構守門通過
-- [ ] 2.2 `auth.css`：進度條（琥珀色與 `#2A2D34`）、步驟區、守則列、取向選項卡、`prefers-reduced-motion`；驗證：沒有純白、沒有外部資源，`tests/test_theme_css.py` 與 `test_fonts_and_static.py` 通過
-- [ ] 2.3 `login.html` 與 `login.js` 加「全部同意」總開關（雙向衍生狀態，送出仍是兩個獨立旗標）；驗證：`tests/js/` 新增測試涵蓋 `auth-pages` 規格的五個情境，`tests/test_auth_pages.py` 更新後通過
-- [ ] 2.4 無頭 Chrome（`/age` 用已登入的待確認年齡帳號，自有實例）在 1280 與 360 寬度逐步截圖並目視：每一步、守則 Modal、錯誤回到第 1 步與第 2 步、小螢幕沒有橫向捲軸、焦點與動畫；驗證：記錄結果給使用者
-- [ ] 2.5 跑 Node、頁面測試與全域守門子集；驗證：通過
+- [x] 2.1 改寫 `age.html` 與 `age.js` 的接線：三段進度條與「第 N 步，共 M 步」、三個步驟的欄位、上一步與下一步或開始、使用守則列與自製 Modal（`ui-modal`，`v-if`、純文字、Esc 與關閉鈕、焦點進出）、取向三選項（預設全讀者）、處理中禁用、錯誤顯示與回到對應步驟、步驟切換後移焦點；全部以 `{{ }}` 渲染，沒有 `v-html` 與 `data-bs-*`；驗證：`tests/test_age_page.py` 更新後通過（樣板內容、守則關鍵語句、`/age` 的存取規則不變、載入新腳本），架構守門通過
+- [x] 2.2 `auth.css`：進度條（琥珀色與 `#2A2D34`）、步驟區、守則列、取向選項卡、`prefers-reduced-motion`；驗證：沒有純白、沒有外部資源，`tests/test_theme_css.py` 與 `test_fonts_and_static.py` 通過
+- [x] 2.3 `login.html` 與 `login.js` 加「全部同意」總開關（雙向衍生狀態，送出仍是兩個獨立旗標）；驗證：`tests/js/` 新增測試涵蓋 `auth-pages` 規格的五個情境，`tests/test_auth_pages.py` 更新後通過
+- [x] 2.4 無頭 Chrome（`/age` 用已登入的待確認年齡帳號，自有實例）在 1280 與 360 寬度逐步截圖並目視：每一步、守則 Modal、錯誤回到第 1 步與第 2 步、小螢幕沒有橫向捲軸、焦點與動畫；驗證：記錄結果給使用者
+- [x] 2.5 跑 Node、頁面測試與全域守門子集；驗證：通過
+
+### 批 2 完成註記（2026-11-23；只跑相關測試加全域守門子集，**未跑全套 pytest**——本批沒有後端改動，全套留到批 3）
+
+- **2.1**：`age.html` 改為三步精靈（進度條 3 段、「第 N 步，共 M 步」`aria-live`、第 1 步暱稱加使用守則列、第 2 步生日與區間、第 3 步取向三選項〔原生單選鈕，預設全讀者〕、上一步與下一步或開始、不可前進時 `disabled` 加文字說明）；使用守則是 `ui-modal`（`v-model`、純文字、`@confirm` 才算確認，Esc 與「關閉」都不算，確認狀態不進送出的內容）；`age.js` 只剩 Vue 接線，一次送出交給 `Onboarding.createOnboarding`，錯誤沿用 `Auth.ageOutcome` 再用 `stepForFailure` 回到對應步驟；步驟切換後焦點移到該步標題（每步都有 `ref="heading"` 與 `tabindex="-1"`）。頁面標題 `<h1>` 改為「開始設定」（原「年齡確認」，因為第 1 步是歡迎與暱稱），`<title>` 仍是「年齡確認」。
+- **2.2**：`auth.css` 新增 `.onb-*`（進度條用 `--color-accent` 與 `--color-border`、守則列、取向選項卡、`prefers-reduced-motion: no-preference` 才有淡入與過渡）；只用主題變數，沒有色碼。
+- **2.3**：`auth-flows.js` 新增純函式 `allAgreed`、`setAllAgreed`（Node 測試 5 項）；`login.js` 以可寫入的 `computed` 接上，`login.html` 在兩個勾選框上方加「全部同意（只是同時勾選下面兩項）」；送出仍是 `googleStartBody` 的兩個獨立旗標。**這是對 1.3 的補充**：批 1 確認 `auth-flows.js` 不需要為精靈修改，這次為登入頁新增了兩個小函式。
+- **頁面測試**：`tests/test_age_page.py` 更新 3 項舊斷言（表單的 `v-else @submit.prevent="onPrimary"`、送出改由 `Onboarding` 流程、腳本載入順序加 `onboarding.js`）並新增 7 項（三步結構、各步內容、守則 Modal、守則涵蓋要點且每一點在 `/terms` 或 `/privacy` 也有、無 `v-html`／`data-bs-`〔深色模式開關除外〕／外部網址／瀏覽器儲存、樣式尊重減少動態且無純白、腳本可由本機取得）；`tests/test_auth_pages.py` 勾選框數 2→3 並新增總開關的結構測試。
+- **2.4 實機檢查**（自有實例：全新 SQLite、假模型、`127.0.0.1:5012`；無頭 Chrome；腳本在 scratchpad，不進專案）：1280 與 360 寬度**各 49／49 通過**：每一步的進度與標籤、守則 Modal（開啟時焦點在內、Esc 與「關閉」不算確認、關閉後焦點回守則列、「我已知悉」才確認）、各步的停用與說明、上一步保留欄位、走完前沒有任何 API 請求、瀏覽器儲存為空、送出順序（`verify-age` 三個欄位 → `story-preference` 的 `male` → `/game`，偏好確實存成男頻）、預設全讀者不發偏好請求、暱稱不合格回第 1 步且其餘保留、`age_mismatch` 回第 2 步並清空、未滿 18 歲結束精靈、重新整理回第 1 步、偏好減少動態（無動畫、無過渡）、登入頁總開關五個情境、每一步與登入頁無橫向捲軸；每一步與錯誤畫面都截圖並目視（360 寬度的第 1、3 步與守則 Modal、1280 寬度的登入頁與不一致畫面）。檢查後已關閉自有實例；**沒有動使用者的驗收環境**。
+- **已知行為（非缺陷，記錄在案）**：步驟切換後焦點在標題上，所以這時按 Enter 不會送出表單（瀏覽器只在焦點位於表單控制項時才隱含送出）；在欄位內按 Enter 可前進，最後一步請用「開始」按鈕。這是為了讓輔助科技讀到新的步驟標題而選的焦點位置。
+- **2.5**：Node 全套 **1827 通過、0 失敗**（1822＋5）；pytest 守門子集加頁面測試（`test_age_page`、`test_auth_pages`、`test_theme_css`、`test_fonts_and_static`、`test_v_cloak_rule`、`test_account_page`、`test_assets_manifest`、`test_js_unit_tests`）**1270 通過、2 略過（既有）、0 失敗**。
+- **未驗證**：變異驗證與全套 pytest（批 3）；真實 Google 登入後的整條路（需要 Google 登入，展示環境部署另案）；手機實機的觸控手感（只有 360 寬度的無頭 Chrome）；使用守則文案與第 3 步選項文字待使用者過目。
 
 ## 3. 整體驗證與文件（批 3）
 

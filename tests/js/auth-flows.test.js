@@ -211,3 +211,47 @@ test('every fixed message is plain Chinese text with no markup', () => {
     assert.ok(text.length > 0 && !/[<>]/.test(text) && /[一-鿿]/.test(text), text);
   }
 });
+
+// ---- 登入頁的「全部同意」總開關（auth-pages 規格）-----------------------------------------------
+
+test('the master switch is on only when both checkboxes are explicitly ticked', () => {
+  assert.equal(Flows.allAgreed({ acceptTerms: true, declareAdult: true }), true);
+  assert.equal(Flows.allAgreed({ acceptTerms: true, declareAdult: false }), false);
+  assert.equal(Flows.allAgreed({ acceptTerms: false, declareAdult: true }), false);
+  assert.equal(Flows.allAgreed({ acceptTerms: false, declareAdult: false }), false);
+  for (const odd of [undefined, null, {}, { acceptTerms: 'true', declareAdult: 'true' }, { acceptTerms: 1, declareAdult: 1 }]) {
+    assert.equal(Flows.allAgreed(odd), false, JSON.stringify(odd));
+  }
+});
+
+test('ticking the master switch ticks both boxes and unticking clears both', () => {
+  const values = { acceptTerms: false, declareAdult: false };
+  Flows.setAllAgreed(values, true);
+  assert.deepEqual(values, { acceptTerms: true, declareAdult: true });
+  assert.equal(Flows.allAgreed(values), true);
+  Flows.setAllAgreed(values, false);
+  assert.deepEqual(values, { acceptTerms: false, declareAdult: false });
+  Flows.setAllAgreed(values, 'yes');                                                     // 只有明確的 true 才算勾選
+  assert.deepEqual(values, { acceptTerms: false, declareAdult: false });
+});
+
+test('unticking one box turns the master switch off and leaves the other box ticked', () => {
+  const values = { acceptTerms: true, declareAdult: true };
+  values.declareAdult = false;
+  assert.equal(Flows.allAgreed(values), false);
+  assert.equal(values.acceptTerms, true);
+});
+
+test('ticking the two boxes by hand turns the master switch on', () => {
+  const values = { acceptTerms: false, declareAdult: false };
+  values.acceptTerms = true;
+  assert.equal(Flows.allAgreed(values), false);
+  values.declareAdult = true;
+  assert.equal(Flows.allAgreed(values), true);
+});
+
+test('the request after using the master switch is still the two independent flags', () => {
+  const values = Flows.setAllAgreed({ acceptTerms: false, declareAdult: false }, true);
+  assert.deepEqual(Flows.googleStartBody(values.acceptTerms, values.declareAdult, '/cs'), { accept_terms: true, declare_adult: true, next: '/cs' });
+  assert.deepEqual(Object.keys(Flows.googleStartBody(values.acceptTerms, values.declareAdult, '/cs')).sort(), ['accept_terms', 'declare_adult', 'next']);
+});

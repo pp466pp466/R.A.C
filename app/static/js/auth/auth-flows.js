@@ -67,6 +67,19 @@
     }
   }
 
+  /* 「全部同意」總開關（auth-pages 規格）：只是同時勾選或取消兩個勾選框，不是第三項同意，也不改變送出的內容（仍是兩個獨立的旗標）。
+     兩個都明確為 true 才算已全部同意；任何一個不是就是未勾選。 */
+  function allAgreed(values) {
+    return !!values && values.acceptTerms === true && values.declareAdult === true;
+  }
+
+  function setAllAgreed(values, checked) {
+    var next = checked === true;
+    values.acceptTerms = next;
+    values.declareAdult = next;
+    return values;
+  }
+
   function googleStartOutcome(info) {
     if (info && info.status === 404) { return { action: 'message', message: TEXT.googleUnavailable }; }
     return { action: 'message', message: (info && info.message) || TEXT.googleUnavailable };
@@ -172,6 +185,8 @@
     safeDestination: safeDestination,
     googleStartBody: googleStartBody,
     isSafeProviderUrl: isSafeProviderUrl,
+    allAgreed: allAgreed,
+    setAllAgreed: setAllAgreed,
     googleStartOutcome: googleStartOutcome,
     validateAge: validateAge,
     validateNickname: validateNickname,
