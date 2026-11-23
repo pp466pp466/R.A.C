@@ -108,14 +108,29 @@
 
 > 執行順序（使用者 2026-11-23 確認）：8.1 → 9.2（文件同步）→ 8.2 → 8.3 → 9.1，使全套測試看到的是最終的設計文件。
 
-- [ ] 8.1 變異驗證：對 `story-pages`、`story-reader`、`rpg_suggest_prompt.clean_items` 與 `SuggestionService` 的關鍵判斷（句界、湊滿釋出、錨點比對、規則層過濾、不扣幣）做變異，設定測試逾時與行程逾時；驗證：每個變異都被測試殺死，工作樹還原乾淨
-- [ ] 8.2 全套 pytest 與全套 Node 測試（背景執行、輸出存檔）；驗證：全部通過，記錄通過與略過的數量
-- [ ] 8.3 `openspec validate rpg-story-view --strict` 與 `alembic check`；驗證：兩者通過
+- [x] 8.1 變異驗證：對 `story-pages`、`story-reader`、`rpg_suggest_prompt.clean_items` 與 `SuggestionService` 的關鍵判斷（句界、湊滿釋出、錨點比對、規則層過濾、不扣幣）做變異，設定測試逾時與行程逾時；驗證：每個變異都被測試殺死，工作樹還原乾淨
+- [x] 8.2 全套 pytest 與全套 Node 測試（背景執行、輸出存檔）；驗證：全部通過，記錄通過與略過的數量
+- [x] 8.3 `openspec validate rpg-story-view --strict` 與 `alembic check`；驗證：兩者通過
+
+### 批 7 完成註記（2026-11-23；8.1–8.3、9.1、9.2；**未提交**，等使用者下指令一起 commit）
+
+> 執行順序：使用者 2026-11-23 改為「8 全做完再直接做 9」，所以實際順序是 8.1 → 9.2 → 8.2 → 8.3 → 9.1（8.3 的 `openspec validate` 與 `alembic check` 在 8.1 跑變異期間先跑過一次，全套測試之後以最終樹重跑）。
+
+- **8.1 變異驗證**：腳本在 scratchpad 的專案副本上執行（專案原始碼未動；每個變異有 `node --test --test-timeout=15000` 或 pytest 的行程逾時，逾時算被抓到，結束時比對副本與專案逐檔相同），共 **211 個變異**：`story-pages.js` 62、`story-reader.js` 59、`rpg_suggest_prompt`（含 `clean_items`、`suggest_rules`、系統指令與結構描述）46、`SuggestionService` 28、`SessionRepository` 的建議錨點方法 16。第一輪 **164 個被殺死、47 個存活**；逐個以**差分模糊測試**（同一組隨機輸入餵給原版與變異版，句子層 6 萬組、閱讀器 3 萬組操作序列，Python 側以讀程式分析）分類：**28 個是測試缺口**（變異版行為真的不同、原本沒有測試分辨）、**19 個是等價變異**。
+  - **缺口與補的測試**：新增 `tests/js/story-pages-edges.test.js`（句末標點每一種、『』與“”、巢狀引號的內層闔上、句後空白與收尾括號、字數剛好 150 與 151〔湊段與串流釋出兩處〕、含空白的字數、超長句逗號切法剛好 150、硬切的最後一塊留給後面的小句、連續逗號不讓一段以逗號開頭、逗號後的空白算前一小句）、`tests/js/story-reader-edges.test.js`（第 0 幕第一段的說話者是旁白、已結束或被丟棄的輪次忽略後續片段、**補完之後才到的打字機回呼不能改動畫面**〔既有測試在 `onUpdate` 後緊接 `onDone` 把問題蓋掉〕、說明狀態下 `jumpToEnd` 不動作也不通知、說明只算一頁、還原後仍等第一個劇情段）；Python：`test_rpg_suggest_prompt.py` 3 項（含大小寫的標記在項目過濾與語意規則中都被找到——原本的測試標記全是小寫英數，又被聯絡樣式〔長串數字〕先擋下而遮蔽；NFC 與大小寫去重要在 `limit=5` 下才看得出，原本被預設上限 3 遮蔽；結構描述最多 5 項）、`test_rpg_suggest_service.py` 4 項（存檔在請求中途消失的 404 兩處加保存時一處、上游放行沒有有效項時仍不保存）、`test_session_repository_suggestions.py` 1 項（`True == 1`：錨點恰為 (1, 1) 時存成布林的文件不能算有效；**ORM 以 `==` 判斷 JSON 有沒有變動，`{"seq": True}` 等於 `{"seq": 1}` 所以直接覆寫不會寫入，測試要先清成 None**）。
+  - **補完後重跑那 47 個**：28 個全被殺死、19 個仍存活，**存活的正好是差分模糊測試分不出差異的那 19 個**，副本沒有殘留變異。
+  - **19 個等價變異（不補測試，理由）**：`P38`（湊段不要求目前有句子）、`P43`（串流釋出不要求目前有句子）：目前沒有句子時 `flush()` 本來就不做事；`P45`（結案時不回傳空 pending）：呼叫端結案時 `tail` 一定是空字串；`P47`（`flush` 允許空白段）：句子必有內容，頁面不會是空的；`P50`（超長判斷 `>=`）與 `P53`（小句超長 `>=`）：剛好 150 字的句子與小句兩條路徑的結果相同；`P65`（硬切不要求目前有內容）：多出的空塊被 `splitLong` 最後的 `filter` 濾掉；`R08`、`R14`、`R16`（說明狀態下的 `prev`／`canPrev`／`canNext`）：有說明時索引一定是 0 或 −1（只有 `discard` 設說明，且清空所有段），可達的狀態下行為相同——只有人工構造的 `restore` 狀態才分得出來；`R20`、`R39`、`R41`（`awaitingFirst` 的冗餘判斷與寫入）：`awaitingFirst` 只在 `feed` 的「第一個劇情段接手」判斷裡被讀，而該判斷要求 `before === 0`；`awaitingFirst` 為假時一定已有劇情段（`before > 0`）或輪次已結束（`feed` 一開始就擋掉），所以 `R20` 拿掉它不改變可達狀態的行為，`R39`（已有段時不解除）與 `R41`（`load` 後仍等第一段，但 `load` 之後輪次已結束）也一樣；`R25`（沒有打字機視為不減少動態）：`createTypewriter` 不是函式時拋出，被 `try/catch` 接住後同樣直接顯示全文；`R32`（開始打字不遞增世代）：`startTyping` 只由 `showPage` 呼叫，而它先 `cancelTyping()` 已遞增；`R51`（`pageText` 不檢查上界）：可達狀態下索引不超過最後一頁；`R52`（已釋出的段變動時不更新）：`paginate` 的性質保證不會發生（防禦性程式碼）；`R59`（說明時 `typing` 仍為真）：進入說明狀態一定先 `cancelTyping()`；`C30`（沒有標記仍驗證）：標記為空字串時 `'' in key` 恆真，所有項目都被丟棄，結果同樣是空元組。
+  - **8.1 的教訓**：我先前靠推理判斷的「等價」有一個判錯（`R33`，實際是測試被 `onUpdate` 後緊接 `onDone` 蓋住），所以改以差分模糊測試核對每一個；之後判斷等價一律先模糊再下結論。
+- **9.2 設計文件**：更新 `docs/前端結構-frontend.md`（新增 3e-2「劇情卡、行動建議與歷史」含 Mermaid、載入順序、寫入呼叫由四個改為六個）、`docs/系統架構-architecture.md`（新增「RPG 行動建議與直接推進劇情」含時序圖與元件表、控制器、純運算模組、事件數二十四個、註冊函式、規格對照列）、`docs/模型呼叫層-llm-layer.md`（新增 6d `rpg_suggest`、用途列表與簡轉繁範圍）、`docs/營運與部署-operations.md`（兩個建議事件、保存期限列、假模型的行動建議員分支）、`docs/帳號與安全-auth-security.md`（建議端點的存取規則）、`docs/路線圖-roadmap.md`（狀態改為實作完成、等驗收）、根目錄 `README.md`（行動建議一節補前端與驗證）；`docs/資料模型-data-model.md` 與 `docs/project資料結構文件.md` 在批 2 已同步 0023，核對無需再改。驗證：`pytest tests/test_design_docs.py tests/test_readme.py tests/test_project_db_schema_doc.py` **107 通過**。
+- **8.2 全套測試**（9.2 之後，輸出存檔於 scratchpad）：pytest **15022 通過、5 略過、0 失敗**（25 分鐘 0 秒，含 SQL Server `project_test` 兩軌；5 個略過皆既有）、Node **1789 通過、0 失敗**（原 1766，加上本批新增 23）。唯一警告是 `tests/test_assets_manifest.py` 的子行程輸出在 cp950 下解碼失敗（執行緒例外，測試本身通過），不在本 change 的改動範圍，未追查。
+- **8.3**：`openspec validate rpg-story-view --strict` 通過；`alembic check` 在拋棄式 SQLite 從頭 `upgrade head` 到 0023 後「No new upgrade operations detected」。**沒有對開發 SQL Server `project` 跑 `alembic check`**（它還沒升到 0023，升級要先備份，須使用者同意）；SQL Server 軌的模型與遷移差異由全套裡的 `test_migrated_schema_has_no_difference_from_the_models` 對 `project_test` 驗證（通過）。
+- **9.1 簡報衝突（只通知、沒改簡報）**：見 HANDOFF 與回覆；沒有改 `docs/2.0簡報.md`、PDF、`2.1簡報.pptx`、`4.0簡報.pptx`、六張圖解與產生器。
+- **未做**：封存（須使用者驗收）、對展示環境的任何新部署（本批只改測試與文件；展示環境仍是 `787ee62`、RDS 0023）。
 
 ## 9. 文件與簡報通知
 
-- [ ] 9.1 依 `deck-conflict-watch` 檢查是否與 `docs/2.0簡報.md`、六張圖解、`docs/4.0簡報.pptx` 衝突，只通知使用者、不自行修改；驗證：把衝突位置與選項列給使用者
-- [ ] 9.2 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`：`docs/RPG.md`、前端結構、系統架構、資料模型、端點與模型呼叫流程、遷移），並讓 `tests/test_design_docs.py` 通過；驗證：`pytest tests/test_design_docs.py tests/test_readme.py tests/test_project_db_schema_doc.py` 通過
+- [x] 9.1 依 `deck-conflict-watch` 檢查是否與 `docs/2.0簡報.md`、六張圖解、`docs/4.0簡報.pptx` 衝突，只通知使用者、不自行修改；驗證：把衝突位置與選項列給使用者
+- [x] 9.2 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`：`docs/RPG.md`、前端結構、系統架構、資料模型、端點與模型呼叫流程、遷移），並讓 `tests/test_design_docs.py` 通過；驗證：`pytest tests/test_design_docs.py tests/test_readme.py tests/test_project_db_schema_doc.py` 通過
 
 ## Workflow follow-up
 

@@ -1,6 +1,6 @@
 # 模型呼叫層
 
-> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-19 ｜ 對應 change：safe-mode-toggle（第 12 節：驗收中發現的兩項調整——簡轉繁保留人名常用的「杰」、提示詞要求不夾雜英文，以及展示環境換為 nemotron-3-ultra 主力與 nemotron-3.5-super-vl 備援的對照紀錄見 `docs/RPG.md` 7.18）、add-traditional-chinese-output-spec（把 RPG 輸出的簡轉繁寫成規格 `rpg-output-traditional-chinese` 並補測試，不改程式與行為，第 12 節）、rpg-turn-revision、rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
+> 狀態：已實作（串流轉接器與 `StreamRunner` 由 rpg-turn-engine 批次 ② 實作；`TurnRunner`／`OpeningRunner` 與 SSE 端點在批次 ④⑤ 接上，2026-11-10 以假供應商、本機驗收環境與真實 OpenRouter 模型驗證過） ｜ 最後更新：2026-11-23 ｜ 對應 change：rpg-story-view（第 6d 節：行動建議的 `rpg_suggest` 呼叫；第 8 節的用途列表與第 12 節的簡轉繁範圍多一項）、safe-mode-toggle（第 12 節：驗收中發現的兩項調整——簡轉繁保留人名常用的「杰」、提示詞要求不夾雜英文，以及展示環境換為 nemotron-3-ultra 主力與 nemotron-3.5-super-vl 備援的對照紀錄見 `docs/RPG.md` 7.18）、add-traditional-chinese-output-spec（把 RPG 輸出的簡轉繁寫成規格 `rpg-output-traditional-chinese` 並補測試，不改程式與行為，第 12 節）、rpg-turn-revision、rpg-notebook（新增呼叫類別 `rpg_notebook`、`run_structured` 的 `budget_seconds`，見第 2 節與 6c）、rpg-turn-engine（新增串流路徑、呼叫類別 `rpg_stream`／`rpg_state`／`rpg_opening`、`OPENROUTER_REASONING`，見第 11 節）、rpg-character-creation（新增呼叫類別 `protagonist_gen`、`protagonist_review`）、rpg-script-authoring（新增呼叫類別 `script_review`）、rpg-data-and-script、cs-chat-core、usage-limits、openai-compatible-provider、privacy-lifecycle、staging-deployment（GEMINI_BASE_URL） ｜ 規範依據：AGENTS.md 第 5、7、9、10、11 節
 > 注意（2026-11-03）：AGENTS.md 第 5 節的 RPG 用途新增「劇本審查的模型層」（非串流結構化輸出，沿用同一解析函式與重試規則）；**已由 change `rpg-script-authoring`（RC-7）實作**（呼叫類別 `script_review`，見第 6a 節），本文件描述目前的實作。change `rpg-data-and-script`（RC-1）只建立劇本與存檔的資料基礎，**沒有新增任何模型呼叫**；安全模式與一般模式的內容界線所需的劇情輸出審查層（不依賴模型拒絕）屬 RC-2，劇本設定的規則層與模型層審查屬 RC-7。
 > 注意（2026-11-04）：AGENTS.md 第 5 節的 RPG 用途再新增「玩家主角的生成與審查」；**已由 change `rpg-character-creation`（RC-9）實作**（呼叫類別 `protagonist_gen`、`protagonist_review`，見第 6b 節）。兩者都是非串流的結構化輸出，沿用同一解析函式與重試規則，不使用 Gemini。
 
@@ -197,9 +197,23 @@ RPG 用途沿用 `LLM_*` 的逾時、預算與輸出上限（一個地方調整�
 | 失敗的處置 | 暫時性失敗、預算逾時、設定錯誤、供應商擋下、JSON 或標記字串驗證失敗 → **不推進** `notebook_upto_turn`，由下一個完成的回合補做；條目通過 JSON 之後才發現的洩漏或規則層未通過 → 整次放棄並**推進**。整個流程不拋出，任何失敗都不影響已送達的回合 |
 | 日誌與保存 | 日誌只有內部編號、整數與列舉；帳本不含任何文字（驗證失敗的模型原文依既有規則截斷存在 `error_detail`，14 天，僅管理員可讀） |
 
+## 6d. 行動建議的呼叫（`rpg_suggest`，rpg-story-view）
+
+| 項目 | 規則 |
+|---|---|
+| 供應商與模型 | RPG 用途的 OpenAI 相容端點（`OPENROUTER_MODEL`，備援 `OPENROUTER_FALLBACK_MODEL`），**不使用 Gemini**；一次**非串流**的結構化呼叫，沿用 `LlmService.run_structured` 的重試（驗證失敗以同一模型重試一次）、備援（429、5xx、逾時切換備援）、斷路與單次請求總預算，每次呼叫實際使用的模型寫進帳本 |
+| 觸發 | 只有玩家點劇情卡旁的圖示才呼叫（`POST /api/game/sessions/<id>/suggestions`）；載入存檔、第 0 幕與回合完成都**不會**呼叫。同一個畫面（第 0 幕，或最後一個完成的回合；修訂成功即視為新畫面）已有有效的建議時直接重用，**不呼叫模型**。流程與錯誤順序見 [系統架構-architecture.md](系統架構-architecture.md)「RPG 行動建議與直接推進劇情」 |
+| 呼叫類別 | 帳本 `kind = rpg_suggest`；`counted` 為否，不計入任何人的每日對話輪數，**不碰遊戲幣錢包**，但每次呼叫都計入全站每日 token 上限（上限用盡時回 503 `system_busy`，管理員一樣），且與 RPG 的其他呼叫一樣不使用 Gemini |
+| 系統指令 | `rpg_suggest_prompt.build_suggest_system`：固定的繁體中文樣板，只放常數與列舉參數（語言、生效的內容模式、標記字串）；分級界線與回合敘事共用 `rpg_prompt.TIER_BOUNDARIES`（生效模式每次現算，安全關的界線不會出現在安全開的指令）、四類絕對禁止、資料區塊聲明、不公開的標記字串。**沒有**回合敘事的行動規則與「推進劇情」規則（它不是在寫劇情，而是替玩家想行動）。**不含任何玩家文字** |
+| 上下文 | `rpg_context.build_suggest_context`：只有玩家看得到的世界狀態、主角角色卡與最近 3 輪（沒有完成回合時用第 0 幕文字）；**不含記事簿與隱藏設定**；玩家與作者的文字一律是使用者內容區的資料區塊（經 `neutralize`） |
+| 輸出 schema | `{"suggestions": [字串]}`，`maxItems` 5（模型多給也沒關係，多的丟棄）、單項 `maxLength` 200（防濫用）；語意規則依序：不得含洩漏標記（`leaked_marker`）、逐項驗證後至少剩一個有效項（`no_valid_items`，全部無效視為驗證失敗而重試一次）。**結構描述不放 2 至 30 字**：真正的長度在 `clean_items` 逐項驗證，使一個壞項目只被丟棄、不使整次輸出失敗 |
+| 簡轉繁 | `rpg_suggest` 在 `TRADITIONAL_KINDS`：解析 JSON 前先轉成繁體（文字會顯示給玩家，見第 12 節） |
+| 失敗的處置 | 模型失敗、驗證兩次都不合格、被供應商過濾、單次預算用盡，或逐項驗證後沒有任何有效項目 → 503 `suggestions_unavailable`（通用文案、不含模型原文），**不保存、不佔每個畫面一次的次數**；產生期間劇情已前進（新回合或修訂成功）→ 409 `suggestions_stale`，不保存。模型呼叫之後立刻提交目前的交易（`release`），使最後一筆帳本在之後的錯誤回應下仍保留 |
+| 日誌與保存 | 日誌只有內部編號、整數項數、`generated`／`reused` 與原因列舉（`rpg.suggestion_served`、`rpg.suggestion_failed`）；帳本不含任何文字（驗證失敗的模型原文依既有規則截斷存在 `error_detail`，14 天，僅管理員可讀）。建議本身保存在 `sessions.suggestions_json`，與存檔同期限 |
+
 ## 8. 用量帳本（`llm_call_logs`）
 
-每次呼叫一筆：用途（`chat`、`summary`、`script_review`、`protagonist_gen`、`protagonist_review`，以及 RPG 回合引擎的 `rpg_stream`、`rpg_state`、`rpg_opening`，與記事簿抓取的 `rpg_notebook`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0；串流呼叫斷線時為估算值，見第 11 節）、延遲，以及結束原因。串流呼叫另有 `first_chunk_ms`（從送出到第一個正文片段的毫秒數，其他呼叫為空值）。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
+每次呼叫一筆：用途（`chat`、`summary`、`script_review`、`protagonist_gen`、`protagonist_review`，以及 RPG 回合引擎的 `rpg_stream`、`rpg_state`、`rpg_opening`，與記事簿抓取的 `rpg_notebook`、行動建議的 `rpg_suggest`）、供應商、**實際使用的模型**、第幾次、結果狀態（`ok`、`validation_failed`、`rate_limited`、`server_error`、`timeout`、`network`、`blocked`、`config_error`）、是否計入額度、三種 token（供應商沒給時為空值，不是 0；串流呼叫斷線時為估算值，見第 11 節）、延遲，以及結束原因。串流呼叫另有 `first_chunk_ms`（從送出到第一個正文片段的毫秒數，其他呼叫為空值）。只有「一則訊息最後成功的對話呼叫」計入額度；降級與摘要不計。帳本不含對話全文，唯一例外是驗證失敗的模型原文（`error_detail`，14 天後由 `flask purge-expired-data` 清為空值、該筆帳本保留，僅管理員可讀）。
 
 帳本也是**用量限制的唯一來源**（`UsageService`，見 [客服對話-chat-service.md](客服對話-chat-service.md) 第 3 節），沒有另外的計數器：
 
@@ -340,7 +354,7 @@ RPG 的提示詞已要求繁體中文（`rpg_prompt.LANGUAGE_INSTRUCTIONS`，並
 | 位置 | 做法 |
 |---|---|
 | 劇情串流（回合、第 0 幕、重新生成與編輯） | `OutputGuard._process` 對**每一句**先轉繁體，再做洩漏與規則層檢查；釋放給前端與寫入資料庫的都是轉換後的文字。轉換只依這一句本身，不受片段怎麼切影響（測試鎖住）；`received_text`（被擋回合暫存用）仍是原文 |
-| 結構化輸出 | `LlmService.run_structured` 對 `rpg_state`、`rpg_notebook`、`protagonist_gen` 三種用途在解析 JSON 前先轉換（這些文字會顯示給玩家）；審查類（`script_review`、`protagonist_review`）與客服（Gemini）不轉 |
+| 結構化輸出 | `LlmService.run_structured` 對 `rpg_state`、`rpg_notebook`、`protagonist_gen`、`rpg_suggest` 四種用途在解析 JSON 前先轉換（這些文字會顯示給玩家）；審查類（`script_review`、`protagonist_review`）與客服（Gemini）不轉 |
 
 - 套件：`opencc-python-reimplemented`（OpenCC 的純 Python 版，`requirements.txt` 精確版本，離線）；設定 `s2twp`（簡體轉台灣繁體，含慣用詞：軟件→軟體）。
 - **只在句子裡真的有簡體字時才轉換**：轉換器會把繁體異體字「祕」改成「秘」、把「咸陽」改成「鹹陽」。偵測用 `s2t`（只換字）：有字被換掉就算有簡體字，但「里、咸、台、余、后、于…」這類在繁體裡也是正確用字的字（`_BOTH_FORMS`）單獨出現不算證據。取捨：整句只有這類字的簡體句（例如「他在后山」）不會被轉，句子裡有其他簡體字就整句轉換。

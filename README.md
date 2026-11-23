@@ -1569,7 +1569,7 @@ change `rpg-notebook`（RC-2b）。RPG 以記事簿取代對話摘要：每個�
 
 ## RPG 行動建議與推進劇情（rpg-story-view）
 
-change `rpg-story-view`（視覺小說式遊戲畫面）。**本節只記錄已實作的後端**（批 2、批 3）；分段閱讀器、劇情卡版面與前端的建議圖示屬後面的批次，完成後再補在這裡。規範在 AGENTS.md 第 5、6、7、10、11 節（批 1 已修訂）；設計見 `openspec/changes/rpg-story-view/design.md`（D4 至 D7）。
+change `rpg-story-view`（視覺小說式遊戲畫面）：遊戲主畫面改為依句分段的劇情卡（逐段打字機、點擊或按鍵翻段）、玩家點圖示才產生的行動建議、直接推進劇情、唯讀的歷史 Modal 與動態流星氛圍層。本節記錄後端（行動建議與推進規則）與前端（劇情卡）；規範在 AGENTS.md 第 5、6、7、10、11 節；設計見 `openspec/changes/rpg-story-view/design.md`（D1 至 D11）與 [docs/前端結構-frontend.md](docs/前端結構-frontend.md) 3e-2、[docs/系統架構-architecture.md](docs/系統架構-architecture.md)「RPG 行動建議與直接推進劇情」。
 
 ### 直接推進劇情
 
@@ -1596,6 +1596,24 @@ change `rpg-story-view`（視覺小說式遊戲畫面）。**本節只記錄已�
 |---|---|
 | `rpg.suggestion_served` | 建議已回給玩家（項數 `count`、結果 `generated` 或 `reused`、實際使用的模型） |
 | `rpg.suggestion_failed` | 沒有產生（原因列舉：`no_provider`、`validation`、`transient`、`blocked`、`config`、`budget`、`empty`、`stale`；`attempt` 為實際發出的模型呼叫次數） |
+
+### 前端：劇情卡、翻頁、歷史與氛圍層
+
+| 項目 | 內容 |
+|---|---|
+| 分段（`story-pages.js`） | 純函式 `paginate(text, { done })`：句末標點 `。！？…`（連續者一組，引號內不算句界）、換行為硬分界、**一段至多 3 句且約 150 字**；單一句超過 150 字時先在逗號、分號、頓號處切，無處可切才在字素邊界硬切。串流時一段在「湊滿」才釋出，**已釋出的段永不改變**（任何前綴的結果是完整結果的前綴），各段串接還原原文。分段只是前端呈現，不改變串流事件協定、回合內容、審查與扣幣 |
+| 閱讀器（`story-reader.js`） | 純狀態機（打字機工廠與時鐘由外部注入）：玩家的行動是第 0 段「你」，AI 回應的段是「旁白」；翻到沒看過的段才逐字打字，回看一律直接完整顯示；打字中第一下先補完、第二下才翻頁；第一段的 `‹` 停用；`prefers-reduced-motion` 時一律直接完整顯示；被擋、轉場與中斷只留一行說明 |
+| 翻頁操作 | 點擊 `›`，或空白鍵、Enter、→ 翻下一段，← 回上一段；有 Modal 開著、焦點在輸入框、按鈕或連結上、帶修飾鍵或輸入法組字中一律不翻頁 |
+| 行動建議（前端） | 劇情卡右上的建議圖示（內嵌 SVG，含 `aria-label`）；點了才請求，結果顯示為卡內的 chips（純文字）；**點選只是把文字貼進輸入框（取代原內容、可修改），不直接送出**；每個畫面最多產生 1 次，重開圖示重用已保存的；新一輪、第 0 幕串流與修訂開始時清掉；建議不寫入 IndexedDB |
+| 直接推進劇情 | 快速操作列的「推進劇情」按鈕，送出固定行動「推進劇情」，與一般行動完全相同（預扣 30 幣、可重新生成與編輯）；沒有空白送出 |
+| 歷史 Modal | 唯讀、純文字，顯示完整對話（含第 0 幕與玩家的行動），單純捲動、可載入更早的內容；沒有跳到某一輪、沒有編輯按鈕 |
+| 氛圍背景層 | `game.css` 的 `gm-sky`：專案色彩的 CSS 漸層底加 5 顆空的流星元素（`@keyframes` 只動 `transform` 與 `opacity`、週期 6 至 14 秒、位於劇情卡之下、`pointer-events: none`、`aria-hidden`）；未滿 992px 只留 3 顆；`prefers-reduced-motion` 時不顯示流星且沒有任何動畫；沒有圖片與純白 |
+
+### 驗證（rpg-story-view）
+
+- **變異驗證（tasks 8.1）**：對 `story-pages.js`、`story-reader.js`、`rpg_suggest_prompt`、`SuggestionService` 與 `SessionRepository` 的建議錨點方法做 **211 個變異**（在 scratchpad 的專案副本上，專案原始碼未動；每個變異有測試逾時與行程逾時）。第一輪 164 個被殺死、47 個存活；其中 28 個是真正的測試缺口（句末標點「！」、『』與巢狀引號、句後空白與收尾括號、字數剛好 150 與 151 的邊界、含空白的字數、逗號切法的邊界、已結束輪次忽略後續片段、補完之後才到的打字機回呼、第 0 幕第一段的說話者、還原保留「等第一個劇情段」、說明狀態的頁數、大小寫不同的標記與去重、存檔在請求中途消失的 404、`True == 1` 的布林錨點），已補測試（`tests/js/story-pages-edges.test.js`、`story-reader-edges.test.js` 與三個 Python 測試檔）並**全部殺死**。其餘 19 個是**等價變異**（改了寫法但行為不變：對冗餘防禦的拿掉或重複的判斷，例如空的 `flush` 本來就不做事、尾端在結案時本來就是空字串），以差分模糊測試佐證：同一組隨機輸入餵給原版與變異版，句子層 6 萬組、閱讀器 3 萬組操作序列都分不出差異。
+- **全套測試（tasks 8.2，2026-11-23，在 8.1 補的測試與 9.2 的文件之後）**：pytest **15022 通過、5 略過、0 失敗**（25 分鐘，含 SQL Server `project_test` 兩軌；5 個略過皆既有：`test_no_legacy_tier_checks` 2、`test_admin_service_scripts` 1〔pysqlite 的 SAVEPOINT 行為〕、`test_aws_demo_script` 1〔Windows ACL〕、`test_container_files` 1〔沒有 `grp`〕）；Node **1789 通過、0 失敗**。`openspec validate rpg-story-view --strict` 通過；`alembic check` 在拋棄式 SQLite 從頭升到 0023 之後「No new upgrade operations detected」（SQL Server 軌由 `test_migrated_schema_has_no_difference_from_the_models` 涵蓋）。
+- **未驗證／限制**：假模型的劇情只有 1 至 3 句，多段翻頁（3 句一段、回看第二與第三段）只有單元測試、沒有實機；真實模型的分段品質與第一段延遲、動態流星的觀感與手機實機的觸控手感，由使用者在展示時確認。
 
 ## 故事偏好與讀者頻道（story-preference）
 

@@ -7,6 +7,7 @@
 import json
 import logging
 from datetime import timedelta
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import select
@@ -516,6 +517,43 @@ def test_a_session_that_ends_during_the_call_is_session_ended_and_nothing_is_sav
     kit.provider.script(reply(*ITEMS))
     with pytest.raises(SessionEnded):
         ask(kit, user, save)
+    assert stored(kit, save) is None
+
+
+# ---- 防禦：存檔在請求中途消失、上游放行了沒有有效項的輸出 ---------------------------------------------------------
+
+
+@pytest.mark.parametrize("method", ["turn_in_progress", "suggestion_state"])
+def test_a_save_that_disappears_between_the_steps_is_the_same_not_found_and_never_calls_the_model(kit, monkeypatch, method):
+    """前面的步驟已確認是自己的存檔；之後各步驟若查不到（請求中途被刪除），一律回 404，不繼續、不呼叫模型。"""
+    user, save = setup(kit)
+    kit.provider.script(reply(*ITEMS))
+    monkeypatch.setattr(kit.sessions, method, lambda *args, **kwargs: None)
+    with pytest.raises(NotFound):
+        ask(kit, user, save)
+    assert kit.provider.calls == [] and stored(kit, save) is None
+
+
+def test_a_save_that_disappears_during_the_model_call_is_not_found_and_the_ledger_row_survives(kit, monkeypatch):
+    user, save = setup(kit)
+    kit.provider.script(reply(*ITEMS))
+    monkeypatch.setattr(kit.sessions, "save_suggestions", lambda *args, **kwargs: None)
+    with pytest.raises(NotFound):
+        ask(kit, user, save)
+    assert len(suggest_rows(kit)) == 1 and stored(kit, save) is None
+
+
+def test_an_output_with_no_valid_item_is_never_saved_even_if_the_upstream_rules_let_it_through(kit):
+    """語意規則已要求至少一個有效項；這是第二道防線：就算上游放行（這裡以替身模擬），沒有有效項一律視為失敗、不保存。"""
+    user, save = setup(kit)
+    outcome = SimpleNamespace(ok=True, value={"suggestions": ["好", "abc@example.com 聯絡"]}, attempts=1, model=MODEL, degraded=None)
+    stub = SimpleNamespace(run_structured=lambda **kwargs: outcome)
+    guarded = SuggestionService(
+        sessions=kit.sessions, policy=kit.policy, limits=kit.limits, llm=stub, budget_exhausted=lambda: False, marker=MARKER, model=MODEL,
+        clock=kit.clock, release=kit.session.commit,
+    )
+    with pytest.raises(ActionSuggestionsUnavailable):
+        guarded.suggest(user, save.public_id)
     assert stored(kit, save) is None
 
 

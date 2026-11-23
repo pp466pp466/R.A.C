@@ -147,6 +147,26 @@ def test_a_malformed_or_foreign_document_is_treated_as_no_suggestions(repo, memb
     assert repo.suggestion_state(alice.id, save.public_id).items == ()
 
 
+def test_a_boolean_anchor_is_never_valid_even_though_true_equals_one(repo, member_session, world):
+    """Python 的 `True == 1`：錨點恰為 (1, 1) 時，存成布林的文件不能被當成有效。"""
+    alice, save = world
+    play(repo, alice, save, 1)
+    assert anchor(repo, alice, save) == (1, 1)
+
+    def put(document):
+        for value in (None, document):               # 先清成 None：ORM 以 `==` 判斷 JSON 有沒有變動，而 {"seq": True} == {"seq": 1}，直接覆寫不會寫入
+            save.suggestions_json = value
+            member_session.flush()
+            member_session.expire_all()
+
+    for bad in ({"seq": True, "revision": 1, "items": ["a"]}, {"seq": 1, "revision": True, "items": ["a"]}, {"seq": True, "revision": True, "items": ["a"]}):
+        put(bad)
+        assert stored(member_session, save) == bad
+        assert repo.suggestion_state(alice.id, save.public_id).items == (), bad
+    put({"seq": 1, "revision": 1, "items": ["a"]})
+    assert repo.suggestion_state(alice.id, save.public_id).items == ("a",)
+
+
 def test_non_string_items_in_a_stored_document_are_ignored(repo, member_session, world):
     alice, save = world
     save.suggestions_json = {"seq": 0, "revision": 0, "items": ["好的", 3, None, "也好"]}

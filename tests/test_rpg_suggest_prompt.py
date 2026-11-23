@@ -89,6 +89,12 @@ def test_the_schema_refuses_the_wrong_shape(value):
         parse_llm_json(json.dumps(value, ensure_ascii=False), sp.SUGGEST_SCHEMA)
 
 
+def test_the_schema_allows_at_most_five_suggestions_though_only_three_are_kept():
+    """設計文件（D5）：結構描述最多 5 項，模型多給也沒關係；超過 5 項才是格式錯誤。"""
+    assert sp.MODEL_MAX_ITEMS == 5 and sp.SUGGEST_SCHEMA["properties"]["suggestions"]["maxItems"] == 5
+    assert sp.SUGGEST_MAX_ITEMS == 3
+
+
 def test_the_schema_strips_a_markdown_fence_like_every_structured_call():
     text = "```json\n" + json.dumps({"suggestions": ["走向山門"]}, ensure_ascii=False) + "\n```"
     assert parse_llm_json(text, sp.SUGGEST_SCHEMA) == {"suggestions": ["走向山門"]}
@@ -145,6 +151,29 @@ def test_duplicates_are_dropped_including_the_same_text_in_another_unicode_form_
 
 def test_an_item_with_the_secret_marker_is_dropped_in_any_case():
     assert clean([f"說出{MARKER}", f"說出{MARKER.upper()}", "走向山門"]) == ("走向山門",)
+
+
+# 沒有長串數字（長串數字會先被聯絡樣式擋下，測不到標記本身），且含大小寫：比對要先做不分大小寫的正規化
+CAPITALIZED_MARKER = "RpgMarkerAbCdEf"
+
+
+def test_the_marker_check_in_the_item_filter_does_not_depend_on_the_markers_own_case():
+    for spelled in (CAPITALIZED_MARKER, CAPITALIZED_MARKER.lower(), CAPITALIZED_MARKER.upper()):
+        assert sp.clean_items([f"說出{spelled}", "走向山門"], marker=CAPITALIZED_MARKER, tier="safe") == ("走向山門",)
+
+
+def test_the_semantic_rule_finds_a_capitalized_marker_written_in_lowercase():
+    rules = sp.suggest_rules(CAPITALIZED_MARKER, tier="safe")
+    value = json.dumps({"suggestions": ["走向山門", f"說出{CAPITALIZED_MARKER.lower()}"]}, ensure_ascii=False)
+    with pytest.raises(LLMValidationError) as caught:
+        parse_llm_json(value, sp.SUGGEST_SCHEMA, rules)
+    assert caught.value.reason == "semantic:leaked_marker"
+
+
+def test_duplicates_are_found_across_unicode_forms_and_case_even_when_the_limit_would_hide_the_difference():
+    composed, decomposed = "和Café談談", "和Café談談"
+    assert decomposed != composed and unicodedata.normalize("NFC", decomposed) == composed
+    assert clean(["找ABC談談", "找abc談談", composed, decomposed], limit=5) == ("找ABC談談", composed)
 
 
 @pytest.mark.parametrize("text", [

@@ -1,6 +1,6 @@
 # 系統架構與分層
 
-> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-22 ｜ 對應 change：rpg-script-reports（RC-8 的 8b：`ScriptReportService`、`ScriptReportRepository`、`ScriptRetentionPreferenceService`、`AdminService` 的檢舉讀取與結案、版本離開上架時自動結案、抹除流程的匿名保留；遷移 `0022`；見下方「劇本檢舉與匿名保留」）、rpg-script-publishing（RC-8 的 8a：管理員審核佇列與下架、完整公開目錄與游標分頁、詳情頁 `/game/script/<版本>`；遷移 `0021`）、safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
+> 狀態：已實作（RPG 為規劃中） ｜ 最後更新：2026-11-23 ｜ 對應 change：rpg-story-view（`SuggestionService`、`rpg_suggest_prompt.py`、`rpg_context.build_suggest_context`、`SessionRepository` 的建議錨點方法與 `turn_in_progress`、固定的「推進劇情」規則、`POST /api/game/sessions/<id>/suggestions`；遷移 `0023`；見下方「RPG 行動建議與直接推進劇情」）、rpg-script-reports（RC-8 的 8b：`ScriptReportService`、`ScriptReportRepository`、`ScriptRetentionPreferenceService`、`AdminService` 的檢舉讀取與結案、版本離開上架時自動結案、抹除流程的匿名保留；遷移 `0022`；見下方「劇本檢舉與匿名保留」）、rpg-script-publishing（RC-8 的 8a：管理員審核佇列與下架、完整公開目錄與游標分頁、詳情頁 `/game/script/<版本>`；遷移 `0021`）、safe-mode-toggle（內容模式只有 `safe`／`adult` 兩種；`AccessPolicy.effective_mode`／`save_mode`／`mode_state` 取代 `content_access`／`effective_tier`／`author_content_cap`；緊急煞車 `SAFE_MODE_FORCED`；目錄全可見、開存檔不依模式拒絕；遷移 `0020`）、wallet-hub（頁面路由 `/wallet`：免費簽到、儲值示意、紀錄；六個頁面頂列的餘額標籤；沒有新 API、資料表與 migration）、admin-unlimited-coins（管理員帳號不消耗遊戲幣）、adult-only-signup（未滿 18 歲抹除）、rpg-turn-revision、rpg-game-ui、rpg-entry-ui、story-preference、rpg-notebook、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、platform-foundation、member-auth、cs-chat-core、usage-limits、admin-console、openai-compatible-provider、privacy-lifecycle、ops-alerting、launch-readiness、staging-deployment、google-first-login ｜ 規範依據：AGENTS.md 第 3、4、9、10 節
 > 注意（2026-11-03）：Google 登入改版的兩個 change 都已實作：change ① `google-first-login`（`AccountLockService`、`AppealService`、`SlidingSessionInterface`、受限登入狀態一般化、管理員二階段登入的中間狀態 cookie）與 change ② `remove-player-password-auth`（移除玩家端密碼註冊、密碼登入、忘記密碼與信箱驗證；`AuthService` 只剩管理員的密碼驗證、補填年齡、變更密碼與建立管理員，`EmailFlowService` 只剩管理員的重設密碼；玩家不收任何信）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）加入 RPG 的資料基礎：`ScriptRepository`、`SessionRepository`、`ContentModeService`、`SessionService`、`ScriptSeedService` 與純運算的 `script_spec`、`content_tier`；`AccessPolicy` 的內容上限改為三種內容模式。還沒有任何玩家看得到的 RPG 介面。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）加入玩家創作劇本：`ScriptAuthoringService`、`ScriptSubmissionService`、`ScriptReviewService`、`RuntimeLimits`、`NicknameService`，以及純運算的 `script_rules`、`script_review_prompt`、`nickname`（見下方「劇本創作與審查」）；`SessionService` 開存檔前多一道審查閘門（`ReviewGate`）。玩家看得到的第一個 RPG 頁面是 `/scripts`。
@@ -394,20 +394,20 @@ sequenceDiagram
 
 | 元件 | 責任 |
 |---|---|
-| `game_api_controller.py` | `POST /api/game/sessions/<id>/turns/stream`、`POST …/opening/stream`、`GET …/<id>`、`GET …/turns`，修訂最後一輪的 `POST …/turns/<client_msg_id>/regenerate/stream` 與 `POST …/turns/<client_msg_id>/edit/stream`（見下一小節；`client_msg_id` 是路徑參數且永遠不變，不掛記事簿抓取），以及記事簿的 `GET`／`PUT …/<id>/notebook`（呼叫 `NotebookService`，不需要 RPG 供應商）；只讀請求、呼叫 `GameService`、回應。串流端點先確認有 RPG 供應商（沒有就在預扣之前回 503），再呼叫開始階段；開始前的失敗全是 JSON；已完成的重送由 `rpg_replay.py` 轉成 `meta`（`replayed: true`）、一個含全文的 `token`、`done`；要生成時在建立 Response 之前呼叫 `build_turn_runner`／`build_opening_runner`，Response 的本文把「關閉」傳給事件產生器（斷線收尾）；回合串流另以 `response.call_on_close` 在回應關閉之後呼叫記事簿抓取（`_notebook_follow_up`：依賴在請求內由 `build_notebook_capturer` 取好，回呼先問 `TurnRunner.capture_target()`，有值才抓取，並包 `try/except`，絕不拋出）。標頭 `text/event-stream; charset=utf-8`、`no-cache, no-transform`、`X-Accel-Buffering: no`；沒有權限判斷，也不匯入資料層 |
+| `game_api_controller.py` | `POST /api/game/sessions/<id>/turns/stream`、`POST …/opening/stream`、`GET …/<id>`、`GET …/turns`，修訂最後一輪的 `POST …/turns/<client_msg_id>/regenerate/stream` 與 `POST …/turns/<client_msg_id>/edit/stream`（見下一小節；`client_msg_id` 是路徑參數且永遠不變，不掛記事簿抓取），以及記事簿的 `GET`／`PUT …/<id>/notebook`（呼叫 `NotebookService`，不需要 RPG 供應商）與行動建議的 `POST …/<id>/suggestions`（呼叫 `SuggestionService`，沒有本文、回 JSON、不是事件串流，見「RPG 行動建議與直接推進劇情」）；只讀請求、呼叫 `GameService`、回應。串流端點先確認有 RPG 供應商（沒有就在預扣之前回 503），再呼叫開始階段；開始前的失敗全是 JSON；已完成的重送由 `rpg_replay.py` 轉成 `meta`（`replayed: true`）、一個含全文的 `token`、`done`；要生成時在建立 Response 之前呼叫 `build_turn_runner`／`build_opening_runner`，Response 的本文把「關閉」傳給事件產生器（斷線收尾）；回合串流另以 `response.call_on_close` 在回應關閉之後呼叫記事簿抓取（`_notebook_follow_up`：依賴在請求內由 `build_notebook_capturer` 取好，回呼先問 `TurnRunner.capture_target()`，有值才抓取，並包 `try/except`，絕不拋出）。標頭 `text/event-stream; charset=utf-8`、`no-cache, no-transform`、`X-Accel-Buffering: no`；沒有權限判斷，也不匯入資料層 |
 | `GameService`（`game_service.py`） | `begin_turn`：閘門 → `client_msg_id` 與行動驗證 → 擁有者 → 已完成的重送（`TurnReplay`，不碰錢包）→ 完結與第 0 幕閘門 → 行動的規則層（只擋確定違規，422 `input_blocked`）→ 全站預算 → SAVEPOINT 內 `start_turn` 與 `hold`（鍵含 `attempt`；管理員的預扣金額為 0、不因餘額不足被拒，其餘流程相同）→ 凍結 `TurnPlan`（最近 10 輪、世界狀態、在場角色與年齡、結局判定、首選模型、版本、上下文）。`begin_opening`：已完成的直接回傳既有文字，否則條件式搶佔生成權（`OpeningPlan`），同時只有一個請求能生成 |
 | `RunnerBase`（`rpg_runner_base.py`） | 兩種 Runner 共用：`SseEvent`、`RunnerDeps`（工作階段工廠、錢包與模型服務工廠、供應商、設定、時鐘，**在建立 Response 之前取出**）、心跳、串流帳本的緩衝與短交易（`_tx`）、一次串流嘗試（`StreamRun` 加 `OutputGuard`，回傳成功、被擋或失敗） |
 | `TurnRunner`（`rpg_turn_runner.py`） | 事件產生器：被擋後同一筆預扣自動重生一次、第二次仍被擋則 `blocked` 並退回；失敗與中斷 `interrupted` 並退回；文字完整後的收尾（狀態呼叫、`apply_proposal`、`finish_turn`、`settle`）不 `yield`，正常路徑與 `GeneratorExit` 路徑共用；版本衝突、狀態呼叫失敗都不影響文字與結算；`capture_target()`：`done` 被伺服器取走（`yield` 返回）之後、回合為 `complete`（不是 `ended`、被擋、中斷、失敗或被取代）才回傳抓取對象（`CaptureTarget`，純資料），`done` 寫入時客戶端斷線（`GeneratorExit`）不設定 |
 | `NotebookCapturer`（`rpg_notebook_capture.py`） | 每完成 10 輪抓取重點並追加到記事簿，**在回應關閉之後執行，自己管理短交易**：短交易 A（讀存檔、算邊界與視窗、全站預算）→ 抓取呼叫（`rpg_notebook`，無交易，預算 `min(30, 剩餘)`、總預算 60 秒）→ 驗證（清理與去重、標記字串與洩漏、規則層逐條累積）→ 長度（超過「容量 + 預備空間」且剩餘 ≥ 20 秒才精簡重試一次）→ 短交易 B（條件式 UPDATE 鎖定存檔列，對鎖內讀到的最新文字重新計算後追加）。不碰錢包、不計輪數、不拋出；暫時性失敗與驗證失敗不推進 `notebook_upto_turn`，由下個回合補做。細節見 [模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 6c |
 | `NotebookService`（`notebook_service.py`） | 玩家檢視與儲存自己存檔的記事簿（`registry.get_notebook_service`，在請求內建立，**不呼叫模型**）。`view`：閘門 → 擁有者（404）→ 全文、版本、字數、容量、預備空間、是否已滿（形狀由 `notebook_policy.view_of` 決定，快照的摘要由 `summary_of` 決定，兩者共用同一個來源）。`save` 的順序：閘門 → 擁有者 → 清理 → 已完結（409 `session_ended`）→ 長度大於容量（422 `notebook_too_long`，玩家沒有預備空間）→ 規則層（`script_rules.check_text_rules`，只擋必須拒絕的類別，422 `notebook_blocked`）→ `SessionRepository.save_notebook` 條件式寫入（進行中且版本相符，版本加 1，不碰 `notebook_upto_turn`）→ 衝突時重新讀取並回 409 `notebook_conflict` 附最新內容。每個被拒的出口只記 `rpg_events` 的整數與列舉事件 |
 | `OpeningRunner`（`rpg_opening_runner.py`） | 第 0 幕：不碰錢包、不寫回合表；寫回都是帶憑證（`opening_started_at`）的條件式 UPDATE；失敗或兩次被擋 → `fallback`（劇本的初始對話），斷線 → 退回 `pending` |
-| 純運算模組 | `rpg_prompt`、`rpg_context`、`rpg_world`、`rpg_output_guard`、`rpg_output_rules`、`notebook_policy`（容量、清理、視窗、追加）、`rpg_notebook_prompt`（抓取的提示詞與 schema）（不匯入資料模型、Repository 或 Flask，`tests/architecture/test_rpg_pure_modules.py` 守住） |
-| `rpg_events.py` | 二十一個日誌事件（回合與第 0 幕 12 個、記事簿 6 個、修訂 3 個），只有內部編號、整數與固定列舉；函式沒有接收文字的參數，所以玩家文字放不進日誌 |
+| 純運算模組 | `rpg_prompt`、`rpg_context`、`rpg_world`、`rpg_output_guard`、`rpg_output_rules`、`notebook_policy`（容量、清理、視窗、追加）、`rpg_notebook_prompt`（抓取的提示詞與 schema）、`rpg_suggest_prompt`（行動建議的提示詞、schema 與逐項驗證）（不匯入資料模型、Repository 或 Flask，`tests/architecture/test_rpg_pure_modules.py` 守住） |
+| `rpg_events.py` | 二十四個日誌事件（回合與第 0 幕 12 個、記事簿 6 個、修訂 3 個、安全模式提示 1 個、行動建議 2 個），只有內部編號、整數與固定列舉；函式沒有接收文字的參數，所以玩家文字放不進日誌 |
 
 - **交易邊界**：交易 1 由請求提交；之後每個寫入階段各開新工作階段並提交（被擋記錄、中斷或被擋結束、完成回合）。**完成回合、寫入世界狀態與結算預扣在同一個短交易**，不會出現「回合完成但沒結算」。串流的帳本緩衝在下一個短交易寫入，狀態呼叫之前一定先寫入，使帳本順序與實際一致。
 - **斷線**：Controller 逐個送出事件，客戶端斷線時 WSGI 伺服器 `close()` 產生器（`GeneratorExit`）。文字尚未完成 → 上游關閉、回合 `interrupted`、退回預扣；文字已完整且通過審查 → 收尾照常完成並結算，玩家以相同 `client_msg_id` 重送即取得既有結果。
 - **卡住的回合**：產生器所在的 worker 重啟時，回合停在 `streaming`；超過 `coin.hold_timeout_seconds` 後，重送相同編號會接手（`attempt` 加 1、新的預扣鍵），舊預扣已被錢包的逾時規則退回，玩家只被扣一輪。過時的產生器寫回時因 `attempt` 不符而失敗，只送出 `turn_superseded` 錯誤，不影響新的嘗試。
-- 組裝在 `registry.py`（`get_game_service()`、`build_runner_deps()`、`build_turn_runner()`、`build_opening_runner()`、`build_revision_runner()`、`build_notebook_capturer()`）；標記字串由 `SECRET_KEY` 導出（`rpg_marker`），模型名稱取 RPG 用途的首選模型。
+- 組裝在 `registry.py`（`get_game_service()`、`build_runner_deps()`、`build_turn_runner()`、`build_opening_runner()`、`build_revision_runner()`、`build_notebook_capturer()`、`get_suggestion_service()`）；標記字串由 `SECRET_KEY` 導出（`rpg_marker`），模型名稱取 RPG 用途的首選模型。
 
 ### RPG 修訂：重新生成與編輯最後一輪（rpg-turn-revision）
 
@@ -439,6 +439,45 @@ flowchart TD
 - **預扣鍵與免費次數**：每個回合前 `rpg.free_regenerations`（現讀，初始 2）次修訂免費（重新生成與編輯共用同一組次數；免費者不預扣、不檢查餘額），之後不論重新生成或編輯都用 `turn:{存檔}:{client_msg_id}:{attempt}` 預扣（**管理員的預扣金額為 0**，免費次數的認領與計次不變，`last_turn` 的 `regenerate_cost`／`edit_cost` 對管理員一律為 0）；`attempt` 只增不減，所以退回過的鍵不會被撿回，也不會與原回合已結算的鍵相同。次數以成功替換為準（`regen_count` 只在成功時加 1，重新生成與編輯相同、不歸零）。
 - **互斥**：修訂的認領未逾時期間，同存檔的 `turns/stream` 回 409 `turn_in_progress`；下一輪生成中，修訂回 409 `not_revisable`（`in_progress`）。認領逾時與預扣逾時相同（`coin.hold_timeout_seconds`，現讀），逾時後可被接手，過時執行者的 `replace_turn` 因 `attempt` 不符而失敗並送出 `turn_superseded`。
 - **隱私**：理由與分類只存入 `turn_regenerations`，不進任何模型呼叫、日誌與前端本機暫存；被取代的行動與劇情不保存；日誌只有 `rpg.revision_started`／`completed`／`failed` 的內部編號、列舉與整數。
+
+### RPG 行動建議與直接推進劇情（rpg-story-view）
+
+玩家點劇情卡旁的圖示才產生行動建議：**一次獨立的非串流結構化呼叫**（用途 `rpg_suggest`，沿用第 5 節的 RPG 模型、備援與單次請求總預算），回傳至多 3 個主角可做的行動短句（繁體中文、2 至 30 字、純文字）。**預設不呼叫模型**：載入存檔、第 0 幕與回合完成都不會產生；不碰錢包（不預扣、不扣款、不用免費次數），但每次模型呼叫都寫入 `llm_call_logs` 並計入全站每日 token 上限，管理員行為相同。另有「直接推進劇情」：送出固定的平台常數行動「推進劇情」，視為一般行動（預扣 30 幣、可重新生成與編輯），由回合敘事的固定 `system_instruction` 規則讓劇情自然推進。
+
+```mermaid
+sequenceDiagram
+    participant C as game_api_controller
+    participant S as SuggestionService
+    participant R as SessionRepository
+    participant L as LlmService
+    C->>S: suggest 目前使用者與存檔識別碼
+    S->>S: 閘門 擁有者 已完結 第 0 幕 進行中的回合
+    S->>R: suggestion_state 錨點 seq 與 revision
+    R-->>S: 已保存的建議 或空
+    alt 錨點相等且有保存的建議
+        S-->>C: 重用 reused 不呼叫模型
+    else 需要產生
+        S->>S: 沒有供應商 503 全站預算用盡 503
+        S->>L: run_structured rpg_suggest 結構化輸出
+        L-->>S: 通過解析與語意規則的建議
+        S->>S: clean_items 逐項驗證 無效者丟棄
+        S->>R: save_suggestions 在鎖內重新比對錨點
+        R-->>S: saved 或 reused 或 stale 或 ended
+        S-->>C: 1 至 3 項 或 409 suggestions_stale
+    end
+```
+
+| 元件 | 責任 |
+|---|---|
+| `SuggestionService`（`rpg_suggest_service.py`，`registry.get_suggestion_service`，在請求內建立） | `suggest` 的順序（每一步失敗就停下，便宜、沒有副作用的檢查在前）：帳號與年齡閘門（`require_chat_access`）→ 擁有者（非擁有者與不存在同為 404）→ 已完結（409 `session_ended`）→ 第 0 幕尚未完成（409 `opening_pending`；`ready`、`fallback` 與遷移之前的存檔〔沒有第 0 幕狀態〕都允許）→ 有進行中或修訂中的回合（409 `turn_in_progress`，第一輪正在串流而尚無完成回合時也成立）→ 保存的錨點等於目前的錨點就直接回傳（`reused`，**不需要供應商也不看全站預算**）→ 沒有 RPG 供應商（503）→ 全站每日 token 上限（503 `system_busy`）→ 以 `rpg_context.build_suggest_context` 組上下文並呼叫模型（生效模式現算，不取自開存檔時的值）→ `release`（`session.commit`：最後一筆帳本先提交，之後的 4xx／5xx 不會把它回復）→ `clean_items` → `SessionRepository.save_suggestions`。模型失敗或沒有任何有效項目回 503 `suggestions_unavailable`（**不保存、不佔每個畫面一次的次數**，玩家可再按圖示）；產生期間劇情已前進回 409 `suggestions_stale`（不保存、不回傳） |
+| `rpg_suggest_prompt.py`（純運算） | `build_suggest_system(tier, language, marker)`：系統指令只由固定樣板與列舉參數組成，沿用 `rpg_prompt.TIER_BOUNDARIES` 的分級界線（安全開的指令不含安全關的界線），**沒有**回合敘事的行動規則與「推進劇情」規則；`SUGGEST_SCHEMA`（`suggestions` 字串陣列，最多 5 項，多的丟棄）；`clean_items`（NFC、去除控制與零寬字元、2 至 30 字、不含網址與電子郵件與電話、不重複、不含洩漏標記、不含設定用語與資料區塊標題、通過規則層 `script_rules.check_text_rules` 且安全模式開時判為性內容者丟棄、至多 3 項，不拋出）；`suggest_rules`（語意規則：洩漏標記與「逐項驗證後至少剩一個有效項」，使全部無效視為驗證失敗而由 `LlmService` 以同一模型重試一次） |
+| `rpg_context.build_suggest_context`（純運算） | 建議專用的精簡上下文：只含玩家看得到的世界狀態、主角角色卡與最近 3 輪（`SUGGEST_TURNS`；沒有完成回合時用第 0 幕文字），**不含記事簿與隱藏設定**（不洩漏隱藏特質、弧線階段或不公開標記字串）；玩家與作者的文字只放在使用者內容區的資料區塊 |
+| `SessionRepository`（建議的方法） | `suggestion_state`（目前的錨點與有效的建議）、`save_suggestions`（先對自己的存檔做一次不改值的條件式 UPDATE 取得列鎖，鎖內重新判斷：已完結 → `ended`；錨點已改變 → `stale`；已有錨點相同的有效建議 → `reused`〔並行的另一個請求先寫入，不覆蓋〕；否則寫入 → `saved`；**不改 `version`、世界狀態、記事簿與最後活動時間**）、`turn_in_progress`、`recent_complete_turns`；錨點是最後一個完成回合的 `(seq, revision)`，第 0 幕為 `(0, 0)`，**錨點相等才有效**（布林與型別不符一律視為過期） |
+| `rpg_events.py` | `rpg.suggestion_served`（項數、`generated`／`reused`、實際使用的模型）與 `rpg.suggestion_failed`（原因列舉與模型呼叫次數）；函式沒有接收文字的參數，建議、劇情、行動與角色卡的文字進不了日誌 |
+
+- **錨點與保存**：建議存在 `sessions.suggestions_json`（`{seq, revision, items}`，遷移 `0023`），每個畫面（第 0 幕，或最後一個完成的回合；重新生成或編輯成功即視為新畫面）最多產生 1 次，新回合或修訂成功後自動失效（舊文件仍留在資料列上直到被覆寫，匯出照常列出）。快照 `GET …/<id>` 的 `suggestions` 只回有效的那一組。
+- **安全與隱私**：行動建議由玩家的角色卡與近期劇情衍生，視為個資：與存檔同期限、隨存檔與帳號刪除、納入個人資料匯出、不在管理員預設可檢視的範圍；建議呼叫的輸入輸出會傳送至 RPG 模型供應商。點選建議只是前端把文字貼進輸入框，送出時仍走一般行動的規則層與扣幣。
+- **直接推進劇情**：固定行動文字 `rpg_prompt.ADVANCE_ACTION`（`推進劇情`，前端 `game-state.js` 的同名常數由 Node 測試比對相等）。`_ADVANCE_RULE` 只放在回合敘事的固定 `system_instruction`（`build_system` 的 `action_rule`），**行動建議的指令沒有它**；規則文字是平台常數、不來自玩家，不放寬內容界線。送出走 `begin_turn`，與一般行動完全相同（規則層、預扣 30 幣、記事簿、重新生成與編輯），**不提供空白送出**。
 
 ## 3. 一個請求的生命週期
 
@@ -511,6 +550,7 @@ flowchart LR
 | rpg-protagonist、protagonist-suggestion | `app/services/protagonist.py`、`protagonist_prompt.py`、`protagonist_service.py`、`protagonist_review_service.py`、`startable.py`、`session_service.py`、`app/controllers/session_api_controller.py` | [系統架構-architecture.md](系統架構-architecture.md)（本文）、[資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
 | rpg-notebook、rpg-notebook-capture | `app/services/notebook_policy.py`、`notebook_service.py`、`rpg_notebook_prompt.py`、`rpg_notebook_capture.py`、`rpg_turn_runner.py`（`capture_target`）、`app/controllers/game_api_controller.py`（`call_on_close`、記事簿端點）、`app/repositories/session_repository.py`（記事簿方法）、`app/observability/rpg_events.py` | 本文、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 6c、[RPG.md](RPG.md) 7.16 |
 | rpg-turn-revision | `app/services/rpg_revision_runner.py`、`rpg_state_phase.py`、`rpg_turn_runner.py`、`game_service.py`（`begin_revision`、`RevisionPlan`）、`app/repositories/session_repository.py`（修訂的方法）、`turn_regeneration_repository.py`、`app/controllers/game_api_controller.py`（兩個修訂端點）、`game_page_controller.py`（`revision_limits`）、`personal_export_service.py`、`app/observability/rpg_events.py` | 本文「RPG 修訂」、[資料模型-data-model.md](資料模型-data-model.md)、[RPG.md](RPG.md) 7.8 |
+| rpg-suggestions、rpg-advance-action、rpg-turn-context、rpg-sessions、personal-data-export、rpg-story-pages、rpg-stream-client、rpg-revision-ui、rpg-game-screen（rpg-story-view 的 delta） | `app/services/rpg_suggest_service.py`、`rpg_suggest_prompt.py`、`rpg_context.py`（`build_suggest_context`）、`rpg_prompt.py`（`ADVANCE_ACTION`、`_ADVANCE_RULE`）、`game_service.py`（快照的 `suggestions`）、`registry.py`（`get_suggestion_service`）、`app/repositories/session_repository.py`（建議與 `turn_in_progress`）、`app/models/rpg_session.py`（`suggestions_json`）、`migrations/versions/20261123_0023_story_suggestions.py`、`app/controllers/game_api_controller.py`、`app/observability/rpg_events.py`、`personal_export_service.py`；前端 `app/static/js/game/` 的 `story-pages.js`、`story-reader.js`、`game-state.js`、`game-api.js`、`game-session.js`、`game-revision.js`、`game.js`、`app/templates/game/session.html`、`app/static/css/game.css` | 本文「RPG 行動建議與直接推進劇情」、[前端結構-frontend.md](前端結構-frontend.md) 3e-2、[模型呼叫層-llm-layer.md](模型呼叫層-llm-layer.md) 6d、[資料模型-data-model.md](資料模型-data-model.md)、[RPG.md](RPG.md) |
 | admin-unlimited-coins | `app/services/current_user.py`（`is_active_admin`）、`access_policy.py`（`is_admin` 委派）、`wallet_service.py`（`hold`、`WalletView.coin_exempt`）、`game_service.py`（`_last_turn_view`）；前端 `app/static/js/game/` 的 `game-wallet.js`、`game-labels.js`、`game-revision.js`；沒有 migration | 本文「遊戲幣錢包」與「RPG 修訂」、[RPG.md](RPG.md) 7.7.1、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[前端結構-frontend.md](前端結構-frontend.md) |
 | game-wallet、wallet-api | `app/models/wallet.py`、`app/repositories/wallet_repository.py`、`app/services/wallet_service.py`、`wallet_messages.py`、`app/controllers/wallet_api_controller.py`、`app/observability/wallet_events.py` | [資料模型-data-model.md](資料模型-data-model.md)、[帳號與安全-auth-security.md](帳號與安全-auth-security.md)、[營運與部署-operations.md](營運與部署-operations.md) |
 | wallet-hub、shared-wallet-balance、wallet-hub-page | `app/controllers/wallet_page_controller.py`、`app/templates/wallet/hub.html`；前端 `app/static/js/ui/` 的 `wallet-api.js`、`wallet-store.js`、`wallet-checkin.js`、`ui-components.js`（`<ui-wallet-balance>`）、`app/static/js/wallet/`、`app/static/css/wallet.css`、`game/game-wallet.js`（改從共用狀態庫衍生）；沒有 migration、資料表、設定鍵與 API 異動 | 本文「遊戲幣錢包」、[前端結構-frontend.md](前端結構-frontend.md) 2 與 3f、[RPG.md](RPG.md) 7.7.2、[帳號與安全-auth-security.md](帳號與安全-auth-security.md) |
