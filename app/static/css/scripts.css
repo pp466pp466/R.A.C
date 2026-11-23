@@ -2,7 +2,7 @@
 /* 劇本創作頁樣式。顏色一律使用 theme.css 的變數（Cinematic Dark Minimalist，嚴禁純白）。
    版面以 Bootstrap 的網格（row、col-*）排欄位；手機寬度時欄位自動堆疊，沒有橫向捲動。 */
 
-[v-cloak] { display: none; }
+[v-cloak] { display: none !important; }
 
 .sw-shell {
   min-height: 100vh;

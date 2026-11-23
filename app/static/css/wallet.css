@@ -2,7 +2,7 @@
 /* 錢包頁 `/wallet` 的樣式。顏色一律使用 theme.css 的變數（Cinematic Dark Minimalist，嚴禁純白），不寫色碼。
    版面以 flex 與 CSS 網格排列：手機寬度（360px）卡片單欄、不橫向溢出；寬螢幕卡片並排。 */
 
-[v-cloak] { display: none; }
+[v-cloak] { display: none !important; }
 
 .wh-shell {
   min-height: 100vh;

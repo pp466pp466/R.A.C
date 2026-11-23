@@ -2,7 +2,7 @@
 /* 客服頁面樣式。顏色一律使用 theme.css 的變數（Cinematic Dark Minimalist，嚴禁純白）。
    Sidebar 寬度 280px：桌面（992px 以上）推擠主區域，手機與平板以覆蓋方式顯示並附遮罩。 */
 
-[v-cloak] { display: none; }
+[v-cloak] { display: none !important; }
 
 .cs-shell {
   --cs-sidebar-width: 280px;

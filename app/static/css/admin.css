@@ -2,7 +2,7 @@
 /* 管理員後台樣式。顏色一律使用 theme.css 的變數（Cinematic Dark Minimalist，嚴禁純白）。
    調色盤只有六色：警示靠琥珀橙加上文字說明，不單靠顏色傳達（用量長條旁一定有百分比與文字）。 */
 
-[v-cloak] { display: none; }
+[v-cloak] { display: none !important; }
 
 .admin-shell {
   --admin-width: 64rem;                 /* 內容區的最大寬度 */

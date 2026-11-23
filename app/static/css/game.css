@@ -2,7 +2,9 @@
 /* RPG 入口頁與存檔頁外殼的樣式。顏色一律使用 theme.css 的變數（Cinematic Dark Minimalist，嚴禁純白）。
    版面以 flex 與 CSS 網格排列：手機寬度（360px）卡片單欄、不橫向溢出；桌面寬度兩欄。 */
 
-[v-cloak] { display: none; }
+/* Vue 掛載之前先隱藏整個範本，避免使用者短暫看到原始的 {{ }} 文字。必須加 !important：遊戲主畫面的根元素 `.gm-shell` 自己設定了
+   `display: flex`，與這條規則同樣是單一類別／屬性選擇器的特異性、又寫在後面，沒有 !important 就會蓋掉它，載入較慢時整份範本會露出來。 */
+[v-cloak] { display: none !important; }
 
 .ge-shell {
   min-height: 100vh;
