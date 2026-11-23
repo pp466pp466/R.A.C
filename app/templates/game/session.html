@@ -10,7 +10,9 @@
    - 載入與狀態：phase（'loading'｜'ready'｜'gone'｜'failed'）、loadFailure（{ message, link, retry }｜null）、restriction（'locked'｜'suspended'｜null）、
      title、playerName、modeLabel、modeNote（字串）、gateNotice（{ text, link, linkText }｜null）、ended、offline、notice（{ tone, text, link }｜null）、safeHint（{ text, link, linkText, closeText, closeLabel }｜null；遊戲內「可以嘗試關閉安全模式」提示）、
      openingNotice（{ tone, text, retry }｜null）。
-   - 時間軸：items（最近 60 項：opening｜turn｜note｜inflight）、hasEarlier、jumpVisible、scroller（捲動區的元素參照）。
+   - 時間軸資料與歷史：items（最近 60 項：opening｜turn｜note｜inflight；主畫面只用 inflight，完整時間軸只在「歷史」Modal 純文字顯示）、hasEarlier、scroller（歷史捲動區的元素參照）。
+   - 劇情卡（rpg-story-view）：card（Game.cardView 的形狀：visible、speaker、speakerLabel、text 打字中的字、fullText 給輔助科技、note、position、canPrev、canNext、typing、waitingText）；
+     行動建議：suggestOpen、suggestItems、suggestBusy、suggestError、suggestDisabled、suggestHint；直接推進劇情：advanceDisabled、advanceHint。
    - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
    - 世界與餘額提示：world（Game.worldView 的形狀）、locationLine、lowBalanceText。頂列的餘額是全站共用的 ui-wallet-balance 元件（由 UI.install 註冊，讀全站的 UI.wallet；
      game.js 把同一個 UI.wallet 交給 game-wallet.js，所以標籤與輸入區的餘額不足提示依同一份狀態，整頁只有一個 GET /api/wallet），樣板不再需要 balanceText。
@@ -25,7 +27,7 @@
      （{ value, label } 的分類清單）、regenerateCategory、regenerateReason、regenerateRule（字數規則）、regenerateCount、regenerateError、regenerateCanSubmit、
      regenerateCostLine；編輯 Modal：editOpen、editDraft、editCount、editHint、editError、editCanSubmit、editInsufficient（需付費且餘額不足）、editCostLine（免費次數內說明免費；需付費時提醒消耗遊戲幣與原本那輪的幣不退，並顯示費用與餘額）。
      理由字數範圍與分類來自初始狀態的 revision_limits，樣板不寫死任何數字；理由與分類只存在 Modal 的記憶體狀態，樣板以雙大括號顯示、不進任何儲存。
-   - 方法：retryLoad、retryOpening、showEarlier、jumpToLatest、onScroll、send、cancel、dismissNotice、dismissSafeHint、resendInflight、askAbandon、confirmAbandon、
+   - 方法：retryLoad、retryOpening、showEarlier、nextPage、prevPage、advance、toggleSuggestions、pickSuggestion、openHistory、closeHistory、onScroll、send、cancel、dismissNotice、dismissSafeHint、resendInflight、askAbandon、confirmAbandon、
      leaveClick、confirmLeave、toggleSidebar、closeSidebar、selectSideTab、claimCheckin、confirmOverflow、cancelOverflow、closeCoinModal、
      openNotebook（頂列「記事簿已滿」入口）、reloadNotebook、startNotebookEdit、saveNotebook、cancelNotebookEdit、confirmNotebookDiscard、
      openRegenerate、openEdit、closeRegenerate、closeEdit、selectRegenerateCategory、submitRegenerate、submitEdit、cancelRevision。 #}
@@ -36,6 +38,13 @@
 {% block content %}
 <div id="game-app" class="gm-shell" v-cloak>
 {% raw %}
+  <div class="gm-sky" aria-hidden="true">
+    <span class="gm-meteor"></span>
+    <span class="gm-meteor"></span>
+    <span class="gm-meteor"></span>
+    <span class="gm-meteor"></span>
+    <span class="gm-meteor"></span>
+  </div>
   <header class="gm-topbar">
     <button type="button" class="gm-iconbtn" aria-controls="gm-sidebar" :aria-expanded="sidebarOpen ? 'true' : 'false'"
             :aria-label="sidebarOpen ? '收合世界狀態側欄' : '開啟世界狀態側欄'" @click="toggleSidebar">☰</button>
@@ -71,7 +80,7 @@
 
   <div class="gm-body">
     <main class="gm-main">
-      <div ref="scroller" class="gm-scroll" role="log" aria-label="劇情" @scroll="onScroll">
+      <div class="gm-scroll gm-stage">
         <p v-if="phase === 'loading'" class="ge-hint" role="status">載入中…</p>
 
         <section v-else-if="phase === 'gone'" class="gm-state" role="alert">
@@ -88,54 +97,72 @@
         </section>
 
         <template v-else>
-          <p v-if="hasEarlier" class="gm-earlier"><button type="button" class="ui-btn" @click="showEarlier">顯示更早的內容</button></p>
-          <ol class="gm-timeline">
-            <li v-for="item in items" :key="item.key" class="gm-item" :class="'gm-item--' + item.kind">
-              <template v-if="item.kind === 'opening'">
-                <p class="gm-eyebrow">第 0 幕</p>
-                <div class="gm-story">{{ item.text }}</div>
-              </template>
+          <template v-for="item in items" :key="item.key">
+            <div v-if="item.kind === 'inflight'" class="gm-inflight gm-stage__inflight" role="status">
+              <p class="gm-eyebrow">還沒有確認完成的行動</p>
+              <div class="gm-action__text">{{ item.action }}</div>
+              <p class="ge-hint">這個行動可能因為重新整理或斷線而中斷，伺服器端還沒有它的完整結果。「重送」會使用同一個編號：伺服器已經完成的話只會重播、不會再扣遊戲幣。</p>
+              <p class="gm-actions">
+                <button type="button" class="ui-btn ui-btn--primary" :disabled="sending || offline || ended" @click="resendInflight">重送</button>
+                <button type="button" class="ui-btn" :disabled="sending" @click="askAbandon">放棄</button>
+              </p>
+            </div>
+          </template>
 
-              <template v-else-if="item.kind === 'turn'">
-                <div v-if="item.action" class="gm-action">
-                  <span class="gm-eyebrow">你的行動</span>
-                  <div class="gm-action__text">{{ item.action }}</div>
-                </div>
-                <p v-for="(line, index) in item.notes" :key="index" class="gm-note gm-note--transition">{{ line }}</p>
-                <div v-if="item.story" class="gm-story" :class="{ 'gm-story--streaming': item.streaming }">{{ item.story }}</div>
-                <p v-else-if="item.streaming" class="gm-wait" role="status">故事正在展開…</p>
-                <div v-if="item.key === reviseKey" class="gm-revise">
-                  <p class="gm-revise__bar">
-                    <button type="button" class="ui-btn gm-revise__btn" :disabled="reviseDisabled" @click="openRegenerate">重新生成</button>
-                    <small v-if="regenerateNote" class="gm-revise__note">{{ regenerateNote }}</small>
-                    <button type="button" class="ui-btn gm-revise__btn" :disabled="reviseDisabled" @click="openEdit">編輯</button>
-                    <small v-if="editNote" class="gm-revise__note">{{ editNote }}</small>
-                    <button v-if="revisionBusy" type="button" class="ui-btn gm-revise__btn" @click="cancelRevision">取消</button>
-                  </p>
-                  <p v-if="reviseHint" class="ge-hint gm-revise__hint" role="status">{{ reviseHint }}</p>
-                </div>
-              </template>
-
-              <p v-else-if="item.kind === 'note'" class="gm-note" :class="'gm-note--' + item.tone">{{ item.text }}</p>
-
-              <div v-else class="gm-inflight" role="status">
-                <p class="gm-eyebrow">還沒有確認完成的行動</p>
-                <div class="gm-action__text">{{ item.action }}</div>
-                <p class="ge-hint">這個行動可能因為重新整理或斷線而中斷，伺服器端還沒有它的完整結果。「重送」會使用同一個編號：伺服器已經完成的話只會重播、不會再扣遊戲幣。</p>
-                <p class="gm-actions">
-                  <button type="button" class="ui-btn ui-btn--primary" :disabled="sending || offline || ended" @click="resendInflight">重送</button>
-                  <button type="button" class="ui-btn" :disabled="sending" @click="askAbandon">放棄</button>
-                </p>
+          <div class="gm-stagerow">
+            <section v-if="card.visible" class="gm-card" :class="'gm-card--' + card.speaker" aria-label="劇情卡">
+              <div class="gm-card__head">
+                <span class="gm-eyebrow gm-card__speaker">{{ card.speakerLabel }}</span>
+                <span v-if="card.position" class="gm-card__pos">{{ card.position }}</span>
+                <span class="gm-card__spacer"></span>
+                <button type="button" class="gm-iconbtn gm-suggest" :class="{ 'gm-suggest--on': suggestOpen }" :disabled="suggestDisabled"
+                        :aria-expanded="suggestOpen ? 'true' : 'false'" aria-controls="gm-suggest-list"
+                        :aria-label="suggestBusy ? '取消取得建議' : (suggestOpen ? '收起行動建議' : '取得行動建議')"
+                        :title="suggestHint" @click="toggleSuggestions">
+                  <svg class="gm-suggest__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <path d="M9 18h6M10 21h4M12 3a6 6 0 0 0-3.5 10.9c.6.5 1 1.2 1 2V16h5v-.1c0-.8.4-1.5 1-2A6 6 0 0 0 12 3z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"></path>
+                  </svg>
+                </button>
               </div>
-            </li>
-          </ol>
+              <div class="gm-card__body" @click="nextPage">
+                <div class="gm-card__text" aria-hidden="true">{{ card.text }}</div>
+                <div v-if="!card.typing" class="gm-sr">{{ card.fullText }}</div>
+              </div>
+              <p v-if="card.note" class="gm-note gm-note--transition">{{ card.note }}</p>
+              <p v-if="card.waitingText" class="gm-wait" role="status">{{ card.waitingText }}</p>
+              <div class="gm-card__nav">
+                <button type="button" class="gm-pagebtn" :disabled="!card.canPrev" aria-label="回到上一段" @click="prevPage">‹</button>
+                <button type="button" class="gm-pagebtn" :disabled="!card.canNext" aria-label="翻到下一段" @click="nextPage">›</button>
+              </div>
+              <div v-if="reviseKey" class="gm-revise">
+                <p class="gm-revise__bar">
+                  <button type="button" class="ui-btn gm-revise__btn" :disabled="reviseDisabled" @click="openRegenerate">重新生成</button>
+                  <small v-if="regenerateNote" class="gm-revise__note">{{ regenerateNote }}</small>
+                  <button type="button" class="ui-btn gm-revise__btn" :disabled="reviseDisabled" @click="openEdit">編輯</button>
+                  <small v-if="editNote" class="gm-revise__note">{{ editNote }}</small>
+                  <button v-if="revisionBusy" type="button" class="ui-btn gm-revise__btn" @click="cancelRevision">取消</button>
+                </p>
+                <p v-if="reviseHint" class="ge-hint gm-revise__hint" role="status">{{ reviseHint }}</p>
+              </div>
+              <div v-if="suggestOpen" id="gm-suggest-list" class="gm-chips" role="group" aria-label="行動建議">
+                <button v-for="item in suggestItems" :key="item" type="button" class="gm-chip" @click="pickSuggestion(item)">{{ item }}</button>
+              </div>
+              <p v-if="suggestBusy" class="ge-hint gm-suggest__state" role="status">{{ suggestHint }}</p>
+              <p v-if="suggestError" class="gw-field-error gm-suggest__state" role="alert">{{ suggestError }}</p>
+            </section>
+            <p v-else-if="phase === 'ready' && !openingNotice" class="gm-wait gm-stagerow__wait" role="status">故事正在準備中…</p>
+
+            <div class="gm-quick" role="group" aria-label="快速操作">
+              <button type="button" class="ui-btn gm-quick__btn" @click="openHistory">歷史</button>
+              <button type="button" class="ui-btn gm-quick__btn" :disabled="advanceDisabled" :title="advanceHint" @click="advance">推進劇情</button>
+            </div>
+          </div>
           <p v-if="openingNotice" class="gm-note" :class="'gm-note--' + openingNotice.tone" role="status">
             {{ openingNotice.text }}
             <button v-if="openingNotice.retry" type="button" class="gm-linkbtn" @click="retryOpening">重試</button>
           </p>
         </template>
       </div>
-      <button v-if="jumpVisible" type="button" class="gm-jump" @click="jumpToLatest">回到最新</button>
 
       <section class="gm-composer" aria-label="輸入行動">
         <p v-if="safeHint" class="gm-notice gm-notice--info gm-notice--hint" role="status">
@@ -251,6 +278,32 @@
     </aside>
   </div>
 
+  <ui-modal v-model="modal.history" title="歷史" status-code="HISTORY" :show-cancel="false">
+    <div ref="scroller" class="gm-history" role="log" aria-label="劇情歷史" @scroll="onScroll">
+      <p v-if="hasEarlier" class="gm-earlier"><button type="button" class="ui-btn" @click="showEarlier">顯示更早的內容</button></p>
+      <ol class="gm-timeline">
+        <li v-for="item in items" :key="item.key" class="gm-item" :class="'gm-item--' + item.kind">
+          <template v-if="item.kind === 'opening'">
+            <p class="gm-eyebrow">第 0 幕</p>
+            <div class="gm-story">{{ item.text }}</div>
+          </template>
+          <template v-else-if="item.kind === 'turn'">
+            <div v-if="item.action" class="gm-action">
+              <span class="gm-eyebrow">你的行動</span>
+              <div class="gm-action__text">{{ item.action }}</div>
+            </div>
+            <p v-for="(line, index) in item.notes" :key="index" class="gm-note gm-note--transition">{{ line }}</p>
+            <div v-if="item.story" class="gm-story">{{ item.story }}</div>
+          </template>
+          <p v-else-if="item.kind === 'note'" class="gm-note" :class="'gm-note--' + item.tone">{{ item.text }}</p>
+          <p v-else class="gm-note gm-note--interrupted">這個行動還沒有確認完成。</p>
+        </li>
+      </ol>
+    </div>
+    <template #actions>
+      <button type="button" class="ui-btn ui-btn--primary" @click="closeHistory">關閉</button>
+    </template>
+  </ui-modal>
   <ui-modal v-model="regenerateOpen" title="重新生成這一輪" status-code="REGENERATE_TURN" :show-cancel="false">
     <p class="gm-modal-text">AI 會依同一個行動重新寫這一輪的劇情，新的內容通過檢查才會取代目前的。請選擇原因並簡短說明；理由會提供營運團隊檢視，不會送給 AI。</p>
     <p class="gm-modal-text" role="status">{{ regenerateCostLine }}</p>

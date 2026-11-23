@@ -90,11 +90,19 @@
 
 ## 7. 前端：版面與樣式
 
-- [ ] 7.1 改寫 `session.html`：劇情卡、說話者標籤、`‹`、等待狀態、行動區（建議圖示與 chips、直接推進劇情、輸入框）、歷史 Modal（`v-if`、純文字、載入更早內容）、桌機左側捷徑欄、氛圍背景層容器（`aria-hidden="true"`，內含 5 個空的流星裝飾元素 `gm-meteor`，見 design D11）；全部以 `{{ }}` 渲染，沒有 `v-html` 與 `data-bs-*`；驗證：頁面測試（`tests/test_game_page*.py`）更新後通過，架構守門通過
-- [ ] 7.2 `game.css`：氛圍背景層＝純 CSS 漸層底（專案色彩、無圖片、無純白）加**動態的流星效果**（design D11：5 顆空裝飾元素、`@keyframes` 只動 `transform` 與 `opacity`、頭 `#E2E4E9` 尾漸層到透明且少數帶 `#FF6B35` 暖色、週期約 6 至 14 秒並以負延遲錯開、位於劇情卡之下、`pointer-events: none`；未滿 992px 只留 3 顆；`prefers-reduced-motion` 時不顯示流星且無任何動畫）、劇情卡大字、桌機左欄與手機的按鈕位置、icon 與 chips 樣式（沿用既有 chips 規格）；驗證：新增樣式測試（`@keyframes` 只動 `transform` 與 `opacity`、`prefers-reduced-motion` 規則關閉動畫、背景與流星規則沒有 `url(` 與純白、`pointer-events: none`、手機只留 3 顆）通過；用無頭 Chrome 在 1280 與 360 寬度截圖逐張目視，並以間隔數秒的連續截圖確認流星確實移動，360px 沒有橫向捲軸、輸入區不遮住劇情卡；動態的觀感由使用者在 7.4 目視確認
-- [ ] 7.3 建議圖示使用內嵌 SVG 並含可及性標籤；劇情卡的完整文字另提供給輔助科技（打字中不重複朗讀）；流星容器對輔助科技隱藏；驗證：頁面測試斷言標籤與屬性存在（含流星容器的 `aria-hidden`）
-- [ ] 7.4 跑 Node、頁面測試與全域守門子集；驗證：通過；並以假模型的驗收環境實際操作一輪（翻頁、回看、歷史、推進、建議、重新生成、編輯），記錄結果給使用者
+- [x] 7.1 改寫 `session.html`：劇情卡、說話者標籤、`‹`、等待狀態、行動區（建議圖示與 chips、直接推進劇情、輸入框）、歷史 Modal（`v-if`、純文字、載入更早內容）、桌機左側捷徑欄、氛圍背景層容器（`aria-hidden="true"`，內含 5 個空的流星裝飾元素 `gm-meteor`，見 design D11）；全部以 `{{ }}` 渲染，沒有 `v-html` 與 `data-bs-*`；驗證：頁面測試（`tests/test_game_page*.py`）更新後通過，架構守門通過
+- [x] 7.2 `game.css`：氛圍背景層＝純 CSS 漸層底（專案色彩、無圖片、無純白）加**動態的流星效果**（design D11：5 顆空裝飾元素、`@keyframes` 只動 `transform` 與 `opacity`、頭 `#E2E4E9` 尾漸層到透明且少數帶 `#FF6B35` 暖色、週期約 6 至 14 秒並以負延遲錯開、位於劇情卡之下、`pointer-events: none`；未滿 992px 只留 3 顆；`prefers-reduced-motion` 時不顯示流星且無任何動畫）、劇情卡大字、桌機左欄與手機的按鈕位置、icon 與 chips 樣式（沿用既有 chips 規格）；驗證：新增樣式測試（`@keyframes` 只動 `transform` 與 `opacity`、`prefers-reduced-motion` 規則關閉動畫、背景與流星規則沒有 `url(` 與純白、`pointer-events: none`、手機只留 3 顆）通過；用無頭 Chrome 在 1280 與 360 寬度截圖逐張目視，並以間隔數秒的連續截圖確認流星確實移動，360px 沒有橫向捲軸、輸入區不遮住劇情卡；動態的觀感由使用者在 7.4 目視確認
+- [x] 7.3 建議圖示使用內嵌 SVG 並含可及性標籤；劇情卡的完整文字另提供給輔助科技（打字中不重複朗讀）；流星容器對輔助科技隱藏；驗證：頁面測試斷言標籤與屬性存在（含流星容器的 `aria-hidden`）
+- [x] 7.4 （2026-11-23 使用者改為：「你做功能檢查，功能無誤即可部署；我用實際帳號展示時直接使用，有問題再改」）跑 Node、頁面測試與全域守門子集；以假模型的自有實例（SQLite、假模型 9100、應用程式 5012）用無頭 Chrome 在 1280 與 360 寬度各操作一輪（翻頁、回看、歷史、推進、建議、重新生成、編輯、重新整理）並截圖；功能無誤後直接部署到展示環境；**動態流星的觀感與每段字數、翻頁手感由使用者在展示時目視，有問題再改**；驗證：測試通過、兩個寬度各 27／27 項檢查通過、部署 21 步通過
 - [x] 7.5 修正（2026-11-23 展示環境發現）：遊戲主畫面載入較慢時露出原始的 `{{ }}` 範本文字（`{{ title }}`、所有 Modal 與提示）。原因：`game.css` 的 `.gm-shell { display: flex }` 與 `[v-cloak] { display: none }` 特異性相同、寫在後面，把遮蔽規則蓋掉；修法：`game`、`cs`、`admin`、`scripts`、`wallet` 五個樣式檔的規則一律改為 `display: none !important`（`auth.css` 本來就是）；7.1 改寫 `session.html` 時須保留根元素的 `v-cloak` 與這條規則；驗證：新增的 `tests/test_v_cloak_rule.py`（3 項）通過——每個樣式檔的遮蔽規則都有 `!important`、遊戲根元素確實自己設定了 `display`（所以必須有）、每個有 `v-cloak` 的範本都載入含遮蔽規則的樣式檔（含繼承的父範本）；**尚未部署到展示環境**（只改了樣式檔，但目前的工作樹已含批 2 與批 3，須隨遷移 `0023` 之後的下一次部署一起上線）
+
+### 批 6 完成註記（2026-11-23；7.1–7.4）
+
+- **7.1**：`session.html` 的主畫面改為劇情卡（說話者標籤、`‹` `›`、等待狀態、重新生成與編輯掛在卡內、建議圖示在卡右上、chips 在卡內）、快速操作列（「歷史」「推進劇情」；手機在卡下方，桌機 992px 以上在卡左側）、歷史 Modal（唯讀純文字、載入更早內容，沒有任何編輯按鈕）、`gm-sky` 氛圍層（`aria-hidden`、5 個空的 `gm-meteor`）；在途回合（重送、放棄）仍顯示在主畫面。時間軸資料層不動，完整時間軸只在歷史顯示。`game.js` 接線：`isModalOpen`、全頁 `keydown` → `session.handleKey`、`focusTick`（貼上建議後焦點進輸入框）、`openHistory`／`closeHistory`；移除 `jumpVisible`、`jumpToLatest`（規格明訂歷史沒有「回到最新」，session 仍保留該狀態、不影響行為）。契約檔與 `game-template.test.js` 的「修訂按鈕掛在哪裡」改為對照劇情卡；`test_game_pages.py` 的 Modal 清單加上 `HISTORY`。
+- **7.2**：`game.css` 加劇情卡、chips、捷徑列、歷史捲動區與流星層（`@keyframes gm-meteor` 只動 `transform` 與 `opacity`；5 顆，週期 8、12、6、14、10 秒、負延遲錯開；第 2 顆帶 `#FF6B35`；位於劇情卡之下、`pointer-events: none`；未滿 992px 以 `not all and (min-width: 992px)` 只留 3 顆——既有測試只允許 992px 與 575.98px 兩個斷點，所以用這種寫法；`prefers-reduced-motion` 時不顯示）。寬度一律用 `inline-size` 或 `max-width`（既有測試禁止其他的 `width:` 宣告）。
+- **7.3**：建議圖示是內嵌 SVG（`aria-hidden`）加按鈕的 `aria-label`、`aria-expanded`、`aria-controls`；劇情卡打字中的字 `aria-hidden`，打字結束才提供 `fullText` 給輔助科技；流星容器 `aria-hidden`。新增 `tests/test_game_story_page.py`（8 項）。
+- **7.4 的驗證**：`node --test` **1766 通過**；pytest 守門子集加 `test_game_pages`、`test_game_story_page`、`test_script_page`、`test_v_cloak_rule`、`test_loadtest_harness`、`test_acceptance_rpg_scripts` **1301＋115 通過、2 略過**；**自有實例實機操作**（Chrome 無頭，1280 與 360 寬度各 **27／27** 項）：第 0 幕串流與第一段、點擊補完、第一段 `‹` 停用、輸入框打空白不翻頁、送出後先顯示「你」再翻到旁白、回合完成後送出鈕恢復、歷史含第 0 幕與行動且沒有修訂按鈕、建議產生並只貼進輸入框、推進劇情以固定文字送出、重新生成與編輯成功、重新整理後直接顯示最後一段、沒有橫向捲軸、沒有主控台錯誤；流星 12 秒內取樣出現 24 種狀態、最高不透明度 0.54（確實在動）。為此在 `scripts/rpg_acceptance_harness.py` 的假模型加了「行動建議員」分支（固定回 3 個建議）。
+- **未驗證／限制**：假模型的劇情只有 1 至 3 句，所以**多段翻頁（3 句一段、回看第二與第三段）只有單元測試覆蓋，沒有實機**；真實模型的分段品質與第一段延遲、動態流星的觀感、手機實機的觸控手感，由使用者在展示時確認。**8.1 變異驗證、8.2 全套 pytest、9.2 設計文件仍未做**（使用者選擇先部署）。
 
 ## 8. 整體驗證
 

@@ -290,6 +290,7 @@ textarea.gw-input { resize: vertical; }
    整頁高度固定為視窗高度，只有時間軸在內部捲動，所以輸入區永遠在底部，不會遮住最後一則劇情。360px 不橫向溢出：所有 flex 子元素 min-width: 0，
    文字一律 overflow-wrap: anywhere。顏色只用主題變數（沒有純白）。 */
 .gm-shell {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -466,6 +467,137 @@ textarea.gw-input { resize: vertical; }
 .gm-revise__choice input { accent-color: var(--color-accent); }
 .gm-revise__row { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.3rem 0.75rem; margin-top: 0.3rem; }
 
+/* ---- 視覺小說式劇情卡（rpg-story-view）：一次顯示一段，點擊或按鍵翻頁；大字、半透明毛玻璃，說話者標示為「旁白」與「你」 -------------------- */
+.gm-stage { display: flex; flex-direction: column; gap: 0.9rem; }
+.gm-stagerow { display: flex; flex: 0 0 auto; flex-direction: column; gap: 0.8rem; min-width: 0; inline-size: 100%; max-width: 46rem; margin: auto; }
+.gm-stagerow__wait { align-self: center; }
+.gm-stage__inflight { max-width: 46rem; margin: 0 auto; }
+
+.gm-card {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.9rem 1.1rem 1rem;
+  background: var(--color-surface);
+  backdrop-filter: blur(6px);
+  border: var(--border-hairline);
+  border-left: 2px solid var(--color-border);
+}
+
+.gm-card--you { border-left-color: var(--color-accent); }
+.gm-card__head { display: flex; align-items: center; gap: 0.6rem; margin-bottom: 0.4rem; }
+.gm-card__speaker { margin: 0; color: var(--color-accent); }
+.gm-card__pos { color: var(--color-text-muted); font-size: 0.78rem; letter-spacing: 0.08em; }
+.gm-card__spacer { flex: 1 1 auto; }
+.gm-card__body { min-height: 7rem; cursor: pointer; }
+.gm-card__text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 1.12rem; line-height: 2.05; }
+.gm-card--you .gm-card__text { color: var(--color-text-muted); font-size: 1rem; line-height: 1.9; }
+.gm-card__nav { display: flex; justify-content: flex-end; gap: 0.5rem; margin-top: 0.5rem; }
+
+.gm-pagebtn {
+  appearance: none;
+  min-width: 2.5rem;
+  min-height: 2.5rem;
+  padding: 0 0.7rem;
+  background: transparent;
+  border: var(--border-hairline);
+  border-radius: 0;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 1.3rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.gm-pagebtn:hover:not(:disabled), .gm-pagebtn:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
+.gm-pagebtn:disabled { opacity: 0.35; cursor: default; }
+
+/* 行動建議：圖示在劇情卡右上，點了才產生；建議以膠囊 chips 顯示在劇情卡內，點選只是貼進輸入框 */
+.gm-suggest { min-width: 2.5rem; min-height: 2.5rem; }
+.gm-suggest--on { border-color: var(--color-accent); color: var(--color-accent); }
+.gm-suggest:disabled { opacity: 0.4; cursor: default; }
+.gm-suggest__icon { inline-size: 1.25rem; block-size: 1.25rem; }
+.gm-suggest__state { margin: 0.5rem 0 0; }
+.gm-chips { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.7rem; }
+.gm-chip {
+  appearance: none;
+  max-width: 100%;
+  padding: 0.35rem 0.9rem;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  color: var(--color-text-muted);
+  font: inherit;
+  font-size: 0.92rem;
+  text-align: left;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.gm-chip:hover, .gm-chip:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
+
+/* 捷徑（歷史、直接推進劇情）：手機與平板在劇情卡下方，桌機（992px 以上）在劇情卡左側 */
+.gm-quick { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+.gm-quick__btn { min-height: 2.5rem; white-space: nowrap; }
+
+/* 歷史 Modal：完整時間軸只讀、純文字，在 Modal 內捲動 */
+.gm-history { max-height: 60vh; padding-right: 0.25rem; overflow-x: hidden; overflow-y: auto; }
+
+/* ---- 氛圍背景層：純 CSS 的漸層底加疏落的流星（沒有圖片或 JavaScript；動畫只改 transform 與 opacity）---------------------------------- */
+.gm-sky {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse at 15% 0%, rgba(255, 107, 53, 0.07), transparent 55%),
+    radial-gradient(ellipse at 85% 100%, rgba(138, 143, 153, 0.08), transparent 60%),
+    var(--color-bg);
+}
+
+.gm-topbar, .gm-banner, .gm-body, .gm-shell > .ui-restriction { position: relative; z-index: 1; }
+
+.gm-meteor {
+  position: absolute;
+  inline-size: 150px;
+  block-size: 2px;
+  border-radius: 2px;
+  background: linear-gradient(to right, transparent, var(--color-text));
+  opacity: 0;
+  transform: translate3d(0, 0, 0) rotate(35deg);
+  animation: gm-meteor 9s linear infinite;
+  pointer-events: none;
+}
+
+.gm-meteor:nth-child(1) { top: -3%; left: 8%; animation-duration: 8s; animation-delay: -2s; }
+.gm-meteor:nth-child(2) { top: 6%; left: 30%; animation-duration: 12s; animation-delay: -7s; background: linear-gradient(to right, transparent, var(--color-accent)); }
+.gm-meteor:nth-child(3) { top: -6%; left: 52%; animation-duration: 6s; animation-delay: -4s; }
+.gm-meteor:nth-child(4) { top: 4%; left: 70%; animation-duration: 14s; animation-delay: -10s; }
+.gm-meteor:nth-child(5) { top: -2%; left: 88%; animation-duration: 10s; animation-delay: -1s; }
+
+/* 一個週期只有前段約 15% 可見，其餘時間透明；畫面上通常只有 0 至 2 顆 */
+@keyframes gm-meteor {
+  0% { opacity: 0; transform: translate3d(0, 0, 0) rotate(35deg); }
+  2% { opacity: 0.6; }
+  15% { opacity: 0; transform: translate3d(620px, 434px, 0) rotate(35deg); }
+  100% { opacity: 0; transform: translate3d(620px, 434px, 0) rotate(35deg); }
+}
+
+/* 手機與平板（未滿 992px）只留 3 顆 */
+@media not all and (min-width: 992px) {
+  .gm-meteor:nth-child(n + 4) { display: none; }
+}
+
+@media (min-width: 992px) {
+  .gm-stagerow { flex-direction: row; align-items: flex-start; max-width: 58rem; }
+  .gm-quick { flex: 0 0 8rem; flex-direction: column; order: -1; }
+  .gm-quick__btn { text-align: center; }
+}
+
 @media (min-width: 992px) {
   .gm-topbar { padding-left: 24px; padding-right: 24px; }
   .gm-scroll { padding-left: 24px; padding-right: 24px; }
@@ -479,4 +611,5 @@ textarea.gw-input { resize: vertical; }
 
 @media (prefers-reduced-motion: reduce) {
   .gm-story--streaming::after { animation: none; }
+  .gm-meteor { display: none; animation: none; }
 }

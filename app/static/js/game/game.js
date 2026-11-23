@@ -69,7 +69,8 @@
         csrf: function () { return Auth.csrfTokenFrom(document); },
         isOnline: function () { return window.navigator.onLine !== false; },
         setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window), AbortController: window.AbortController,
-        restrictionOf: UI.restrictionOf
+        restrictionOf: UI.restrictionOf,
+        isModalOpen: function () { return anyModalOpen(); }                // 有 Modal 開啟時，鍵盤翻頁不作用
       });
       noteRestriction = function (info) {
         var kind = UI.restrictionOf(info);
@@ -113,9 +114,9 @@
       }
 
       // ---- Modal ------------------------------------------------------------------------------------
-      var modal = Vue.reactive({ leave: false, abandon: false });
+      var modal = Vue.reactive({ leave: false, abandon: false, history: false });
       function anyModalOpen() {
-        return modal.leave || modal.abandon || wallet.coinModalOpen.value || notebook.notebookDiscardOpen.value || revision.regenerateOpen.value || revision.editOpen.value;
+        return modal.leave || modal.abandon || modal.history || wallet.coinModalOpen.value || notebook.notebookDiscardOpen.value || revision.regenerateOpen.value || revision.editOpen.value;
       }
 
       /* 頂列的「回到冒險」：這一輪還在進行時先問；其餘照一般連結離開。 */
@@ -141,9 +142,29 @@
         return session.abandonInflight();
       }
 
+      /* 歷史：完整的時間軸（純文字、只讀）放在 Modal 裡；開啟時捲到最新的內容。 */
+      function openHistory() {
+        modal.history = true;
+        Vue.nextTick(function () {
+          var element = scroller.value;
+          if (element) { element.scrollTop = element.scrollHeight; }
+        });
+        return true;
+      }
+      function closeHistory() { modal.history = false; return true; }
+
       // ---- 元素參照與捲動 -----------------------------------------------------------------------------
       var scroller = Vue.ref(null);
       var input = Vue.ref(null);
+      /* 貼上建議之後：焦點放到輸入框、游標移到尾端（建議只貼進輸入框，不送出）。 */
+      Vue.watch(function () { return session.focusTick.value; }, function () {
+        Vue.nextTick(function () {
+          var element = input.value;
+          if (!element || typeof element.focus !== 'function') { return; }
+          element.focus();
+          if (typeof element.setSelectionRange === 'function') { var end = element.value.length; element.setSelectionRange(end, end); }
+        });
+      });
       Vue.watch(function () { return session.scrollTick.value; }, function () {
         Vue.nextTick(function () {
           var element = scroller.value;
@@ -165,13 +186,18 @@
       document.addEventListener('keydown', function (event) {
         if (event && event.key === 'Escape' && sidebarOpen.value && !anyModalOpen()) { sidebarOpen.value = false; }
       });
+      document.addEventListener('keydown', function (event) { session.handleKey(event); });   // 空白鍵、Enter、方向鍵翻頁（焦點在輸入框或有 Modal 時不作用）
       Vue.onMounted(function () { session.load(); });
 
       return {
         phase: session.phase, loadFailure: session.loadFailure, restriction: session.restriction, title: session.title, playerName: session.playerName,
         modeLabel: session.modeLabel, modeNote: session.modeNote, gateNotice: session.gateNotice, ended: session.ended, offline: session.offline,
         notice: session.notice, safeHint: session.safeHint, openingNotice: session.openingNotice,
-        items: session.items, hasEarlier: session.hasEarlier, jumpVisible: session.jumpVisible, scroller: scroller,
+        items: session.items, hasEarlier: session.hasEarlier, scroller: scroller,
+        card: session.card, nextPage: session.nextPage, prevPage: session.prevPage, advance: session.advance, advanceDisabled: session.advanceDisabled,
+        advanceHint: session.advanceHint, suggestOpen: session.suggestOpen, suggestItems: session.suggestItems, suggestBusy: session.suggestBusy,
+        suggestError: session.suggestError, suggestDisabled: session.suggestDisabled, suggestHint: session.suggestHint,
+        toggleSuggestions: session.toggleSuggestions, pickSuggestion: session.pickSuggestion, openHistory: openHistory, closeHistory: closeHistory,
         input: input, draft: session.draft, actionError: session.actionError, draftCount: session.draftCount, draftOver: session.draftOver,
         actionMax: session.actionMax, sending: session.sending, sendDisabled: session.sendDisabled, inputDisabled: session.inputDisabled,
         blockerText: session.blockerText,
@@ -179,7 +205,7 @@
         sidebarOpen: sidebarOpen, sidebarMode: sidebarMode, modal: modal,
         coinModalOpen: wallet.coinModalOpen, coinModalText: wallet.coinModalText, checkinBusy: wallet.checkinBusy, checkinPreview: wallet.checkinPreview,
         checkinMessage: wallet.checkinMessage, checkinFinished: wallet.checkinFinished,
-        retryLoad: session.retryLoad, retryOpening: session.retryOpening, showEarlier: session.showEarlier, jumpToLatest: session.jumpToLatest,
+        retryLoad: session.retryLoad, retryOpening: session.retryOpening, showEarlier: session.showEarlier,
         onScroll: session.onScroll, send: session.send, cancel: session.cancel, dismissNotice: session.dismissNotice, dismissSafeHint: session.dismissSafeHint,
         resendInflight: session.resendInflight, askAbandon: askAbandon, confirmAbandon: confirmAbandon, leaveClick: leaveClick,
         confirmLeave: confirmLeave, toggleSidebar: toggleSidebar, closeSidebar: closeSidebar, claimCheckin: wallet.claimCheckin,

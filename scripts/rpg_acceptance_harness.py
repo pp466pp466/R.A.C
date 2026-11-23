@@ -7,7 +7,7 @@
    `python rpg_acceptance_harness.py serve --model-port 9100 --helper-port 9101`（工作目錄須是應用程式根目錄，並已設定 `DATABASE_URL` 等環境變數）。
 
 **假模型**（OpenAI 相容）依請求種類回應：串流（`stream: true`）是劇情或第 0 幕；系統指令含「記事簿記錄員」是記事簿抓取（rpg-notebook）；
-含「狀態記錄員」是狀態呼叫；其餘（主角的模型層審查等）一律通過（子類可覆寫 `review`）。動作文字裡的關鍵字決定行為，約定見
+含「狀態記錄員」是狀態呼叫；含「行動建議員」是行動建議（固定回 3 個）；其餘（主角的模型層審查等）一律通過（子類可覆寫 `review`）。動作文字裡的關鍵字決定行為，約定見
 `acceptance_rpg_turn.py`（劇情與狀態）與 `acceptance_rpg_notebook.py`（記事簿）的說明：
 測試被擋一次、測試被擋兩次、測試中斷、測試慢速、測試結局；測試記事簿超量、測試記事簿放棄、測試記事簿違規、測試記事簿慢速。
 `GET /_status` 回傳呼叫計數（串流、狀態、記事簿抓取、上游被關閉的次數，以及請求內容含「驗收理由標記」的次數 marker_calls）。
@@ -136,7 +136,18 @@ class FakeRpgModel(BaseHTTPRequestHandler):
             return self.capture_call(text)
         if "狀態記錄員" in system:
             return self.state_call(text)
+        if "行動建議員" in system:
+            return self.suggest_call(body)
         return self.review(text, body)
+
+    def suggest_call(self, body: dict) -> None:
+        """行動建議（rpg-story-view，用途 rpg_suggest）：固定回 3 個通過規則層的建議。"""
+        content = json.dumps({"suggestions": ["向守門的弟子打聽消息", "回頭檢查剛才的腳印", "走向山門深處"]}, ensure_ascii=False)
+        self._send(200, {
+            "id": "acceptance", "object": "chat.completion", "model": body.get("model", ""),
+            "choices": [{"index": 0, "finish_reason": "stop", "message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 300, "completion_tokens": 40},
+        })
 
     def review(self, text: str, body: dict) -> None:
         """其餘的非串流呼叫（主角的模型層審查等）：預設一律通過。"""

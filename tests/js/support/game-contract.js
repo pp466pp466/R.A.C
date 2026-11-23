@@ -4,9 +4,11 @@
 const CONTRACT = {
   state: [
     'phase', 'loadFailure', 'restriction', 'title', 'playerName', 'modeLabel', 'modeNote', 'gateNotice', 'ended', 'offline', 'notice', 'safeHint', 'openingNotice',
-    'items', 'hasEarlier', 'jumpVisible', 'scroller', 'input', 'draft', 'actionError', 'draftCount', 'draftOver', 'actionMax', 'sending', 'sendDisabled',
+    'items', 'hasEarlier', 'scroller', 'input', 'draft', 'actionError', 'draftCount', 'draftOver', 'actionMax', 'sending', 'sendDisabled',
     'inputDisabled', 'blockerText', 'world', 'locationLine', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'sideTab', 'modal', 'coinModalOpen',
     'coinModalText', 'checkinBusy', 'checkinPreview', 'checkinMessage', 'checkinFinished',
+    // 劇情卡、行動建議與直接推進劇情（game-session.js，rpg-story-view）
+    'card', 'suggestOpen', 'suggestItems', 'suggestBusy', 'suggestError', 'suggestDisabled', 'suggestHint', 'advanceDisabled', 'advanceHint',
     // 記事簿面板（game-notebook.js）
     'notebook', 'notebookLoading', 'notebookError', 'notebookEmpty', 'notebookUsage', 'notebookReserveNote', 'notebookFull', 'notebookFullText', 'notebookEmptyText',
     'notebookStale', 'notebookEditing', 'notebookDraft', 'notebookDraftCount', 'notebookOver', 'notebookOverNote', 'notebookEditHint', 'notebookSaveHint', 'notebookCanEdit',
@@ -17,9 +19,10 @@ const CONTRACT = {
     'editHint', 'editError', 'editCanSubmit', 'editInsufficient', 'editCostLine',
   ],
   methods: [
-    'retryLoad', 'retryOpening', 'showEarlier', 'jumpToLatest', 'onScroll', 'send', 'cancel', 'dismissNotice', 'dismissSafeHint', 'resendInflight', 'askAbandon',
+    'retryLoad', 'retryOpening', 'showEarlier', 'onScroll', 'send', 'cancel', 'dismissNotice', 'dismissSafeHint', 'resendInflight', 'askAbandon',
     'confirmAbandon', 'leaveClick', 'confirmLeave', 'toggleSidebar', 'closeSidebar', 'selectSideTab', 'claimCheckin', 'confirmOverflow', 'cancelOverflow',
     'closeCoinModal', 'openNotebook', 'reloadNotebook', 'startNotebookEdit', 'saveNotebook', 'cancelNotebookEdit', 'confirmNotebookDiscard',
+    'nextPage', 'prevPage', 'advance', 'toggleSuggestions', 'pickSuggestion', 'openHistory', 'closeHistory',
     'openRegenerate', 'openEdit', 'closeRegenerate', 'closeEdit', 'selectRegenerateCategory', 'submitRegenerate', 'submitEdit', 'cancelRevision',
   ],
 };

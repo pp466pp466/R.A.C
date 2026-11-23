@@ -140,15 +140,15 @@ function modalBlock(html, model) {
   return html.slice(start, html.indexOf('</ui-modal>', start));
 }
 
-test('the revision buttons sit under the story of the one turn whose key is reviseKey, and nowhere else (not on the opening, notes or other turns)', () => {
+test('the revision buttons sit in the story card (rpg-story-view), only while reviseKey is set, and nowhere else (not in the history or the quick bar)', () => {
   const html = read(TEMPLATE);
-  const turn = html.slice(html.indexOf("<template v-else-if=\"item.kind === 'turn'\">"), html.indexOf("<p v-else-if=\"item.kind === 'note'\""));
-  assert.ok(turn.includes('<div v-if="item.key === reviseKey" class="gm-revise">'));
-  for (const call of ['openRegenerate', 'openEdit', 'cancelRevision']) { assert.ok(turn.includes(`@click="${call}"`), call); }
-  assert.ok(turn.indexOf('{{ item.story }}') < turn.indexOf('class="gm-revise"'));                         // 在劇情的下方
-  const outside = html.replace(turn, '');
+  const card = html.slice(html.indexOf('<section v-if="card.visible"'), html.indexOf('<div class="gm-quick"'));
+  assert.ok(card.includes('<div v-if="reviseKey" class="gm-revise">'));
+  for (const call of ['openRegenerate', 'openEdit', 'cancelRevision']) { assert.ok(card.includes(`@click="${call}"`), call); }
+  assert.ok(card.indexOf('{{ card.text }}') < card.indexOf('class="gm-revise"'));                         // 在劇情卡文字的下方
+  const outside = html.replace(card, '');
   assert.ok(!outside.includes('@click="openRegenerate"') && !outside.includes('@click="openEdit"'));      // 只有這一處入口
-  assert.equal(html.split('item.key === reviseKey').length - 1, 1);                                       // 按鈕列與說明在同一個區塊裡，只用這一個 key 判斷
+  assert.equal(html.split('v-if="reviseKey"').length - 1, 1);                                              // 按鈕列與說明在同一個區塊裡，只用這一個 key 判斷
 });
 
 test('the revision buttons are disabled by the reactive state, the cancel button only shows while a revision runs, and the hint is plain text', () => {
