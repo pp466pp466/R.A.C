@@ -4,8 +4,8 @@
 
 ## 1. 規範修訂（須使用者確認文字後才寫）
 
-- [ ] 1.1 依 `design.md` D9 的草案修訂 `AGENTS.md` 第 5、6、7、10、11 節（最小改動），先把每一節的新舊對照給使用者確認；驗證：使用者確認，且 `git diff AGENTS.md` 只有草案列出的段落
-- [ ] 1.2 同步 `.claude/skills/python-flask-skill` 的對應 reference，並在 `tests/test_agents_skill_sync.py` 的 `SYNCED_RULES` 補守門句；驗證：`pytest tests/test_agents_skill_sync.py` 通過，且新增的守門句在 AGENTS.md 與 reference 都找得到
+- [x] 1.1 依 `design.md` D9 的草案修訂 `AGENTS.md` 第 5、6、7、10、11 節（最小改動），先把每一節的新舊對照給使用者確認；驗證：使用者確認，且 `git diff AGENTS.md` 只有草案列出的段落
+- [x] 1.2 同步 `.claude/skills/python-flask-skill` 的對應 reference，並在 `tests/test_agents_skill_sync.py` 的 `SYNCED_RULES` 補守門句；驗證：`pytest tests/test_agents_skill_sync.py` 通過，且新增的守門句在 AGENTS.md 與 reference 都找得到
 
 ## 2. 後端：直接推進劇情的平台規則
 
@@ -32,7 +32,8 @@
 - [ ] 4.5 在 `game_api_controller.py` 新增 `POST /api/game/sessions/<id>/suggestions`（JSON、CSRF、閘門）；驗證：端點測試覆蓋 404、`session_ended`、`opening_pending`、`turn_in_progress`、`system_busy`、沒有供應商、`suggestions_unavailable`、`suggestions_stale` 與成功回應的欄位；`/api/*` 回應不洩漏內部細節
 - [ ] 4.6 在 `rpg_events.py` 新增建議事件（白名單：內部編號、項數、是否重用、結果列舉）；驗證：日誌測試收集一輪建議流程，找不到任何建議、劇情或行動的文字
 - [ ] 4.7 確認呼叫的狀態：一個進行中（`streaming`）的回合而尚無完成回合時，錨點與 `turn_in_progress` 判斷正確；驗證：新增對應測試
-- [ ] 4.8 跑後端相關測試（`tests/test_rpg_*`、`tests/test_game_*`、帳本與遷移）與全域守門子集；驗證：通過
+- [ ] 4.8 更新 `README.md` 的端點表與路由數，以及事件白名單、用途列舉等別處寫死的數量；驗證：`test_readme`、`test_design_docs` 與守門子集通過
+- [ ] 4.9 跑後端相關測試（`tests/test_rpg_*`、`tests/test_game_*`、帳本與遷移）與全域守門子集，並補跑一次全套 pytest（涵蓋第 3 與第 4 組；背景執行、輸出存檔）；驗證：全部通過並記錄筆數
 
 ## 5. 前端純函式：分頁與閱讀器
 
@@ -56,6 +57,8 @@
 - [ ] 7.4 跑 Node、頁面測試與全域守門子集；驗證：通過；並以假模型的驗收環境實際操作一輪（翻頁、回看、歷史、推進、建議、重新生成、編輯），記錄結果給使用者
 
 ## 8. 整體驗證
+
+> 執行順序（使用者 2026-11-23 確認）：8.1 → 9.2（文件同步）→ 8.2 → 8.3 → 9.1，使全套測試看到的是最終的設計文件。
 
 - [ ] 8.1 變異驗證：對 `story-pages`、`story-reader`、`rpg_suggest_prompt.clean_items` 與 `SuggestionService` 的關鍵判斷（句界、湊滿釋出、錨點比對、規則層過濾、不扣幣）做變異，設定測試逾時與行程逾時；驗證：每個變異都被測試殺死，工作樹還原乾淨
 - [ ] 8.2 全套 pytest 與全套 Node 測試（背景執行、輸出存檔）；驗證：全部通過，記錄通過與略過的數量

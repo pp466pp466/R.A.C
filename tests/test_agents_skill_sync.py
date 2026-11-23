@@ -211,6 +211,16 @@ SYNCED_RULES = [
     (11, "重新生成回饋：理由由玩家文字構成，視為個資", "references/privacy-observability.md"),
     (11, "玩家於重新生成時填寫的理由會提供營運團隊檢視、玩家的對話人設會經 AI 處理、遊戲幣與帳本會保存", "references/privacy-observability.md"),
     (11, "user_identities、auth_tokens、遊戲幣錢包與帳本與全部對話", "references/privacy-observability.md"),
+    # 2026-11-23：rpg-story-view（視覺小說式分段、點圖示才產生的行動建議、直接推進劇情）
+    (5, "RPG 的劇情文字另依句分段，以「段」為單位逐字渲染", "references/llm-streaming.md"),
+    (6, "行動建議（見第 7 節）不進入上下文與記事簿", "references/llm-streaming.md"),
+    (7, "遊戲畫面（RPG）：存檔畫面採視覺小說式閱讀", "references/business-encoding.md"),
+    (7, "行動建議與直接推進劇情（RPG）：劇情卡旁有建議圖示，預設不呼叫模型", "references/business-encoding.md"),
+    (7, "行動建議不消耗遊戲幣；「直接推進劇情」與一般行動相同，一輪消耗 30 幣", "references/business-encoding.md"),
+    (7, "「直接推進劇情」的回合與一般回合相同，可重新生成與編輯", "references/business-encoding.md"),
+    (10, "RPG 的行動建議與歷史視圖同樣一律以純文字渲染，嚴禁 v-html", "references/auth-security.md"),
+    (11, "RPG 行動建議：建議內容由模型依玩家的角色卡與近期劇情產生，視為個資", "references/privacy-observability.md"),
+    (11, "管理員的審核備註、行動建議的內容。失敗的模型輸出", "references/privacy-observability.md"),
 ]
 
 
