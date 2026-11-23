@@ -61,9 +61,15 @@
 
 ## 5. 前端純函式：分頁與閱讀器
 
-- [ ] 5.1 新增 `story-pages.js`（UMD）：句界、引號深度、換行硬分界、3 句與 150 字上限、單句超長的切法、字素安全、`done` 與湊滿才釋出；驗證：`tests/js/story-pages.test.js` 涵蓋 `rpg-story-pages` 規格的分段與串流釋出情境，並有「串接還原原文」的性質測試（多組含標點、無標點、對話、表情符號的輸入）
-- [ ] 5.2 新增 `story-reader.js`（UMD，注入時鐘與打字機工廠）：`feed`、`next`、`prev`、`jumpToEnd`、`reset`、`restore`、等待狀態、`prefers-reduced-motion`；驗證：`tests/js/story-reader.test.js` 以假時鐘涵蓋打字中補完、翻頁、第一段停用 `‹`、回看直接完整顯示、串流等待、`done` 補完、被擋與中斷、修訂還原
-- [ ] 5.3 跑 Node 測試與全域守門子集（含前端架構守門）；驗證：通過，新檔沒有 CDN、`v-html`、Bootstrap JavaScript
+- [x] 5.1 新增 `story-pages.js`（UMD）：句界、引號深度、換行硬分界、3 句與 150 字上限、單句超長的切法、字素安全、`done` 與湊滿才釋出；驗證：`tests/js/story-pages.test.js` 涵蓋 `rpg-story-pages` 規格的分段與串流釋出情境，並有「串接還原原文」的性質測試（多組含標點、無標點、對話、表情符號的輸入）
+- [x] 5.2 新增 `story-reader.js`（UMD，注入時鐘與打字機工廠）：`feed`、`next`、`prev`、`jumpToEnd`、`reset`、`restore`、等待狀態、`prefers-reduced-motion`；驗證：`tests/js/story-reader.test.js` 以假時鐘涵蓋打字中補完、翻頁、第一段停用 `‹`、回看直接完整顯示、串流等待、`done` 補完、被擋與中斷、修訂還原
+- [x] 5.3 跑 Node 測試與全域守門子集（含前端架構守門）；驗證：通過，新檔沒有 CDN、`v-html`、Bootstrap JavaScript
+
+### 批 4 完成註記（2026-11-23；前端純函式 `story-pages.js` 與 `story-reader.js`；只跑 Node 全套與全域守門子集，**未跑全套 pytest**——本批沒有動 `app/` 的 Python、端點、遷移或權限路徑）
+
+- **5.1**：`app/static/js/game/story-pages.js`（UMD，`Game.paginate`、`PAGE_MAX_SENTENCES`、`PAGE_MAX_CHARS`）。`paginate(text, { done })` 回傳 `{ pages, pending }`。性質：**已釋出的段永不改變**（對任何前綴，釋出的段都是完整結果的前綴），串接還原原文（扣除分界處空白）。細節與規格的出入或補充（我選的做法，可推翻）：①**一個句子要等到後面出現下一個有內容的字元（或換行、或 `done`）才算完整**——規格情境寫「收到三個完整句、後續尚未到達 → 第一段釋出」，但「……」可能分成兩個片段到達，若句末標點一到就釋出，已釋出的段之後會被改寫；所以文字剛好停在第三句的句末標點時，要等下一個字元（實際上幾毫秒）或 `done` 才釋出；②只有標點沒有內容的「句」（例如開頭的「……」）不獨立成句，併入後面的句子；③引號深度同時認得「」『』與“”（規格只列前兩種；提示詞沒有規定模型用哪一種）；④超長句（超過 150 字）自己成為獨立的數段、不與鄰句合併（否則串流中的已釋出段可能被後到的內容改寫）；⑤長度以 UTF-16 單位計（中文等於字數），硬切只在字素邊界，單一字素超過上限時整個保留；⑥半形 `,` `;` 也算逗號分號。
+- **5.2**：`app/static/js/game/story-reader.js`（UMD，`Game.createStoryReader`、`SPEAKER_YOU`、`SPEAKER_NARRATOR`）。動作：`reset`、`feed`、`next`、`prev`、`jumpToEnd`、`load`（載入既有回合：最後一段、不打字）、`discard`（被擋、轉場、中斷：只留一行說明、不留部分內容）、`snapshot`／`restore`（修訂失敗還原，只含基本型別、只在記憶體）、`destroy`；狀態以 `reader.state` 或 `onChange` 取得。打字機工廠與 `reducedMotion` 由外部注入（`UI.TypewriterBuffer` 即符合介面），時鐘以 `scheduler` 原樣轉交。`next()` 回傳 `completed`｜`advanced`｜`waiting`｜`end`｜`none`，供之後的接線判斷。**與 design D2 的出入**：多了 `load` 與 `discard`（D2 列的是 `feed/next/prev/jumpToEnd/reset/restore`），因為載入既有回合要避免先打字再取消、被擋與中斷要「不留部分內容」；`feed` 的第一個參數是**片段**（不是累計全文）。
+- **5.3 與驗證**：新增 `tests/js/story-pages.test.js`（38 項，含五個性質測試：串接還原、段長上限、任何前綴的釋出結果是完整結果的前綴、任意切塊含切在代理對中間、無狀態）與 `tests/js/story-reader.test.js`（42 項，假時鐘加真正的 `UI.TypewriterBuffer`，另有手動控制的打字機證明過期回呼被忽略）。**`node --test` 全套 1690 通過**（原 1610）；pytest 全域守門子集加 `test_game_pages`、`test_script_page`、`test_v_cloak_rule`：**1242 通過、2 略過**（略過的是 `test_no_legacy_tier_checks` 既有的兩項）。前端規則守門（沒有 CDN、`v-html`、Bootstrap JavaScript、`console.log`、`eval(`、瀏覽器儲存）通過，且新檔另由 Node 測試掃描。**快速變異驗證**（暫存目錄的副本，14 個變異全被殺死；正式的變異驗證在 8.1）。**未驗證**：真正的瀏覽器行為（接線在第 6、7 組）、真實模型輸出的分段品質（只以人工字串與隨機字串驗證）。設計文件（前端結構等）與 README 的模組清單留到 9.2；兩支新檔尚未被任何樣板載入（7.1）。
 
 ## 6. 前端：狀態、API 與接線
 
