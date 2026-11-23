@@ -27,7 +27,8 @@ const STATE = {
 const SCRIPTS = [
   'js/auth/auth-common.js', 'js/ui/typewriter.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/wallet-api.js', 'js/ui/wallet-store.js', 'js/ui/ui-components.js',
   'js/game/game-labels.js', 'js/game/sse-parser.js', 'js/game/turn-stream.js', 'js/game/game-state.js', 'js/game/game-store.js', 'js/game/game-sync.js',
-  'js/game/game-api.js', 'js/ui/wallet-checkin.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-revision.js', 'js/game/game-session.js',
+  'js/game/game-api.js', 'js/ui/wallet-checkin.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-revision.js',
+  'js/game/story-pages.js', 'js/game/story-reader.js', 'js/game/game-session.js',
 ];
 
 /* 建立沙盒並回傳 setup() 的結果。`respond(request)` 是 axios 的替身：收到 { method, url, data, timeout, signal }，回傳 Promise。 */

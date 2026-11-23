@@ -18,6 +18,7 @@
  * 記事簿與簽到用的固定文字。這些文字**不含任何玩家文字**；不認得的值一律退回固定文字（失敗時關閉：不當成有內容的回合）。
  * 重新生成與編輯最後一輪（rpg-turn-revision）另加：五個回饋分類的名稱、按鈕旁的免費次數與幣價說明、兩個 Modal 的費用說明、不能修訂的各種原因與結果通知
  * （一律說明「已保留原本的回應」）；同樣不含任何玩家文字（行動、理由、劇情都不會被帶進來）。
+ * 視覺小說式畫面與行動建議（rpg-story-view）另加：說話者標籤（旁白、你）、劇情卡的等待與翻頁標籤、建議圖示的標籤與失敗說明、行動區不能使用的原因；同樣不含任何玩家文字。
  * 所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。
  */
 (function (root, factory) {
@@ -194,6 +195,36 @@
   };
   var REVISION_ERROR_FALLBACK = '新的內容暫時無法生成。已保留原本的回應，沒有扣遊戲幣、沒有用掉免費次數。';
 
+  /* ---- 視覺小說式遊戲畫面與行動建議（rpg-story-view）：說話者、劇情卡的狀態說明、建議圖示與錯誤、不能使用的原因 ----
+     這些文字**不含任何玩家文字**（行動、劇情、建議的內容都不會被帶進來）；不認得的鍵退回固定文字。 */
+  var SPEAKER_LABELS = { narrator: '旁白', you: '你' };
+  var SPEAKER_FALLBACK = '旁白';
+  var STORY_TEXTS = {
+    waiting: '故事還在繼續生成…',
+    back_label: '回到上一段',
+    next_label: '翻到下一段'
+  };
+  var SUGGEST_TEXTS = {
+    unavailable: '建議暫時無法產生，可以自己輸入行動。',
+    stale: '劇情已經往前進行，這組建議已經過期，請再按一次圖示。',
+    loading: '正在想幾個可以做的行動…',
+    icon_label: '取得行動建議',
+    close_label: '收起行動建議',
+    cancel_label: '取消取得建議'
+  };
+  /* 行動區（建議圖示、直接推進劇情、輸入框）目前不能使用的原因；與 `Game.sendBlocker` 的原因一一對應，另有「正在取得建議」與「載入中」。 */
+  var ACTION_HINTS = {
+    gate: '目前無法送出行動，請見上方說明。',
+    ended: '存檔已完結，無法再送出新的行動。',
+    offline: '目前離線，需要連線才能使用。',
+    opening: '故事的開場還沒有準備好，完成後才能使用。',
+    reading: '請先翻到開場的最後一段，才能開始行動。',
+    inflight: '有一個行動還沒有確認完成，請先選擇「重送」或「放棄」。',
+    busy: '這一輪還在進行中，完成後才能使用。',
+    suggesting: '正在取得建議…',
+    loading: '頁面還在載入中。'
+  };
+
   function has(map, key) { return typeof key === 'string' && Object.prototype.hasOwnProperty.call(map, key); }
   function labelOf(map, value, fallback) { return has(map, value) ? map[value] : fallback; }
   function copy(notice) { return { text: notice.text, link: notice.link, linkText: notice.linkText }; }
@@ -333,6 +364,18 @@
   /* 修訂用的固定文字；不認得的鍵退回通用說明。 */
   function revisionText(key) { return labelOf(REVISION_TEXTS, key, REVISION_TEXTS.unavailable); }
 
+  /* 劇情卡的說話者標籤：只有「旁白」與「你」；不認得的值退回「旁白」。 */
+  function speakerLabel(speaker) { return labelOf(SPEAKER_LABELS, speaker, SPEAKER_FALLBACK); }
+
+  /* 劇情卡的固定文字（等待、翻頁按鈕的無障礙標籤）；不認得的鍵退回等待說明。 */
+  function storyText(key) { return labelOf(STORY_TEXTS, key, STORY_TEXTS.waiting); }
+
+  /* 行動建議的固定文字（圖示標籤、載入中、失敗與過期說明）；不認得的鍵退回「暫時無法產生」。 */
+  function suggestText(key) { return labelOf(SUGGEST_TEXTS, key, SUGGEST_TEXTS.unavailable); }
+
+  /* 行動區不能使用的原因（建議圖示與「直接推進劇情」的說明）；空字串或不認得的原因沒有說明。 */
+  function actionHint(reason) { return labelOf(ACTION_HINTS, reason, ''); }
+
   /* 「重新生成」與「編輯」旁的說明（兩者共用同一組免費次數，2026-11-16 規則修訂）：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。
      `exempt`（最後一個參數，缺值視為假）：管理員帳號不消耗遊戲幣（admin-unlimited-coins），免費次數用完後改顯示「不消耗遊戲幣」，不顯示幣價；還有免費次數時文字不變。 */
   function revisionRegenerateNote(freeLeft, cost, exempt) {
@@ -389,6 +432,10 @@
     REVISION_CONFLICT_MESSAGE: REVISION_CONFLICT_MESSAGE,
     revisionCategoryLabel: revisionCategoryLabel,
     revisionText: revisionText,
+    speakerLabel: speakerLabel,
+    storyText: storyText,
+    suggestText: suggestText,
+    actionHint: actionHint,
     revisionRegenerateNote: revisionRegenerateNote,
     revisionEditNote: revisionEditNote,
     revisionRegenerateCostLine: revisionRegenerateCostLine,

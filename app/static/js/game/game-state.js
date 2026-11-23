@@ -21,6 +21,10 @@
  * - **小工具**：`notebookLength`（NFC 之後以 Unicode 字元計，與後端 `notebook_policy.length_of` 同一個算法，取樣案例由 pytest 比對）、
  *   `notebookView`（面板讀到的全文與用量）、`notebookSummary`（快照裡只有用量的摘要）、`notebookIsFull`／`notebookCurrent`／`notebookEditState`（已滿的判斷、
  *   摘要與檢視取較新者、編輯中的即時字數）、`worldView`／`mergeWorld`、`noticeText`、`sendBlocker`／`canSend`、`actionProblem`、`hasCompleteTurn`。
+ * - **視覺小說式畫面與行動建議**（rpg-story-view）：`ADVANCE_ACTION`（「直接推進劇情」送出的固定行動文字，與後端 `rpg_prompt.ADVANCE_ACTION` 相同，由測試比對）；
+ *   `cardView(readerState)` 把閱讀器（story-reader.js）的狀態整理成劇情卡的顯示欄位（說話者標籤、當下顯示的字、完整文字給輔助科技、位置、可否翻頁、等待說明）；
+ *   `suggestionItems`（快照與端點回應的建議，只取至多 3 個字串）；`suggestBlocker`／`canSuggest`、`advanceBlocker`／`canAdvance`（行動區的啟用條件，與送出行動相同，
+ *   另外「第 0 幕還沒翻到最後一段」也不能使用）；`describeSuggestionFailure(info)`（建議端點的失敗：`suggestions_unavailable`、`suggestions_stale`，其餘沿用一般對照）。
  * 所有文字是純文字，頁面以 {{ }} 插值顯示，絕不使用 v-html。載入順序：game-labels.js 在前（固定文字取自它）。
  */
 (function (root, factory) {
@@ -86,7 +90,7 @@
 
   /* 所有失敗共用同一個形狀，掛載層不必判斷欄位存不存在。
      kind：canceled、timeout、network、csrf、login、gate、not_found、fields、coins、busy、opening_wait、opening_pending、ended、conflict、rejected、
-           limit、unavailable、unknown、interrupted、stream_error、too_long、overflow、already、config。
+           limit、unavailable、unknown、interrupted、stream_error、too_long、overflow、already、config、stale（行動建議過期）。
      reload：畫面應重讀快照；catchUp：應以 since_seq 補齊；silent：不顯示成錯誤；keepDraft：保留玩家正在編輯的內容。 */
   function failure(kind, status, code, message, extra) {
     var result = {
@@ -243,6 +247,20 @@
 
   /* 其他請求（快照、回合清單、錢包…）的失敗：info 是 `Auth.describeError` 的結果加上 game-api 放進來的欄位。 */
   function describeRequestFailure(info) { return requestFailure(fromInfo(info), ''); }
+
+  /* 行動建議端點（`POST …/suggestions`）的失敗。`suggestions_unavailable`（模型失敗或沒有任何有效項目）說明可以自己輸入行動、圖示仍可再按；
+     `suggestions_stale`（呼叫期間劇情已前進）說明建議過期並要求重讀狀態；其餘（已完結、第 0 幕未完成、回合進行中、全站忙碌、閘門、404…）沿用一般對照，不附「沒有扣幣」的說明
+     （建議本來就不扣遊戲幣）。 */
+  function describeSuggestionFailure(info) {
+    var request = fromInfo(info);
+    if (request.status === 503 && request.code === 'suggestions_unavailable') {
+      return failure('unavailable', 503, request.code, labels.suggestText('unavailable'), { retry: true });
+    }
+    if (request.status === 409 && request.code === 'suggestions_stale') {
+      return failure('stale', 409, request.code, labels.suggestText('stale'), { reload: true, catchUp: true });
+    }
+    return requestFailure(request, '');
+  }
 
   /* 串流客戶端（turn-stream.js）沒有 `done` 的結果：開始前被拒、`error` 事件、中斷、逾時、取消。`done` 回傳 null。 */
   var KNOWN_FAILURE_KINDS = {
@@ -684,13 +702,14 @@
   // ---- 送出行動 ---------------------------------------------------------------------------------------
 
   /* 目前不能送出的原因（可以送出回傳空字串）。失敗時關閉：狀態缺漏、第 0 幕未明確完成都視為不能送出。
-     state：{ gate, ended, offline, openingReady, inflight, busy }。順序固定：閘門、已完結、離線、第 0 幕、在途回合、進行中。 */
+     state：{ gate, ended, offline, openingReady, reading, inflight, busy }。順序固定：閘門、已完結、離線、第 0 幕、第 0 幕還沒翻到最後一段（`reading`，缺值視為假）、在途回合、進行中。 */
   function sendBlocker(state) {
     if (!isObject(state)) { return 'opening'; }
     if (state.gate) { return 'gate'; }
     if (state.ended === true) { return 'ended'; }
     if (state.offline === true) { return 'offline'; }
     if (state.openingReady !== true) { return 'opening'; }
+    if (state.reading === true) { return 'reading'; }
     if (state.inflight) { return 'inflight'; }
     if (state.busy === true) { return 'busy'; }
     return '';
@@ -709,6 +728,64 @@
     }
     return '';
   }
+
+  // ---- 視覺小說式畫面與行動建議（rpg-story-view）------------------------------------------------------
+
+  /* 「直接推進劇情」送出的固定行動文字（平台常數，不來自玩家）。後端的 `rpg_prompt.ADVANCE_ACTION` 必須相同（tests/js/game-state.test.js 讀原始碼比對）。 */
+  var ADVANCE_ACTION = '推進劇情';
+  var SUGGESTION_COUNT_MAX = 3;
+  var SUGGESTION_CHARS_MAX = 60;           // 後端限制 2 至 30 字；前端只是寬鬆的上界（驗證在後端），只擋明顯不對的資料
+
+  /* 快照的 `suggestions` 與端點回應的 `suggestions`：只取字串、去頭尾空白、去重、至多 3 個、單項不超過上界；不是陣列回傳空陣列。 */
+  function suggestionItems(raw) {
+    var items = [];
+    list(raw).forEach(function (value) {
+      if (typeof value !== 'string' || items.length >= SUGGESTION_COUNT_MAX) { return; }
+      var trimmed = value.replace(/^\s+|\s+$/g, '');
+      if (trimmed === '' || trimmed.length > SUGGESTION_CHARS_MAX || items.indexOf(trimmed) >= 0) { return; }
+      items.push(trimmed);
+    });
+    return items;
+  }
+
+  /* 閱讀器（story-reader.js）的狀態 -> 劇情卡的顯示欄位。沒有狀態或還沒有任何內容（`key` 為空）時 `visible` 為假。
+     - `text`：當下顯示到哪裡（打字機的進度）；`fullText`：這一段的完整文字，供輔助科技（打字中不重複朗讀整段）；`note`：轉場、中斷或錯誤的一行說明（有說明時只顯示它）。
+     - `position`：「第幾段 / 共幾段」（只算劇情段，不含玩家行動頁），只有在串流結束（總段數確定）且多於一段時才有；`atEnd`：已是最後一段而且串流已結束。
+     - `waitingText`：翻到目前最後一個已釋出的段、串流尚未結束、且這一段打完時的等待說明（不是錯誤）。 */
+  function cardView(state) {
+    var source = isObject(state) ? state : null;
+    if (!source || typeof source.key !== 'string' || source.key === '') {
+      return {
+        visible: false, key: '', speaker: 'narrator', speakerLabel: labels.speakerLabel('narrator'), text: '', fullText: '', note: '', index: 0, total: 0,
+        position: '', canPrev: false, canNext: false, typing: false, waiting: false, waitingText: '', finished: false, atEnd: false, hasAction: false
+      };
+    }
+    var note = typeof source.note === 'string' ? source.note : '';
+    var speaker = source.speaker === 'you' ? 'you' : 'narrator';
+    var total = isCount(source.total) ? source.total : 0;
+    var index = isCount(source.index) ? source.index : 0;
+    var hasAction = source.hasAction === true;
+    var typing = source.typing === true;
+    var waiting = source.waiting === true;
+    var finished = source.finished === true;
+    var canNext = source.canNext === true;
+    var storyTotal = total - (hasAction ? 1 : 0);
+    var storyIndex = index - (hasAction ? 1 : 0);
+    return {
+      visible: true, key: source.key, speaker: speaker, speakerLabel: labels.speakerLabel(speaker), text: text(source.shown), fullText: text(source.text), note: note,
+      index: index, total: total,
+      position: note === '' && finished && speaker === 'narrator' && storyTotal > 1 && storyIndex >= 0 ? (storyIndex + 1) + ' / ' + storyTotal : '',
+      canPrev: source.canPrev === true, canNext: canNext, typing: typing, waiting: waiting, waitingText: waiting && !typing ? labels.storyText('waiting') : '',
+      finished: finished, atEnd: finished && !canNext, hasAction: hasAction
+    };
+  }
+
+  /* 行動區的啟用條件。行動建議圖示與「直接推進劇情」的條件和送出行動相同（第 0 幕已完成並已翻到最後一段、存檔未完結、閘門為空、沒有進行中的回合與未確認的行動、已連線），
+     所以直接沿用 `sendBlocker`；各留一個函式，是讓畫面與測試以規格的名稱讀取（之後若兩者的條件分歧，只改這裡）。 */
+  function suggestBlocker(state) { return sendBlocker(state); }
+  function canSuggest(state) { return suggestBlocker(state) === ''; }
+  function advanceBlocker(state) { return sendBlocker(state); }
+  function canAdvance(state) { return advanceBlocker(state) === ''; }
 
   return {
     characterCount: characterCount,
@@ -743,6 +820,14 @@
     notebookEditState: notebookEditState,
     sendBlocker: sendBlocker,
     canSend: canSend,
-    actionProblem: actionProblem
+    actionProblem: actionProblem,
+    ADVANCE_ACTION: ADVANCE_ACTION,
+    suggestionItems: suggestionItems,
+    cardView: cardView,
+    suggestBlocker: suggestBlocker,
+    canSuggest: canSuggest,
+    advanceBlocker: advanceBlocker,
+    canAdvance: canAdvance,
+    describeSuggestionFailure: describeSuggestionFailure
   };
 });

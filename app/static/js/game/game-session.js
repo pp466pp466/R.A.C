@@ -22,13 +22,21 @@
  *   **從不自動重送**（每一輪都要消耗遊戲幣）。
  * - 快照裡的**記事簿摘要**（版本、字數、容量、是否已滿；沒有全文）放在 `notebookSummary`（每次讀到快照就更新，壞掉的摘要不改動），給 game-notebook.js 判斷遊戲頁上的「已滿」提示；
  *   它只在記憶體，不進本機暫存（game-store.js 的白名單不收），記事簿全文不經過這個檔案。
- * - 這裡**不記錄、不輸出任何內容**（行動、劇情、第 0 幕都是玩家文字）；錯誤訊息只來自 game-state.js／game-labels.js 的固定文字。
+ * - **視覺小說式劇情卡**（rpg-story-view，design D2、D3）：時間軸的資料層（`items`、補齊、在途回合、IndexedDB）照舊，另外多一個閱讀器（story-reader.js）只管「當前輪」：
+ *   串流的片段餵給它（`beginStory`、`feedStory`、`finishStory`、`noteStory`），由它依句分段、逐段打字、翻頁；`card` 是它的狀態經 `Game.cardView` 整理後的顯示欄位。
+ *   載入既有存檔（重新整理、換裝置、離線）時由 `syncReader` 以最後一個完成的回合（沒有就是第 0 幕）載入閱讀器：停在最後一段、不打字；已經顯示了同樣內容（串流剛完成）就不動，
+ *   所以玩家翻到哪一段不會被補齊或重讀快照打斷。被擋、中斷與錯誤的回合只留一行說明（`readerHold`，直到下一次送出或後端出現這一輪的完整內容）；開始前被拒絕的送出則還原成送出前的畫面。
+ *   第 0 幕由串流生成時，玩家翻到最後一段之前不能使用行動區（`reading`）。閱讀位置不寫入任何儲存。
+ * - **行動建議與直接推進劇情**：`toggleSuggestions` 只有玩家點圖示才呼叫 `api.suggestActions`（有快照裡已保存的就直接顯示，不呼叫）；結果只放在記憶體（`suggestItems`），
+ *   點選建議只是把文字貼進輸入框（`pickSuggestion`，不送出）；新的一輪開始或最後一輪被修訂時一律收回。`advance` 以固定文字 `Game.ADVANCE_ACTION` 當一般行動送出，不讀取、不清除輸入框的草稿。
+ * - 鍵盤翻頁由 `handleKey(event)` 判斷（焦點在輸入元素或有開啟的 Modal 時不作用；`deps.isModalOpen` 由掛載層注入），掛載層（game.js）負責把它接到 `document` 的 keydown。
+ * - 這裡**不記錄、不輸出任何內容**（行動、劇情、第 0 幕、建議都是玩家文字）；錯誤訊息只來自 game-state.js／game-labels.js 的固定文字。
  */
 (function (root, factory) {
   'use strict';
   var Game;
   if (typeof module === 'object' && module.exports) {
-    Game = Object.assign({}, require('./game-labels.js'), require('./game-state.js'));
+    Game = Object.assign({}, require('./game-labels.js'), require('./game-state.js'), require('./story-reader.js'));
   } else {
     Game = root.Game;
   }
@@ -47,13 +55,18 @@
   var OPENING_POLL_MS = 5000;            // 另一個裝置正在生成第 0 幕時，重讀快照的間隔
   var OPENING_POLL_MAX = 24;             // 最多重讀幾次（約 2 分鐘），之後提供重試按鈕
   var OPENING_STATES = { pending: true, generating: true, ready: true, fallback: true };
+  var SUGGEST_TIMEOUT_FALLBACK_MS = 35000;   // 行動建議的前端逾時：略大於後端單次請求總預算 30 秒（AGENTS.md 第 5 節）；頁面初始狀態有 `suggest_timeout_ms` 時以它為準
   var BLOCKER_TEXTS = {
     gate: '目前無法送出行動，請見上方說明。',
     ended: '存檔已完結，無法再送出新的行動。',
     offline: '目前離線，需要連線才能送出行動。',
     opening: '故事的開場還沒有準備好，完成後才能輸入行動。',
+    reading: Game.actionHint('reading'),
     inflight: '有一個行動還沒有確認完成，請先在時間軸裡選擇「重送」或「放棄」。'
   };
+  /* 鍵盤翻頁：這些按鍵對應的動作；焦點在這些元素（或可編輯的元素）時一律不作用。 */
+  var KEY_ACTIONS = { ' ': 'next', Spacebar: 'next', Enter: 'next', ArrowRight: 'next', ArrowLeft: 'prev' };
+  var INTERACTIVE_TAGS = { INPUT: true, TEXTAREA: true, SELECT: true, OPTION: true, BUTTON: true, A: true, SUMMARY: true };
 
   function isObject(value) { return value !== null && typeof value === 'object' && !Array.isArray(value); }
   function isCount(value) { return typeof value === 'number' && isFinite(value) && value >= 0 && Math.floor(value) === value; }
@@ -74,6 +87,7 @@
     var streamLimits = isObject(initial.stream) ? initial.stream : {};
     var sessionId = text(info.id);
     var actionMax = isObject(initial.limits) && isCount(initial.limits.action_max) ? initial.limits.action_max : 0;   // 0 = 不知道：不在前端檢查長度
+    var suggestTimeout = isCount(initial.suggest_timeout_ms) && initial.suggest_timeout_ms > 0 ? initial.suggest_timeout_ms : SUGGEST_TIMEOUT_FALLBACK_MS;
     var api = deps.api;
     var store = deps.store;
     var sync = deps.sync;
@@ -115,6 +129,14 @@
     var visibleCount = ref(RENDER_WINDOW);
     var unread = ref(false);               // 玩家不在底部時有新內容到達：顯示「回到最新」
     var scrollTick = ref(0);               // game.js 監看它來捲到底部
+    var card = ref(Game.cardView(null));   // 劇情卡的顯示欄位（閱讀器的狀態經 Game.cardView 整理）；沒有內容時 visible 為假
+    var openingReached = ref(false);       // 第 0 幕已經翻到最後一段過（之後即使用 `‹` 回看，行動區也不再鎖上）
+    var suggestOpen = ref(false);          // 行動建議是否展開（只有玩家點圖示才會有內容）
+    var suggestItems = ref([]);            // 展開時顯示的建議（純文字，至多 3 個）；只在記憶體
+    var suggestBusy = ref(false);          // 正在向伺服器取得建議（可取消）
+    var suggestError = ref('');            // 取得建議失敗的固定說明；圖示仍可再按
+    var savedSuggestions = ref([]);        // 快照裡已保存、錨點仍有效的建議：再按圖示時直接顯示，不呼叫端點
+    var focusTick = ref(0);                // 貼上建議之後加一：掛載層監看它，把焦點放到輸入框並把游標移到尾端
 
     var live = null;                       // 非響應式：{ id, typewriter, typed, settled, raw }
     var currentRun = null;                 // 非響應式：{ controller, aborted }
@@ -127,6 +149,19 @@
     var loading = false;
     var loadingPromise = null;
     var tailPromise = Promise.resolve();   // 上一輪 `done` 之後的補齊；下一輪等它做完才開始，所以輸入可以在 `done` 時就解鎖
+    var suggestRun = null;                 // 非響應式：{ controller, canceled }（取得建議的請求）
+    var readerContent = null;              // 非響應式：{ key, action, story }——閱讀器目前持有的內容（串流中隨片段增加；載入時是整輪）
+    var readerHold = null;                 // 非響應式：{ base }——這一輪沒有完整內容（被擋、中斷、錯誤），劇情卡只留一行說明；base 是當時的最後完成回合的 key
+
+    function readerTypewriter(handlers) { return new deps.TypewriterBuffer(handlers); }
+    var reader = Game.createStoryReader({
+      createTypewriter: typeof deps.createTypewriter === 'function' ? deps.createTypewriter : (typeof deps.TypewriterBuffer === 'function' ? readerTypewriter : undefined),
+      reducedMotion: deps.reducedMotion, scheduler: deps.scheduler,
+      onChange: function (state) {
+        card.value = Game.cardView(state);
+        if (state && state.key === 'opening' && card.value.atEnd) { openingReached.value = true; }
+      }
+    });
 
     // ---- 計算 ---------------------------------------------------------------------------------------
     // 存檔目前的生效模式（現算：玩家設定、劇本綁定、緊急煞車）；補充說明只有緊急煞車與劇本綁定兩種（沒有年齡相關的說明）
@@ -187,19 +222,40 @@
     var hasEarlier = computed(function () { return timeline.value.length > visibleCount.value; });
     var jumpVisible = computed(function () { return unread.value; });
 
+    /* 第 0 幕還在閱讀中：劇情卡顯示的是第 0 幕、而且還沒翻到過最後一段（串流生成的第 0 幕要從第一段讀起；載入既有的第 0 幕直接停在最後一段，所以不會卡住；
+       翻到過最後一段之後即使回看較早的段，行動區也不會再鎖上）。 */
+    var reading = computed(function () { return card.value.visible && card.value.key === 'opening' && !openingReached.value; });
+
+    function actionState() {
+      return {
+        gate: gate.value, ended: ended.value, offline: offline.value, openingReady: openingReady.value, reading: reading.value,
+        inflight: sending.value ? null : inflight.value, busy: sending.value || revising.value
+      };
+    }
     var blockerReason = computed(function () {
       if (phase.value !== 'ready' || !historyReady.value) { return 'loading'; }
-      return Game.sendBlocker({
-        gate: gate.value, ended: ended.value, offline: offline.value, openingReady: openingReady.value,
-        inflight: sending.value ? null : inflight.value, busy: sending.value || revising.value
-      });
+      return Game.sendBlocker(actionState());
     });
     var sendDisabled = computed(function () { return blockerReason.value !== ''; });
     var blockerText = computed(function () {
       var reason = blockerReason.value;
       return Object.prototype.hasOwnProperty.call(BLOCKER_TEXTS, reason) ? BLOCKER_TEXTS[reason] : '';
     });
-    var inputDisabled = computed(function () { return !!gate.value || ended.value || phase.value !== 'ready' || !openingReady.value; });
+    var inputDisabled = computed(function () { return !!gate.value || ended.value || phase.value !== 'ready' || !openingReady.value || reading.value; });
+
+    /* 行動建議圖示與「直接推進劇情」：啟用條件與送出行動相同（Game.suggestBlocker／advanceBlocker）；說明是固定文字，可以按時為空字串。 */
+    var suggestReason = computed(function () {
+      if (phase.value !== 'ready' || !historyReady.value) { return 'loading'; }
+      return Game.suggestBlocker(actionState());
+    });
+    var advanceReason = computed(function () {
+      if (phase.value !== 'ready' || !historyReady.value) { return 'loading'; }
+      return Game.advanceBlocker(actionState());
+    });
+    var suggestDisabled = computed(function () { return suggestReason.value !== '' && !suggestBusy.value; });   // 取得中仍可按（取消）
+    var suggestHint = computed(function () { return suggestBusy.value ? Game.suggestText('loading') : Game.actionHint(suggestReason.value); });
+    var advanceDisabled = computed(function () { return advanceReason.value !== ''; });
+    var advanceHint = computed(function () { return Game.actionHint(advanceReason.value); });
     var draftCount = computed(function () { return Game.characterCount(draft.value.replace(/^\s+|\s+$/g, '')); });
     var draftOver = computed(function () { return actionMax > 0 && draftCount.value > actionMax; });
 
@@ -237,6 +293,77 @@
       return new deps.TypewriterBuffer({ onUpdate: function (value) { onText(value); notifyContent(false); }, onDone: onDone });
     }
 
+    // ---- 劇情卡（閱讀器）-----------------------------------------------------------------------------
+    function storyKey(turn) { return 'turn:' + (turn.client_msg_id || 'seq-' + turn.seq); }
+
+    /* 閱讀器應該顯示的當前輪：最後一個完成的回合；尚無完成的回合時是已完成的第 0 幕；都沒有是 null。 */
+    function readerTarget() {
+      var turn = Game.lastCompleteTurn(history.value);
+      if (turn) { return { key: storyKey(turn), action: turn.action, story: turn.story }; }
+      var scene = openingScene.value;
+      if ((scene.state === 'ready' || scene.state === 'fallback') && scene.text) { return { key: 'opening', action: '', story: scene.text }; }
+      return null;
+    }
+    function readerTargetKey() { var target = readerTarget(); return target ? target.key : null; }
+    /* 比較劇情時忽略空白的差異（後端定稿可能修剪頭尾或換行），避免串流剛完成就被「重新載入」而跳到最後一段。 */
+    function sameStory(left, right) { return text(left).replace(/\s+/g, ' ').trim() === text(right).replace(/\s+/g, ' ').trim(); }
+    /* 串流中（回合、第 0 幕、修訂）閱讀器由串流事件驅動，不被補齊或快照重讀打斷。 */
+    function readerBusy() { return !!liveTurn.value || !!openingRun || revising.value; }
+
+    /* 讓閱讀器對齊目前的資料：已經顯示同一輪的同樣內容就不動（玩家翻到哪一段不被打斷）；否則載入（停在最後一段、不打字）。
+       被擋、中斷或錯誤的那一輪（`readerHold`）維持一行說明，直到後端出現這一輪的完整內容或另一個裝置新增了回合。 */
+    function syncReader() {
+      if (!historyReady.value || readerBusy()) { return false; }
+      var target = readerTarget();
+      if (!target) { return false; }
+      if (readerHold) {
+        if (target.key === readerHold.base) { return false; }
+        readerHold = null;
+      }
+      if (readerContent && readerContent.key === target.key && sameStory(readerContent.story, target.story)) { return false; }
+      reader.load(target.key, { action: target.action, story: target.story });
+      readerContent = { key: target.key, action: target.action, story: target.story };
+      return true;
+    }
+
+    /* 新的一輪（回合、第 0 幕、修訂）開始：收回建議並丟掉已保存的（劇情前進後它們就過期了），閱讀器立即顯示玩家的行動（第 0 幕沒有行動）。 */
+    function beginStory(key, action) {
+      cancelSuggestRun();
+      closeSuggestions();
+      savedSuggestions.value = [];
+      suggestError.value = '';
+      readerHold = null;
+      readerContent = { key: key, action: text(action), story: '' };
+      if (key === 'opening') { openingReached.value = false; }                       // 新生成的第 0 幕要從第一段讀到最後一段
+      reader.reset(key, { action: text(action) });
+    }
+    function feedStory(chunk) {
+      if (readerContent && typeof chunk === 'string') { readerContent.story += chunk; }
+      reader.feed(chunk, false);
+    }
+    function finishStory() { reader.feed('', true); }
+    /* 轉場、被擋、中斷與錯誤：丟棄尚未完成的劇情，劇情卡只留一行說明；`willRetry` 為真（自動重生中）時仍在等待新內容。 */
+    function noteStory(line, willRetry) {
+      if (readerContent) { readerContent.story = ''; }
+      reader.discard(text(line), { willRetry: willRetry === true });
+    }
+    function holdStory(base) { readerHold = { base: base === undefined ? null : base }; }
+    /* 修訂失敗與開始前被拒絕時還原用：只在記憶體，不寫入任何儲存。 */
+    function saveStory() {
+      return { reader: reader.snapshot(), content: readerContent ? assign({}, readerContent) : null, hold: readerHold ? assign({}, readerHold) : null };
+    }
+    function restoreStory(saved) {
+      if (!isObject(saved)) { return; }
+      readerContent = saved.content ? assign({}, saved.content) : null;
+      readerHold = saved.hold ? assign({}, saved.hold) : null;
+      if (saved.reader) { reader.restore(saved.reader); }
+    }
+    /* 串流沒有完整結束時劇情卡上的一行說明：用整理過的失敗說明（固定文字），沒有就用該結果的固定說明。 */
+    function streamLine(result) {
+      var failure = Game.describeStreamFailure(result);
+      return (failure && failure.message) || Game.streamOutcomeNotice(isObject(result) ? result.outcome : '');
+    }
+
     // ---- 快照與歷史 ---------------------------------------------------------------------------------
     /* 第 0 幕的狀態與文字。打字機還沒打完時把後端的內容先放著，打完再換上（不閃爍、不截斷）。 */
     function setOpening(opening) {
@@ -245,6 +372,7 @@
       if (openingTyping && !openingTyping.typed) { openingTyping.deferred = next; return; }
       openingScene.value = next;
       if (next.state === 'ready' || next.state === 'fallback') { openingNotice.value = null; clearPoll(); }
+      syncReader();                                                                // 另一個裝置生成了第 0 幕、或後端的版本換上了：劇情卡跟上（串流中不動）
     }
 
     function applySnapshot(snapshot) {
@@ -255,6 +383,7 @@
       var brief = Game.notebookSummary(snapshot.notebook);
       if (brief) { notebookSummary.value = brief; }
       lastTurn.value = Game.lastTurnView(snapshot.last_turn);                       // 沒有或壞掉的資料就是 null：不顯示重新生成與編輯
+      savedSuggestions.value = Game.suggestionItems(snapshot.suggestions);          // 錨點仍有效、已保存的建議（過期的伺服器已不帶）；只在記憶體
       setOpening(snapshot.opening);
     }
 
@@ -343,6 +472,7 @@
         loadFailure.value = null;
         phase.value = 'ready';
         historyReady.value = true;
+        syncReader();
         notifyContent(true);
         return true;
       }, function () {
@@ -365,7 +495,7 @@
       return sync.catchUp(sessionId, { signal: signal, fromSeq: from }).then(function (result) {
         applyCatchUp(result);
         return sync.resolveInflight(sessionId, { signal: signal, result: result, onRevision: onRevisionResolved }).then(function (record) { inflight.value = record; });
-      }).then(function () { historyReady.value = true; });
+      }).then(function () { historyReady.value = true; syncReader(); });
     }
 
     function loadOnline(soft, controller) {
@@ -473,20 +603,28 @@
       var typewriter = makeTypewriter(openingText, function () { typing.typed = true; if (openingTyping === typing) { applyDeferred(); } });
       openingScene.value = { state: 'generating', text: '' };
       var turn = Game.newStreamTurn('', '', 'opening');
+      var openingLine = '';                                                      // 最後一次轉場的說明（劇情卡的一行說明）
+      beginStory('opening', '');                                                 // 劇情卡從第 0 幕的第一段讀起（沒有玩家行動）
 
       var adapter = {
         meta: noop,
-        push: function (value) { typewriter.push(value); },
+        push: function (value) { typewriter.push(value); feedStory(value); },
         discard: function () {
           typewriter.cancel();
           openingText('');
           typewriter = makeTypewriter(openingText, function () { typing.typed = true; if (openingTyping === typing) { applyDeferred(); } });
+          noteStory(openingLine, true);
         },
-        transition: function (line) { openingNotice.value = { tone: 'info', text: line, retry: false }; },
-        finish: function () { typewriter.finish(); },
+        transition: function (line, willRetry) {
+          openingNotice.value = { tone: 'info', text: line, retry: false };
+          openingLine = line;
+          noteStory(line, willRetry === true);
+        },
+        finish: function () { typewriter.finish(); finishStory(); },
         done: function (effect) {
           openingScene.value = { state: effect.openingState || 'ready', text: openingScene.value.text };
           openingNotice.value = null;
+          if (effect.status !== 'complete' && effect.status !== 'ended') { noteStory(openingLine || Game.historyLine('blocked'), false); }   // 被擋：退回劇本的初始對話（快照），先只留一行說明
         },
         failure: noop,
         hint: noop
@@ -508,8 +646,10 @@
         typewriter.cancel();
         typing.typed = true;
         openingTyping = null;
+        var failedFailure = Game.describeStreamFailure(result);
+        if (!(failedFailure && failedFailure.silent)) { noteStory(streamLine(result), false); }   // 沒有完整的第 0 幕：只留一行說明（不留部分內容），重試或快照換上內容時會被取代
         return afterOpeningFailed(result);
-      }).finally(function () { openingRun = null; });
+      }).finally(function () { openingRun = null; syncReader(); });
     }
 
     /* 開場串流完成：重讀快照（`fallback` 的文字來自快照；`ready` 的文字等打字機打完再換成後端的版本）。 */
@@ -550,7 +690,7 @@
     }
 
     function tryDropLive(context) {
-      if (live === context && context.typed && context.settled) { liveTurn.value = null; live = null; }
+      if (live === context && context.typed && context.settled) { liveTurn.value = null; live = null; syncReader(); }
     }
 
     /* 立刻結束上一個串流中的氣泡（它的內容已經在歷史裡）。 */
@@ -567,8 +707,9 @@
       dropLive();
       turnNotes[id] = [];
       liveTurn.value = { key: 'turn:' + id, clientMsgId: id, action: action, story: '', streaming: true, seq: null };
-      live = { id: id, typewriter: null, typed: false, settled: false, raw: '', reload: false };
+      live = { id: id, typewriter: null, typed: false, settled: false, raw: '', reload: false, note: '', base: readerTargetKey(), pre: saveStory() };
       live.typewriter = bubbleTypewriter(live);
+      beginStory('turn:' + id, action);                                                        // 劇情卡立即顯示「你」的行動頁，之後的片段由閱讀器分段
     }
 
     /* 串流中收到 `done`（完整或結局）：後端已寫入，先把這一輪放進歷史（之後的補齊以後端的內容覆寫它）。 */
@@ -584,18 +725,21 @@
     function turnAdapter(context, run) {
       return {
         meta: function (effect) { if (liveTurn.value && isCount(effect.seq)) { liveTurn.value.seq = effect.seq; } },
-        push: function (value) { context.raw += value; context.typewriter.push(value); },
+        push: function (value) { context.raw += value; context.typewriter.push(value); feedStory(value); },
         discard: function () {
           context.typewriter.cancel();
           context.raw = '';
           if (liveTurn.value) { liveTurn.value.story = ''; }
           context.typewriter = bubbleTypewriter(context);
+          noteStory(context.note, true);                                                           // 還沒有新的內容：劇情卡只留上一則說明（`transition` 緊接著會換成這次的說明）
         },
         transition: function (line, willRetry) {
           addNote(context.id, line);
           if (liveTurn.value) { liveTurn.value.streaming = willRetry === true; }
+          context.note = line;
+          noteStory(line, willRetry === true);
         },
-        finish: function () { context.typewriter.finish(); if (liveTurn.value) { liveTurn.value.streaming = false; } },
+        finish: function () { context.typewriter.finish(); if (liveTurn.value) { liveTurn.value.streaming = false; } finishStory(); },
         hint: function (line) { notice.value = { tone: 'info', text: line, link: null }; },
         done: function (effect) {
           if (effect.ended) { ended.value = true; }
@@ -603,9 +747,11 @@
           if (effect.status === 'complete' || effect.status === 'ended') {
             lastTurn.value = null;                                                                 // 最後一輪換人了：舊的修訂資訊作廢，等快照重讀才顯示按鈕
             commitLocal(context, effect);
-            if (draft.value.replace(/^\s+|\s+$/g, '') === run.action) { draft.value = ''; }      // 成功才清空；被擋時保留，玩家可以修改後再試
+            if (!run.keepDraft && draft.value.replace(/^\s+|\s+$/g, '') === run.action) { draft.value = ''; }   // 成功才清空；被擋時保留，玩家可以修改後再試（直接推進劇情不動草稿）
           } else {
             context.typed = true;                                                                  // 被擋：沒有文字要打
+            noteStory(context.note || Game.historyLine(effect.status === 'blocked' ? 'blocked' : 'interrupted'), false);   // 這一輪只留一行說明，直到後端出現它的完整內容或下一次送出
+            holdStory(context.base);
           }
           store.clearInflight(sessionId).then(noop, noop);                                         // `done` 就是完整接收的依據：在途回合不再需要
           inflight.value = null;
@@ -661,7 +807,17 @@
         context.settled = true;
         if (outcome !== 'done' && live === context) { liveTurn.value = null; live = null; }       // 沒有 done：丟棄尚未完成的氣泡，歷史以後端為準
         else { tryDropLive(context); }
+        syncReader();                                                                             // 補齊之後：後端若已有這一輪的完整內容（中斷但伺服器完成了）劇情卡換上它
       });
+    }
+
+    /* 串流結束後劇情卡的收尾（`done` 的完成與被擋已由事件處理）：開始前就被拒絕（餘額不足、內容規範、閘門…）什麼都沒發生，還原成送出前的畫面；
+       錯誤、取消、中斷與逾時留一行說明（不留部分內容）；前端中止不代表後端中止，補齊之後後端若有這一輪的完整內容，`syncReader` 會換上它。 */
+    function settleStory(result, context) {
+      if (result.outcome === 'done') { return; }
+      if (result.outcome === 'rejected') { restoreStory(context.pre); return; }
+      noteStory(streamLine(result), false);
+      holdStory(context.base);
     }
 
     function execute(run, options) {
@@ -691,6 +847,7 @@
         var end = Game.applyStreamEnd(turn, result);
         turn = end.turn;
         applyEffects(end.effects, adapter);
+        settleStory(result, context);
         return afterRun(result, context, run);
       }).then(function () { return true; }, function () {
         // 串流客戶端永不拋出；這裡只防止程式錯誤讓畫面卡在進行中
@@ -699,6 +856,8 @@
         notice.value = { tone: 'error', text: '這一輪沒有順利完成，已重新整理狀態。遊戲幣以伺服器的結算為準。', link: null };
         liveTurn.value = null;
         live = null;
+        restoreStory(context.pre);                                                             // 劇情卡不要停在「等待中」：還原成送出前的畫面，之後的補齊會對齊後端
+        syncReader();
         return false;
       }).finally(function () {
         if (currentRun === run) { sending.value = false; currentRun = null; }                // finally：無論成功、失敗或中斷都恢復
@@ -710,7 +869,7 @@
       sending.value = true;
       notice.value = null;
       actionError.value = '';
-      var run = { controller: newController(), aborted: false, action: options.action };
+      var run = { controller: newController(), aborted: false, action: options.action, keepDraft: options.keepDraft === true };
       currentRun = run;
       var task = tailPromise.then(function () {
         if (run.aborted) { return false; }
@@ -749,11 +908,119 @@
       return true;
     }
 
-    /* 離開頁面（pagehide）：中止所有進行中的請求與計時器。 */
+    // ---- 直接推進劇情 -------------------------------------------------------------------------------
+    /* 以固定的平台文字「推進劇情」當一般行動送出（預扣、規則層、重新生成與編輯都沿用）：啟用條件與送出行動相同，不另開確認視窗，
+       **不讀取、不清除、不送出輸入框的草稿**（草稿即使剛好也是這四個字也保留）。 */
+    function advance() {
+      if (sending.value || advanceReason.value !== '') { return Promise.resolve(false); }
+      return runTurn({ clientMsgId: deps.newId(), action: Game.ADVANCE_ACTION, resend: false, keepDraft: true });
+    }
+
+    // ---- 行動建議 -----------------------------------------------------------------------------------
+    function closeSuggestions() { suggestOpen.value = false; }
+
+    /* 取消正在進行的取得建議請求（玩家再按圖示、新的一輪開始、離開頁面）：中止請求，不顯示成錯誤。 */
+    function cancelSuggestRun() {
+      var run = suggestRun;
+      if (!run) { return false; }
+      run.canceled = true;
+      suggestRun = null;
+      suggestBusy.value = false;
+      abort(run.controller);
+      return true;
+    }
+
+    /* 取得失敗之後：登入過期、閘門與完結照一般處理，其餘只顯示固定說明（圖示仍可再按）；需要重讀的（過期、第 0 幕未完成、回合進行中）重讀歷史與快照。 */
+    function suggestFailed(failed) {
+      noteFailureInfo(failed);
+      var failure = Game.describeSuggestionFailure(failed);
+      if (failure.silent) { return Promise.resolve(false); }
+      if (failure.kind === 'login') { goLogin(); return Promise.resolve(false); }
+      if (failure.kind === 'gate') { gate.value = failure.code || 'forbidden'; return Promise.resolve(false); }
+      if (failure.kind === 'ended') { ended.value = true; }
+      if (failure.kind === 'not_found') { phase.value = 'gone'; }
+      suggestError.value = failure.message;
+      if (failure.reload || failure.catchUp) { return refreshAfterRevision(undefined).then(function () { syncReader(); return false; }); }
+      return Promise.resolve(false);
+    }
+
+    function requestSuggestions() {
+      var run = { controller: newController(), canceled: false };
+      suggestRun = run;
+      suggestBusy.value = true;
+      return new Promise(function (resolve) {
+        resolve(api.suggestActions(sessionId, { timeout: suggestTimeout, signal: signalOf(run.controller) }));
+      }).then(function (data) {
+        if (run.canceled || suggestRun !== run) { return false; }
+        var items = Game.suggestionItems(isObject(data) ? data.suggestions : null);
+        if (items.length === 0) { suggestError.value = Game.suggestText('unavailable'); return false; }       // 沒有任何可用的項目：當成失敗（伺服器本來就不會回空的）
+        savedSuggestions.value = items;
+        suggestItems.value = items.slice();
+        suggestOpen.value = true;
+        return true;
+      }, function (failed) {
+        if (run.canceled || suggestRun !== run) { return false; }
+        return suggestFailed(failed);
+      }).finally(function () {
+        if (suggestRun === run) { suggestRun = null; suggestBusy.value = false; }
+      });
+    }
+
+    /* 建議圖示：展開中就收回；取得中就取消；否則在可以送出行動時展開——快照裡已保存的建議直接顯示（不呼叫端點），沒有才呼叫端點。不可用時什麼都不做、不送請求。
+       回傳 Promise<是否展開了建議>，永不拒絕。 */
+    function toggleSuggestions() {
+      if (suggestOpen.value) { closeSuggestions(); return Promise.resolve(false); }
+      if (suggestBusy.value) { cancelSuggestRun(); return Promise.resolve(false); }
+      if (suggestReason.value !== '') { return Promise.resolve(false); }
+      suggestError.value = '';
+      if (savedSuggestions.value.length > 0) {
+        suggestItems.value = savedSuggestions.value.slice();
+        suggestOpen.value = true;
+        return Promise.resolve(true);
+      }
+      return requestSuggestions();
+    }
+
+    /* 點選一個建議：把文字貼進輸入框（取代原有內容），**不送出**，並收回成圖示；掛載層監看 `focusTick`，把焦點放到輸入框、游標移到尾端。只認目前顯示的建議。 */
+    function pickSuggestion(value) {
+      if (typeof value !== 'string' || suggestItems.value.indexOf(value) < 0) { return false; }
+      draft.value = value;
+      actionError.value = '';
+      suggestOpen.value = false;
+      focusTick.value += 1;
+      return true;
+    }
+
+    // ---- 翻頁與鍵盤 ---------------------------------------------------------------------------------
+    /* 點擊劇情卡、空白鍵、Enter 與向右鍵：打字中先補完該段，其次翻到下一段；最後一段不動作（回傳 completed｜advanced｜waiting｜end｜none）。 */
+    function nextPage() { return reader.next(); }
+    /* `‹` 與向左鍵：回到同一輪的上一段（第一段無作用）；已讀過的段直接完整顯示（回傳 back｜none）。 */
+    function prevPage() { return reader.prev(); }
+
+    /* 鍵盤翻頁。`event` 只讀 `key`、`target`、修飾鍵、`repeat`、`isComposing`、`defaultPrevented`，處理時呼叫 `preventDefault()`（避免空白鍵捲動頁面）。
+       焦點在輸入、按鈕、連結等互動元素或可編輯元素時、有開啟的 Modal 時、按住不放時、帶 Ctrl／Alt／Meta 時都不作用；頁面還沒載入完成也不作用。回傳是否處理了這個按鍵。 */
+    function handleKey(event) {
+      if (!isObject(event) || event.defaultPrevented === true || event.isComposing === true || event.repeat === true) { return false; }
+      if (event.ctrlKey === true || event.altKey === true || event.metaKey === true) { return false; }
+      var action = Object.prototype.hasOwnProperty.call(KEY_ACTIONS, event.key) ? KEY_ACTIONS[event.key] : '';
+      if (!action || phase.value !== 'ready' || !card.value.visible) { return false; }
+      if (typeof deps.isModalOpen === 'function' && deps.isModalOpen()) { return false; }
+      var target = isObject(event.target) ? event.target : null;
+      if (target) {
+        var tag = typeof target.tagName === 'string' ? target.tagName.toUpperCase() : '';
+        if (INTERACTIVE_TAGS[tag] === true || target.isContentEditable === true) { return false; }
+      }
+      if (action === 'next') { nextPage(); } else { prevPage(); }
+      if (typeof event.preventDefault === 'function') { event.preventDefault(); }
+      return true;
+    }
+
+    /* 離開頁面（pagehide）：中止所有進行中的請求與計時器（含取得建議）。 */
     function dispose() {
       abort(bootController);
       if (currentRun) { abort(currentRun.controller); }
       if (openingRun) { abort(openingRun.controller); }
+      cancelSuggestRun();
       clearPoll();
     }
 
@@ -767,14 +1034,22 @@
     }
 
     /* 交給 game-revision.js 的把手：它自己管 Modal 與串流流程，這裡只開放它需要讀寫的狀態與幾個既有的動作（不含任何玩家文字的處理）。 */
+    /* 劇情卡交給 game-revision.js 的把手（rpg-story-view）：修訂開始時 `begin`（劇情卡改顯示這一輪的行動，從第一段重新讀起；同時收回建議）、串流事件 `feed`／`note`／`finish`，
+       失敗或被擋時 `restore` 還原成修訂前的畫面與所在的段，結束後 `sync` 對齊後端。`save` 的結果只放在記憶體。 */
+    var storyBridge = { begin: beginStory, feed: feedStory, finish: finishStory, note: noteStory, save: saveStory, restore: restoreStory, sync: syncReader };
+
     var revisionHost = {
       sessionId: sessionId, lastTurn: lastTurn, history: history, phase: phase, historyReady: historyReady, openingReady: openingReady, ended: ended, offline: offline,
-      gate: gate, sending: sending, inflight: inflight, revising: revising, overlay: revisionOverlay, notice: notice,
+      gate: gate, sending: sending, inflight: inflight, revising: revising, overlay: revisionOverlay, notice: notice, card: card, story: storyBridge,
       applyEffects: applyEffects, showFailure: showFailure, refresh: refreshAfterRevision, notifyContent: notifyContent, dismissNotice: dismissNotice
     };
 
     return {
       revisionHost: revisionHost, lastTurn: lastTurn, revising: revising,
+      card: card, reading: reading, nextPage: nextPage, prevPage: prevPage, handleKey: handleKey,
+      advance: advance, advanceDisabled: advanceDisabled, advanceHint: advanceHint,
+      suggestOpen: suggestOpen, suggestItems: suggestItems, suggestBusy: suggestBusy, suggestError: suggestError, suggestDisabled: suggestDisabled, suggestHint: suggestHint,
+      toggleSuggestions: toggleSuggestions, closeSuggestions: closeSuggestions, pickSuggestion: pickSuggestion, focusTick: focusTick,
       phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, modeLabel: modeLabel, modeNote: modeNote,
       gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, safeHint: safeHint, openingNotice: openingNotice,
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,

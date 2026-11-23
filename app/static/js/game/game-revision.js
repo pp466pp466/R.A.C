@@ -27,6 +27,9 @@
  *   沒有用掉免費次數」；前端中止不代表後端中止，所以取消、中斷、逾時要等重讀之後依後端的 `revision` 決定說「已保留」「已同步」或「還在處理」）。
  *   **從不自動重送，也沒有「重送」**。開始前被拒：欄位或內容規範的問題把 Modal 開回來並保留玩家填的內容，其餘交給既有的失敗顯示（餘額不足開簽到 Modal）。
  * - 修訂進行中不得送出新行動（`host.revising` 與 session 共用），離開頁面（`pagehide`）時中止請求。
+ * - **掛在劇情卡上**（rpg-story-view）：按鈕只在劇情卡當下顯示的就是最後一個完成的回合時出現（`host.card`：新的一輪串流中、第 0 幕、被擋與中斷的一行說明都不顯示）；
+ *   修訂開始時 `host.story.save()` 把舊內容與所在的段留在記憶體、`host.story.begin()` 讓劇情卡從第一段重新閱讀新內容，串流事件經 `host.story` 餵給閱讀器；
+ *   失敗、被擋、中斷與取消時 `host.story.restore()` 還原成修訂前的畫面，結束時 `host.story.sync()` 對齊後端。舊內容仍在 `host.history`，歷史裡不受影響。
  */
 (function (root, factory) {
   'use strict';
@@ -110,7 +113,12 @@
       if (host.phase.value !== 'ready' || host.ended.value || host.gate.value) { return false; }
       return last.revisable || last.reason === 'in_progress' || last.reason === 'no_snapshot';
     });
-    var reviseKey = computed(function () { return visible.value ? 'turn:' + target.value.clientMsgId : ''; });
+    /* 劇情卡目前顯示的就是這一輪（rpg-story-view）：新的一輪串流中、第 0 幕、被擋與中斷的一行說明都不是——這些時候卡片下方沒有這兩個按鈕。 */
+    var cardOnTarget = computed(function () {
+      var shown = host.card.value;
+      return !!target.value && shown.visible === true && shown.note === '' && shown.key === 'turn:' + target.value.clientMsgId;
+    });
+    var reviseKey = computed(function () { return visible.value && cardOnTarget.value ? 'turn:' + target.value.clientMsgId : ''; });
 
     /* 按鈕為什麼不能按（可以按回傳空字串）。順序固定：修訂中、離線、串流中、有一筆還沒確認的行動、後端說的原因。 */
     var reviseHint = computed(function () {
@@ -196,7 +204,7 @@
     function nowIso() { return new Date(typeof deps.now === 'function' ? deps.now() : Date.now()).toISOString(); }
 
     function canStart(kind) {
-      if (!visible.value || reviseDisabled.value || !host.lastTurn.value.revisable || !target.value) { return false; }
+      if (!visible.value || !cardOnTarget.value || reviseDisabled.value || !host.lastTurn.value.revisable || !target.value) { return false; }
       return kind === KIND_REGENERATE ? limits.ok : true;
     }
 
@@ -262,17 +270,20 @@
     function adapterFor(ctx) {
       return {
         meta: noop,
-        push: function (value) { ctx.raw += value; ctx.typewriter.push(value); },
+        push: function (value) { ctx.raw += value; ctx.typewriter.push(value); host.story.feed(value); },
         discard: function () {
           ctx.typewriter.cancel();
           ctx.raw = '';
           if (host.overlay.value) { host.overlay.value.story = ''; }
           ctx.typewriter = makeTypewriter(ctx);
+          host.story.note(ctx.note, true);                                    // 還沒有新的內容：劇情卡只留上一則說明（`transition` 緊接著會換成這次的說明）
         },
         transition: function (line, willRetry) {
           if (host.overlay.value) { host.overlay.value.notes.push(line); host.overlay.value.streaming = willRetry === true; }
+          ctx.note = line;
+          host.story.note(line, willRetry === true);
         },
-        finish: function () { ctx.typewriter.finish(); if (host.overlay.value) { host.overlay.value.streaming = false; } },
+        finish: function () { ctx.typewriter.finish(); if (host.overlay.value) { host.overlay.value.streaming = false; } host.story.finish(); },
         hint: noop,                                                         // 被擋的說明由這裡自己組（說明保留原本的回應），不用新回合的提示
         failure: noop,                                                      // 失敗由 `describeRevisionFailure` 依串流的最後結果整理
         done: function (effect) {
@@ -335,11 +346,12 @@
         });
       }
 
-      // 沒有新內容：丟棄尚未完成的文字，拿掉覆蓋層就是舊內容
+      // 沒有新內容：丟棄尚未完成的文字，拿掉覆蓋層就是舊內容；劇情卡還原成修訂前的內容與所在的段（之後重讀若發現後端已經修訂完成，`sync` 會換成後端的內容）
       ctx.typed = true;
       ctx.settled = true;
       ctx.typewriter.cancel();
       dropOverlay(ctx);
+      host.story.restore(run.saved);
 
       if (outcome === 'done') {                                              // 被擋（或狀態不明）：伺服器已退回，舊內容保留
         toast(Game.revisionText('kept_blocked'));
@@ -381,7 +393,9 @@
       host.revising.value = true;
       host.dismissNotice();
       host.overlay.value = { clientMsgId: now.clientMsgId, action: kind === KIND_EDIT ? extra.action : null, story: '', streaming: true, notes: [] };
-      var ctx = { id: now.clientMsgId, raw: '', typewriter: null, typed: false, settled: false, status: null };
+      run.saved = host.story.save();                                         // 舊內容與原本所在的段留在記憶體，失敗時還原
+      host.story.begin('turn:' + now.clientMsgId, kind === KIND_EDIT ? extra.action : now.action);   // 劇情卡從第一段重新閱讀新的內容（先顯示這一輪的行動）
+      var ctx = { id: now.clientMsgId, raw: '', typewriter: null, typed: false, settled: false, status: null, note: '' };
       ctx.typewriter = makeTypewriter(ctx);
       host.notifyContent(true);
       var turn = Game.newStreamTurn(now.clientMsgId, extra.action || now.action, 'turn');
@@ -409,14 +423,17 @@
         ctx.typed = true;
         ctx.settled = true;
         dropOverlay(ctx);
+        host.story.restore(run.saved);
         toast(Game.revisionText('unavailable'));
         return false;
       }).finally(function () {
         run.newAction = '';
         run.payloadText = '';                                                // 理由與新行動不再需要：不留在記憶體裡
         run.payloadCategory = '';
+        run.saved = null;                                                    // 修訂前的畫面也不再需要
         if (currentRun === run) { currentRun = null; }
         host.revising.value = false;                                         // finally：無論成功、失敗或中斷都恢復
+        host.story.sync();                                                   // 串流結束：劇情卡對齊後端（已顯示同樣的內容就不動；後端若已修訂完成才換上）
       });
     }
 

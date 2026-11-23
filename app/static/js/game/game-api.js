@@ -18,7 +18,8 @@
  *   那是 `turn-stream.js` 的事（原生 fetch 搭配 ReadableStream，AGENTS.md 第 5 節）。
  * - **遊戲幣**（`/api/wallet`）：`wallet`（餘額、每輪幣價、簽到狀態）、`checkin`（每日簽到；`confirmOverflow` 為真才帶 `confirm_overflow: true`）。
  * 會呼叫模型或較慢的請求，逾時（`options.timeout`，毫秒）與中止用的 `signal`（AbortController）**由呼叫端傳入**，數值取自頁面初始狀態（由設定算出，這裡不寫死）；
- * 沒給就用 axios 的預設。**寫入的呼叫恰好是五個**：`suggest`、`start`、`checkin`、`saveNotebook`、`reportScript`（測試固定，`tests/js/game-api.test.js` 與 `tests/test_game_pages.py`）。
+ * 沒給就用 axios 的預設。**寫入的呼叫恰好是六個**：`suggest`、`start`、`checkin`、`saveNotebook`、`reportScript`、`suggestActions`（測試固定，`tests/js/game-api.test.js` 與 `tests/test_game_pages.py`）。
+ * `suggestActions`（行動建議，rpg-story-view）與創角的 `suggest`（AI 生成主角預覽）是兩件事：前者是玩家點圖示才呼叫的遊戲內建議，會把結果保存在存檔。
  * **玩家文字只在請求本文裡**：這裡不記錄、不快取、不寫任何瀏覽器儲存。
  * 路徑都是固定字串，識別碼經 encodeURIComponent 才放進網址；分頁參數只送呼叫端給的數字（範圍由伺服器驗證，前端不重複實作規則）。
  */
@@ -123,6 +124,10 @@
     snapshot: function (id, options) { return send('get', gamePath(id), undefined, options); },
     /* 序號大於 `sinceSeq` 的回合（遞增）：{ turns: [{ seq, client_msg_id, turn_number, status, action, story }], has_more }；只有 `complete` 的回合含文字。 */
     turns: function (id, sinceSeq, options) { return send('get', gamePath(id) + '/turns', undefined, options, turnParams(sinceSeq, options)); },
+    /* 行動建議（rpg-suggestions；寫入，呼叫模型、不扣遊戲幣）：POST 沒有本文，成功回 `{ ok, suggestions: [字串，1 至 3 個], reused }`（`reused` 為真代表是存檔裡已保存的結果、沒有呼叫模型）。
+       失敗：404、403（閘門）、409 `session_ended`／`opening_pending`／`turn_in_progress`／`suggestions_stale`、503 `system_busy`／`suggestions_unavailable`。
+       逾時（略大於後端單次請求總預算）與 `signal`（離開頁面或玩家取消時中止）由呼叫端傳入；建議文字只在回應裡，這裡不記錄、不快取。 */
+    suggestActions: function (id, options) { return send('post', gamePath(id) + '/suggestions', undefined, options); },
     /* 記事簿全文與用量：{ notebook: { text, version, length, capacity, reserve, full } } */
     notebook: function (id, options) { return send('get', gamePath(id) + '/notebook', undefined, options); },
     /* 儲存玩家編輯的記事簿（`expectedVersion` 是開啟編輯時的版本）：{ notebook }；版本不符時以 409 `notebook_conflict` 拒絕並附後端最新的記事簿。 */

@@ -72,11 +72,12 @@ function normalTurn({ seq, clientMsgId, story, coins = 170, tokens, state, doneE
 }
 
 function createHarness(options = {}) {
-  const calls = { snapshot: [], turns: [], streams: [], openings: [], fetch: [], wallet: [], checkin: [] };
+  const calls = { snapshot: [], turns: [], streams: [], openings: [], fetch: [], wallet: [], checkin: [], suggest: [] };
   const logs = [];
   const toasts = [];
   const logins = [];
   const typewriters = [];
+  const readerTypewriters = [];                                                                                         // 劇情卡（閱讀器）的打字機：與每個氣泡一個的 `typewriters` 分開記錄
   const noted = [];
   const server = {
     session: Object.assign({
@@ -87,7 +88,7 @@ function createHarness(options = {}) {
     turns: (options.turns || []).map((turn) => Object.assign({}, turn)),
     pageSize: options.pageSize || 200,
     snapshotFailure: null, turnsFailure: null, walletFailure: null,
-    streamPlans: [], openingPlans: [],
+    streamPlans: [], openingPlans: [], suggestPlans: [], suggestGate: null,
     wallet: options.wallet || { total: 230 },
   };
   const state = initialState(options.state);
@@ -114,6 +115,23 @@ function createHarness(options = {}) {
       return Promise.resolve({ ok: true, wallet: Object.assign({ free_balance: server.wallet.total, paid_balance: 0, total: server.wallet.total, free_cap: 1000, turn_cost: cost === null ? {} : { standard: cost }, checkin: { claimable: true, grant: 200, would_gain: 200, would_lose: 0, next_reset_at: '2026-11-12T16:00:00+00:00' } }, flag) });
     },
     checkin: (confirm, opts) => { calls.checkin.push({ confirm, opts }); return Promise.resolve({ ok: true, wallet: { total: server.wallet.total + 200, turn_cost: { standard: 30 }, checkin: { claimable: false } } }); },
+    /* 行動建議端點：依序消耗 `server.suggestPlans`（`{ suggestions, reused }` 或 `{ failure }`；`apply(server)` 在回應前改動伺服器的狀態）；`server.suggestGate` 是讓測試卡住請求的 Promise。
+       被中止（`opts.signal`）時比照 axios 以 canceled 拒絕。 */
+    suggestActions: async (id, opts) => {
+      calls.suggest.push({ id, opts });
+      if (server.suggestGate) {
+        await new Promise((resolve, reject) => {
+          const signal = opts && opts.signal;
+          if (signal) { signal.addEventListener('abort', () => reject(Object.assign({ kind: 'canceled', status: 0, code: '', message: '', fields: {} })), { once: true }); }
+          server.suggestGate.then(resolve, reject);
+        });
+      }
+      const plan = server.suggestPlans.shift();
+      if (!plan) { throw new Error('沒有為建議準備計畫'); }
+      if (plan.failure) { throw plan.failure; }
+      if (plan.apply) { plan.apply(server); }
+      return { ok: true, suggestions: plan.suggestions, reused: plan.reused === true };
+    },
   };
 
   async function fetch(url, init) {
@@ -173,6 +191,24 @@ function createHarness(options = {}) {
     cancel() { this.cancelled = true; }
   }
 
+  /* 劇情卡的打字機替身（story-reader.js 用 `play`、`flush`、`cancel`）：預設 `play` 立刻打完（整段直接顯示）；`readerAutoFinish: false` 時要測試呼叫 `complete()`，
+     並可用 `progress(文字)` 模擬打到一半。 */
+  class FakeReaderTypewriter {
+    constructor(handlers) {
+      this.handlers = handlers;
+      this.played = '';
+      this.text = '';
+      this.completed = false;
+      this.cancelled = false;
+      readerTypewriters.push(this);
+    }
+    play(value) { this.played = value; if (options.readerAutoFinish !== false) { this.complete(); } }
+    progress(value) { if (!this.cancelled && !this.completed) { this.text = value; this.handlers.onUpdate(value); } }
+    complete() { if (this.cancelled || this.completed) { return; } this.completed = true; this.text = this.played; this.handlers.onUpdate(this.played); this.handlers.onDone(); }
+    flush() { this.complete(); }
+    cancel() { this.cancelled = true; }
+  }
+
   const timerList = [];
   let timerId = 0;
   const timers = {
@@ -184,6 +220,8 @@ function createHarness(options = {}) {
 
   let idCounter = 0;
   let online = options.online !== false;
+  let modalOpen = false;
+  let reducedMotion = false;
   let store = null;
   let sync = null;
   let wallet = null;
@@ -204,7 +242,8 @@ function createHarness(options = {}) {
     });
     session = createSession({
       Vue: { ref: Vue.ref, computed: Vue.computed, reactive: Vue.reactive }, state, api, store, sync, stream, wallet,
-      TypewriterBuffer: FakeTypewriter, toast: (message) => toasts.push(message), goLogin: () => logins.push('session'),
+      TypewriterBuffer: FakeTypewriter, createTypewriter: (handlers) => new FakeReaderTypewriter(handlers), reducedMotion: () => reducedMotion,
+      isModalOpen: () => modalOpen, toast: (message) => toasts.push(message), goLogin: () => logins.push('session'),
       newId: () => { idCounter += 1; return 'msg-' + idCounter; }, now: () => Date.UTC(2026, 10, 11, 12, 0, 0), csrf: () => 'CSRF-TOKEN',
       isOnline: () => online, setTimeout: timers.set, clearTimeout: timers.clear, AbortController: globalThis.AbortController,
       restrictionOf: (info) => (info && info.status === 403 && info.code === 'account_locked' ? 'locked' : null),
@@ -228,9 +267,13 @@ function createHarness(options = {}) {
   const idle = async (turns = 12) => { for (let index = 0; index < turns; index += 1) { await new Promise((resolve) => setImmediate(resolve)); } };
 
   const harness = {
-    build, calls, logs, toasts, logins, typewriters, noted, server, state, timers, until, idle,
+    build, calls, logs, toasts, logins, typewriters, readerTypewriters, noted, server, state, timers, until, idle,
     get store() { return store; }, get sync() { return sync; }, get wallet() { return wallet; }, get session() { return session; }, get revision() { return revision; },
     setOnline: (value) => { online = value; },
+    setModalOpen: (value) => { modalOpen = value; },
+    setReducedMotion: (value) => { reducedMotion = value; },
+    /* 劇情卡目前的顯示欄位（純資料）。 */
+    card: () => plain(session.card.value),
     /* 時間軸目前的項目（純資料）。 */
     timeline: () => plain(session.items.value),
     kinds: () => plain(session.items.value).map((item) => item.kind),

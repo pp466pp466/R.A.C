@@ -73,11 +73,20 @@
 
 ## 6. 前端：狀態、API 與接線
 
-- [ ] 6.1 `game-state.js` 新增 `ADVANCE_ACTION`、劇情卡視圖、建議與推進的啟用條件與錯誤對照（含 `suggestions_unavailable`、`suggestions_stale`、`opening_pending`）；驗證：`tests/js/game-state*.test.js` 擴充後通過；新增斷言前後端的 `ADVANCE_ACTION` 相等
-- [ ] 6.2 `game-api.js` 新增建議端點呼叫（axios、逾時 35 秒、AbortController）；`game-store.js` 讀取快照的 `suggestions`，且確認建議不寫入 IndexedDB；驗證：Node 測試涵蓋請求、取消、重用，並斷言儲存層沒有建議
-- [ ] 6.3 `game-session.js` 把回合與第 0 幕的串流事件餵給 reader，載入既有存檔時 `jumpToEnd`，處理鍵盤翻頁（焦點與 Modal 判斷）、推進動作、建議動作（貼進輸入框並收回）與離開頁面中止；驗證：沙盒跑完整載入與一輪流程，攔截 `console` 後沒有玩家文字；涵蓋被擋轉場、中斷、重送、離線與已完結
-- [ ] 6.4 `game-revision.js` 改掛劇情卡：按鈕只在當前顯示最後一輪時出現；成功後從第一段重新閱讀、失敗還原舊內容與原本的段；驗證：`tests/js/game-revision*.test.js` 更新後通過，涵蓋 `rpg-revision-ui` 規格的情境
-- [ ] 6.5 跑 Node 測試與全域守門子集；驗證：通過
+- [x] 6.1 `game-state.js` 新增 `ADVANCE_ACTION`、劇情卡視圖、建議與推進的啟用條件與錯誤對照（含 `suggestions_unavailable`、`suggestions_stale`、`opening_pending`）；驗證：`tests/js/game-state*.test.js` 擴充後通過；新增斷言前後端的 `ADVANCE_ACTION` 相等
+- [x] 6.2 `game-api.js` 新增建議端點呼叫（axios、逾時 35 秒、AbortController）；`game-store.js` 讀取快照的 `suggestions`，且確認建議不寫入 IndexedDB；驗證：Node 測試涵蓋請求、取消、重用，並斷言儲存層沒有建議
+- [x] 6.3 `game-session.js` 把回合與第 0 幕的串流事件餵給 reader，載入既有存檔時 `jumpToEnd`，處理鍵盤翻頁（焦點與 Modal 判斷）、推進動作、建議動作（貼進輸入框並收回）與離開頁面中止；驗證：沙盒跑完整載入與一輪流程，攔截 `console` 後沒有玩家文字；涵蓋被擋轉場、中斷、重送、離線與已完結
+- [x] 6.4 `game-revision.js` 改掛劇情卡：按鈕只在當前顯示最後一輪時出現；成功後從第一段重新閱讀、失敗還原舊內容與原本的段；驗證：`tests/js/game-revision*.test.js` 更新後通過，涵蓋 `rpg-revision-ui` 規格的情境
+- [x] 6.5 跑 Node 測試與全域守門子集；驗證：通過
+
+### 批 5 完成註記（2026-11-23；前端狀態、API 與接線；只跑 Node 全套與全域守門子集加頁面測試，**未跑全套 pytest**——本批沒有動 `app/` 的 Python）
+
+- **6.1**：`game-state.js` 新增 `ADVANCE_ACTION`、`cardView`（閱讀器狀態 → 劇情卡欄位）、`suggestionItems`、`suggestBlocker`／`canSuggest`、`advanceBlocker`／`canAdvance`、`describeSuggestionFailure`；`sendBlocker` 多一個 `reading`（第 0 幕還沒翻到最後一段）。固定文字在 `game-labels.js`（`speakerLabel`、`storyText`、`suggestText`、`actionHint`）。前後端 `ADVANCE_ACTION` 相等由 `tests/js/game-state-story.test.js` 讀 `rpg_prompt.py` 原始碼比對。
+- **6.2**：`game-api.js` 新增 `suggestActions(id, options)`（POST、無本文；**寫入的呼叫由五個變六個**，`tests/js/game-api.test.js` 與 `tests/test_game_pages.py` 已更新）。`game-store.js` 本來就是白名單，沒有改邏輯，只補註解；`tests/js/game-store-suggestions.test.js` 證明建議不進記憶體與 IndexedDB 兩種後端。
+- **6.3**：`game-session.js` 以 `story-reader.js` 驅動劇情卡：`card`、`nextPage`、`prevPage`、`handleKey`、`advance`、`toggleSuggestions`／`pickSuggestion`／`closeSuggestions`（含 `suggestOpen`、`suggestItems`、`suggestBusy`、`suggestError`、`focusTick`）、`reading`、`suggestDisabled`／`suggestHint`、`advanceDisabled`／`advanceHint`。時間軸資料層（`items`、補齊、在途回合、IndexedDB）與舊的每氣泡打字機**都沒動**，閱讀器是並行加上去的。
+- **6.4**：`game-revision.js` 的 `reviseKey` 與 `canStart` 加上「劇情卡當下顯示的就是最後一輪」；修訂開始時存下舊畫面並讓劇情卡從第一段重讀，失敗、被擋、被拒、中斷、取消時還原，結束時 `sync` 對齊後端。
+- **出入與解讀（我選的做法，可推翻）**：①**`game.js`、`game-contract.js` 與 `session.html` 的新名稱接線留到 7.1**——樣板測試要求樣板用到的名稱與 `setup()` 回傳的名稱一一對應（沒用到就失敗），所以名稱只能與樣板一起加；本批 `game.js` 沒動，因此 **`deps.reducedMotion` 與 `deps.isModalOpen` 尚未注入、document 的 keydown 尚未接到 `handleKey`、`focusTick` 尚未有人監看**（7.1 一併做）；②`session.html` 只多載入 `story-pages.js` 與 `story-reader.js` 兩行（否則 `createSession` 在瀏覽器裡找不到閱讀器），畫面本身仍是舊的時間軸；③**第 0 幕「翻到最後一段才能行動」**（規格 `rpg-story-pages` 的情境）做成黏著旗標 `openingReached`：翻到過最後一段就不再因回看而鎖上；載入既有第 0 幕直接停在最後一段所以不鎖；④建議的前端逾時用頁面初始狀態的 `suggest_timeout_ms`，**會期頁目前沒有這個鍵，暫用 35 秒常數**（AGENTS.md 第 5 節）；後端要隨設定改變時，在 `game_page_controller.py` 的會期頁狀態補一行即可；⑤新一輪、第 0 幕串流與修訂開始時，已保存與已展開的建議一律清掉（伺服器會以錨點判斷，再按圖示只會得到 `reused`，不多花 token）；⑥被擋與中斷的那一輪，劇情卡維持一行說明（`readerHold`），直到後端出現它的完整內容、另一個裝置新增回合或下一次送出；⑦後端的第 0 幕串流一律以 `status: complete` 結束（`opening_state` 為 `ready` 或 `fallback`），所以第 0 幕被擋的情境以 `complete` + `fallback` 測試。
+- **驗證**：`node --test` 全套 **1766 通過**（原 1690；新增 `game-state-story` 9、`game-story-session` 46、`game-story-revision` 16、`game-store-suggestions` 3、`game-api` 2）；pytest 全域守門子集加 `test_game_pages`、`test_script_page`、`test_v_cloak_rule`：**1242 通過、2 略過**；在 scratchpad 副本上快速變異 20 個全被殺死（正式變異在 8.1）。**未驗證**：瀏覽器實機行為（接線在 7.1）、真實 `UI.TypewriterBuffer` 與 `matchMedia` 的組合（測試用替身）。
 
 ## 7. 前端：版面與樣式
 

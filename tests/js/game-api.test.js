@@ -37,7 +37,7 @@ const serverError = (status, body) => () => Promise.reject({ response: { status,
 
 test('the page-level API exposes exactly the entry, game and wallet calls', () => {
   const { api } = sandboxWith(ok({}));
-  assert.deepEqual(Object.keys(api).sort(), ['catalog', 'catalogTags', 'checkin', 'notebook', 'reportScript', 'saveNotebook', 'scriptDetail', 'sessions', 'setup', 'snapshot', 'start', 'suggest', 'turns', 'wallet']);
+  assert.deepEqual(Object.keys(api).sort(), ['catalog', 'catalogTags', 'checkin', 'notebook', 'reportScript', 'saveNotebook', 'scriptDetail', 'sessions', 'setup', 'snapshot', 'start', 'suggest', 'suggestActions', 'turns', 'wallet']);
 });
 
 test('snapshot reads the save by its public id and returns the response body untouched', async () => {
@@ -195,21 +195,48 @@ test('a 404 from the script detail rejects with the described failure so the pag
   assert.equal(info.kind, 'server');
 });
 
-test('the only calls that can change anything are suggest, start, checkin, saveNotebook and reportScript', async () => {
+test('the only calls that can change anything are suggest, start, checkin, saveNotebook, reportScript and suggestActions', async () => {
   const { api, requests } = sandboxWith(ok({}));
   const args = {
     catalog: [], catalogTags: [], scriptDetail: ['v'], sessions: [], setup: ['v'], suggest: [{}], start: [{}], snapshot: [SESSION], turns: [SESSION, 0], notebook: [SESSION],
-    saveNotebook: [SESSION, 'x', 1], wallet: [], checkin: [false], reportScript: ['v', { reasons: ['other'] }]
+    saveNotebook: [SESSION, 'x', 1], wallet: [], checkin: [false], reportScript: ['v', { reasons: ['other'] }], suggestActions: [SESSION]
   };
   for (const name of Object.keys(api)) { await api[name](...args[name]); }
   const writes = requests.filter((r) => r.method !== 'get').map((r) => `${r.method} ${r.url}`).sort();
   assert.deepEqual(writes, [
+    'post /api/game/sessions/' + SESSION + '/suggestions',
     'post /api/sessions',
     'post /api/sessions/catalog/v/report',
     'post /api/sessions/protagonist/suggest',
     'post /api/wallet/checkin',
     `put /api/game/sessions/${SESSION}/notebook`
   ]);
+});
+
+test('suggestActions posts to the save\'s suggestions path with no body, passes the timeout and signal from the caller and returns the response untouched', async () => {
+  const controller = new AbortController();
+  const body = { ok: true, suggestions: ['推開門', '問問路人'], reused: false };
+  const { api, requests } = sandboxWith(ok(body));
+  const result = await api.suggestActions(SESSION, { timeout: 35000, signal: controller.signal });
+  assert.deepEqual(plain(result), body);
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].method, 'post');
+  assert.equal(requests[0].url, `/api/game/sessions/${SESSION}/suggestions`);
+  assert.equal(requests[0].data, undefined);                                     // 端點不需要本文
+  assert.equal(requests[0].timeout, 35000);
+  assert.equal(requests[0].signal, controller.signal);
+  await api.suggestActions('a/b c');
+  assert.equal(requests[1].url, '/api/game/sessions/a%2Fb%20c/suggestions');      // 識別碼經 encodeURIComponent
+  assert.equal(requests[1].timeout, undefined);                                   // 沒給就用 axios 的預設，這裡不寫死逾時
+});
+
+test('suggestActions failures keep the status and code so the page can tell an unavailable model, a stale screen and a busy turn apart', async () => {
+  for (const [status, code] of [[503, 'suggestions_unavailable'], [409, 'suggestions_stale'], [409, 'turn_in_progress'], [409, 'opening_pending'], [409, 'session_ended'], [503, 'system_busy'], [404, 'not_found']]) {
+    const { api } = sandboxWith(serverError(status, { error: { code, message: '訊息' } }));
+    const info = await api.suggestActions(SESSION).then(() => null, (failure) => failure);
+    assert.equal(info.status, status);
+    assert.equal(info.code, code);
+  }
 });
 
 test('reportScript posts the body to the version\'s report path, with the id encoded, and returns the response body untouched', async () => {

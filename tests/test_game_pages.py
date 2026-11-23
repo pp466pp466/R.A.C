@@ -577,7 +577,8 @@ def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_t
     html = client.get(f"/game/{save_id}").get_data(as_text=True)
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
     expected = ["auth-common.js", "game-labels.js", "sse-parser.js", "turn-stream.js", "game-state.js", "game-store.js", "game-sync.js",
-                "game-api.js", "wallet-checkin.js", "game-wallet.js", "game-notebook.js", "game-revision.js", "game-session.js", "game.js"]
+                "game-api.js", "wallet-checkin.js", "game-wallet.js", "game-notebook.js", "game-revision.js", "story-pages.js", "story-reader.js",
+                "game-session.js", "game.js"]
     for needed in ("vue.global.prod.js", "axios.min.js", "typewriter.js", "ui-components.js", "restriction.js", *expected):
         assert needed in names, needed
     assert names[-1] == "game.js"                                                # 掛載腳本必須是最後一個（它用到前面所有模組）
@@ -996,14 +997,15 @@ def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
     assert set(re.findall(r"Game\.api\.(\w+)", code["wizard.js"])) == {"setup", "suggest", "start"}
 
 
-def test_the_game_api_writes_through_exactly_five_calls_and_takes_timeouts_and_signals_from_the_caller():
-    """寫入的呼叫恰好是 suggest（生成預覽，無狀態）、start（開存檔）、checkin（每日簽到）、saveNotebook（玩家儲存記事簿）與 reportScript（檢舉劇本）；
-    其餘都是 GET。回合與第 0 幕的串流不在 game-api.js（那是 turn-stream.js 的原生 fetch）。"""
+def test_the_game_api_writes_through_exactly_six_calls_and_takes_timeouts_and_signals_from_the_caller():
+    """寫入的呼叫恰好是 suggest（生成預覽，無狀態）、start（開存檔）、checkin（每日簽到）、saveNotebook（玩家儲存記事簿）、reportScript（檢舉劇本）
+    與 suggestActions（遊戲內的行動建議，rpg-story-view）；其餘都是 GET。回合與第 0 幕的串流不在 game-api.js（那是 turn-stream.js 的原生 fetch）。"""
     api = strip_js_comments(read(JS_DIR / "game-api.js"))
     calls = re.findall(r"""(\w+):\s*function\s*\([^)]*\)\s*\{\s*return\s+(?:call|send)\('(get|post|put|patch|delete)'""", api, re.I)
-    assert sorted(name for name, method in calls if method != "get") == ["checkin", "reportScript", "saveNotebook", "start", "suggest"]
+    assert sorted(name for name, method in calls if method != "get") == ["checkin", "reportScript", "saveNotebook", "start", "suggest", "suggestActions"]
     assert dict(calls)["saveNotebook"] == "put" and dict(calls)["checkin"] == "post" and dict(calls)["reportScript"] == "post"
-    # 目錄、常用標籤與劇本詳情（rpg-script-publishing 7.2）也經 send()，但都是 GET：寫入的呼叫仍恰好是上面五個
+    assert dict(calls)["suggestActions"] == "post"
+    # 目錄、常用標籤與劇本詳情（rpg-script-publishing 7.2）也經 send()，但都是 GET：寫入的呼叫仍恰好是上面六個
     assert sorted(name for name, method in calls if method == "get") == [
         "catalog", "catalogTags", "notebook", "scriptDetail", "setup", "snapshot", "turns", "wallet",
     ]
