@@ -575,7 +575,8 @@ class GameService:
 
         沒有內部編號、來源版本與劇本複本全文（只有標題）；世界狀態只含玩家可以知道的欄位（NPC 的特質與隱藏的歸屬不在其中）；
         記事簿只有版本、字數、容量與是否已滿，**沒有全文**（全文只走 `NotebookService.view`）。
-        `last_turn` 是最後一輪的修訂資訊（沒有完成的回合時為空）：`client_msg_id`、`seq`、`revision`、是否可修訂與原因、剩餘免費次數與兩種操作的幣價。"""
+        `last_turn` 是最後一輪的修訂資訊（沒有完成的回合時為空）：`client_msg_id`、`seq`、`revision`、是否可修訂與原因、剩餘免費次數與兩種操作的幣價。
+        `suggestions` 是已保存且仍有效的行動建議（字串陣列；沒有或已過期為空陣列，**不含錨點細節**）：新回合完成或修訂成功後錨點改變，舊建議自動不再帶出。"""
         self._policy.require_chat_access(current)
         save = self._sessions.get_owned(current.id, session_public_id)
         if save is None:
@@ -588,6 +589,7 @@ class GameService:
             "opening": opening_view(save, script), "world": world_view(save),
             "notebook": notebook_policy.summary_of(save.notebook_text, save.notebook_version, current.member_tier),
             "last_turn": self._last_turn_view(current, save.public_id),
+            "suggestions": self._suggestions_view(current, save.public_id),
         }
 
     def turn_views(
@@ -638,6 +640,11 @@ class GameService:
             script=script, protagonist=protagonist, world=world, characters=tuple(rpg_world.known_characters(world, script, protagonist)),
             history=history, system_instruction=system, contents=tuple(contents),
         )
+
+    def _suggestions_view(self, current: CurrentUser, session_public_id: str) -> list[str]:
+        """快照的行動建議：錨點與目前相等的有效建議（字串陣列），沒有或已過期為空陣列；不帶錨點。"""
+        state = self._sessions.suggestion_state(current.id, session_public_id)
+        return [] if state is None else list(state.items)
 
     def _last_turn_view(self, current: CurrentUser, session_public_id: str) -> dict[str, Any] | None:
         """最後一輪的修訂資訊（玩家端 `last_turn`）：與 `begin_revision` 用同一個判斷（`revision_state`），畫面與端點不會各說各話。

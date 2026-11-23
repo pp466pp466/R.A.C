@@ -1691,3 +1691,68 @@ def test_migrated_report_table_and_retention_column_behave_correctly_on_both_dat
     with engine.connect() as conn:
         for name in ("scripts", "script_versions", "script_reports"):
             assert conn.execute(select(func.count()).select_from(Table(name, MetaData(), autoload_with=conn))).scalar_one() == 0, name
+
+
+# ---- 0023 rpg-story-view ----------------------------------------------------------------
+
+def test_0023_adds_one_nullable_json_column_to_sessions_and_keeps_every_row(tmp_path):
+    """rpg-story-view：sessions 新增 suggestions_json（可為空、不回填、不加索引）；既有存檔與回合一列不少、新欄位為空值；
+    不改寫任何既有資料；回復只移除這一欄、不串聯刪除任何資料；再升級一次不重複。"""
+    url = f"sqlite+pysqlite:///{tmp_path / 'story_suggestions.sqlite3'}"
+    cfg = alembic_config(url)
+    engine = create_engine_for(url)
+    revision = ScriptDirectory.from_config(cfg).get_revision("0023_story_suggestions")
+    assert revision.down_revision == "0022_script_reports" and len(revision.revision) <= 32
+
+    command.upgrade(cfg, "0022_script_reports")
+    with engine.begin() as conn:
+        _insert_old_save_and_turn(conn)
+    before_columns = {c["name"] for c in inspect(engine).get_columns("sessions")}
+    before_indexes = {i["name"] for i in inspect(engine).get_indexes("sessions")}
+    with engine.connect() as conn:
+        before_row = dict(conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().one())
+
+    command.upgrade(cfg, "0023_story_suggestions")
+    inspector = inspect(engine)
+    added = {c["name"]: c for c in inspector.get_columns("sessions") if c["name"] not in before_columns}
+    assert set(added) == {"suggestions_json"} and added["suggestions_json"]["nullable"]       # 可為空：舊版程式不認識它也照常運作
+    assert {i["name"] for i in inspector.get_indexes("sessions")} == before_indexes            # 沒有新增索引
+    with engine.connect() as conn:
+        saves = conn.execute(select(Table("sessions", MetaData(), autoload_with=conn))).mappings().all()
+    assert len(saves) == 1 and saves[0]["suggestions_json"] is None                            # 不回填：舊資料列讀出為空值
+    assert {key: value for key, value in saves[0].items() if key != "suggestions_json"} == before_row     # 不改寫既有資料
+
+    command.downgrade(cfg, "0022_script_reports")
+    assert {c["name"] for c in inspect(engine).get_columns("sessions")} == before_columns
+    with engine.connect() as conn:                                                            # 回復不串聯刪除既有的存檔與回合
+        assert conn.execute(select(func.count()).select_from(Table("sessions", MetaData(), autoload_with=conn))).scalar_one() == 1
+        assert conn.execute(select(func.count()).select_from(Table("memory_logs", MetaData(), autoload_with=conn))).scalar_one() == 1
+
+    command.upgrade(cfg, "0023_story_suggestions")                                            # 再升級一次，不重複
+    assert {c["name"] for c in inspect(engine).get_columns("sessions")} == before_columns | {"suggestions_json"}
+    engine.dispose()
+
+
+def test_migrated_suggestions_column_stores_a_json_document_and_defaults_to_null_on_both_databases(migrated_database):
+    """SQLite 與 SQL Server 兩軌：舊版程式形狀的存檔 INSERT（不含新欄位）取得空值；寫入含繁體中文與 emoji 的建議文件後讀回相同
+    （SQL Server 的 JSON 欄位是 NVARCHAR，ORM 的 JSON 型別負責序列化）；刪除存檔時建議隨同一資料列消失。"""
+    from app.models import RpgSession
+
+    engine = migrated_database
+    with engine.begin() as conn:
+        _insert_old_save_and_turn(conn)
+        sessions = Table("sessions", MetaData(), autoload_with=conn)
+        assert conn.execute(select(sessions.c.suggestions_json)).scalar_one() is None          # 沒有帶新欄位的 INSERT 取得空值
+    document = {"seq": 3, "revision": 2, "items": ["走向山門", "向守衛打聽消息 😀"]}
+    with Session(engine) as db:
+        save = db.scalars(select(RpgSession)).one()
+        assert save.suggestions_json is None
+        save.suggestions_json = document
+        db.commit()
+    with Session(engine) as db:
+        assert db.scalars(select(RpgSession)).one().suggestions_json == document
+    with engine.begin() as conn:                                                              # 同一資料列：刪除存檔就沒有建議（先刪依賴它的回合列）
+        conn.execute(Table("memory_logs", MetaData(), autoload_with=conn).delete())
+        conn.execute(Table("sessions", MetaData(), autoload_with=conn).delete())
+    with Session(engine) as db:
+        assert db.scalars(select(RpgSession)).all() == []

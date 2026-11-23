@@ -104,6 +104,11 @@ class RpgSession(Base, PublicIdMixin, TimestampMixin):
     # 遊戲內「可嘗試關閉安全模式」的提示已出現的時間（safe-mode-toggle，expand 階段新增，可為空）：每個存檔最多一次，
     # 以「safe_hint_at 為空才更新、更新列數為 1 才送出」的條件式更新保證。只有時間戳記，不含任何玩家文字。
     safe_hint_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
+    # 行動建議（rpg-story-view，expand 階段新增，可為空，無預設的非空值）：`{"seq": <最後完成回合的 seq，第 0 幕為 0>, "revision": <該回合的 revision，
+    # 第 0 幕為 0>, "items": [<建議文字>…]}`。錨點（seq、revision）等於目前的錨點才有效：新回合完成使 seq 改變、修訂成功使 revision 加 1，
+    # 舊建議自動過期（不需在回合引擎或修訂流程清除）；寫入不改 `version`，不碰世界狀態。內容由模型依玩家的角色卡與近期劇情產生，視為個資：
+    # 與存檔同期限、不進日誌、不在管理員預設範圍；不得依內容篩選查詢（JSON 欄位）。
+    suggestions_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(Unicode(10), default=SESSION_ACTIVE)
     ended_at: Mapped[datetime | None] = mapped_column(UTCDateTime, nullable=True)
     is_archived: Mapped[bool] = mapped_column(Boolean, default=False)          # 玩家自行封存，與劇情完結是兩件事

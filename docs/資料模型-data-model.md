@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-22 ｜ 對應 change：rpg-script-reports（新增 `script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`；遷移 `0022`；抹除流程新增匿名保留與刪除作者版本檢舉兩步；變更已實作並於 2026-11-22 封存）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`，版本狀態新增 `removed`；遷移 `0021`；本批只有資料與 Repository 核心，其餘設計見後續批次）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0022_script_reports` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-23 ｜ 對應 change：rpg-story-view（`sessions` 新增 `suggestions_json`，可為空，保存最近一次產生的行動建議與錨點；遷移 `0023_story_suggestions`；實作中，尚未封存、尚未套用到實際的 `project`）、rpg-script-reports（新增 `script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`；遷移 `0022`；抹除流程新增匿名保留與刪除作者版本檢舉兩步；變更已實作並於 2026-11-22 封存）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`，版本狀態新增 `removed`；遷移 `0021`；本批只有資料與 Repository 核心，其餘設計見後續批次）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0022_script_reports` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：性格原型三張表（RC-5）；刪帳號的「匿名保留已發佈劇本」偏好已由 `rpg-script-reports`（RC-8 的 8b，`0022`）實作，見下方保存與刪除一節、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -144,6 +144,7 @@ erDiagram
         datetime opening_started_at "搶佔時間 也是這次生成的憑證 可為空"
         string content_tier "開存檔當下的生效模式 新版程式只寫入不讀取 存檔的生效模式現算"
         datetime safe_hint_at "安全模式提示已出現的時間 可為空 每個存檔最多一次"
+        json suggestions_json "行動建議與其錨點 個資 可為空 錨點改變即過期"
         string status "active 或 ended 已完結不可恢復"
         datetime last_active_at "期限清除的依據"
     }
@@ -428,6 +429,7 @@ flowchart LR
     M19 --> M20["0020 safe_mode_hint<br/>sessions.safe_hint_at"]
     M20 --> M21["0021 script_publishing<br/>script_versions 的送審時間與下架決定五欄、索引 status 加 published_at"]
     M21 --> M22["0022 script_reports<br/>script_reports、users.keep_published_scripts、runtime_limits 補每人每日檢舉上限"]
+    M22 --> M23["0023 story_suggestions<br/>sessions.suggestions_json"]
 ```
 
 - 一律 expand-only：新增欄位先可為空，先部署相容新舊結構的程式，再回填與加約束。
@@ -443,6 +445,7 @@ flowchart LR
 - `0020_safe_mode_hint` 只新增一個 `sessions` 欄位（`safe_hint_at`，可為空、不回填、不建索引）：遊戲內「可嘗試關閉安全模式」的提示已出現的時間，每個存檔最多一次，以「為空才更新、更新列數為 1 才送出」的條件式更新保證；**沒有任何資料改寫**（舊值 `standard` 於讀取時讀作 `adult`）；沒有新資料表；降級對 `sessions` 用 `recreate="never"`；舊版程式在新結構上可運作。
 - `0021_script_publishing` 只新增五個 `script_versions` 欄位（`submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at`，皆可為空、不回填）與索引 `ix_script_versions_status_published_at`（`status`、`published_at`）；版本狀態新增值 `removed` 是值域的新增（欄位 `NVARCHAR(16)` 放得下、不加 CHECK）。舊版程式在新結構上可運作；**回復到舊版程式之前須確認沒有 `removed` 版本**（舊版不認識該狀態）。降級用 `recreate="never"`，先移除索引再移除五個欄位（決定類別與審核備註一併消失，沒有其他影響）。已於 2026-11-20 套用到本機 `project` 並實跑降級驗證（見 [project資料結構文件.md](project資料結構文件.md) 第 14 節）。
 - `0022_script_reports` 新增一張表 `script_reports`（版本外鍵**無動作**、檢舉人外鍵 CASCADE，`(reporter_id, version_id)` 唯一，三個索引）、一個 `users` 欄位 `keep_published_scripts`（NOT NULL、預設 0；預設值寫成字串，不用運算式：運算式預設值會讓 Alembic 在 SQLite 重建 `users`，串聯清掉劇本與存檔）並補一個設定鍵 `script_report_daily`（先查再插）。舊版程式在新結構上可運作；**回復到舊版程式之前須確認 `script_reports` 為空**（舊版的抹除流程不認識它，刪除含檢舉的作者會被無動作外鍵擋下）。降級先刪除設定鍵，再用 `recreate="never"` 移除 `users` 欄位（SQL Server 需 `mssql_drop_default`），最後刪除索引與資料表。已於 2026-11-22 套用到本機 `project`（先備份；見 [project資料結構文件.md](project資料結構文件.md) 第 14 節）；`project` 本身沒有實跑 downgrade。
+- `0023_story_suggestions` 只新增一個 `sessions` 欄位（`suggestions_json`，JSON、可為空、不回填、不建索引）：最近一次產生的行動建議 `{seq, revision, items}`，錨點（最後一個完成回合的 `seq` 與 `revision`，尚無完成回合的第 0 幕為 0、0）等於目前的錨點才有效，新回合完成與修訂成功都使它自動過期，所以回合引擎與修訂流程不需要清除它；寫入不改存檔的 `version`。內容是模型依玩家文字衍生的個資：與存檔同一資料列，隨存檔與帳號刪除，沒有另外的刪除路徑，納入個人資料匯出。舊版程式在新結構上可運作（不認識新欄位）；降級對 `sessions` 用 `recreate="never"`，只移除這一欄（已保存的建議一併消失，玩家再點圖示即可重新產生）。
 - SQLite 對 `users` 的降級必須用 `recreate="never"`（`0003`、`0004`、`0008`、`0010`、`0012`、`0013`）：預設的「重建資料表」會先刪除 `users`，外鍵啟用時以串聯刪除參照它的資料表（身分、權杖、對話）會被一併清空。
 - migration 是部署流程中獨立的步驟（升級前先備份），應用程式啟動時不會自動執行；正式環境不使用 `create_all()`。
 - migration 腳本使用 Alembic op API 與 ORM 型別，不含方言專屬的原生 SQL；`alembic.ini` 與範本必須純 ASCII。

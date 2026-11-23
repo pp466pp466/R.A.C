@@ -8,7 +8,7 @@
 - 範圍：帳號欄位、對話標題與摘要、訊息序號／角色／內容／時間，**自己送出的申訴**（內容、時間、處理狀態；CSV 為 `appeals.csv`），
   **自己創作的劇本**（全部版本，含草稿、待審、被退回與已被取代的，每個版本含讀者頻道，遷移之前的舊版本空值匯出為 `all`；
   CSV 為 `scripts.csv`，每個版本一列）、**故事偏好**（帳號資料的一個欄位）與**自己的存檔**（含記事簿全文與每個回合的
-  玩家行動與劇情原文；CSV 為 `sessions.csv` 與 `turns.csv`；NPC 狀態、目標與里程碑進度等世界狀態只在 JSON）。存檔內的劇本複本不匯出，
+  玩家行動與劇情原文，以及目前保存的行動建議文字〔`suggestions`：JSON 為字串陣列、`sessions.csv` 為單一欄位各項以換行連接，不含錨點〕；CSV 為 `sessions.csv` 與 `turns.csv`；NPC 狀態、目標與里程碑進度等世界狀態只在 JSON）。存檔內的劇本複本不匯出，
   它是來源劇本作者的內容，存檔只帶該劇本的標題。劇本與存檔也以產生器逐筆、逐頁讀取，記憶體用量與總量無關。
   **自己的重新生成與編輯回饋**（rpg-turn-revision；每個存檔的回合序號、種類、分類、理由、是否免費、結果與時間，含失敗與被擋的嘗試；JSON 在存檔區塊的
   `regenerations`，CSV 為 `turn_regenerations.csv`）：理由是玩家文字，視為個資；**不含**內部編號、預扣的冪等鍵與回合前快照，也沒有被取代的行動與劇情（本來就不保存）。
@@ -76,7 +76,7 @@ SCRIPT_COLUMNS = (
 SESSION_COLUMNS = (
     "session_id", "script_title", "status", "content_tier", "player_name", "character_age", "origin", "personality", "appearance",
     "occupation", "speech_style", "hidden_trait", "anchor_kind", "anchor_ref", "anchor_text", "current_location", "status_summary",
-    "elapsed_months", "created_at", "last_active_at", "ended_at", "notebook_text", "opening_state", "opening_text",
+    "elapsed_months", "created_at", "last_active_at", "ended_at", "notebook_text", "opening_state", "opening_text", "suggestions",
 )
 # sessions.csv 的主角欄位：由 `protagonist` 攤平（舊存檔沒有主角資料，這些欄位為空；來歷另外處理）
 PROTAGONIST_CARD_COLUMNS = ("personality", "appearance", "occupation", "speech_style", "hidden_trait")
@@ -249,6 +249,9 @@ class PersonalExportService:
         for key in ("created_at", "last_active_at", "ended_at"):
             head[key] = self._when(head[key])
         protagonist = save.get("protagonist")
+        # 行動建議（rpg-story-view）：JSON 為字串陣列；CSV 為單一欄位，各項以換行連接（沒有建議為空字串）。不含錨點。
+        suggestions = list(save.get("suggestions") or [])
+        head["suggestions"] = suggestions if world_state else chr(10).join(suggestions)
         if world_state:                                          # JSON：完整的角色卡與錨定事實（舊存檔為 null）
             head["protagonist"] = protagonist
             head["world_state"] = save["world_state"]

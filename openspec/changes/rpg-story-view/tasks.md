@@ -9,19 +9,31 @@
 
 ## 2. 後端：直接推進劇情的平台規則
 
-- [ ] 2.1 在 `rpg_prompt.py` 新增 `ADVANCE_ACTION = "推進劇情"` 與回合敘事專用的推進規則（只進回合敘事的系統指令，不進第 0 幕、狀態、記事簿與之後的建議）；驗證：新增的 `tests/test_rpg_advance_prompt.py` 斷言規則只出現在回合敘事、安全模式界線仍在、玩家文字不在系統指令
-- [ ] 2.2 確認「推進劇情」走一般回合的預扣、規則層、重新生成與編輯，不需特例；驗證：以假模型跑一輪 `action="推進劇情"`，斷言預扣 30 幣、`insufficient_coins` 路徑、重新生成可用、同一 `client_msg_id` 重送不重複扣幣（沿用既有回合測試的夾具）
-- [ ] 2.3 跑相關測試與全域守門子集；驗證：通過
+- [x] 2.1 在 `rpg_prompt.py` 新增 `ADVANCE_ACTION = "推進劇情"` 與回合敘事專用的推進規則（只進回合敘事的系統指令，不進第 0 幕、狀態、記事簿與之後的建議）；驗證：新增的 `tests/test_rpg_advance_prompt.py` 斷言規則只出現在回合敘事、安全模式界線仍在、玩家文字不在系統指令
+- [x] 2.2 確認「推進劇情」走一般回合的預扣、規則層、重新生成與編輯，不需特例；驗證：以假模型跑一輪 `action="推進劇情"`，斷言預扣 30 幣、`insufficient_coins` 路徑、重新生成可用、同一 `client_msg_id` 重送不重複扣幣（沿用既有回合測試的夾具）
+- [x] 2.3 跑相關測試與全域守門子集；驗證：通過
 
 ## 3. 後端：資料結構、快照與匯出
 
-- [ ] 3.1 在 `RpgSession` 新增 `suggestions_json`（JSON、可為空），撰寫遷移 `0023`（expand，`recreate="never"` 的 downgrade），驗證：升降級測試與 `alembic check`（SQLite）通過；舊資料列讀出為空值
-- [ ] 3.2 在 `session_repository.py` 新增讀取目前錨點與保存建議的方法（所有方法帶 `user_id`；寫入不改 `version`；寫回前比對錨點的條件式更新）；驗證：repository 測試覆蓋錨點相等才可讀、錨點改變後不可讀、並行寫入只保留一份、他人存檔回無資料
-- [ ] 3.3 `session_snapshot` 帶出 `suggestions`（有效才有；不含錨點細節）；驗證：快照測試覆蓋新存檔、有效、完成新回合後過期、修訂成功後過期
-- [ ] 3.4 `personal_export_service` 的 `SESSION_COLUMNS` 與 JSON 匯出加入建議；驗證：匯出測試覆蓋有建議與沒有建議（JSON 字串陣列、CSV 換行連接、公式前綴規則照舊）
-- [ ] 3.5 確認存檔刪除與帳號抹除涵蓋新欄位（同一資料列，預期不需改程式）；驗證：既有的抹除測試加一項斷言「建議隨存檔消失」
-- [ ] 3.6 同步 `docs/project資料結構文件.md`（欄位表、第 14 節異動紀錄）並用既有的列骨架工具核對；驗證：`pytest tests/test_project_db_schema_doc.py` 通過
-- [ ] 3.7 跑相關測試與全域守門子集；驗證：通過
+- [x] 3.1 在 `RpgSession` 新增 `suggestions_json`（JSON、可為空），撰寫遷移 `0023`（expand，`recreate="never"` 的 downgrade），驗證：升降級測試與 `alembic check`（SQLite）通過；舊資料列讀出為空值
+- [x] 3.2 在 `session_repository.py` 新增讀取目前錨點與保存建議的方法（所有方法帶 `user_id`；寫入不改 `version`；寫回前比對錨點的條件式更新）；驗證：repository 測試覆蓋錨點相等才可讀、錨點改變後不可讀、並行寫入只保留一份、他人存檔回無資料
+- [x] 3.3 `session_snapshot` 帶出 `suggestions`（有效才有；不含錨點細節）；驗證：快照測試覆蓋新存檔、有效、完成新回合後過期、修訂成功後過期
+- [x] 3.4 `personal_export_service` 的 `SESSION_COLUMNS` 與 JSON 匯出加入建議；驗證：匯出測試覆蓋有建議與沒有建議（JSON 字串陣列、CSV 換行連接、公式前綴規則照舊）
+- [x] 3.5 確認存檔刪除與帳號抹除涵蓋新欄位（同一資料列，預期不需改程式）；驗證：既有的抹除測試加一項斷言「建議隨存檔消失」
+- [x] 3.6 同步 `docs/project資料結構文件.md`（欄位表、第 14 節異動紀錄）並用既有的列骨架工具核對；驗證：`pytest tests/test_project_db_schema_doc.py` 通過
+- [x] 3.7 跑相關測試與全域守門子集；驗證：通過
+
+### 批 2 完成註記（2026-11-23；只跑相關測試加全域守門子集，**未跑全套 pytest 與 Node**，全套留到 4.9 與第 8 組）
+
+- **2.1**：`ADVANCE_ACTION = "推進劇情"` 與 `_ADVANCE_RULE` 放在 `rpg_prompt.py`，串在 `_ACTION_RULE` 之後交給同一個 `action_rule` 參數，所以只進回合敘事（`build_system`）；第 0 幕、狀態、記事簿的系統指令都沒有（`tests/test_rpg_advance_prompt.py` 斷言）。建議呼叫的系統指令在批 3 才存在，那一批的測試要補斷言它也不含這條規則。前端常數與後端相等的斷言留到 6.1。
+- **2.2**：確認不需要特例：`tests/test_rpg_advance_action.py` 以 HTTP 走完整流程（預扣 30 幣與帳本形狀和一般行動相同、餘額不足 409、重送冪等、重新生成與編輯共用免費次數、規則層照常擋）。
+- **3.1**：欄位與遷移 `0023_story_suggestions`（檔名 `20261123_0023_story_suggestions.py`，downgrade 用 `recreate="never"`）；遷移測試在 `tests/test_migrations.py`（SQLite 升降級與再升級、兩軌的 JSON 寫入與讀回、`alembic check` 無差異）。
+- **3.2（與 design D5 的出入）**：新增 `suggestion_state`（目前錨點與有效建議）與 `save_suggestions`（鎖內重新確認；回傳 `saved`｜`reused`｜`stale`｜`ended`，另有 `SuggestionState`、`SuggestionSave` 兩個結果型別）。**寫入的鎖是一次不改值的條件式 UPDATE（`version = version`，與記事簿抓取相同的做法）**，因為規範不允許依 JSON 內容篩選：錨點與「已有有效建議」的比對在鎖內以程式做。這次 UPDATE 會使 `updated_at`（資料表的 onupdate）前進，不改 `version`、世界狀態、記事簿、最後活動時間與回合列（測試明確排除 `updated_at` 並說明）。多一個 `ended` 結果（存檔在呼叫期間完結），設計文件的十個步驟沒有列。
+- **3.3**：`session_snapshot` 的 `suggestions` 是字串陣列，過期或沒有為空陣列，不帶錨點。
+- **3.4（解讀）**：匯出的是「資料庫裡目前保存的文字」，**不論錨點是否有效**（過期的建議仍存放在資料庫，屬個資，所以仍匯出）；JSON 為字串陣列，`sessions.csv` 為單一欄位以換行連接，公式前綴規則照舊。若要改成「只匯出有效的」，只需改 `export_sessions` 一處。
+- **3.5**：沒有改程式；新增測試證明建議的文字隨帳號抹除與 365 天期限清除消失，且不影響別人的存檔、管理員沒有任何路徑（`tests/test_story_suggestions_storage.py`）。專案裡沒有「玩家自行刪除存檔」的路徑，存檔只經帳號抹除與期限清除消失。
+- **3.6**：`docs/project資料結構文件.md` 已同步（標頭、第 1、2、5.18、7、9、12、14 節與 ERD；用 `python -X utf8 -m tests.support.db_schema sessions` 核對骨架，`sessions` 由 30 欄變 31 欄、全庫 269 欄；第 24 列新增、後面重新編號）；**尚未套用到實際的 `project`**，文件已如實寫明。
+- **守門測試連帶的最小改動（不在原任務內）**：①`docs/路線圖-roadmap.md` 補上 `rpg-story-view`（立案提交時漏列，守門子集的 `test_the_roadmap_lists_every_archived_and_active_change` 本來就紅；已補表格一列、Mermaid 節點與一條邊）；②`docs/資料模型-data-model.md` 補最小的 0023 說明（標頭、ERD 欄位、遷移鏈、一條說明；`test_every_table_and_the_latest_migration_are_described_in_the_data_model_doc` 要求）。其餘設計文件（系統架構、前端結構、RPG.md 等）仍留到 9.2。
 
 ## 4. 後端：建議的提示詞、服務與端點
 

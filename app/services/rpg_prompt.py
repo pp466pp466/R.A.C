@@ -113,6 +113,15 @@ _ACTION_RULE = (
     "（他人的反應、旁人的目擊、追查與代價等），不要替主角否認、改口或放棄這個決定。\n"
 )
 
+# 「直接推進劇情」（rpg-advance-action）：前端以固定文字送出一般行動，由這條平台規則讓模型自然推進。
+# 規則文字是平台常數、不來自玩家；只進回合敘事（第 0 幕、狀態、記事簿與建議的系統指令都沒有），也不放寬任何內容界線。
+# 前端的 `ADVANCE_ACTION`（`game-state.js`）必須與這個常數相等（Node 測試守門）。
+ADVANCE_ACTION = "推進劇情"
+_ADVANCE_RULE = (
+    f"- 若本次行動恰好是「{ADVANCE_ACTION}」，表示玩家沒有特別的指示：請依最近 10 輪的劇情、記事簿與當前世界狀態，讓故事自然地往下推進，"
+    "可以讓世界或其他人物主動行動；不要替主角做出違背其角色卡的重大決定。這不會放寬任何內容界線。\n"
+)
+
 _TRANSMIGRATOR_RULE = """\
 - 主角是穿越者：保留主角的現代知識與思維，讓這份知識與這個世界格格不入的反差，自然地呈現在劇情裡（例如對本地習俗的困惑、\
 不經意脫口而出的現代用語、以現代常識看待事物）。不要因此讓主角擁有超出劇本設定的力量，細節以資料中的主角資料為準。"""
@@ -212,7 +221,7 @@ def build_system(tier: str, language: str, origin: str, ending_due: bool, marker
     `ending_due`（結局回合才加入結局寫法，否則加入「不要結束故事」）、`marker`。"""
     return _common(
         _TURN_ROLE, _TURN_DATA_RULES, tier=tier, language=language, origin=origin, marker=marker,
-        extra=(_ENDING_RULE if ending_due else _NOT_ENDING_RULE,), action_rule=_ACTION_RULE,
+        extra=(_ENDING_RULE if ending_due else _NOT_ENDING_RULE,), action_rule=_ACTION_RULE + _ADVANCE_RULE,
     )
 
 

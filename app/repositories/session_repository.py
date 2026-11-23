@@ -32,6 +32,12 @@
 任何一步失敗整個復原（保留舊內容）。回合前的世界快照（`state_before_json`）由 `start_turn` 寫入，下一輪完成（`complete_turn` 指派輪數）時
 清掉前一輪的快照，所以全存檔最多一個回合有快照。快照與回合內容一樣是玩家文字衍生的個資：不記錄日誌。
 
+**行動建議**（rpg-story-view）：建議存在 `suggestions_json`（`{seq, revision, items}`），錨點（最後一個完成回合的 `seq` 與 `revision`，尚無完成回合的第 0 幕為 0、0）
+等於目前的錨點才有效，所以新回合完成與修訂成功都會讓舊建議自動過期，回合引擎與修訂流程不需要清除它。`suggestion_state` 讀目前的錨點與有效的建議；
+`save_suggestions` 先對存檔那一列做不改值的條件式 UPDATE 取得列鎖（與記事簿的抓取相同，只為了鎖；**不改 `version`、不改世界狀態、不改最後活動時間**），
+在鎖內重新確認存檔進行中、錨點沒變、且沒有已經保存的有效建議，才寫入：並行的兩個請求只有一份被保存，後到者讀到已存的結果（`reused`）。
+不得依 JSON 內容篩選，所以比對在鎖內以程式做，不寫成 SQL 條件。建議是模型依玩家文字衍生的個資：這裡不記錄任何日誌。
+
 **已完結的存檔**：`end_session` 之後不得再開始回合或改動世界狀態；沒有任何方法把狀態改回進行中（不可恢復）。
 玩家自行封存（`is_archived`）與劇情完結是兩件事，`set_archived` 對已完結的存檔也有效。
 
@@ -75,6 +81,12 @@ REVISION_CLAIMED = "claimed"           # 取得修訂權（沒有人在修訂）
 REVISION_TAKEN_OVER = "taken_over"     # 接手了逾時未完成的認領（舊執行者之後的替換與釋放都會失敗）
 REVISION_CONFLICT = "conflict"         # `expected_revision` 與後端不一致（回合已被修訂過）
 REVISION_BUSY = "busy"                 # 同一回合已有未逾時的認領
+
+# `save_suggestions` 的結果
+SUGGESTIONS_SAVED = "saved"            # 寫入了這一組建議
+SUGGESTIONS_REUSED = "reused"          # 錨點相同且已經有有效的建議（並行的另一個請求先寫入）：沒有改動，回傳已存的那一組
+SUGGESTIONS_STALE = "stale"            # 錨點已經改變（呼叫期間有新回合或修訂成功）：沒有寫入
+SUGGESTIONS_ENDED = "ended"            # 存檔已完結：沒有寫入
 
 # 不可修訂的原因（`NotRevisableError.reason`、`RevisionState.reason`）；判斷順序即這裡的順序
 NOT_REVISABLE_ENDED = "ended"              # 存檔已完結（含結局那一輪）
@@ -138,6 +150,38 @@ class NotebookLock:
     text: str
     version: int
     upto_turn: int
+
+
+@dataclass(frozen=True)
+class SuggestionState:
+    """`suggestion_state` 的結果：目前的錨點（最後一個完成回合的 `seq` 與 `revision`；尚無完成回合為 0、0）與錨點相等的有效建議（沒有或已過期為空）。"""
+
+    seq: int
+    revision: int
+    items: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class SuggestionSave:
+    """`save_suggestions` 的結果：`outcome` 為 `SUGGESTIONS_*` 之一；`items` 是寫入的建議（`saved`）、已存的有效建議（`reused`），其餘為空。"""
+
+    outcome: str
+    items: tuple[str, ...]
+
+
+def _stored_suggestion_items(stored: Any) -> list[str]:
+    """保存的建議文字（不管錨點是否有效）：格式不符時視為沒有。匯出用——過期的建議仍是存放在資料庫裡的個資。"""
+    items = stored.get("items") if isinstance(stored, dict) else None
+    return [item for item in items if isinstance(item, str)] if isinstance(items, list) else []
+
+
+def _valid_suggestion_items(stored: Any, seq: int, revision: int) -> tuple[str, ...]:
+    """錨點與 (`seq`, `revision`) 相等才有效；錨點缺漏或型別不符一律視為過期。"""
+    if not isinstance(stored, dict) or stored.get("seq") != seq or stored.get("revision") != revision:
+        return ()
+    if isinstance(stored.get("seq"), bool) or isinstance(stored.get("revision"), bool):
+        return ()
+    return tuple(_stored_suggestion_items(stored))
 
 
 def _exported_protagonist(stored: Any) -> dict[str, Any] | None:
@@ -698,12 +742,43 @@ class SessionRepository(BaseRepository[RpgSession]):
         )
         return list(reversed(list(self._session.scalars(statement))))
 
+    # ---- 行動建議（錨點相等才有效；寫入在鎖內重新確認，不改 version）------------------------------------
+
+    def suggestion_state(self, user_id: int, public_id: str) -> SuggestionState | None:
+        """目前的錨點與有效的建議。不是自己的存檔回傳 `None`（別人的與不存在的相同）。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        seq, revision = self._suggestion_anchor(save.id)
+        return SuggestionState(seq, revision, _valid_suggestion_items(save.suggestions_json, seq, revision))
+
+    def save_suggestions(self, user_id: int, public_id: str, *, seq: int, revision: int, items: Sequence[str]) -> SuggestionSave | None:
+        """保存這一組建議（錨點 `seq`、`revision` 是產生建議時讀到的）。不是自己的存檔回傳 `None`。
+
+        先對自己的存檔做一次不改值的條件式 UPDATE 取得該列的鎖（存檔進行中才成立；不改 `version`、世界狀態與最後活動時間，只為了鎖），
+        鎖內重新判斷：存檔已完結 → `ended`；目前的錨點不等於傳入的 → `stale`（呼叫期間有新回合或修訂成功，不保存）；
+        已經有錨點相同的有效建議 → `reused`（並行的另一個請求先寫入，回傳已存的那一組，不覆蓋）；否則寫入並回傳 `saved`。
+        不改動 `suggestions_json` 以外的任何欄位。"""
+        save = self.get_owned(user_id, public_id)
+        if save is None:
+            return None
+        if self._update_owned(save, RpgSession.status == SESSION_ACTIVE, version=RpgSession.version) != 1:    # 不改任何值：只為了取得列鎖
+            return SuggestionSave(SUGGESTIONS_ENDED, ())
+        if self._suggestion_anchor(save.id) != (seq, revision):
+            return SuggestionSave(SUGGESTIONS_STALE, ())
+        existing = _valid_suggestion_items(save.suggestions_json, seq, revision)
+        if existing:
+            return SuggestionSave(SUGGESTIONS_REUSED, existing)
+        stored = [str(item) for item in items]
+        self._update_owned(save, suggestions_json={"seq": seq, "revision": revision, "items": stored})
+        return SuggestionSave(SUGGESTIONS_SAVED, tuple(stored))
+
     # ---- 匯出（個人資料匯出用）-------------------------------------------------------------
 
     def export_sessions(self, user_id: int, *, page_size: int = 50) -> Iterator[dict[str, Any]]:
         """這位使用者的全部存檔（含已完結與已封存的），由舊到新逐筆產生（以存檔編號為游標分頁）。回合另以 `export_turns` 分頁讀取。
 
-        含劇本標題（取自存檔自己的複本）、狀態、內容模式、主角姓名與角色年齡、主角的角色卡與錨定事實（`protagonist`；遷移之前建立的存檔為空）、所在地點、狀態摘要、各時間、記事簿全文、第 0 幕的狀態與文字（遷移之前的存檔為空）與世界狀態
+        含劇本標題（取自存檔自己的複本）、狀態、內容模式、主角姓名與角色年齡、主角的角色卡與錨定事實（`protagonist`；遷移之前建立的存檔為空）、所在地點、狀態摘要、各時間、記事簿全文、第 0 幕的狀態與文字（遷移之前的存檔為空）、目前保存的行動建議文字（`suggestions`，字串陣列；沒有時為空陣列，不管錨點是否有效，只要還存放在資料庫就匯出，**不含錨點**）與世界狀態
         （`world_state`，只給 JSON 匯出使用）。**不含**劇本複本本身（那是來源劇本作者的內容）、來源版本編號、版本號、第 0 幕的開始時間與其他內部編號。
         """
         after = 0
@@ -722,6 +797,7 @@ class SessionRepository(BaseRepository[RpgSession]):
                     "created_at": save.created_at, "last_active_at": save.last_active_at, "ended_at": save.ended_at,
                     "notebook_text": save.notebook_text, "protagonist": _exported_protagonist(save.protagonist_json),
                     "opening_state": save.opening_state, "opening_text": save.opening_text,
+                    "suggestions": _stored_suggestion_items(save.suggestions_json),
                     "world_state": {
                         "entities": save.entities_json, "goals": save.goals_json, "milestone_progress": save.milestone_progress_json,
                     },
@@ -768,6 +844,11 @@ class SessionRepository(BaseRepository[RpgSession]):
             select(MemoryLog).where(MemoryLog.session_id == session_id, MemoryLog.turn_status == TURN_COMPLETE, MemoryLog.turn_number.is_not(None))
             .order_by(MemoryLog.turn_number.desc()).limit(1).execution_options(populate_existing=True)
         )
+
+    def _suggestion_anchor(self, session_id: int) -> tuple[int, int]:
+        """行動建議的錨點：最後一個完成回合的 (`seq`, `revision`)；尚無完成回合（第 0 幕）為 (0, 0)。"""
+        last = self._last_complete_turn(session_id)
+        return (0, 0) if last is None else (last.seq, last.revision)
 
     def _not_revisable_reason(self, session_id: int, turn: MemoryLog, *, cutoff: datetime, include_claim: bool) -> str | None:
         """回合不能被修訂的原因（依 `NOT_REVISABLE_REASONS` 的順序），可以修訂則回傳 `None`。`include_claim` 為真時，
