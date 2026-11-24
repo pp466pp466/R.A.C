@@ -24,9 +24,9 @@
 
 ## 4. 整合檢查
 
-- [ ] 4.1 跑相關測試與全域守門：`node --test tests/js/story-speech.test.js tests/js/story-reader.test.js tests/js/game-story-session.test.js tests/js/game-story-revision.test.js tests/js/game.test.js`，加 `pytest tests/test_game_pages.py tests/test_game_story_page.py tests/test_legal_pages.py tests/test_design_docs.py tests/test_agents_skill_sync.py`。驗證：全數通過；全套 pytest 留給提交前最後執行一次。
-- [ ] 4.2 瀏覽器實測（使用者親自或 Claude 以腳本輔助，結果記入 README 的驗收紀錄）：①第一次按語音按鈕先開選單，選語音後再按即朗讀、再按停止；②選單列出中文語音並正確標示本機與線上，試聽用所選語音、不讀劇情；③選過語音後重新整理，仍記得選擇；選「自動」後不再開選單；④打字中按下即朗讀整段；⑤翻段、回看、重新生成、編輯、離開頁面時聲音立即停止，且不自動接讀；⑥「你」的行動頁可朗讀，被擋回合的轉場說明不可朗讀；⑦Windows 的 Chrome 與 Edge 各驗一次，記下實際列出的語音與本機或線上標示是否正確，並以線上語音朗讀一段接近 150 字的劇情，確認不會在中途被中斷（會的話調低 `SPEECH_CHUNK_MAX`，見 design 風險一節）；⑧停用 localStorage（或隱私模式）時功能照常；⑨沒有中文語音的環境驗證 `no-voice` 的停用與說明。驗證：項目逐一記錄結果。
-- [ ] 4.3 依 `deck-conflict-watch` 技能檢查是否與 `docs/2.0簡報.md` 及六張圖解衝突（預期沒有：只改前端細節與一段隱私文字）；有衝突只通知使用者，不自行修改。驗證：檢查結果寫入提交說明。
+- [x] 4.1 跑相關測試與全域守門：`node --test tests/js/story-speech.test.js tests/js/story-reader.test.js tests/js/game-story-session.test.js tests/js/game-story-revision.test.js tests/js/game.test.js`，加 `pytest tests/test_game_pages.py tests/test_game_story_page.py tests/test_legal_pages.py tests/test_design_docs.py tests/test_agents_skill_sync.py`。驗證：全數通過；全套 pytest 留給提交前最後執行一次。
+- [x] 4.2 瀏覽器實測（使用者親自或 Claude 以腳本輔助，結果記入 README 的驗收紀錄）：①第一次按語音按鈕先開選單，選語音後再按即朗讀、再按停止；②選單列出中文語音並正確標示本機與線上，試聽用所選語音、不讀劇情；③選過語音後重新整理，仍記得選擇；選「自動」後不再開選單；④打字中按下即朗讀整段；⑤翻段、回看、重新生成、編輯、離開頁面時聲音立即停止，且不自動接讀；⑥「你」的行動頁可朗讀，被擋回合的轉場說明不可朗讀；⑦Windows 的 Chrome 與 Edge 各驗一次，記下實際列出的語音與本機或線上標示是否正確，並以線上語音朗讀一段接近 150 字的劇情，確認不會在中途被中斷（會的話調低 `SPEECH_CHUNK_MAX`，見 design 風險一節）；⑧停用 localStorage（或隱私模式）時功能照常；⑨沒有中文語音的環境驗證 `no-voice` 的停用與說明。驗證：項目逐一記錄結果。
+- [x] 4.3 依 `deck-conflict-watch` 技能檢查是否與 `docs/2.0簡報.md` 及六張圖解衝突（預期沒有：只改前端細節與一段隱私文字）；有衝突只通知使用者，不自行修改。驗證：檢查結果寫入提交說明。
 
 ## 批 1 完成註記（2026-11-24）
 
@@ -63,6 +63,14 @@
 - **驗證**：`pytest tests/test_legal_pages.py tests/test_auth_pages.py` 133 通過；`tests/test_design_docs.py tests/test_readme.py tests/test_legal_pages.py tests/test_agents_skill_sync.py` 342 通過；`openspec validate rpg-story-tts --strict` 通過。本批沒有改 JavaScript，Node 沿用批 3 的 1957 通過。
 - **簡報衝突**：檢查過，`docs/2.0簡報.md` 與圖解沒有寫隱私頁的段落或朗讀；條款版本沒變，沒有衝突。
 - **未驗證**：全套 pytest（最後一批）；真實瀏覽器（4.2）。
+
+## 批 5 與封存紀錄（2026-11-24）
+
+- **4.1 整合測試**：批 5 提交 `b63f4e7` 時 pytest 全套約 15,100 項、0 失敗、5 略過（環境因素）、Node 全套 1,963 通過；封存當天（HEAD `cbfb1a1` 之後）另在 `admin-default-landing` 的批 3 跑過一次全套：**pytest 15,209 通過、5 略過、0 失敗**（含真實 SQL Server）、**Node 1,963 通過、0 失敗**，涵蓋本 change 的全部測試。變異驗證在批 1（61 個變異殺死 60，剩 1 個等價變異）。
+- **4.2 瀏覽器實測**：Claude 以腳本輔助的部分：真實 Chrome（Windows、無頭、真的語音引擎、音量固定為 0）對自有實例，1280 與 360 寬各 **48／48 通過**，結果與未驗證項目記在 README「驗收紀錄（rpg-story-tts，批 1 至 5）」。**使用者 2026-11-24 回報「已經驗收了」**（沒有逐項說明）。**Claude 沒有驗證**的項目維持列為未驗證：Edge（無頭 Edge 在這台機器啟動即關閉）、**線上語音**（這台機器的 Chrome 只有本機語音，接近 150 字的線上語音是否在約 15 秒被中斷沒有實測；若實測仍被中斷，調低 `SPEECH_CHUNK_MAX`）、真實手機的觸控與喇叭聲音。
+- **4.3 簡報**：每一批都依 `deck-conflict-watch` 檢查過，原本沒有衝突；2026-11-24 使用者要求把劇情朗讀寫入 2.0 簡報與 5.0 簡報（`f3898af`，5.0 為一次性例外）。封存當下 2.0 簡報寫「進行中、已部署待驗收、尚未封存」的幾處已過時，**只通知使用者、沒有修改**（見 HANDOFF）。
+- **部署**：已部署到展示環境（`b63f4e7`；之後 `cbfb1a1` 已包含本 change 的程式，沒有遷移）。
+- **封存同步**：delta spec 是全新的 capability `rpg-story-tts`（含 `## Purpose`、ADDED 要求），封存時建立主規格。
 
 ## Workflow follow-up
 
