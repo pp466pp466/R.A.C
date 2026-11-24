@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.models import Base, User
-from app.security.redirects import DEFAULT_AFTER_LOGIN
+from app.security.redirects import ADMIN_AFTER_LOGIN, DEFAULT_AFTER_LOGIN
 from app.services.age_policy import DEFAULT_AGE_POLICY, AgePolicy
 from app.services.legal import CURRENT_TERMS_VERSION
 from tests.architecture.test_frontend_rules import own_asset_violations
@@ -291,16 +291,19 @@ def test_the_google_button_stays_clickable_when_nothing_is_ticked_and_only_the_f
 
 def test_the_default_destinations_in_the_auth_scripts_are_the_servers_default_landing_page_not_the_chat():
     """前端的備援頁面曾停在改版之前的 `/cs`（客服）：`DEFAULT_AFTER_LOGIN` 改成 `/game` 時只改了伺服器。伺服器平常一定會給 `next`，
-    但申訴頁收到 404（管理員剛解除鎖定）時會導向「預設頁面」，那條路是走得到的。三個備援都要與伺服器的常數一致。"""
+    但申訴頁收到 404（管理員剛解除鎖定）時會導向「預設頁面」，那條路是走得到的。三個備援都要與伺服器的常數一致。
+    預設頁面依角色各一個常數（admin-default-landing）：`auth-flows.js` 與 `age.js` 服務玩家（管理員的年齡補填在 /account，不經 `age.js`），
+    備援是 `DEFAULT_AFTER_LOGIN`；`login-password.js` 只有管理員會走到，備援是 `ADMIN_AFTER_LOGIN`。"""
     from app.config import PROJECT_ROOT
 
     js = PROJECT_ROOT / "app" / "static" / "js" / "auth"
     flows = (js / "auth-flows.js").read_text(encoding="utf-8")
     assert f"var DEFAULT_PAGE = '{DEFAULT_AFTER_LOGIN}';" in flows
-    password = (js / "login-password.js").read_text(encoding="utf-8")
-    assert f"Auth.safeDestination(response.data && response.data.next, '{DEFAULT_AFTER_LOGIN}')" in password
     age = (js / "age.js").read_text(encoding="utf-8")
     assert f"Auth.safeDestination(state.next, '{DEFAULT_AFTER_LOGIN}')" in age
+    password = (js / "login-password.js").read_text(encoding="utf-8")
+    assert f"Auth.safeDestination(response.data && response.data.next, '{ADMIN_AFTER_LOGIN}')" in password
+    assert f"'{DEFAULT_AFTER_LOGIN}'" not in password, "密碼驗證頁只有管理員會走到，備援不得是玩家的預設頁面"
     for name, source in (("auth-flows.js", flows), ("login-password.js", password), ("age.js", age)):
         assert "'/cs'" not in source, f"{name} 還有寫死的 /cs 備援"
 

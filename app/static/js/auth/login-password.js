@@ -25,7 +25,7 @@
         form.values.password = '';                           // 送出的當下立即清空，不論結果
         return form.run(function () {
           return axios.post('/api/auth/admin-password', { password: password }).then(function (response) {
-            window.location.assign(Auth.safeDestination(response.data && response.data.next, '/game'));
+            window.location.assign(Auth.safeDestination(response.data && response.data.next, '/admin'));   // 管理員的預設頁面（伺服器的 ADMIN_AFTER_LOGIN）
           });
         }, {
           onError: function (info) {

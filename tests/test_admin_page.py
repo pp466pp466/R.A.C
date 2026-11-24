@@ -93,6 +93,25 @@ def test_a_post_to_the_page_is_not_allowed(app):
     assert client_for(app, "admin").post("/admin", json={}).status_code == 405
 
 
+# ---- 頂列的導覽連結（admin-default-landing）-----------------------------------------------------------------
+
+def _topbar(html: str) -> str:
+    return html.split('<header class="admin-topbar">', 1)[1].split("</header>", 1)[0]
+
+
+def test_the_top_bar_links_to_the_adventure_the_chat_and_the_account_in_that_order(app):
+    """管理員登入後預設落在 /admin，頂列要有回到玩家頁面的入口：「冒險」(/game) 排在「客服」之前，再來是「帳號」。"""
+    topbar = _topbar(client_for(app, "admin").get("/admin").get_data(as_text=True))
+    links = re.findall(r'<a class="admin-topbar__link" href="([^"]*)">([^<]*)</a>', topbar)
+    assert links == [("/game", "冒險"), ("/cs", "客服"), ("/account", "帳號")]
+
+
+def test_the_top_bar_links_are_plain_pages_with_no_bootstrap_javascript_and_no_raw_markup(app):
+    topbar = _topbar(client_for(app, "admin").get("/admin").get_data(as_text=True))
+    assert "data-bs-" not in topbar and "v-html" not in topbar and "onclick" not in topbar
+    assert len(re.findall(r"<a ", topbar)) == 3                                  # 沒有別的連結夾在裡面
+
+
 # ---- 被鎖定的帳號與申訴（google-first-login）-------------------------------------------------------------
 
 def _frontend(name: str) -> str:
