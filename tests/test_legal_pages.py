@@ -490,3 +490,20 @@ def test_the_new_policy_text_makes_no_promise_of_future_features_and_keeps_the_d
         for forbidden in ("將提供", "後續版本提供", "將於", "保證不會被留存", "保證不會被審閱", "保證匿名"):
             assert forbidden not in html, (path, forbidden)
         assert "草稿" in html
+
+
+def test_the_privacy_policy_explains_that_story_reading_uses_browser_voices_and_what_is_remembered(client):
+    """rpg-story-tts 3.1：朗讀使用瀏覽器內建語音；線上語音可能把文字送到瀏覽器廠商、不經過本平台、也不適用 RPG 模型服務；只在瀏覽器記住所選的語音名稱。"""
+    html = client.get("/privacy").get_data(as_text=True)
+    section = html.split("<h2>4.", 1)[1].split("<h2>5.", 1)[0]
+    paragraph = section.split("劇情朗讀不經過上述服務", 1)[1].split("</p>", 1)[0]
+    # 重點一：線上語音可能把文字送到瀏覽器廠商，不經過本平台、也不適用 RPG 模型服務
+    for needle in ("瀏覽器或作業系統內建的語音", "不會傳送到本平台的伺服器", "不適用上述 RPG 模型服務", "線上", "瀏覽器廠商", "本機"):
+        assert needle in paragraph, needle
+    # 重點二：只在瀏覽器記住語音名稱，不記住任何朗讀的內容
+    for needle in ("只在您的瀏覽器裡記住您選的語音名稱", "不記住任何朗讀的內容", "不會把這個選擇傳送到我們的伺服器"):
+        assert needle in paragraph, needle
+    for forbidden in ("將", "即將", "日後", "未來", "之後會", "保證"):
+        assert forbidden not in paragraph, forbidden                                               # 只描述已實作的行為，不承諾任何功能
+    assert CURRENT_TERMS_VERSION == "2026-11-24-draft-11"                                           # 條款版本不因這一段而改變（design Open Questions）
+

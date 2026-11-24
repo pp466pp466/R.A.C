@@ -19,8 +19,8 @@
 
 ## 3. 隱私權政策與文件
 
-- [ ] 3.1 `templates/legal/privacy.html` 在 RPG 模型服務一節之後補一段：朗讀使用瀏覽器內建語音、部分瀏覽器的線上語音可能把文字送到瀏覽器廠商、不經過本平台、也不適用 RPG 模型服務的說明；本平台只在你的瀏覽器記住你選的語音名稱，不記住任何朗讀內容；不使用「即將」「日後」等承諾字眼。`tests/test_legal_pages.py` 新增守門測試（兩個重點各一個斷言），並通過既有的「不承諾未實作功能」測試。驗證：`pytest tests/test_legal_pages.py` 通過；`CURRENT_TERMS_VERSION` 不變（design 的 Open Questions）。
-- [ ] 3.2 更新 `docs/前端結構-frontend.md`：載入順序（頁首的 Mermaid 與第 3e-2 節的順序）、`story-speech.js` 的說明（含語音選單與 localStorage 鍵 `rpg.speech.voice`）與測試清單、頁首的「最後更新」與「對應 change」；依 `docs/README.md` 的對照表檢查是否有其他文件受影響。驗證：`pytest tests/test_design_docs.py` 通過。
+- [x] 3.1 `templates/legal/privacy.html` 在 RPG 模型服務一節之後補一段：朗讀使用瀏覽器內建語音、部分瀏覽器的線上語音可能把文字送到瀏覽器廠商、不經過本平台、也不適用 RPG 模型服務的說明；本平台只在你的瀏覽器記住你選的語音名稱，不記住任何朗讀內容；不使用「即將」「日後」等承諾字眼。`tests/test_legal_pages.py` 新增守門測試（兩個重點各一個斷言），並通過既有的「不承諾未實作功能」測試。驗證：`pytest tests/test_legal_pages.py` 通過；`CURRENT_TERMS_VERSION` 不變（design 的 Open Questions）。
+- [x] 3.2 更新 `docs/前端結構-frontend.md`：載入順序（頁首的 Mermaid 與第 3e-2 節的順序）、`story-speech.js` 的說明（含語音選單與 localStorage 鍵 `rpg.speech.voice`）與測試清單、頁首的「最後更新」與「對應 change」；依 `docs/README.md` 的對照表檢查是否有其他文件受影響。驗證：`pytest tests/test_design_docs.py` 通過。
 
 ## 4. 整合檢查
 
@@ -55,6 +55,14 @@
 - **測試**：Node 全套 **1957 通過、0 失敗**（新增：焦點 3 項、`speakDisabled`／`speakHint`／`speechHint`／兩個樣板包裝 3 項）；`tests/test_game_story_page.py` 新增 6 項（按鈕在最左、朗讀鈕的屬性與兩個 SVG、選單按鈕、選單 Modal 的結構與標籤與空狀態與不共用 `name`、沒有 `v-html`／`data-bs-`／外部資源、樣式只用主題變數且沒有動畫）；pytest 守門子集（含 `test_assets_manifest.py`）加 game 頁面測試 **1232 通過、2 略過（既有）、0 失敗**；`openspec validate rpg-story-tts --strict` 通過。
 - **簡報衝突**：檢查過，簡報沒有寫遊戲畫面的按鈕或朗讀，沒有衝突。
 - **未驗證**：真實瀏覽器（`speechSynthesis` 的語音清單、`localService` 實際值、焦點、Esc、手機版面不溢出——屬 4.2）；隱私權政策與前端結構文件（批 4 的 3.1、3.2）；全套 pytest（最後一批）；變異驗證（最後一批）。
+
+## 批 4 完成註記（2026-11-24；只跑相關測試加全域守門子集，**未跑全套 pytest**；批 3 已提交為 `83985ba`）
+
+- **3.1**：`app/templates/legal/privacy.html` 第 4 節（RPG 模型服務）的最後加一段「劇情朗讀不經過上述服務」：使用瀏覽器或作業系統內建語音、要朗讀的文字不傳送到本平台的伺服器也不適用 RPG 模型服務、部分瀏覽器的「線上」語音可能由瀏覽器廠商處理（語音選單標示「線上」或「本機」）、本平台只在瀏覽器記住所選語音名稱（或「自動」）而不記住任何朗讀的內容、也不傳到伺服器；沒有「將」、「日後」、「未來」等承諾字眼。**沒有新增 `<h2>`**：新增一節會讓第 5 至 8 節重新編號，`test_legal_pages.py` 有四個測試依 `<h2>6. 您的權利</h2>` 切段；這一段放在第 4 節最後，開頭以粗體點明它不屬於上述服務。`CURRENT_TERMS_VERSION` 不變（`draft-11`；design 的 Open Questions）。`tests/test_legal_pages.py` 新增 1 項：兩個重點（線上語音可能送到瀏覽器廠商且不經過本平台與不適用 RPG 模型服務；只在瀏覽器記住語音名稱、不記住內容）各有斷言，另外斷言段落沒有承諾字眼與版本不變，並通過既有的「不承諾未實作功能」測試。
+- **3.2**：`docs/前端結構-frontend.md`：頁首新增 2026-11-24 的注意（`rpg-story-tts` 的前端變化、沒有後端異動、`game.js` 是唯一碰 `localStorage` 的遊戲腳本）、第 1 節的載入順序加 `story-speech.js`（在 `story-reader.js` 之後、`game-session.js` 之前）、新增第 3e-3 節「劇情朗讀」（Mermaid 流程圖、`story-speech.js` 的狀態機與代號、語音選擇與儲存鍵、`game-session.js` 的兩條停止路徑、`game.js` 的注入與焦點、版面與選項單選鈕不共用 `name` 的理由、隱私、測試清單、已知限制）。依 `docs/README.md` 的對照表檢查其他設計文件：後端、端點、資料表與設定都沒有變，不需要更新。
+- **驗證**：`pytest tests/test_legal_pages.py tests/test_auth_pages.py` 133 通過；`tests/test_design_docs.py tests/test_readme.py tests/test_legal_pages.py tests/test_agents_skill_sync.py` 342 通過；`openspec validate rpg-story-tts --strict` 通過。本批沒有改 JavaScript，Node 沿用批 3 的 1957 通過。
+- **簡報衝突**：檢查過，`docs/2.0簡報.md` 與圖解沒有寫隱私頁的段落或朗讀；條款版本沒變，沒有衝突。
+- **未驗證**：全套 pytest（最後一批）；真實瀏覽器（4.2）。
 
 ## Workflow follow-up
 

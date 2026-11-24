@@ -7,6 +7,7 @@
 > 注意（2026-11-20）：本文件已納入 change `rpg-script-publishing` 第 ⑥ 批的前端變化（`/scripts` 的審核結果與下架畫面、新增 `script-status.js`）與第 ⑦ 批的載入順序（`/game` 新增 `mode-prompt.js`、`catalog-state.js`；新頁面 `/game/script/<版本>` 載入 `script-detail.js`）；入口目錄的搜尋與篩選、共用的安全模式詢問 Modal 與詳情頁的模組關係（3d）、`/admin` 的「劇本審核」分頁（3a）已由 8.6 補齊。
 > 注意（2026-11-22）：本文件已納入 change `rpg-script-reports` 第 ⑥ 批的前端變化：劇本詳情頁的檢舉（新增 `script-report.js`、`game-api.js` 的 `reportScript`、詳情頁的檢舉 Modal）、帳號頁的「匿名保留我已發佈的劇本」開關與刪除視窗的核取方塊（新增 `account-script-retention.js`）、後台劇本審核的「被檢舉」檢視與檢舉面板（`admin.js`、`admin-format.js`）。
 > 注意（2026-11-23）：本文件已納入 change `rpg-story-view` 的前端變化（遊戲主畫面改為劇情卡：新增 `story-pages.js`、`story-reader.js`，`game-state.js`、`game-api.js`、`game-session.js`、`game-revision.js`、`game.js`、`session.html`、`game.css` 都有擴充；歷史改為 Modal；**沒有新的頁面**），見第 3e-2 節。
+> 注意（2026-11-24）：本文件已納入 change `rpg-story-tts` 的前端變化（遊戲主畫面的劇情卡可以朗讀：新增純函式狀態機 `story-speech.js`，`game-session.js`、`game-revision.js`、`game.js`、`game-labels.js`、`session.html`、`game.css` 配合；**沒有後端 API、資料表與 migration 異動**，朗讀完全在瀏覽器內，用瀏覽器內建的 `speechSynthesis`；`game.js` 是遊戲腳本裡唯一碰 `localStorage` 的地方，只存玩家選的語音），見第 1 節的載入順序與第 3e-3 節。
 
 > 注意（2026-11-23）：本文件已納入 change `onboarding-polish` 的前端變化（`/age` 改為三步精靈：新增純函式模組 `auth/onboarding.js`〔步驟、進度、可前進條件、錯誤回到對應步驟、一次送出〕與 Vue 接線 `age.js`、使用守則 Modal、取向步驟；登入頁加「全部同意」總開關；**沒有後端改動**，見 3a）。
 
@@ -30,7 +31,7 @@ flowchart TD
     Page -->|"/game/script/版本"| Sdt["auth-common.js → game-labels.js → mode-prompt.js → script-report.js → game-api.js → script-detail.js（另載入 game.css）"]
     Page -->|"/game/start/版本"| Wzd["auth-common.js → game-labels.js → wizard-state.js → game-api.js → wizard.js"]
     Page -->|"/wallet"| Wlt["auth-common.js → game-labels.js → game-state.js → wallet-checkin.js → wallet-demo-packages.js → wallet-hub-state.js → wallet-hub.js（另載入 wallet.css）"]
-    Page -->|"/game/存檔"| Gsv["auth-common.js → game-labels.js → sse-parser.js → turn-stream.js → game-state.js → game-store.js → game-sync.js → game-api.js → wallet-checkin.js → game-wallet.js → game-notebook.js → game-revision.js → story-pages.js → story-reader.js → game-session.js → game.js（另載入 game.css）"]
+    Page -->|"/game/存檔"| Gsv["auth-common.js → game-labels.js → sse-parser.js → turn-stream.js → game-state.js → game-store.js → game-sync.js → game-api.js → wallet-checkin.js → game-wallet.js → game-notebook.js → game-revision.js → story-pages.js → story-reader.js → story-speech.js → game-session.js → game.js（另載入 game.css）"]
 ```
 
 - 第三方資產（Vue、Bootstrap CSS、axios、字型）全部在 `static/vendor`、`static/fonts`，**不使用 CDN**；字型為 Noto Sans TC（108 個 `unicode-range` 切片的 woff2）。
@@ -324,6 +325,31 @@ flowchart LR
 - **可及性**：建議圖示是內嵌 SVG（`aria-hidden`）加按鈕的 `aria-label`、`aria-expanded`、`aria-controls`；劇情卡打字中的字 `aria-hidden`，打字結束才把完整文字提供給輔助科技（打字中不重複朗讀）；流星容器對輔助科技隱藏。
 - **測試**：`tests/js/story-pages.test.js`、`story-pages-edges.test.js`（含五個性質測試：串接還原、段長上限、任何前綴的釋出結果是完整結果的前綴、任意切塊含切在代理對中間、無狀態）、`story-reader.test.js`、`story-reader-edges.test.js`（假時鐘加真正的 `UI.TypewriterBuffer`，另有手動控制的打字機）、`game-state-story.test.js`、`game-story-session.test.js`、`game-story-revision.test.js`、`game-store-suggestions.test.js`；`tests/test_game_story_page.py`（樣板的標籤、屬性與沒有 `v-html`／`data-bs-*`）、`tests/test_game_pages.py`（載入順序與寫入呼叫）。**8.1 變異驗證**（`story-pages`、`story-reader`、`rpg_suggest_prompt.clean_items`、`SuggestionService` 與錨點判斷）的結果見 `openspec/changes/archive/2026-11-24-rpg-story-view/tasks.md` 的 8.1 註記。
 - **已知限制**：①假模型的劇情只有 1 至 3 句，多段翻頁（3 句一段、回看第二與第三段）只有單元測試，沒有實機；②真實模型的分段品質與第一段延遲、動態流星的觀感與手機實機的觸控手感，由使用者在展示時確認；③建議逾時的頁面初始狀態鍵 `suggest_timeout_ms` 尚未由會期頁提供，前端暫用 35 秒常數；④歷史 Modal 與時間軸共用同一份資料層，只渲染最近 60 項，其餘「載入更早的內容」。
+
+## 3e-3. 劇情朗讀（`/game/<存檔識別碼>`，rpg-story-tts）
+
+劇情卡的當前段可以朗讀：用瀏覽器或作業系統內建的語音（`speechSynthesis`），**不引入語音庫、不經過本平台的伺服器、不改變任何後端契約**。朗讀只讀劇情卡的狀態，閱讀器、串流、扣幣與同步完全不知道它的存在（單向耦合）。
+
+```mermaid
+flowchart LR
+    Gm["game.js<br/>注入 speechSynthesis 與 SpeechSynthesisUtterance<br/>speechStorage 只存所選語音 pagehide 銷毀"] -->|"deps"| Run["game-session.js<br/>speakCurrent stopSpeech openVoiceMenu<br/>chooseVoice previewVoice speakDisabled"]
+    Run -->|"card.fullText 當前段"| Sp["story-speech.js<br/>createStorySpeech 狀態機<br/>代號 作廢過期事件 語音清單 玩家的選擇"]
+    Sp -->|"paginate 超過 150 字才切段"| Pg["story-pages.js"]
+    Sp -->|"speak cancel getVoices"| Syn["瀏覽器 speechSynthesis"]
+    Sp -->|"只讀寫 rpg.speech.voice"| Ls["localStorage<br/>只有語音名稱 沒有任何朗讀的文字"]
+    Rd["story-reader.js onChange<br/>頁面身分 key index fullText"] -->|"改變就停止"| Run
+    Rv["game-revision.js start<br/>host.stopSpeech"] -->|"修訂開始就停止"| Run
+    Run --> Tpl["session.html<br/>語音按鈕 選單按鈕 語音選單 Modal"]
+```
+
+- **`story-speech.js`（UMD 狀態機，不碰 `window`、`document`、`localStorage`、`console`）**：`createStorySpeech({ synth, Utterance, storage, lang, onChange })` 回傳 `speak`、`stop`、`toggle`、`preview`、`choose`、`destroy`、`state`。狀態 `{ availability, speaking, voices, choice, selectedKey }`：`availability` 是 `unsupported`（沒有 `synth` 或 `Utterance`）、`no-voice`（語音清單已載入但沒有中文語音）、`ready`（清單為空也視為 `ready`，Chrome 的清單常延後載入，`voiceschanged` 時重新評估）。**自己維護 `speaking`**：每次朗讀產生遞增代號，只有目前代號的 `end` 與 `error` 能把它設回假，`stop()` 先作廢代號再 `cancel()`——各瀏覽器對 `cancel()` 之後的事件並不一致，不能依賴它們。超過 `SPEECH_CHUNK_MAX`（150 字，與劇情段上限相同）的文字（玩家行動頁可到 1000 字）以 `paginate` 依句界切成數段，排進同一個代號。
+- **語音選擇**：`voices` 只含中文語音（排序＝語言層級 `zh-TW`、`zh-Hant*`、其他 `zh*`，再本機優先，再名稱）；`choice` 三態 `none`（從未選過）、`auto`、`voice`；**只存一個鍵 `rpg.speech.voice`**，值是 `{"mode":"auto"}` 或 `{"mode":"voice","voiceURI":"…","name":"…"}`，不存任何朗讀的文字；讀到壞值視為 `none`、寫入失敗仍以記憶體中的選擇為準；比對先 `voiceURI`、再名稱加語言，找不到就自動挑選且不改寫儲存。第一次按語音按鈕且 `choice` 為 `none` 時 `toggle` 回 `'needs-choice'`，由 `game-session.js` 開語音選單而不是朗讀。
+- **`game-session.js`**：`speech`（朗讀器狀態）、`voiceMenuOpen`（與 `game.js` 的 `modal.voice` 是同一個 ref）、`speakCurrent()`（有說明行或沒有內容時不動作）、`stopSpeech()`、`openVoiceMenu()`、`closeVoiceMenu()`、`chooseVoice(selection)`、`chooseAutoVoice()`、`chooseVoiceByKey(key)`、`previewVoice(key)`、`speakDisabled`、`speakHint`（固定說明在 `game-labels.js` 的 `speechHint`）。**停止有兩條路徑，缺一不可**：①身分路徑——閱讀器每次變化都比較 `key:index:fullText`，不同就停止（翻段、回看、換輪、丟棄、載入與還原）；②明確路徑——`runTurn`（送出行動、推進劇情、重送，在重複點擊的防護之後，所以被拒絕的點擊不停止）、`abandonInflight`、`game-revision.js` 的 `start()`（修訂開始時劇情卡內容還沒改，只靠身分比較會漏）。`dispose()` 銷毀朗讀器。不自動翻頁、不自動接讀。
+- **`game.js`**：注入 `window.speechSynthesis` 與 `window.SpeechSynthesisUtterance`（存取丟例外視為不存在）與 `speechStorage`（`localStorage` 的 `getItem`／`setItem`，各包 try/catch，失敗退回預設值；**這是整個遊戲腳本目錄唯一出現 `localStorage` 的地方**，`tests/test_game_pages.py` 守住）；`voiceMenuButton` 與 `voiceList` 兩個元素參照加一個監看語音選單開關的 watch：開啟時焦點落在目前選中的選項（沒有選中的落在第一個「自動」），關閉後還給選單按鈕。
+- **版面（`session.html`、`game.css`）**：`gm-card__nav` 最左邊的語音按鈕（播放與停止兩個內嵌 SVG、`aria-pressed`、`aria-label`、停用時 `title` 說明原因）與較小的選單按鈕（`aria-haspopup="dialog"`，只在沒有中文語音時停用）；瀏覽器不支援朗讀時整組不顯示。語音選單是最後一個 `ui-modal`（`VOICE_SELECT`）：說明、`role="radiogroup"`、「自動」加各中文語音（名稱、語言、「本機」或「線上」、「試聽」）、沒有中文語音時的空狀態；**選項的單選鈕不共用 `name`**（同名的原生單選鈕按方向鍵就會選取，在「選取即關閉」下一碰就關），模板只用 `chooseAutoVoice()` 與 `chooseVoiceByKey(key)`。樣式全用主題變數、沒有動畫。
+- **隱私**：朗讀的文字不傳送到本平台；線上語音可能由瀏覽器廠商處理，語音選單與 `/privacy` 都說明；本平台只在瀏覽器記住所選語音名稱，不記住任何朗讀的內容（`/privacy` 第 4 節的最後一段）。
+- **測試**：`tests/js/story-speech.test.js`（狀態機、語音清單、選擇、試聽、切段、`destroy`）、`game-story-session.test.js` 與 `game-story-revision.test.js` 的朗讀情境（兩條停止路徑、第一次先開選單、不支援與 `no-voice`、離開頁面銷毀）、`game.test.js`（注入、`pagehide`、存取被擋、焦點）、`tests/js/support/fake-speech.js`（假的語音合成與儲存）；`tests/test_game_story_page.py`（按鈕與選單的結構與可及性）、`tests/test_game_pages.py`（載入順序與儲存契約）、`tests/test_legal_pages.py`（隱私頁的說明）。
+- **已知限制**：①語音清單與 `localService` 的實際值依瀏覽器與作業系統而異，只有假的語音合成測過，真實語音由瀏覽器實測確認；②部分線上語音可能在約 15 秒後中斷，劇情段已限制在 150 字以內，若實測仍中斷，調低 `SPEECH_CHUNK_MAX`；③不做連續朗讀、語速與音量、朗讀時高亮目前的字、歷史 Modal 與客服的朗讀、跨裝置同步所選語音。
 
 ## 3f. 錢包頁（`/wallet`，wallet-hub）
 
