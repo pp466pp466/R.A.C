@@ -15,11 +15,11 @@
 
 ## 3. 整合檢查
 
-- [ ] 3.1 變異驗證（在 scratchpad 的專案副本上做，設 `--test-timeout` 與行程逾時，專案檔案雜湊前後相同）：拿掉 `is_active_admin` 判斷（改成永遠 `DEFAULT_AFTER_LOGIN`）、拿掉「等於 `/game` 視為沒有指定」、把 `ADMIN_AFTER_LOGIN` 改成 `/game`、對玩家也回 `/admin`、把 `is_active_admin` 換成 `role == "admin"`、拿掉頂列的「冒險」連結、把 `login-password.js` 備援改回 `/game`，每個變異至少一個測試失敗。驗證：存活的變異做差分判斷（等價或補測試），結果寫入任務完成註記。
-- [ ] 3.2 全套測試（本 change 動了 `app/` 後端與登入導向）：背景執行 pytest 全套（輸出存檔、不接 tail）與 `node --test tests/js/*.test.js`。驗證：0 失敗；略過的項目與變更前相同。
-- [ ] 3.3 實機驗證（自有實例，全新資料庫、假的 Google 供應商、`127.0.0.1`）：管理員走完 Google 與密碼兩步驗證落在 `/admin`；已登入的管理員打開 `/` 與 `/login` 導向 `/admin`；管理員被擋在 `/game/<存檔>` 後登入回到該存檔；玩家登入落在 `/game`、打開 `/admin` 得 404；`/admin` 頂列「冒險」開啟 `/game`；管理員直接開 `/cs` 不被導走。驗證：逐項記錄結果於 README 的驗收紀錄。
-- [ ] 3.4 依 `deck-conflict-watch` 技能檢查與 `docs/2.0簡報.md`、六張圖解的衝突（預期有：「網站入口」章節與登入圖、入口圖的產生器寫「否則 `/game`」「`DEFAULT_AFTER_LOGIN`＝`/game`」）；**只通知，不自行修改簡報、圖解、PDF、pptx**，由使用者決定。驗證：檢查結果寫入提交說明與回覆。
-- [ ] 3.5 依 `docs/README.md` 的對照表複查所有受影響的設計文件（`docs/路線圖-roadmap.md` 加本 change 的狀態與日期、各文件標頭的「最後更新」與「對應 change」），並讓 `tests/test_design_docs.py` 通過。驗證：`pytest tests/test_design_docs.py tests/test_readme.py` 通過。
+- [x] 3.1 變異驗證（在 scratchpad 的專案副本上做，設 `--test-timeout` 與行程逾時，專案檔案雜湊前後相同）：拿掉 `is_active_admin` 判斷（改成永遠 `DEFAULT_AFTER_LOGIN`）、拿掉「等於 `/game` 視為沒有指定」、把 `ADMIN_AFTER_LOGIN` 改成 `/game`、對玩家也回 `/admin`、把 `is_active_admin` 換成 `role == "admin"`、拿掉頂列的「冒險」連結、把 `login-password.js` 備援改回 `/game`，每個變異至少一個測試失敗。驗證：存活的變異做差分判斷（等價或補測試），結果寫入任務完成註記。
+- [x] 3.2 全套測試（本 change 動了 `app/` 後端與登入導向）：背景執行 pytest 全套（輸出存檔、不接 tail）與 `node --test tests/js/*.test.js`。驗證：0 失敗；略過的項目與變更前相同。
+- [x] 3.3 實機驗證（自有實例，全新資料庫、假的 Google 供應商、`127.0.0.1`）：管理員走完 Google 與密碼兩步驗證落在 `/admin`；已登入的管理員打開 `/` 與 `/login` 導向 `/admin`；管理員被擋在 `/game/<存檔>` 後登入回到該存檔；玩家登入落在 `/game`、打開 `/admin` 得 404；`/admin` 頂列「冒險」開啟 `/game`；管理員直接開 `/cs` 不被導走。驗證：逐項記錄結果於 README 的驗收紀錄。
+- [x] 3.4 依 `deck-conflict-watch` 技能檢查與 `docs/2.0簡報.md`、六張圖解的衝突（預期有：「網站入口」章節與登入圖、入口圖的產生器寫「否則 `/game`」「`DEFAULT_AFTER_LOGIN`＝`/game`」）；**只通知，不自行修改簡報、圖解、PDF、pptx**，由使用者決定。驗證：檢查結果寫入提交說明與回覆。
+- [x] 3.5 依 `docs/README.md` 的對照表複查所有受影響的設計文件（`docs/路線圖-roadmap.md` 加本 change 的狀態與日期、各文件標頭的「最後更新」與「對應 change」），並讓 `tests/test_design_docs.py` 通過。驗證：`pytest tests/test_design_docs.py tests/test_readme.py` 通過。
 
 ## 批 1 完成註記（2026-11-24；只跑相關測試加全域守門子集，**未跑全套 pytest**）
 
@@ -37,6 +37,17 @@
 - **驗證**：相關測試（test_auth_pages、test_admin_page、test_admin_password_page、test_age_page、test_appeal_page）加全域守門子集（tests/architecture、test_service_errors、test_design_docs、test_readme、test_restricted_session、test_legal_pages、test_agents_skill_sync）合計 1,260 通過、2 略過（`test_no_legacy_tier_checks` 的設計性略過）、0 失敗；Node 的 auth-common、auth-flows、onboarding、admin、admin-format、admin-delete-user 共 172 通過；`openspec validate admin-default-landing --strict` 通過。**任務 2.1 的反向驗證**（在原檔上暫時改動、結束後以雜湊確認已還原）：備援改回 `'/game'` → `test_auth_pages.py` 1 失敗；拿掉頂列的「冒險」連結 → `test_admin_page.py` 1 失敗。這是批 3 的變異驗證前的快速檢查，批 3 仍要在副本上做完整的七個變異。
 - **文件**：`docs/前端結構-frontend.md`（標頭、2026-11-24 注意、登入流程圖「其他」改為 `/game` 並把管理員密碼驗證的終點改為 `/admin`、申訴頁與管理員密碼驗證頁的說明、後台「頂列的連結」新增一條、3d 的預設頁面與導覽）；`README.md`（登入頁、密碼驗證頁、年齡頁、申訴頁、`/admin` 各列與預設頁面兩處說明；另外兩處因此過時的句子一併更正：第 928 行「尚未確認年齡的管理員也會落在 `/game`」、第 1000 行 `/game` 不再是「登入後的預設頁面」而是「玩家登入後的預設頁面」）。README 裡過往的驗收紀錄（例如「管理員落在 `/cs`」的舊紀錄與 `DEFAULT_AFTER_LOGIN` 改回 `/cs` 的變異紀錄）是歷史，沒有動。
 - **簡報**：依 `deck-conflict-watch`，這批沒有新增衝突；批 1 已列的幾處（2.0 簡報第 376 行「`DEFAULT_AFTER_LOGIN`＝`/game`」、`build_diagrams.py` 第 183 行、`build_diagrams_system.py` 第 204、265 行）仍待使用者在任務 3.4 決定。簡報沒有提到 `/admin` 頂列或 `login-password.js` 的備援。
+
+## 批 3 完成註記（2026-11-24；整合檢查，變異驗證 → 全套 → 實機 → 簡報通知 → 文件複查）
+
+- **範圍**：3.1–3.5（批 3 全部）。這批沒有改任何程式或測試，只動文件（README 驗收紀錄、路線圖、本檔）。
+- **3.1 變異驗證**：在 scratchpad 的專案副本（app、tests、migrations、scripts、docs 與根目錄設定檔）上做，每個變異以 `-x` 跑九個相關測試檔、行程逾時 420 秒（逾時算被抓到，實際沒有逾時），還原後以雜湊確認，結束後專案三個被變異的檔案雜湊與專案相同、`git status` 乾淨。基準 355 通過、25 略過（SQL Server 對照版本，副本沒有連線字串）。**九個變異全部被抓到、沒有存活**：M1 拿掉 `is_active_admin`（`test_an_admin_without_age_data_is_not_sent_to_the_age_step`）、M2 拿掉「等於 `/game` 視為沒有指定」（`test_for_an_admin_a_next_equal_to_the_player_default_page_counts_as_no_destination`）、M3 `ADMIN_AFTER_LOGIN` 改 `/game`（`test_the_admin_default_page_is_the_console`）、M4 對玩家也回 `/admin`（`test_an_unrestricted_member_goes_to_next_when_it_is_safe_and_to_the_default_page_otherwise`）、M5 換成 `role == "admin"`（`test_a_suspended_admin_is_not_sent_to_a_page_that_would_be_a_404`）、M6 拿掉「冒險」連結、M8 連結目標改 `/cs`、M9 連結移到「客服」之後（三個都是 `test_the_top_bar_links_to_the_adventure_the_chat_and_the_account_in_that_order`）、M7 `login-password.js` 備援改回 `/game`（`test_the_default_destinations_in_the_auth_scripts_are_the_servers_default_landing_page_not_the_chat`）。因為 `-x`，每個變異只列出第一個失敗的測試；沒有需要差分模糊測試的存活變異。
+- **3.2 全套**：pytest（含真實 SQL Server `project_test`）**15,209 通過、5 略過、0 失敗**（31 分 3 秒；背景執行、輸出存檔）；略過與前次全套同為 5 項（環境因素，沒有逐項列出清單——`-rfE` 不含略過清單）；另有 1 則既有警告（`test_assets_manifest` 的子行程讀取執行緒以 UTF-8 解碼 cp950 輸出失敗），與本 change 無關。Node 全套 **1,963 通過、0 失敗**。
+- **3.3 實機驗證**：真實 Chrome（channel chrome、無頭、1280 寬）對自有實例（全新 SQLite 升到最新、`create-admin`、假的 Google 供應商、`127.0.0.1:5013`）**18／18 通過，連跑兩次**；細節與一次原因未查明的逾時見 README「驗收紀錄（admin-default-landing）」。**前端只接受 https 的授權網址**（`Auth.isSafeProviderUrl`，刻意的防護），所以假供應商回傳 `https://accounts.example/…`、由瀏覽器端攔截並導回本機回呼，沒有改任何程式去配合驗證。實例用完已停止；驗證用的腳本與資料庫在 scratchpad，不進專案。
+- **3.4 簡報**：依 `deck-conflict-watch`，**3 項衝突、待使用者決定**（只通知，沒有動簡報、圖解、PDF、pptx）：①`docs/2.0簡報.md` 第 358 行「預設頁面只改一個常數」→ 現為兩個常數（`DEFAULT_AFTER_LOGIN`＝`/game`、`ADMIN_AFTER_LOGIN`＝`/admin`），`landing_for` 依角色選；②同檔第 356 行 `/game`「登入後的預設頁面」→ 現為玩家的預設頁面，管理員是 `/admin`；③入口圖產生器 `docs/diagrams/build_diagrams_system.py` 第 224–225 行（`landing_for` 卡）「不合法就退回 /game」→ 管理員退回 `/admin`。另有**不算衝突但不完整**的幾處（事實仍成立）：簡報第 376 行與 `build_diagrams_system.py` 第 204、265 行寫 `DEFAULT_AFTER_LOGIN`＝`/game`（常數仍是 `/game`，只是少了 `ADMIN_AFTER_LOGIN`）、第 233 行的出口列沒有管理員、`build_diagrams.py` 第 183 行與簡報第 403 行是玩家分支（仍正確）。數字漂移：測試案例數等是快照，不逐項列。
+- **3.5 文件複查**：`docs/路線圖-roadmap.md` 的節點與表列改為「已實作，待使用者驗收」；前三批已同步的設計文件（`前端結構-frontend.md`、`帳號與安全-auth-security.md`、`系統架構-architecture.md`）標頭的「對應 change」與內容仍與程式一致；README 新增驗收紀錄一節。
+- **未驗證**：Edge、真實手機、展示環境（尚未部署）、真實 Google 帳號登入（驗證用假供應商）。
+- **下一步**：使用者驗收 → 封存（`openspec archive`，`auth-pages` 的修改與新增、`admin-console` 的新增同步到主規格）→ 更新路線圖與 HANDOFF；部署到展示環境由使用者決定。
 
 ## Workflow follow-up
 
