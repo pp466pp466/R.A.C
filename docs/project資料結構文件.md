@@ -1572,7 +1572,7 @@ JSON 欄位由 Repository 負責序列化與反序列化，一律存成 `NVARCHA
 
 ```mermaid
 flowchart TD
-    Acc["users（帳號）"] -->|"連續 12 個月未登入<br/>24 小時未完成年齡確認<br/>未滿 13 歲（立即）"| Era["AccountErasureService<br/>單一抹除出口"]
+    Acc["users（帳號）"] -->|"連續 12 個月未登入<br/>24 小時未完成年齡確認<br/>未滿 13 歲（立即）<br/>管理員在後台刪除（立即）"| Era["AccountErasureService<br/>單一抹除出口"]
     Acc -->|"使用者申請刪除"| Pend["deletion_pending<br/>7 天寬限期，可撤銷"]
     Pend -->|"寬限期滿"| Era
     Era --> Wipe["CASCADE 刪除內容<br/>帳本與稽核的使用者欄位變空值"]
@@ -1582,7 +1582,7 @@ flowchart TD
 
 | 資料 | 期限或觸發 | 指令 | 備註 |
 |---|---|---|---|
-| 帳號（含生日與年齡區間） | 連續 12 個月未登入；使用者申請刪除（7 天寬限）；建立後 24 小時未完成年齡確認；發現未滿 13 歲（立即） | purge-inactive-accounts、execute-account-deletions、purge-unconfirmed-accounts；未滿 13 歲於補填時立即處理 | 全部走 AccountErasureService 單一出口，並寫入 deletion_tombstones；管理員不納入 |
+| 帳號（含生日與年齡區間） | 連續 12 個月未登入；使用者申請刪除（7 天寬限）；建立後 24 小時未完成年齡確認；發現未滿 13 歲（立即）；管理員在後台刪除（立即，不經寬限期） | purge-inactive-accounts、execute-account-deletions、purge-unconfirmed-accounts；未滿 13 歲於補填時立即處理；管理員刪除走 `POST /api/admin/users/<public_id>/delete`（不是排程指令） | 全部走 AccountErasureService 單一出口，並寫入 deletion_tombstones；排程清除不納入管理員帳號，管理員刪除只能刪角色為 user 的帳號且劇本一律全刪（原因 admin_deleted） |
 | 對話與訊息 | 最後活動後 365 天；或使用者主動刪除 | purge-expired-data | 帳本的對話編號先清為空值，再刪對話，訊息靠 CASCADE |
 | RPG 存檔與回合 | 最後活動後 365 天 | purge-expired-data | 回合、記事簿、行動建議（`suggestions_json`，同一資料列）與重新生成回饋（`turn_regenerations`）一併消失；中斷或被擋回合的劇情內容 14 天清為空字串 |
 | 模型呼叫帳本 | 建立後 365 天；失敗原文 14 天 | purge-expired-data | 失敗原文清為空值，帳本那一筆保留；帳號刪除時 user_id 變空值 |
@@ -1830,3 +1830,4 @@ flowchart TD
 | 2026-11-23 | 新增 | 欄位 `sessions.suggestions_json`（JSON，可為空） | 視覺小說式遊戲畫面：存檔保存最近一次產生的行動建議與其錨點（最後完成回合的 seq 與 revision，第 0 幕為 0、0）；錨點相等才有效，新回合完成與修訂成功都使舊建議自動過期，所以回合引擎與修訂流程不需要清除它；寫入不改存檔的 `version`。不回填、不建索引、無預設的非空值；`sessions` 由 30 欄變 31 欄、全庫欄位共 269 個。內容由模型依玩家的角色卡與近期劇情產生，視為個資：與存檔同期限，隨存檔與帳號刪除（同一資料列）、納入個人資料匯出。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0023_story_suggestions` |
 | 2026-11-23 | 文件 | 本文件 | 同步 rpg-story-view 批 3：`llm_call_logs.kind` 的允許值新增 `rpg_suggest`（第 5 節的欄位說明與第 6 節的固定值字典）：玩家點行動建議圖示才發出的結構化呼叫，記入實際使用的模型與 token、計入全站每日 token 上限、不扣遊戲幣、帳本不含建議文字。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：`kind` 為 `NVARCHAR(20)`，新值 11 字放得下 | 本文件 |
 | 2026-11-24 | 文件 | 本文件 | 同步 admin-delete-account 批 1：`deletion_tombstones.reason` 的允許值新增 `admin_deleted`（第 5 節的欄位說明、第 6 節的固定值字典與列舉對照表）、`admin_audit_logs.action` 的允許值新增 `user.delete`（動作 24 個）：管理員在後台刪除帳號時，立即抹除並留下刪除紀錄與稽核。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：兩個欄位都是無約束的字串（`NVARCHAR(30)`），新值放得下 | 本文件 |
+| 2026-11-24 | 文件 | 本文件 | 同步 admin-delete-account 批 4：第 4.2 節之後的資料生命週期圖（第 9 節）與保存期限表的「帳號」一列補上「管理員在後台刪除」這條抹除路徑（立即、不經寬限期、只限角色為 user、劇本一律全刪、原因 `admin_deleted`、不是排程指令）。**只是流程說明，沒有結構變更、沒有遷移、不需要升級 `project` 資料庫** | 本文件 |

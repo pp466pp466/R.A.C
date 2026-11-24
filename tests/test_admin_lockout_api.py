@@ -62,7 +62,7 @@ def test_the_locked_list_has_only_locked_players_and_only_public_fields(world):
 
 def test_the_locked_list_is_paged_and_follows_new_locks_and_unlocks(world):
     with Session(world.engine) as s:
-        for n in range(6, 9):
+        for n in range(7, 10):                                                    # World 已有 1 至 6 號（6 號是 admin-delete-account 的刪除目標）
             add_user(s, n, age=30, locked_at=START + timedelta(minutes=n), lock_reason="identity_rejected")
     client = admin_client(world)
     everyone = client.get("/api/admin/locked").get_json()["accounts"]

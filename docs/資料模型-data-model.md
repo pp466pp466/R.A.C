@@ -1,6 +1,6 @@
 # 資料模型
 
-> 狀態：已實作 ｜ 最後更新：2026-11-23 ｜ 對應 change：rpg-story-view（`sessions` 新增 `suggestions_json`，可為空，保存最近一次產生的行動建議與錨點；遷移 `0023_story_suggestions`；實作中，尚未封存、尚未套用到實際的 `project`）、rpg-script-reports（新增 `script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`；遷移 `0022`；抹除流程新增匿名保留與刪除作者版本檢舉兩步；變更已實作並於 2026-11-22 封存）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`，版本狀態新增 `removed`；遷移 `0021`；本批只有資料與 Repository 核心，其餘設計見後續批次）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0022_script_reports` ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-24 ｜ 對應 change：admin-delete-account（沒有結構變更、沒有遷移：抹除原因新增 `admin_deleted`、稽核動作新增 `user.delete`；管理員在後台立即抹除一個玩家，走同一個抹除出口、劇本全刪）、rpg-story-view（`sessions` 新增 `suggestions_json`，可為空，保存最近一次產生的行動建議與錨點；遷移 `0023_story_suggestions`；實作中，尚未封存、尚未套用到實際的 `project`）、rpg-script-reports（新增 `script_reports`、`users.keep_published_scripts`、設定鍵 `script_report_daily`；遷移 `0022`；抹除流程新增匿名保留與刪除作者版本檢舉兩步；變更已實作並於 2026-11-22 封存）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`，版本狀態新增 `removed`；遷移 `0021`；本批只有資料與 Repository 核心，其餘設計見後續批次）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；遷移 `0020`；內容模式由三種改為兩種，舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、admin-unlimited-coins（無資料表異動，只註記管理員的 0 幣帳本列）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；遷移 `0019`）、rpg-turn-revision（`memory_logs` 新增四個修訂欄位、新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`；2026-11-16 規則修訂：`regen_count` 與 `is_free` 兩種操作共用、不歸零）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只更正欄位註解）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring、rpg-data-and-script、remove-player-password-auth、member-auth、age-verification-birthdate、cs-chat-core、usage-limits、admin-console、privacy-lifecycle、ops-alerting、launch-readiness、google-first-login ｜ 資料庫版本：`0022_script_reports` ｜ 規範依據：AGENTS.md 第 4、10、11 節
 > 注意（2026-11-03）：本文件已納入 change ① `google-first-login` 的資料模型（`users` 的 `age_deadline_at`、`locked_at`、`lock_reason`；`lock_strikes`、`lock_appeals`；migration `0010`）與 change ② `remove-player-password-auth`（migration `0011` 只動資料：清除非管理員帳號的密碼雜湊，並把 `pending_verification` 改為 `active`；`users.password_hash` 只屬於管理員，`auth_tokens` 只放管理員的重設密碼權杖）。
 > 注意（2026-11-03）：change `rpg-data-and-script`（RC-1）已納入：五張新表（`scripts`、`script_versions`、`script_version_tags`、`sessions`、`memory_logs`）、`users` 的內容模式偏好與成年確認四欄、migration `0012`（只新增，並一次回填偏好）。**仍未實作**：性格原型三張表（RC-5）；刪帳號的「匿名保留已發佈劇本」偏好已由 `rpg-script-reports`（RC-8 的 8b，`0022`）實作，見下方保存與刪除一節、記事簿與回合的行為（RC-2，欄位已建立並有預設值）。見 [RPG.md](RPG.md) 第 2 章與 [路線圖](路線圖-roadmap.md)。
 > 注意（2026-11-04）：change `rpg-script-authoring`（RC-7）已納入：`users` 的暱稱與短代號、暫停發佈時間三欄，`script_versions` 的審查結果四欄，兩張新表（`script_submissions` 送審紀錄、`runtime_limits` 存放營運限制），`llm_call_logs.kind` 加寬，migration `0013`（只新增與加寬，並以 ORM 的批次寫入植入七個限制的初始值）。
@@ -458,11 +458,12 @@ flowchart TD
     Acc["帳號（含生日與年齡區間）"] -->|"連續 12 個月未登入（purge-inactive-accounts，管理員不納入）"| Era["抹除一個人（AccountErasureService）"]
     Acc -->|"建立後 24 小時內未完成年齡確認（purge-unconfirmed-accounts，每小時；管理員與沒有期限記錄的舊帳號不納入）"| Era
     Acc -->|"補填年齡時發現未滿 18 歲（立即，不保存生日）"| Era
+    Acc -->|"管理員在後台刪除（立即，不經寬限期；只限角色為 user，劇本一律全刪）"| Era
     Acc -->|"使用者申請刪除"| Pend["deletion_pending：立即停用，所有裝置登出，7 天寬限期"]
     Pend -->|"7 天內登入並撤銷"| Acc
     Pend -->|"寬限期滿（execute-account-deletions）"| Era
     Era --> Wipe["刪除使用者；對話、訊息、第三方身分、重設權杖串聯刪除；帳本與稽核的使用者欄位變空值"]
-    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months、user_requested、underage、age_unconfirmed，或備份還原後補上的 restore_replay），不納入期限清除"]
+    Era --> Tomb["deletion_tombstones：只有內部編號、時間與原因（inactive_12_months、user_requested、underage、age_unconfirmed、admin_deleted，或備份還原後補上的 restore_replay），不納入期限清除"]
     Err["error_detail（失敗原文）"] -->|"14 天（purge-expired-data）"| Del4["清為空值，帳本那一筆保留；僅管理員可讀"]
     Log["llm_call_logs"] -->|"365 天（purge-expired-data）"| Del3["刪除"]
     Tok["auth_tokens"] -->|"到期後 7 天（purge-expired-data）"| Del5["刪除，不論是否已使用"]
@@ -489,7 +490,7 @@ flowchart TD
 flowchart TD
     Start["AccountErasureService.erase（一個交易）"] --> Q{"retain_scripts 且<br/>偏好在這一刻開啟？"}
     Q -->|"是（只有 execute-account-deletions 與 purge-inactive-accounts）"| Keep["步驟 0'：ScriptRepository.retain_published_anonymously<br/>保留集合＝目前上架的版本；刪除集合＝其餘所有版本"]
-    Q -->|"否（偏好關閉、未滿 18 歲、逾時未確認、replay-deletions 一律不傳）"| Rep
+    Q -->|"否（偏好關閉、未滿 18 歲、逾時未確認、管理員刪除、replay-deletions 一律不傳）"| Rep
     Keep --> K1["① 刪除集合被存檔參照的來源參照清為空值，刪除集合的檢舉刪除"]
     K1 --> K2["② 刪除集合的版本（標籤串聯）→ ③ 刪除沒有保留版本的劇本"]
     K2 --> K3["④ 保留的劇本解除作者關聯：creator_id 為空、筆名『已註銷的作者』、短代號清空；保留版本的審核備註清除"]

@@ -65,11 +65,19 @@
 
 ## 4. 文件、驗證與收尾（批 4，最後一批）
 
-- [ ] 4.1 README 的「驗收紀錄」與條款版本說明收尾（端點表與稽核動作已在批 1、2 同步）；核對 `docs/project資料結構文件.md` 的異動紀錄與實際一致；`tests/test_readme.py tests/test_project_db_schema_doc.py` 通過。
-- [ ] 4.2 依 `deck-conflict-watch` 對照 `docs/2.0簡報.md`、六張圖解與 `docs/4.0簡報.pptx`（後台功能清單、稽核動作數、抹除路徑、測試數字）：**只通知，有衝突列出請使用者決定，不自行修改簡報**；沒有衝突也要說一句已檢查。
-- [ ] 4.3 變異驗證（在 scratchpad 的專案副本上，每個變異有行程逾時；存活者先做差分推理再分類為缺口或等價）：`delete_player_by_admin` 的管理員保護與狀態不限制、`delete_user` 的角色判斷與 `deletion_pending` 放行、稽核先於抹除的順序與失敗回復、`retain_scripts=False`、`CONFIRMS.delete` 的 `needsReason`、成功分支不落入預設、按鈕條件、稽核標籤。補上抓不到的測試。
-- [ ] 4.4 全套驗證：pytest 全套（含 SQL Server `project_test` 軌，同時只能一個行程，輸出存檔不接 tail）與 Node 全套；`openspec validate admin-delete-account --strict`、`openspec validate --specs`；`alembic check`（確認沒有模型漂移）；把筆數寫進完成註記。
-- [ ] 4.5 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`：後台與稽核、抹除與保存期限、帳號與安全、前端結構），並讓 `tests/test_design_docs.py` 通過。
+- [x] 4.1 README 的「驗收紀錄」與條款版本說明收尾（端點表與稽核動作已在批 1、2 同步）；核對 `docs/project資料結構文件.md` 的異動紀錄與實際一致；`tests/test_readme.py tests/test_project_db_schema_doc.py` 通過。
+- [x] 4.2 依 `deck-conflict-watch` 對照 `docs/2.0簡報.md`、六張圖解與 `docs/4.0簡報.pptx`（後台功能清單、稽核動作數、抹除路徑、測試數字）：**只通知，有衝突列出請使用者決定，不自行修改簡報**；沒有衝突也要說一句已檢查。
+- [x] 4.3 變異驗證（在 scratchpad 的專案副本上，每個變異有行程逾時；存活者先做差分推理再分類為缺口或等價）：`delete_player_by_admin` 的管理員保護與狀態不限制、`delete_user` 的角色判斷與 `deletion_pending` 放行、稽核先於抹除的順序與失敗回復、`retain_scripts=False`、`CONFIRMS.delete` 的 `needsReason`、成功分支不落入預設、按鈕條件、稽核標籤。補上抓不到的測試。
+- [x] 4.4 全套驗證：pytest 全套（含 SQL Server `project_test` 軌，同時只能一個行程，輸出存檔不接 tail）與 Node 全套；`openspec validate admin-delete-account --strict`、`openspec validate --specs`；`alembic check`（確認沒有模型漂移）；把筆數寫進完成註記。
+- [x] 4.5 更新 `docs/` 對應的設計文件（對照表見 `docs/README.md`：後台與稽核、抹除與保存期限、帳號與安全、前端結構），並讓 `tests/test_design_docs.py` 通過。
+
+### 批 4 完成註記（2026-11-24；**跑了 pytest 全套與 Node 全套**；批 3 已提交為 `e5907f8`）
+
+- **4.1／4.5 文件**：README 新增「管理員刪除帳號（admin-delete-account）」一節與「驗證與驗收紀錄（批 4）」，後台一節的危險操作清單加入「刪除帳號」並註明 `deletion_pending` 例外，抹除出口一條與政策頁版本說明補上 draft-11；設計文件六份同步：`系統架構-architecture.md`（第五條抹除路徑）、`資料模型-data-model.md`（保存與刪除的流程圖與刪除紀錄原因）、`project資料結構文件.md`（第 9 節生命週期圖與表、第 14 節追加一列文件異動，沒有結構變更）、`營運與部署-operations.md`（條款版本、展示環境清理改由後台逐一刪除）、`帳號與安全-auth-security.md`（條款版本說明）、`前端結構-frontend.md`（刪除帳號的前端行為）；`路線圖-roadmap.md` 狀態改為「已實作，等驗收」。`test_design_docs`、`test_readme`、`test_project_db_schema_doc` 等守門測試通過。
+- **4.2 簡報對照**：已依 `deck-conflict-watch` 對照，衝突清單交使用者決定（簡報、圖解、PDF、pptx 一律沒有修改）；**未執行 `build_pptx_40.py --check`**（本機沒有 python-pptx，且本批沒有改 2.0 簡報，`FACTS` 來源沒變）。
+- **4.3 變異驗證**：在 scratchpad 的專案副本上跑 39 個變異（後端 23、前端 16），**全數被測試抓到，沒有存活者、不需要補測試**；每個變異有行程逾時並於結束後逐檔還原比對，專案工作樹沒有被碰。第一輪腳本在印出前端結果時因主控台編碼（cp950）當掉，`finally` 已還原，確認副本與專案逐檔一致後改用 UTF-8 輸出、只重跑未完成的前端變異（J2–J16）；只跑 SQLite 軌，SQL Server 軌由全套涵蓋。
+- **4.4 全套**：pytest **15158 通過、5 略過、0 失敗**（29 分 9 秒，含 SQL Server `project_test` 兩軌；5 個略過都是既有環境因素）；Node 全套 **1872 通過**；`openspec validate admin-delete-account --strict` 通過、`openspec validate --specs` 99 通過；`alembic upgrade head`（SQLite，到 `0023`）後 `alembic check` 沒有差異。**第一次全套抓到一個我造成的測試相撞**（批 2 在 `World` 夾具新增 6 號玩家，`tests/test_admin_lockout_api.py` 在同一夾具再加 6 至 8 號玩家而信箱重複；批 2 的守門子集不含該檔所以當時沒發現），已把該測試新增的玩家改為 7 至 9 號，修正後重跑完整全套通過。
+- **未驗證**：使用者本人在真機上對確認視窗警告文字與條款那一句的驗收；展示環境（尚未部署）；真實 SQL Server `project`（沒有結構變更，不需要升級）；`build_pptx_40.py --check`。
 
 ## Workflow follow-up
 

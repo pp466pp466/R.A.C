@@ -479,8 +479,8 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 - **可讀範圍最小**：清單沒有任何訊息內容；只有兩類對話可讀全文——**意見回饋**（至少有一則助理回覆的意圖是 `complaint_feedback` 或 `human_handoff`，也就是客服告訴使用者「管理員會看到」的兩種情況；只有 `unknown` 的對話**不算**，因為它還包含離題閒聊與越權試探）與**被安全過濾標記**（帳本中有該對話被擋的紀錄）。清單與讀取用同一份條件，不屬於這兩類的對話與不存在的得到完全相同的 404。使用者資料沒有任何個別的年齡資料（生日、年齡區間、年齡群組），年齡只有總覽的區間人數。
 - **劇本審核（rpg-script-publishing）**：管理員可讀「使用者送審過的劇本」全文（待審、上架中、被退回、被取代、已下架；**草稿讀不到**，含被作者撤回而回到草稿的），每次讀取先寫 `script.read` 稽核再回傳。核可與人工退回不需要重新輸入密碼（仍寫稽核）；退回只告知作者固定類別，管理員另可寫只有管理員看得到的審核備註（至多 500 字），備註只出現在管理員讀取版本的回應，**不進稽核、日誌、事件與作者的任何回應**。下架與恢復須重新輸入密碼：誰下架誰恢復，管理員只恢復自己下架的版本，內建劇本不可下架。劇本的狀態轉移全部是條件式 UPDATE，並行的兩個決定只有一個成功（另一個 409，不留稽核）；稽核與動作同一個交易。已知限制：本機 SQLite 的 pysqlite 驅動在沒有進行中的交易時，`SAVEPOINT` 的 `RELEASE` 會直接提交，所以核可（用 SAVEPOINT）之後若稽核寫入失敗，SQLite 上不會整個回復（SQL Server 與正式環境不受影響；`tests/test_admin_service_scripts.py` 在 SQLite 略過該案例並註明）。
 - **找使用者的方式**：平常只透過警告（總覽的「今日警告」→ 被標記對話 → 看對話、看使用者）；以信箱查詢只在客服反應時使用，介面標明用途，稽核的細節註明是以信箱或識別碼。
-- **危險操作要重新輸入密碼**：停權、解除停權、調整等級、刪除對話、管理員下架與恢復劇本（讀取劇本全文、核可與退回不需要密碼，但每次都寫稽核）。密碼錯誤沿用登入的失敗計數與鎖定（**連續 5 次鎖定 15 分鐘，計數與登入共用**），鎖定中即使密碼正確也拒絕，且訊息與密碼錯誤相同（不洩漏是否被鎖定）；成功**不**重設計數（只有登入成功才重設）。失敗寫 `reauth.failed` 並保存（請求是 400，交易預設會回復，所以明確以 `keep_changes_on_error` 保存）。只靠 Google 登入、沒有設定密碼的管理員不能執行這些操作（`no_password`）。讀取類操作不需要密碼，但每次都有稽核。
-- **只能操作一般使用者**：目標若是管理員（含自己）回 403 `admin_target_forbidden`；`deletion_pending` 回 409 `target_pending_deletion`；狀態與等級以單一條件式 `UPDATE` 改寫，兩位管理員同時操作不會互相覆蓋（409 `already_suspended`、`not_suspended`、`tier_unchanged`、`state_changed`）。
+- **危險操作要重新輸入密碼**：停權、解除停權、調整等級、刪除對話、**刪除帳號**（admin-delete-account）、調整遊戲幣、管理員下架與恢復劇本（讀取劇本全文、核可與退回不需要密碼，但每次都寫稽核）。密碼錯誤沿用登入的失敗計數與鎖定（**連續 5 次鎖定 15 分鐘，計數與登入共用**），鎖定中即使密碼正確也拒絕，且訊息與密碼錯誤相同（不洩漏是否被鎖定）；成功**不**重設計數（只有登入成功才重設）。失敗寫 `reauth.failed` 並保存（請求是 400，交易預設會回復，所以明確以 `keep_changes_on_error` 保存）。只靠 Google 登入、沒有設定密碼的管理員不能執行這些操作（`no_password`）。讀取類操作不需要密碼，但每次都有稽核。
+- **只能操作一般使用者**：目標若是管理員（含自己）回 403 `admin_target_forbidden`；`deletion_pending` 回 409 `target_pending_deletion`（**刪除帳號例外：`deletion_pending` 也可立即刪除**）；狀態與等級以單一條件式 `UPDATE` 改寫，兩位管理員同時操作不會互相覆蓋（409 `already_suspended`、`not_suspended`、`tier_unchanged`、`state_changed`）。
 - **劇本檢舉（rpg-script-reports）**：玩家的檢舉只**升高優先度、不自動下架**，是否下架由管理員決定。`/admin` 的劇本審核以 `status=reported` 列出被檢舉的上架版本（紅線理由者最前，其次未結案人數多者，再其次最早檢舉者，見端點表）；管理員讀取一個版本的檢舉內容（理由與自寫文字）每次先寫 `report.read` 稽核再回傳，**回應與查詢都沒有檢舉人**（管理員無從得知誰檢舉）；結案為「不成立」不需要密碼（寫 `report.dismiss`），結案為「下架」須密碼（沿用 `script.remove`，不提供免密碼的下架捷徑）；版本被下架或被新版本取代時未結案的檢舉由系統在同一個交易自動結案。稽核細節與事件只有識別碼與整數筆數，不含自寫文字、理由、檢舉人與標題。
 - **稽核**（`admin_audit_logs`，migration `0007`）：24 個固定動作（`user.lookup`、`user.suspend`、`user.unsuspend`、`user.change_tier`、`user.delete`（管理員刪除帳號，admin-delete-account：立即抹除，目標只存被刪帳號的對外識別碼，細節只有原狀態）、`conversation.read`、`conversation.delete`、`failures.read`、`reauth.failed`，以及 Google 登入改版新增的帳號鎖定與申訴 `account.lock`、`appeal.submit`、`appeal.read`、`account.unlock`，與劇本創作新增的 `limit.set`（部署者修改營運限制；遊戲幣設定也用它）、`publish.suspend`（連續被自動拒絕而暫停發佈）、`publish.lift`（管理員解除暫停），以及遊戲幣新增的 `wallet.adjust`（管理員調整餘額，理由寫在理由欄）；以及劇本審核與下架新增的 `script.read`（讀取送審或被檢舉的劇本全文，先寫稽核再回傳）、`script.approve`、`script.reject`、`script.remove`、`script.restore`（細節只有版本與劇本的對外識別碼、狀態與固定類別，**不含劇本文字與審核備註**）；以及劇本檢舉新增的 `report.read`（讀取一個版本的檢舉，先寫稽核再回傳）、`report.dismiss`（結案為不成立）（細節只有版本與劇本的對外識別碼與整數筆數，**不含自寫文字、理由與檢舉人**）；鎖定、申訴提交、修改限制與暫停發佈由系統、玩家或部署者觸發，管理員欄位為空）；記錄管理員、目標的**對外識別碼**（不設外鍵，使用者或對話被刪除後紀錄仍成立）、管理員填寫的原因（至多 200 字，只有停權、刪除帳號與刪除對話有）與只含列舉值和整數的細節；**不記錄** email、顯示名稱、訊息、模型原文與密碼。Repository 只有新增與讀取，**沒有更新與刪除**（測試以反射守住）。寫入與動作在同一個交易，動作失敗時稽核一併不存在。
 - **分層由測試守住**（`tests/architecture/test_admin_boundaries.py`，AST）：`AdminService` 的每個公開方法第一個陳述式是 `require_admin`；後台專用的 Repository（`admin_repository.py`、`admin_audit_repository.py`、`admin_script_repository.py`）只被 `admin_service.py` 與 `registry.py` 匯入，其中 `admin_script_repository.py` 另有測試證明它只讀（沒有任何寫入呼叫，版本狀態只在 `script_repository.py` 轉移）；測試本身有自我驗證（餵它故意違規的原始碼必須失敗並指出方法或檔案）。一般使用者的 `ChatRepository`「第一個參數必須是 `user_id`」規則完全不變。
@@ -553,7 +553,7 @@ change `privacy-lifecycle`。把隱私權政策承諾的三件事做完：**使�
 
 ### 設計重點與已知限制
 
-- **單一抹除出口**（`AccountErasureService`）：閒置 12 個月與自助刪除共用。每個帳號在**一個交易**內依序「把帳本的對話編號清為空值 → 條件式刪除 → 寫刪除紀錄 → 提交」，條件不成立時**整個回復**（使用者還活著，不能讓他的帳本失去對話連結）。順序不能反過來：使用者一刪，帳本的 `user_id` 就變空，找不到要清的列。這同時補上了先前閒置清除沒有匿名化帳本對話編號的缺口（SQLite 重用整數編號時會錯指別人的新對話）。`tests/architecture/test_account_erasure_coverage.py` 要求每張指向使用者或對話的資料表都登記在清單內，新增資料表漏掉就失敗。
+- **單一抹除出口**（`AccountErasureService`）：閒置 12 個月、自助刪除、逾時未確認年齡、未滿 18 歲與管理員在後台刪除帳號（`erase_by_admin`，見「管理員刪除帳號」一節）共用。每個帳號在**一個交易**內依序「把帳本的對話編號清為空值 → 條件式刪除 → 寫刪除紀錄 → 提交」，條件不成立時**整個回復**（使用者還活著，不能讓他的帳本失去對話連結）。順序不能反過來：使用者一刪，帳本的 `user_id` 就變空，找不到要清的列。這同時補上了先前閒置清除沒有匿名化帳本對話編號的缺口（SQLite 重用整數編號時會錯指別人的新對話）。`tests/architecture/test_account_erasure_coverage.py` 要求每張指向使用者或對話的資料表都登記在清單內，新增資料表漏掉就失敗。
 - **受限登入狀態預設拒絕**：帳號等待刪除的人可以登入（密碼或 Google），但 `require_login()` 與 `login_required_page` 預設拒絕他（API 403 `account_deletion_pending`、頁面導向 `/account`），只有「查詢自己、撤銷刪除、登出、`/account`」明確允許。新增的端點不必記得檢查；`tests/test_restricted_session.py` 掃描 `app.url_map` 的每條規則，並有自我驗證（暫時加一個漏檢查的端點必須被抓到）。客服與後台各自還有 `active` 狀態的檢查，是第二道防線。以 Google 登入時，只有「本來就綁定這個 Google 身分」的待刪除帳號放行；以信箱找到、尚未綁定的待刪除帳號仍拒絕（不在即將刪除的帳號上新增綁定）。
 - **確認本人**：有密碼者重新輸入密碼（沿用 `confirm_password`，與登入共用計數與鎖定）；只靠 Google 者輸入固定文字（NFC 正規化並去除前後空白，含全形空白）。沒有採用「Google 重新授權」（使用者決定）。
 - **匯出的範圍**：帳號欄位（含生日與年齡區間）、對話標題與摘要、訊息序號／角色／內容／時間。**不含**密碼雜湊、`token_version`、驗證權杖、Google 識別值、內部整數編號，以及意圖、實體、信心值、建議動作與對話狀態（系統推論的副產品，不是使用者提供的資料）；不含 `llm_call_logs`。訊息以序號為游標每頁 500 則、寫入暫存檔（8 MB 以內留在記憶體），所以記憶體用量不隨總訊息數增加。
@@ -1796,6 +1796,26 @@ change `onboarding-polish`。玩家第一次以 Google 登入之後的 `/age` �
 - **無頭 Chrome 實機檢查**（自有實例：全新 SQLite、假模型、`127.0.0.1:5012`）：1280 與 360 寬度各 49／49 通過——每一步的進度與標籤、守則 Modal 的焦點與確認規則、各步的停用與說明、上一步保留欄位、送出順序（`verify-age` → `story-preference` → `/game`）、預設不發偏好請求、暱稱不合格回第 1 步、`age_mismatch` 回第 2 步並清空、未滿 18 歲結束精靈、重新整理回第 1 步、偏好減少動態、登入頁總開關、每一步無橫向捲軸；瀏覽器儲存為空。
 - **未驗證**：真實 Google 登入整條路、手機實機觸控；使用守則文案與第 3 步選項文字待使用者過目。
 
+## 管理員刪除帳號（admin-delete-account）
+
+change `admin-delete-account`（**已實作並驗證，等使用者驗收；未封存、未部署**）：管理員在 `/admin` 的「使用者」分頁以信箱查到一位玩家後，可**立即且不可復原地刪除帳號**。tasks 分四批：① 資料與抹除出口（`704ff80`）、② 服務層與端點（`88ce109`）、③ 前端與政策頁（`e5907f8`）、④ 文件、變異驗證與全套驗證；規範（AGENTS.md 第 10、11 節）先單獨提交為 `99022ff`。**沒有資料庫結構變更、沒有遷移**（只有兩個無約束字串欄位多一個允許值）。
+
+- **端點**：`POST /api/admin/users/<public_id>/delete`（端點表見「管理員後台（C-4b）」）；請求 `reason`（必填，1 至 200 字）與 `password`，回應 `{"ok": true}`。沒有 GET、沒有批次、沒有使用者清單。
+- **規則**：一次刪一個；只能刪角色為 `user` 的帳號（管理員含自己 403 `admin_target_forbidden`，不存在 404）；**狀態不限**——使用中、停權、被鎖定、`deletion_pending`（不必等 7 天寬限期）與尚未填生日的帳號都刪得掉（所以刻意不用會擋 `deletion_pending` 的 `_manageable_target`）；須重新輸入密碼（失敗沿用登入的失敗計數與鎖定並寫 `reauth.failed`）。
+- **單一抹除出口**：`AdminService.delete_user` 先寫 `user.delete` 稽核（只 flush），再呼叫 `AccountErasureService.erase_by_admin`；抹除會提交，所以**稽核與抹除在同一個交易**。條件式刪除（`UserRepository.delete_player_by_admin`：`id` 相符且 `role != admin`）在刪除當下再確認一次，不成立（目標在檢查之後變成管理員）時整個回復、稽核列一併消失，回 409 `state_changed`。刪除紀錄的原因為 `admin_deleted`；**不套用「匿名保留我已發佈的劇本」偏好，劇本一律全刪**；別的玩家用該作者的劇本開過的存檔保留、來源參照清為空值；帳本的使用者與對話編號匿名化。
+- **稽核與日誌**：稽核目標只存被刪帳號的對外識別碼，細節只有原狀態與管理員填的理由，**沒有 email 與暱稱**（目標欄位 `target_user_public_id` 是文字、不是外鍵，所以帳號刪除後稽核仍在）；日誌只有 `admin.action` 的管理員編號與動作名稱 `user.delete`，沒有理由與 email。
+- **前端**：「刪除帳號」按鈕（`admin-btn--danger`，目標角色為 `user` 才有）與確認視窗（`CONFIRMS.delete`，警告寫明不可復原、沒有寬限期、連帶刪除的資料、其他玩家已開出的存檔不受影響、同一 Google 帳號可重新註冊）；成功後面板清空、從被鎖定／被暫停發佈／申訴清單移除該帳號的列、把被標記對話、意見回饋、總覽與稽核標為過期；稽核分頁顯示「刪除帳號」與「原狀態：…」。
+- **服務條款**：`/terms` 第 4 節加一條（管理員得因違反內容規範或本條款刪除帳號與其全部資料，立即執行、無法復原、不適用匿名保留選項）；`CURRENT_TERMS_VERSION` 由 `2026-11-22-draft-10` 提高為 `2026-11-24-draft-11`（只影響之後新註冊者記錄的版本，不強迫既有使用者重新同意）；隱私權政策沒有改（刪除範圍已說明）。
+- **不在這個 change**：使用者清單與批次刪除（須先放寬管理員可見範圍並修訂規範）、刪除後寄通知信（email 已抹除）、復原機制。展示環境 rac001 的非管理員帳號清理是部署之後的維運操作：先唯讀盤點、向使用者確認、先做 RDS 快照，再用後台逐一刪除。
+
+### 驗證與驗收紀錄（批 4，2026-11-24）
+
+- **變異驗證（任務 4.3）**：在 scratchpad 的專案副本上逐一套用 39 個變異（後端 23 個：條件式刪除拿掉 `role != admin`、多加狀態或生日限制、回傳值恆為真、抹除原因與 `retain_scripts`、角色判斷、`deletion_pending` 誤擋、稽核先後順序、忽略抹除回傳、略過或改錯重新輸入密碼、稽核細節多帶 email 或缺原狀態、成功日誌提前、原因驗證、`require_admin`、危險動作與稽核動作清單、條款一句與版本、路由路徑與密碼傳遞；前端 16 個：`needsReason`、成功分支落入預設、按鈕條件三種、成功後面板與清單與過期標記、`askDelete` 角色檢查、稽核細節與標籤、請求路徑、模板的按鈕條件、成功訊息與確認視窗警告），**全數被測試抓到，沒有存活者**；每個變異有行程逾時、結束後逐檔比對還原，專案工作樹沒有被碰。變異只跑 SQLite 軌（與方言無關的邏輯；SQL Server 軌由全套測試涵蓋）。
+- **全套測試（任務 4.4）**：pytest **15158 通過、5 略過、0 失敗**（29 分 9 秒，含 SQL Server `project_test` 兩軌；5 個略過都是既有的環境因素：`test_no_legacy_tier_checks` 2、`test_admin_service_scripts` 的 pysqlite `SAVEPOINT` 1、Windows 檔案權限 1、`grp` 模組 1），另有 1 個執行緒讀取子行程輸出時的解碼警告（`test_assets_manifest.py`，本 change 沒有碰）；Node 全套 **1872 通過**（含新增 19 項）。**第一次全套抓到一個我造成的測試相撞**：批 2 在共用夾具 `World`（`tests/test_admin_api.py`）新增 6 號玩家作為刪除目標，而 `tests/test_admin_lockout_api.py` 在同一個夾具上又加 6 至 8 號玩家，信箱重複（批 2 的守門子集不含這個檔案，所以當時沒發現）；不是產品缺陷，已把該測試新增的玩家改為 7 至 9 號，修正後重跑完整全套得到上面的結果。
+- **其他**：`openspec validate admin-delete-account --strict` 與 `openspec validate --specs`（99 通過）通過；`alembic upgrade head` 到 `0023` 後 `alembic check` 沒有差異（SQLite）。
+- **簡報對照**：已對照 `docs/2.0簡報.md`、六張圖解的產生器與 `docs/4.0簡報.pptx` 的產生器，衝突清單交使用者決定（簡報一律沒有修改）；**未執行 `build_pptx_40.py --check`**（本機沒有 python-pptx，且本批沒有修改 2.0 簡報，`FACTS` 的來源沒有變）。
+- **未驗證**：使用者本人在真機上對確認視窗警告文字與條款那一句的驗收；展示環境（尚未部署）；真實 SQL Server `project` 資料庫（沒有結構變更，不需要升級）。
+
 ## AWS 展示環境（aws-demo-environment）
 
 `APP_ENV=staging` 的單機展示環境（AWS 雪梨 `ap-southeast-2`、Free plan 抵用金、展示期到 2026-12-31；不是 production）。步驟、拓撲與執行器的完整說明在 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 第 8 節；計畫在 `scripts/aws_demo_plan.py`（純函式、有測試），執行器是 `scripts/aws_demo.py`（預設只預覽，`--execute` 才逐步確認並執行）。
@@ -2290,7 +2310,7 @@ app.mount('#app');
 | `app/static/js/auth/account-safe-mode.js` | 純函式與狀態機（`Auth.safeMode`）：`safeReturnPath`、`normalize`、`planToggle`、`createController`、固定文案 |
 | `app/templates/auth/account.html`、`app/static/js/auth/account.js`、`app/static/css/auth.css` | 「安全模式」區塊（`role="switch"` 開關）、同意 Modal（`actions` 插槽自訂按鈕）、開關與勾選框樣式 |
 | `app/controllers/auth_page_controller.py`、`app/security/redirects.py` | 初始狀態 `contentMode`（只有 `effective`、`confirmed`、`forced`、`returnPath`）與 `safe_return_path` |
-| `app/templates/legal/{terms,privacy}.html`、`app/services/legal.py` | 露骨內容、兩種狀態、絕對禁止項、18 歲與謊報、供應商留存或審閱的揭露；`CURRENT_TERMS_VERSION` 當時為 `2026-11-19-draft-9`（rpg-script-reports ⑥ 批提高為 `2026-11-22-draft-10`） |
+| `app/templates/legal/{terms,privacy}.html`、`app/services/legal.py` | 露骨內容、兩種狀態、絕對禁止項、18 歲與謊報、供應商留存或審閱的揭露；`CURRENT_TERMS_VERSION` 當時為 `2026-11-19-draft-9`（rpg-script-reports ⑥ 批提高為 `2026-11-22-draft-10`；admin-delete-account 批 3 提高為 `2026-11-24-draft-11`） |
 | `tests/js/account-safe-mode.test.js`、`account-safe-mode-page.test.js`、`fixtures/safe-return-path-cases.json`、`tests/test_account_safe_mode_page.py`、`tests/test_safe_next.py`、`tests/test_legal_pages.py` | Node 與 pytest；前後端的返回位置規則共用同一張案例表 |
 
 | 已驗證 | 結果 |
