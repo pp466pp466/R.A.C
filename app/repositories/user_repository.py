@@ -403,6 +403,18 @@ class UserRepository(BaseRepository[User]):
 
     # ---- 抹除（account-deletion 與 account-retention 規格；流程見 AccountErasureService）----------
 
+    def delete_player_by_admin(self, user_id: int) -> bool:
+        """管理員在後台刪除帳號（admin-delete-account）：條件式刪除「角色不是管理員的帳號」。回傳是否真的刪除。
+
+        **不限制狀態與年齡確認**：使用中、停權、被鎖定、待刪除（不必等寬限期）與尚未填生日的帳號都刪得掉；
+        **管理員絕不刪**（資料庫層的最後一道防線，Service 層另有 403）。條件在刪除當下再確認一次。
+        串聯與不同步 Session 的注意事項同 `delete_inactive`。
+        """
+        result = self._session.execute(
+            delete(User).where(User.id == user_id, User.role != ROLE_ADMIN).execution_options(synchronize_session=False)
+        )
+        return result.rowcount == 1
+
     def clear_ledger_conversation_refs(self, user_id: int) -> int:
         """把這位使用者的用量帳本中的對話編號清為空值（單一 UPDATE），回傳受影響的筆數。
 

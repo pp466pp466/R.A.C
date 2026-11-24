@@ -8,10 +8,20 @@
 
 ## 1. 資料與抹除出口（批 1）
 
-- [ ] 1.1 `app/models/admin_audit_log.py` 新增 `ACTION_USER_DELETE = "user.delete"` 並加入 `AUDIT_ACTIONS`（23→24）；`app/models/deletion_tombstone.py` 新增 `REASON_ADMIN_DELETED = "admin_deleted"` 並加入 `DELETION_REASONS`；`app/observability/admin_events.py` 的 `DANGEROUS_ACTIONS` 加入 `ACTION_USER_DELETE`。同步更新寫死數量與列舉的既有測試（`tests/test_admin_audit_repository.py` 的集合與 `== 23`、`tests/test_admin_events.py`、`tests/support/db_schema.py` 的列舉對照）並確認改動是行為刻意改變。**同一項一併同步文件**（守門測試會要求）：`README.md` 管理員後台一節的稽核動作清單加入 `user.delete`（`tests/test_readme.py` 逐一檢查 `AUDIT_ACTIONS`），`docs/project資料結構文件.md` 內 `admin_audit_logs.action` 與 `deletion_tombstones.reason` 的列舉值加入新值，並在檔案最下方第 14 節追加異動紀錄（只有列舉值變動、沒有結構變動）。驗證：`tests/test_admin_audit_repository.py tests/test_admin_events.py tests/test_project_db_schema_doc.py tests/test_readme.py`。
-- [ ] 1.2 `UserRepository.delete_player_by_admin(user_id)`：以 ORM 表達式的條件式 `DELETE`（`id` 相符且 `role != admin`，不限制狀態、不要求生日），`synchronize_session=False`，回傳是否刪到一列（與 `delete_unconfirmed_player` 同型）。新增 Repository 測試：一般玩家的各種狀態（`active`、`suspended`、鎖定、`deletion_pending`）都刪得掉；管理員刪不掉且資料不變；不存在回傳 `False`。驗證：該測試檔與 SQL Server `project_test` 軌（`-m sqlserver`，同時只能一個 pytest 行程）。
-- [ ] 1.3 `AccountErasureService.erase_by_admin(user_id, *, now)`：呼叫 `erase(..., delete=users.delete_player_by_admin, reason=REASON_ADMIN_DELETED, retain_scripts=False)`，與 `erase_underage` 並列，更新模組說明。新增測試：寫入原因為 `admin_deleted` 的刪除紀錄；偏好開啟的帳號其上架劇本也全刪；別人的存檔保留且來源參照為空；帳本匿名化（使用者與對話編號為空）；目標是管理員時回傳 `False`、整個交易回復、沒有刪除紀錄；`tests/architecture/test_account_erasure_coverage.py` 仍通過。驗證：抹除相關測試檔（含 SQLite 與 SQL Server 兩軌）加全域守門子集。
-- [ ] 1.4 批 1 收尾：跑相關測試與全域守門子集，更新 tasks 完成註記與 HANDOFF（**未跑全套**，如實寫明）。
+- [x] 1.1 `app/models/admin_audit_log.py` 新增 `ACTION_USER_DELETE = "user.delete"` 並加入 `AUDIT_ACTIONS`（23→24）；`app/models/deletion_tombstone.py` 新增 `REASON_ADMIN_DELETED = "admin_deleted"` 並加入 `DELETION_REASONS`；`app/observability/admin_events.py` 的 `DANGEROUS_ACTIONS` 加入 `ACTION_USER_DELETE`。同步更新寫死數量與列舉的既有測試（`tests/test_admin_audit_repository.py` 的集合與 `== 23`、`tests/test_admin_events.py`、`tests/support/db_schema.py` 的列舉對照）並確認改動是行為刻意改變。**同一項一併同步文件**（守門測試會要求）：`README.md` 管理員後台一節的稽核動作清單加入 `user.delete`（`tests/test_readme.py` 逐一檢查 `AUDIT_ACTIONS`），`docs/project資料結構文件.md` 內 `admin_audit_logs.action` 與 `deletion_tombstones.reason` 的列舉值加入新值，並在檔案最下方第 14 節追加異動紀錄（只有列舉值變動、沒有結構變動）。驗證：`tests/test_admin_audit_repository.py tests/test_admin_events.py tests/test_project_db_schema_doc.py tests/test_readme.py`。
+- [x] 1.2 `UserRepository.delete_player_by_admin(user_id)`：以 ORM 表達式的條件式 `DELETE`（`id` 相符且 `role != admin`，不限制狀態、不要求生日），`synchronize_session=False`，回傳是否刪到一列（與 `delete_unconfirmed_player` 同型）。新增 Repository 測試：一般玩家的各種狀態（`active`、`suspended`、鎖定、`deletion_pending`）都刪得掉；管理員刪不掉且資料不變；不存在回傳 `False`。驗證：該測試檔與 SQL Server `project_test` 軌（`-m sqlserver`，同時只能一個 pytest 行程）。
+- [x] 1.3 `AccountErasureService.erase_by_admin(user_id, *, now)`：呼叫 `erase(..., delete=users.delete_player_by_admin, reason=REASON_ADMIN_DELETED, retain_scripts=False)`，與 `erase_underage` 並列，更新模組說明。新增測試：寫入原因為 `admin_deleted` 的刪除紀錄；偏好開啟的帳號其上架劇本也全刪；別人的存檔保留且來源參照為空；帳本匿名化（使用者與對話編號為空）；目標是管理員時回傳 `False`、整個交易回復、沒有刪除紀錄；`tests/architecture/test_account_erasure_coverage.py` 仍通過。驗證：抹除相關測試檔（含 SQLite 與 SQL Server 兩軌）加全域守門子集。
+- [x] 1.4 批 1 收尾：跑相關測試與全域守門子集，更新 tasks 完成註記與 HANDOFF（**未跑全套**，如實寫明）。
+
+### 批 1 完成註記（2026-11-24；只跑相關測試加全域守門子集，**未跑全套 pytest 與全套 Node**）
+
+- **1.1**：`ACTION_USER_DELETE = "user.delete"`（`AUDIT_ACTIONS` 23→24）、`REASON_ADMIN_DELETED = "admin_deleted"`（`DELETION_REASONS`）、`DANGEROUS_ACTIONS` 加入 `user.delete`（9→10）。同步更新寫死的既有測試（`test_admin_audit_repository.py`：24 個動作；`test_admin_events.py`：十個危險操作；`tests/js/admin-format.test.js`：動作清單）。文件：`README.md` 稽核動作清單與原因欄位說明、`docs/project資料結構文件.md`（標頭日期與對應 change、兩個欄位說明、列舉對照表、稽核動作與刪除原因字典、第 14 節的異動紀錄：只有列舉值變動，沒有結構變更、沒有遷移、不需要升級 `project`）。
+- **與原 tasks 的出入（一處）**：`tests/test_admin_format_labels.py` 要求前端標籤涵蓋後端全部動作值，所以 `admin-format.js` 的動作標籤 `'user.delete': '刪除帳號'` 在本批就要加（原本在 3.1）；3.1 只剩稽核細節的「原狀態」格式。
+- **1.2**：`UserRepository.delete_player_by_admin`：`id` 相符且 `role != admin` 的條件式 ORM `DELETE`，不限制狀態與生日。新增 `tests/test_user_repository_admin_delete.py`（SQLite 與 SQL Server `project_test` 兩軌各 9 項：使用中、停權、鎖定、待刪除、沒有生日都刪得掉且只刪指定的；管理員刪不掉；不存在；刪除當下再確認條件；重複刪除只成功一次）。
+- **1.3**：`AccountErasureService.erase_by_admin(user_id, *, now)` = `erase(..., delete=delete_player_by_admin, reason=REASON_ADMIN_DELETED)`（`retain_scripts` 不傳）。新增 `tests/test_account_erasure_admin.py`（兩軌各 11 項）：三種狀態立即抹除、刪除紀錄只有內部編號與時間與原因、偏好開啟或關閉劇本都全刪、他人存檔保留且來源參照為空值、帳本匿名化與對話刪除、管理員不被刪、**條件不成立時先寫入同一 Session 的稽核列隨交易一起回復**（含劇本清理）、成功時稽核列保留且不帶外鍵。
+- **驗證**：新增 40 項（兩軌）全數通過；抹除與架構相關 772 通過、2 略過（既有）；全域守門子集加相關測試 1329 通過、2 略過；Node `admin-format.test.js` 47 通過；`openspec validate admin-delete-account --strict` 通過。
+- **簡報衝突**：檢查過，`docs/2.0簡報.md`、圖解產生器與 `build_pptx_40.py` 都沒有寫稽核動作的數量，沒有衝突。
+- **未驗證**：全套 pytest 與 Node（批 4）；服務層與端點（批 2）。
 
 ## 2. 服務層與端點（批 2）
 

@@ -44,9 +44,9 @@ def test_a_row_keeps_every_documented_field(repo, member_session, admin):
     assert stored.detail_json == {"from_tier": "free", "to_tier": "plus", "count": 3}
 
 
-def test_the_documented_actions_are_exactly_the_twenty_three_in_the_specification():
+def test_the_documented_actions_are_exactly_the_twenty_four_in_the_specification():
     assert set(AUDIT_ACTIONS) == {
-        "user.lookup", "user.suspend", "user.unsuspend", "user.change_tier",
+        "user.lookup", "user.suspend", "user.unsuspend", "user.change_tier", "user.delete",   # user.delete：admin-delete-account
         "conversation.read", "conversation.delete", "failures.read", "reauth.failed",
         "account.lock", "appeal.submit", "appeal.read", "account.unlock",
         "limit.set", "publish.suspend", "publish.lift",         # rpg-script-authoring
@@ -54,7 +54,7 @@ def test_the_documented_actions_are_exactly_the_twenty_three_in_the_specificatio
         "script.read", "script.approve", "script.reject", "script.remove", "script.restore",     # rpg-script-publishing
         "report.read", "report.dismiss",                        # rpg-script-reports
     }
-    assert len(AUDIT_ACTIONS) == len(set(AUDIT_ACTIONS)) == 23
+    assert len(AUDIT_ACTIONS) == len(set(AUDIT_ACTIONS)) == 24
 
 
 @pytest.mark.parametrize("action", AUDIT_ACTIONS)

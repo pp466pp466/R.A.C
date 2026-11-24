@@ -22,8 +22,10 @@ REASON_USER_REQUESTED = "user_requested"
 REASON_RESTORE_REPLAY = "restore_replay"   # 備份還原後依日誌取出的紀錄補上的刪除（原因已不可考，見 deletion-replay 規格）
 REASON_UNDERAGE = "underage"               # 補填年齡時發現未滿 18 歲（2026-11-17 前為 13 歲），立即抹除（google-first-login）
 REASON_AGE_UNCONFIRMED = "age_unconfirmed"  # 建立後 24 小時內沒有完成年齡確認，由排程抹除（google-first-login）
+REASON_ADMIN_DELETED = "admin_deleted"      # 管理員在後台刪除（admin-delete-account）：立即抹除、不經寬限期、劇本一律全刪
 DELETION_REASONS = (
     REASON_INACTIVE_12_MONTHS, REASON_USER_REQUESTED, REASON_RESTORE_REPLAY, REASON_UNDERAGE, REASON_AGE_UNCONFIRMED,
+    REASON_ADMIN_DELETED,
 )
 
 

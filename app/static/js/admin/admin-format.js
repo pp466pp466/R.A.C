@@ -30,7 +30,7 @@
     tier: { free: '一般', plus: '進階', vip: '尊榮' },
     role: { user: '使用者', admin: '管理員' },
     action: {
-      'user.lookup': '查詢使用者', 'user.suspend': '停權', 'user.unsuspend': '解除停權', 'user.change_tier': '調整會員等級',
+      'user.lookup': '查詢使用者', 'user.suspend': '停權', 'user.unsuspend': '解除停權', 'user.change_tier': '調整會員等級', 'user.delete': '刪除帳號',
       'conversation.read': '讀取對話', 'conversation.delete': '刪除對話', 'failures.read': '查看模型失敗原文',
       'reauth.failed': '重新輸入密碼失敗',
       'limit.set': '修改營運限制', 'publish.suspend': '暫停發佈', 'publish.lift': '解除暫停發佈', 'wallet.adjust': '調整遊戲幣',

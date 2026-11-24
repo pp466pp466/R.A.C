@@ -8,7 +8,8 @@
    其餘劇本與版本一律刪除（`ScriptRepository.retain_published_anonymously`）。必須在第 0 步之前：解除關聯之後，第 0 步找不到以這位使用者為
    作者的劇本，就不會把別人的存檔對**保留版本**的來源參照也清掉。偏好在交易內讀取（申請之後、寬限期內改的偏好以期滿當下為準）。
    只有「使用者自己申請刪除」與「連續 12 個月未登入」兩條路傳 `True`；未滿 18 歲抹除、逾時未確認年齡與備份還原後的重新抹除
-   一律不傳（預設 `False`，使新增呼叫者時漏傳偏向全刪）。
+   一律不傳（預設 `False`，使新增呼叫者時漏傳偏向全刪）。管理員在後台刪除帳號（`erase_by_admin`，admin-delete-account）同樣不傳：
+   劇本一律全刪，不讀偏好。
 0-1. 刪除這位使用者名下所有版本上的檢舉（`script_reports.version_id` 也是無動作的外鍵：使用者一刪，作者的版本串聯消失，
    還有檢舉就會讓刪除失敗）。**每一條路都做**：不保留劇本的路（偏好關閉、未滿 18 歲、逾時未確認、備份還原後重新抹除）靠這一步；
    偏好開啟時，0' 已處理被刪版本的檢舉並解除保留劇本的作者關聯，這一步只會碰到沒被保留的部分（通常沒有）。
@@ -31,7 +32,7 @@ from datetime import datetime
 from typing import Callable
 
 from app.models.deletion_tombstone import (
-    REASON_AGE_UNCONFIRMED, REASON_INACTIVE_12_MONTHS, REASON_UNDERAGE, REASON_USER_REQUESTED,
+    REASON_ADMIN_DELETED, REASON_AGE_UNCONFIRMED, REASON_INACTIVE_12_MONTHS, REASON_UNDERAGE, REASON_USER_REQUESTED,
 )
 from app.observability import lifecycle_events, security_events
 from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
@@ -113,6 +114,20 @@ class AccountErasureService:
             reason=REASON_UNDERAGE,
             now=now,
             on_erased=lambda uid: security_events.log_event(security_events.ACCOUNT_UNDERAGE_ERASED, user_id=uid),
+        )
+
+    def erase_by_admin(self, user_id: int, *, now: datetime) -> bool:
+        """管理員在後台刪除帳號（admin-delete-account）：立即抹除，不經 `deletion_pending` 與 7 天寬限期；條件（角色不是管理員）在刪除當下再確認一次。
+
+        **劇本一律全刪**（`retain_scripts` 不傳，不讀「匿名保留我已發佈的劇本」偏好）。稽核（`user.delete`）由呼叫者**在呼叫之前**寫入同一個 Session：
+        這裡的 `erase` 會提交，所以稽核與抹除在同一個交易；回傳 `False`（條件不成立）時 `erase` 已回復整個交易，稽核列也一併消失。
+        不另記安全事件：成功後由後台記一筆 `admin.action`（只有管理員編號與動作名稱）。
+        """
+        return self.erase(
+            user_id,
+            delete=self._users.delete_player_by_admin,
+            reason=REASON_ADMIN_DELETED,
+            now=now,
         )
 
     def erase_unconfirmed(self, user_id: int, *, now: datetime) -> bool:

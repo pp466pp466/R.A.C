@@ -1,6 +1,6 @@
 # project 資料庫結構（Database Schema 與 Data Dictionary）
 
-> 狀態：已實作 ｜ 最後更新：2026-11-23 ｜ 對應 change：rpg-story-view（`sessions` 新增 `suggestions_json`，可為空，保存最近一次產生的行動建議）、rpg-script-reports（新增資料表 `script_reports`；`users` 新增 `keep_published_scripts`；設定鍵 `script_report_daily`；稽核動作新增 `report.read`、`report.dismiss`）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`；版本狀態新增 `removed`；稽核動作新增 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0023_story_suggestions`（實際的 `project` 目前在 `0022_script_reports`（2026-11-22 已套用，見第 14 節；`0023` 尚未套用）；`0021` 已於 2026-11-20 由 `0017_story_preference` 升級，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
+> 狀態：已實作 ｜ 最後更新：2026-11-24 ｜ 對應 change：admin-delete-account（沒有結構變更：`deletion_tombstones.reason` 新增允許值 `admin_deleted`、稽核動作新增 `user.delete`）、rpg-story-view（`sessions` 新增 `suggestions_json`，可為空，保存最近一次產生的行動建議）、rpg-script-reports（新增資料表 `script_reports`；`users` 新增 `keep_published_scripts`；設定鍵 `script_report_daily`；稽核動作新增 `report.read`、`report.dismiss`）、rpg-script-publishing（`script_versions` 新增 `submitted_at`、`removed_by`、`decision_category`、`decision_note`、`decided_at` 與索引 `ix_script_versions_status_published_at`；版本狀態新增 `removed`；稽核動作新增 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`）、safe-mode-toggle（`sessions` 新增 `safe_hint_at`；舊值 `standard` 讀取時讀作 `adult`，不改寫既有資料）、adult-only-signup（`users` 新增 `adult_declared_at`、`adult_declaration_version`；`is_adult_at_confirmation` 不再寫入）、rpg-turn-revision（`memory_logs` 新增 `revision`、`regen_count`、`revising_started_at`、`state_before_json`，新增 `turn_regenerations`，設定鍵 `rpg.free_regenerations`）、story-preference（新增 `users.story_preference`、`script_versions.audience`）、rpg-notebook（沒有結構變更，只補固定值與欄位行為）、rpg-turn-engine、game-wallet、rpg-character-creation、rpg-script-authoring（以及先前所有建立或修改資料表的 change，見第 12 節） ｜ 資料庫版本：`0023_story_suggestions`（實際的 `project` 目前在 `0022_script_reports`（2026-11-22 已套用，見第 14 節；`0023` 尚未套用）；`0021` 已於 2026-11-20 由 `0017_story_preference` 升級，見第 14 節） ｜ 規範依據：AGENTS.md 第 4、10、11 節
 
 本文件是 SQL Server `project` 資料庫的**結構參考**：共 **22 張資料表、269 個欄位**（另有 Alembic 自己的 `alembic_version`）。第 3 節用 ERD 說明關聯，第 5 節是逐表逐欄的資料字典，第 6、7 節補充固定值與 JSON 欄位的內容。
 
@@ -785,7 +785,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | 1 | `id` | INTEGER IDENTITY(1,1) | 否 | — | PK | 內部主鍵（自動遞增）；不對外暴露。 |
 | 2 | `user_id` | INTEGER | 否 | — | — | 被抹除帳號的內部編號；沒有外鍵（帳號已不存在），不含個資。 |
 | 3 | `deleted_at` | DATETIME2(6) | 否 | — | — | 抹除時間。 |
-| 4 | `reason` | NVARCHAR(30) | 否 | — | — | 抹除原因：inactive_12_months｜user_requested｜restore_replay｜underage｜age_unconfirmed。 |
+| 4 | `reason` | NVARCHAR(30) | 否 | — | — | 抹除原因：inactive_12_months｜user_requested｜restore_replay｜underage｜age_unconfirmed｜admin_deleted。 |
 
 索引與約束：
 
@@ -1321,7 +1321,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `users.adult_confirm_method` | `self_declared` | 目前只有 self_declared（自行聲明）；日後法務要求更強的方式時只更換確認方式。 |
 | `user_identities.provider` | `google` | 目前只有 google。 |
 | `auth_tokens.purpose` | `reset_password` | 目前只有 reset_password（管理員重設密碼）。 |
-| `deletion_tombstones.reason` | `inactive_12_months`｜`user_requested`｜`restore_replay`｜`underage`｜`age_unconfirmed` | 見下方「刪除原因」。 |
+| `deletion_tombstones.reason` | `inactive_12_months`｜`user_requested`｜`restore_replay`｜`underage`｜`age_unconfirmed`｜`admin_deleted` | 見下方「刪除原因」。 |
 | `lock_strikes.kind` | `identity_rejected`｜`rate_limited` | 見 users.lock_reason。 |
 | `chat_messages.role` | `user`｜`assistant` | user＝使用者；assistant＝客服 AI。 |
 | `chat_messages.msg_status` | `ok`｜`fallback` | ok＝正常回覆；fallback＝降級文案（模型兩次失敗），不計入每日配額。 |
@@ -1329,7 +1329,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `llm_call_logs.kind` | `chat`｜`summary`｜`script_review`｜`protagonist_gen`｜`protagonist_review`｜`rpg_stream`｜`rpg_state`｜`rpg_opening`｜`rpg_notebook`｜`rpg_suggest` | chat＝客服對話；summary＝對話摘要壓縮；script_review＝劇本審查的模型層；protagonist_gen＝AI 生成主角預覽；protagonist_review＝開存檔時主角文字的模型層審查；rpg_stream＝RPG 回合的劇情串流；rpg_state＝回合結束後的狀態呼叫（結構化輸出）；rpg_opening＝第 0 幕的串流；rpg_notebook＝每完成 10 輪的記事簿抓取（結構化輸出，背景執行）；rpg_suggest＝玩家點圖示才產生的行動建議（結構化輸出，不扣遊戲幣，帳本不含建議文字）。 |
 | `llm_call_logs.provider` | `gemini`｜`openai-compatible` | gemini＝客服；openai-compatible＝RPG 用途（目前為 OpenRouter 的開放模型）。兩者各有自己的金鑰與模型。 |
 | `llm_call_logs.status` | `ok`｜`validation_failed`｜`rate_limited`｜`server_error`｜`timeout`｜`network`｜`blocked`｜`config_error` | 見下方「帳本結果狀態」。 |
-| `admin_audit_logs.action` | `user.lookup`｜`user.suspend`｜`user.unsuspend`｜`user.change_tier`｜`conversation.read`｜`conversation.delete`｜`failures.read`｜`reauth.failed`｜`account.lock`｜`appeal.submit`｜`appeal.read`｜`account.unlock`｜`limit.set`｜`publish.suspend`｜`publish.lift`｜`wallet.adjust`｜`script.read`｜`script.approve`｜`script.reject`｜`script.remove`｜`script.restore`｜`report.read`｜`report.dismiss` | 見下方「稽核動作」。 |
+| `admin_audit_logs.action` | `user.lookup`｜`user.suspend`｜`user.unsuspend`｜`user.change_tier`｜`user.delete`｜`conversation.read`｜`conversation.delete`｜`failures.read`｜`reauth.failed`｜`account.lock`｜`appeal.submit`｜`appeal.read`｜`account.unlock`｜`limit.set`｜`publish.suspend`｜`publish.lift`｜`wallet.adjust`｜`script.read`｜`script.approve`｜`script.reject`｜`script.remove`｜`script.restore`｜`report.read`｜`report.dismiss` | 見下方「稽核動作」。 |
 | `alert_states.alert_key` | `usage_budget`｜`llm_error_rate`｜`llm_config_error`｜`llm_latency_p95`｜`login_lockouts` | 見下方「營運告警」。 |
 | `alert_states.state` | `ok`｜`firing` | ok＝正常；firing＝告警中。 |
 | `alert_states.severity` | `warning`｜`critical` | warning＝警告；critical＝嚴重；只有告警中才有值。 |
@@ -1389,6 +1389,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `user.suspend` | 停權 |
 | `user.unsuspend` | 解除停權 |
 | `user.change_tier` | 調整會員等級 |
+| `user.delete` | 管理員刪除帳號（立即抹除；目標只存被刪帳號的對外識別碼，細節只有原狀態） |
 | `conversation.read` | 讀取對話全文（僅限使用者主動提交的意見回饋與被內容安全過濾標記的對話） |
 | `conversation.delete` | 刪除違規對話 |
 | `failures.read` | 讀取模型輸出驗證失敗的原文 |
@@ -1451,6 +1452,7 @@ Google 登入的穩定識別（sub）。一個帳號最多一個 Google 身分�
 | `restore_replay` | 備份還原後依日誌補上的刪除 |
 | `underage` | 補填年齡時發現未滿 13 歲，立即抹除 |
 | `age_unconfirmed` | 建立後 24 小時內沒有完成年齡確認 |
+| `admin_deleted` | 管理員在後台刪除（立即抹除、不經寬限期、劇本一律全刪） |
 
 ### 6.7 劇本版本狀態（`script_versions.status`）
 
@@ -1827,3 +1829,4 @@ flowchart TD
 | 2026-11-22 | 文件 | 本文件 | 同步 rpg-script-reports ④ 批：`admin_audit_logs.action` 的固定值新增 `report.read`（管理員讀取一個版本的檢舉）與 `report.dismiss`（管理員結案為不成立），由 21 個變 23 個（第 6.3 節的固定值字典與稽核動作表）；細節只有版本與劇本的對外識別碼與整數筆數。**只是固定值說明，沒有結構變更、沒有遷移、沒有套用到 `project`**：`action` 欄位本來就是 `NVARCHAR(40)` 且不加 CHECK 約束，值域由程式（`AUDIT_ACTIONS`）與本文件維護 | 本文件 |
 | 2026-11-23 | 新增 | 欄位 `sessions.suggestions_json`（JSON，可為空） | 視覺小說式遊戲畫面：存檔保存最近一次產生的行動建議與其錨點（最後完成回合的 seq 與 revision，第 0 幕為 0、0）；錨點相等才有效，新回合完成與修訂成功都使舊建議自動過期，所以回合引擎與修訂流程不需要清除它；寫入不改存檔的 `version`。不回填、不建索引、無預設的非空值；`sessions` 由 30 欄變 31 欄、全庫欄位共 269 個。內容由模型依玩家的角色卡與近期劇情產生，視為個資：與存檔同期限，隨存檔與帳號刪除（同一資料列）、納入個人資料匯出。**尚未套用到實際的 `project`**（只在程式與 `project_test` 驗證；套用時依本節的做法先備份、再升級並追加「套用」列） | `0023_story_suggestions` |
 | 2026-11-23 | 文件 | 本文件 | 同步 rpg-story-view 批 3：`llm_call_logs.kind` 的允許值新增 `rpg_suggest`（第 5 節的欄位說明與第 6 節的固定值字典）：玩家點行動建議圖示才發出的結構化呼叫，記入實際使用的模型與 token、計入全站每日 token 上限、不扣遊戲幣、帳本不含建議文字。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：`kind` 為 `NVARCHAR(20)`，新值 11 字放得下 | 本文件 |
+| 2026-11-24 | 文件 | 本文件 | 同步 admin-delete-account 批 1：`deletion_tombstones.reason` 的允許值新增 `admin_deleted`（第 5 節的欄位說明、第 6 節的固定值字典與列舉對照表）、`admin_audit_logs.action` 的允許值新增 `user.delete`（動作 24 個）：管理員在後台刪除帳號時，立即抹除並留下刪除紀錄與稽核。**沒有結構變更、沒有遷移、不需要升級 `project` 資料庫**：兩個欄位都是無約束的字串（`NVARCHAR(30)`），新值放得下 | 本文件 |

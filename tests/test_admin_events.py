@@ -46,9 +46,10 @@ def test_only_the_dangerous_actions_can_fail_reauthentication(log_lines, action)
     assert log_lines() == []
 
 
-def test_the_dangerous_actions_are_exactly_the_nine_that_need_a_password():
+def test_the_dangerous_actions_are_exactly_the_ten_that_need_a_password():
     assert set(DANGEROUS_ACTIONS) == {
         "user.suspend", "user.unsuspend", "user.change_tier", "conversation.delete", "account.unlock",
+        "user.delete",              # admin-delete-account：刪除帳號（不可復原）
         "publish.lift",             # rpg-script-authoring：解除暫停發佈
         "wallet.adjust",            # game-wallet：調整遊戲幣餘額
         "script.remove", "script.restore",      # rpg-script-publishing：管理員下架與恢復劇本（讀取、核可與退回不需要密碼）
