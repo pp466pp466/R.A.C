@@ -67,7 +67,7 @@ SYNCED_RULES = [
     # 2026-11-02：玩家只用 Google 登入（畫面只有 Google 與條款，生日登入後才補填，回訪一鍵登入，保持登入），管理員 Google 加密碼；
     # 未補填年齡的帳號最多保留 24 小時，未滿 13 歲立即抹除，登入有效期改為閒置 30 天、每次使用就續期
     (10, "有效期為閒置 30 天、每次使用就續期（由框架在每次回應時重新簽章，不另放簽發時間），不設絕對上限", "references/auth-security.md"),
-    (10, "已登入時打開首頁（/）或登入頁，直接導向登入後的預設頁面（單一常數；目前為 /game，即 RPG 的入口：選擇劇本與我的存檔，不直接進入聊天；客服 /cs 仍可直接開啟）", "references/auth-security.md"),
+    (10, "已登入時打開首頁（/）或登入頁，直接導向登入後的預設頁面（依角色各一個常數：玩家為 /game，即 RPG 的入口：選擇劇本與我的存檔，不直接進入聊天，管理員為 /admin；登入前指定的合法返回位置優先；客服 /cs 仍可直接開啟）", "references/auth-security.md"),
     (10, "密碼：只有管理員有密碼（玩家不設密碼，只用 Google 登入）", "references/auth-security.md"),
     (10, "玩家只以 Google 登入，首次登入即註冊（沒有密碼註冊，也沒有信箱驗證信、玩家端的重設密碼信與 EMAIL_VERIFICATION_REQUIRED", "references/auth-security.md"),
     (10, "新使用者必須兩者皆勾選，並記錄 terms_version 與 terms_accepted_at，以及年滿 18 歲聲明的時間與版本；回訪的使用者不必勾選，一鍵登入", "references/auth-security.md"),
