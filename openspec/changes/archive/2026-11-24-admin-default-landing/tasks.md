@@ -49,6 +49,12 @@
 - **未驗證**：Edge、真實手機、展示環境（尚未部署）、真實 Google 帳號登入（驗證用假供應商）。
 - **下一步**：使用者驗收 → 封存（`openspec archive`，`auth-pages` 的修改與新增、`admin-console` 的新增同步到主規格）→ 更新路線圖與 HANDOFF；部署到展示環境由使用者決定。
 
+## 封存紀錄（2026-11-24）
+
+- 使用者要求「部署後封存」：先以 `aws_demo.py deploy --tag cbfb1a1 --execute` 部署到展示環境 rac001（21 步全過，沒有遷移；回復點前一版映像 `b63f4e7`；外部 `/healthz`、`/readyz`、`/login` 200、線上 `login-password.js` 備援為 `/admin`），再封存。展示環境上以真實 Google 帳號走管理員登入**沒有**實際操作（需要 Google 登入）。
+- 封存同步：`auth-pages`（修改「登入後的預設頁面與首頁導向」、新增「管理員的預設頁面」）與 `admin-console`（新增「後台頂列的導覽連結」）已同步到主規格，`openspec validate --specs` 103 項通過。同步前修正 `admin-console` delta：頂列順序原寫「客服、帳號、冒險」，與實作及測試（`test_the_top_bar_links_to_the_adventure_the_chat_and_the_account_in_that_order`）不符，改為「冒險、客服、帳號」；`proposal.md` 第 28 行的括號只是列舉，沒有改。
+- 簡報衝突 3 項（2.0 簡報第 356、358 行與入口圖產生器的 `landing_for` 卡）使用者尚未決定，沒有動；另因部署，2.0 簡報的映像標籤與回復點也已過時（見 HANDOFF）。
+
 ## Workflow follow-up
 
 - 使用者驗收通過後才封存（`openspec archive`；封存時 `auth-pages` 的修改與新增、`admin-console` 的新增同步到主規格）；封存後更新 `docs/路線圖-roadmap.md` 與 HANDOFF。
