@@ -22,7 +22,7 @@ from tests.support.idor import logged_in_client
 
 ENDPOINTS = (
     "overview", "audit", "lookup", "user", "suspend", "unsuspend", "tier", "feedback", "flagged", "read", "delete", "failures",
-    "locked", "appeals", "unlock", "wallet",
+    "locked", "appeals", "unlock", "wallet", "delete_user",
 )
 
 
@@ -39,6 +39,7 @@ class World:
             self.vip_id = add_user(session, 3, age=30, member_tier="vip").id
             self.suspended_id = add_user(session, 4, age=30, status=STATUS_SUSPENDED).id
             self.locked_id = add_user(session, 5, age=30, locked_at=START, lock_reason="rate_limited").id
+            self.doomed_id = add_user(session, 6, age=30).id                      # admin-delete-account：刪除帳號的目標（只有 delete_user 會動到它）
             LockAppealRepository(session).create(self.locked_id, "請幫我解除鎖定", START)
             target = session.get(User, self.target_id)
             chats = ChatRepository(session)
@@ -54,6 +55,7 @@ class World:
             self.conversation_public = conv.public_id
             self.suspended_public = session.get(User, self.suspended_id).public_id
             self.locked_public = session.get(User, self.locked_id).public_id
+            self.doomed_public = session.get(User, self.doomed_id).public_id
 
     def client(self, who):
         if who == "anonymous":
@@ -82,6 +84,7 @@ class World:
             "appeals": ("GET", "/api/admin/appeals", None),
             "unlock": ("POST", f"/api/admin/users/{self.locked_public}/unlock", password),
             "wallet": ("POST", f"/api/admin/users/{self.target_public}/wallet/adjust", {**password, "bucket": "paid", "delta": 50, "reason": "活動補償"}),
+            "delete_user": ("POST", f"/api/admin/users/{self.doomed_public}/delete", {**password, "reason": "違規帳號"}),
         }[name]
 
     def send(self, who, name, **overrides):
@@ -129,7 +132,7 @@ def test_a_logged_in_non_admin_gets_the_same_404_as_a_missing_endpoint_and_nothi
     assert (world.user(world.target_id), world.user(world.suspended_id), world.user(world.locked_id), world.count(ChatConversation), world.count(AdminAuditLog)) == before
 
 
-@pytest.mark.parametrize("name", [n for n in ENDPOINTS if n in ("lookup", "suspend", "unsuspend", "tier", "delete", "unlock", "wallet")])
+@pytest.mark.parametrize("name", [n for n in ENDPOINTS if n in ("lookup", "suspend", "unsuspend", "tier", "delete", "unlock", "wallet", "delete_user")])
 @pytest.mark.parametrize("body", [{"data": "not json"}, None])
 def test_a_non_admin_with_a_malformed_body_still_only_sees_404_never_415_or_400(world, name, body):
     method, path, _ = world.request(name)
@@ -181,7 +184,7 @@ def test_a_missing_admin_path_is_no_store_too(world):
     assert not_found_body(world).headers.get("Cache-Control") == "no-store"
 
 
-@pytest.mark.parametrize("name", ["lookup", "suspend", "unsuspend", "tier", "delete", "unlock", "wallet"])
+@pytest.mark.parametrize("name", ["lookup", "suspend", "unsuspend", "tier", "delete", "unlock", "wallet", "delete_user"])
 def test_a_write_without_a_csrf_token_is_403_and_changes_nothing(world, name):
     method, path, body = world.request(name)
     client = raw_client(world.app)
@@ -211,12 +214,13 @@ def test_there_are_no_endpoints_for_listing_users_changing_the_audit_or_deleting
     assert world.client("admin").open(path, method=method, json={} if method != "GET" else None).status_code in (404, 405)
 
 
-def test_the_registered_admin_routes_are_exactly_the_twenty_six_documented_ones(world):
+def test_the_registered_admin_routes_are_exactly_the_twenty_seven_documented_ones(world):
     routes = {(rule.rule, method) for rule in world.app.url_map.iter_rules() if rule.rule.startswith("/api/admin") for method in rule.methods - {"HEAD", "OPTIONS"}}
     assert routes == {
         ("/api/admin/overview", "GET"), ("/api/admin/audit", "GET"), ("/api/admin/users/lookup", "POST"),
         ("/api/admin/users/<public_id>", "GET"), ("/api/admin/users/<public_id>/suspend", "POST"),
         ("/api/admin/users/<public_id>/unsuspend", "POST"), ("/api/admin/users/<public_id>/tier", "POST"),
+        ("/api/admin/users/<public_id>/delete", "POST"),                                                                  # admin-delete-account
         ("/api/admin/feedback", "GET"), ("/api/admin/flagged", "GET"), ("/api/admin/conversations/<public_id>", "GET"),
         ("/api/admin/conversations/<public_id>/delete", "POST"), ("/api/admin/failures", "GET"),
         ("/api/admin/locked", "GET"), ("/api/admin/appeals", "GET"), ("/api/admin/users/<public_id>/unlock", "POST"),
@@ -228,6 +232,60 @@ def test_the_registered_admin_routes_are_exactly_the_twenty_six_documented_ones(
         ("/api/admin/scripts/versions/<public_id>/reports", "GET"),                                                      # rpg-script-reports
         ("/api/admin/scripts/versions/<public_id>/reports/dismiss", "POST"),
     }
+
+
+# ---- 刪除帳號（admin-delete-account）------------------------------------------------------------
+
+def test_deleting_an_account_returns_ok_and_the_account_is_gone_with_one_audit_row_and_one_tombstone(world):
+    from app.models import DeletionTombstone
+
+    response = world.client("admin").post(f"/api/admin/users/{world.doomed_public}/delete", json={"password": GOOD_PASSWORD, "reason": "違規帳號"})
+    assert response.status_code == 200 and response.get_json() == {"ok": True}
+    with Session(world.engine) as session:
+        assert session.get(User, world.doomed_id) is None
+        [row] = session.scalars(select(AdminAuditLog).where(AdminAuditLog.action == "user.delete"))
+        assert (row.target_user_public_id, row.reason, row.detail_json) == (world.doomed_public, "違規帳號", {"from_status": STATUS_ACTIVE})
+        assert [(t.user_id, t.reason) for t in session.scalars(select(DeletionTombstone))] == [(world.doomed_id, "admin_deleted")]
+    again = world.client("admin").post(f"/api/admin/users/{world.doomed_public}/delete", json={"password": GOOD_PASSWORD, "reason": "再刪一次"})
+    assert again.status_code == 404                                                   # 已不存在：與其他不存在的識別碼相同
+
+
+def test_the_deleted_players_browser_is_treated_as_logged_out(world):
+    with Session(world.engine) as session:
+        doomed_client = logged_in_client(world.app, session.get(User, world.doomed_id))
+    assert doomed_client.get("/api/auth/me").status_code == 200                       # 刪除前是登入的
+    world.client("admin").post(f"/api/admin/users/{world.doomed_public}/delete", json={"password": GOOD_PASSWORD, "reason": "違規帳號"})
+    assert doomed_client.get("/api/auth/me").status_code == 401
+
+
+def test_deleting_an_admin_is_403_admin_target_forbidden_and_changes_nothing(world):
+    with Session(world.engine) as session:
+        other_admin = add_user(session, 7, age=30, role="admin")
+        session.commit()
+        public_id = other_admin.public_id
+    before = world.count(AdminAuditLog)
+    response = world.client("admin").post(f"/api/admin/users/{public_id}/delete", json={"password": GOOD_PASSWORD, "reason": "違規"})
+    assert response.status_code == 403 and response.get_json()["error"]["code"] == "admin_target_forbidden"
+    assert world.count(AdminAuditLog) == before and world.count(User) == 7
+
+
+@pytest.mark.parametrize("body", [{"password": GOOD_PASSWORD}, {"reason": "違規"}, {"password": "wrong-password", "reason": "違規"}])
+def test_a_missing_reason_or_password_or_a_wrong_password_is_400_and_the_account_stays(world, body):
+    response = world.client("admin").post(f"/api/admin/users/{world.doomed_public}/delete", json=body)
+    assert response.status_code == 400
+    assert world.count(User) == 6
+
+
+def test_deleting_an_unknown_id_is_404(world):
+    response = world.client("admin").post("/api/admin/users/00000000-0000-4000-8000-000000000000/delete", json={"password": GOOD_PASSWORD, "reason": "違規"})
+    assert response.status_code == 404 and world.count(User) == 6
+
+
+def test_there_is_no_get_or_batch_endpoint_for_deleting_accounts(world):
+    admin = world.client("admin")
+    assert admin.get(f"/api/admin/users/{world.doomed_public}/delete").status_code in (404, 405)
+    assert admin.post("/api/admin/users/delete", json={"password": GOOD_PASSWORD, "reason": "違規"}).status_code in (404, 405)
+    assert world.count(User) == 6
 
 
 # ---- 請求格式與錯誤 -------------------------------------------------------------------------

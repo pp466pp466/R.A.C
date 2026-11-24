@@ -238,9 +238,11 @@ flowchart TD
 | 劇本檢舉（rpg-script-reports） | 檢舉只升高「被檢舉」檢視的優先度（紅線理由者最前，其次未結案人數多者，再其次最早檢舉者），**不自動下架**。管理員讀取一個版本的檢舉內容每次先寫 `report.read` 稽核再回傳，**拿不到檢舉人**（查詢根本不選取）；結案為「不成立」**不需要密碼**（高風險清單不含檢舉結案，與核可、退回同級；寫 `report.dismiss`），結案為「下架」沿用 `script.remove`（須密碼，檢舉在同一個交易自動結為 `removed`），**不提供免密碼的下架捷徑**；版本被新版本取代時未結案的檢舉由系統結為 `superseded`；稽核細節與事件只有識別碼與整數筆數，不含自寫文字、理由、檢舉人與標題 |
 | 找使用者 | 主要入口是警告（總覽的今日警告 → 被標記對話 → 看使用者）；信箱精確查詢是次要入口、供客服反應時使用；沒有使用者清單與模糊搜尋 |
 | 重新輸入密碼 | `AuthService.confirm_password`：與登入共用失敗計數與鎖定（連續 5 次鎖定 15 分鐘），鎖定中即使正確也拒絕且訊息相同；成功不重設計數；沒有設定密碼的管理員不能執行（`no_password`） |
-| 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
-| 稽核 | `admin_audit_logs`：23 個固定動作（含劇本審核的 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`，與劇本檢舉的 `report.read`、`report.dismiss`），只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
+| 操作對象 | 只能是一般使用者：管理員（含自己）403 `admin_target_forbidden`；`deletion_pending` 409（**刪除帳號例外：`deletion_pending` 也可刪**，見下方「管理員刪除帳號」）；兩位管理員同時操作靠條件式 UPDATE 不互相覆蓋 |
+| 稽核 | `admin_audit_logs`：24 個固定動作（含管理員刪除帳號的 `user.delete`，細節只有原狀態、不含 email 或暱稱；含劇本審核的 `script.read`、`script.approve`、`script.reject`、`script.remove`、`script.restore`，與劇本檢舉的 `report.read`、`report.dismiss`），只存對外識別碼、管理員填寫的原因與列舉細節，不含 email 與訊息；Repository 沒有更新與刪除（見 [資料模型-data-model.md](資料模型-data-model.md)） |
 | 回應 | `/admin` 與 `/api/admin/` 一律 `Cache-Control: no-store`；非 GET 須通過 CSRF |
+
+**管理員刪除帳號**（admin-delete-account）：`AdminService.delete_user`——`require_admin` → 原因（1 至 200 字）→ 找目標（404）→ 角色不是 `user` 則 403 → `_confirm`（重新輸入密碼）→ **先寫 `user.delete` 稽核（只 flush）→ 再呼叫 `AccountErasureService.erase_by_admin`**（單一抹除出口，內部提交，所以稽核與抹除在同一個交易；條件式刪除 `role != admin` 不成立時整個回復、稽核列一併消失、回 409 `state_changed`）→ 成功後才記 `admin.action` 日誌。不經 7 天寬限期、不套用匿名保留（劇本全刪）、刪除紀錄原因 `admin_deleted`；沒有使用者清單與批次端點。
 
 `/api/admin/*` 端點（全部需要登入且是管理員；`POST` 另需 CSRF）：
 
@@ -253,6 +255,7 @@ flowchart TD
 | `/api/admin/users/<public_id>/suspend` | POST | 停權（原因與密碼） |
 | `/api/admin/users/<public_id>/unsuspend` | POST | 解除停權（密碼） |
 | `/api/admin/users/<public_id>/tier` | POST | 調整會員等級（密碼） |
+| `/api/admin/users/<public_id>/delete` | POST | 刪除帳號（原因與密碼；一次一個、立即抹除、劇本全刪；回 `{"ok": true}`） |
 | `/api/admin/feedback` | GET | 意見回饋對話清單 |
 | `/api/admin/flagged` | GET | 被標記對話清單（帶今日被擋次數與暫停截止時間） |
 | `/api/admin/conversations/<public_id>` | GET | 讀取可讀對話的全文（最多 200 則） |

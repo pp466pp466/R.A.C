@@ -342,7 +342,7 @@ def test_readme_admin_endpoint_tables_list_exactly_the_registered_routes():
     for rule in app.url_map.iter_rules():
         if rule.rule.startswith("/api/admin/") or rule.endpoint.startswith("admin_pages."):
             actual.update((rule.rule, method) for method in rule.methods - {"HEAD", "OPTIONS"})
-    assert len(actual) == 27, "沒有掃到預期數量的路由，比對可能是空洞的"          # rpg-script-reports：新增讀取檢舉與結案為不成立兩個端點（25 → 27）
+    assert len(actual) == 28, "沒有掃到預期數量的路由，比對可能是空洞的"          # admin-delete-account：新增刪除帳號端點（27 → 28）；先前 rpg-script-reports：新增讀取檢舉與結案為不成立兩個端點（25 → 27）
     assert documented == actual, f"README 多寫：{sorted(documented - actual)}；漏寫：{sorted(actual - documented)}"
 
 

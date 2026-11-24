@@ -450,6 +450,7 @@ change `admin-console`。處理客服用量限制之後的結果：被安全過�
 | `/api/admin/users/<public_id>/suspend` | POST | 停權：請求 `reason`（必填，1 至 200 字）、`password`（管理員自己的密碼）。狀態改為 `suspended` 並使 `token_version` 加 1，既有登入立即失效 | 是（管理員） |
 | `/api/admin/users/<public_id>/unsuspend` | POST | 解除停權：請求 `password`。結果一律是 `active` | 是（管理員） |
 | `/api/admin/users/<public_id>/tier` | POST | 調整會員等級：請求 `tier`（`free`、`plus`、`vip`）、`password`。額度立即改變 | 是（管理員） |
+| `/api/admin/users/<public_id>/delete` | POST | 刪除帳號（admin-delete-account）：請求 `reason`（必填，1 至 200 字）、`password`。一次一個、**立即且不可復原地抹除**（走單一抹除出口，不經寬限期，劇本一律全刪，刪除紀錄原因 `admin_deleted`），稽核 `user.delete` 與抹除同一個交易；只能刪角色為 `user` 的帳號（管理員含自己 403 `admin_target_forbidden`，不存在 404；`deletion_pending` 也可刪），目標在檢查後變成管理員 409 `state_changed`；回應 `{"ok": true}` | 是（管理員） |
 | `/api/admin/feedback` | GET | 意見回饋對話的清單（只有識別碼、次數與時間）。分頁同 `audit` | 是（管理員） |
 | `/api/admin/flagged` | GET | 被內容安全過濾標記的對話清單（警告）。每筆另帶該使用者今日被擋的次數與客服對話暫停的截止時間。分頁同 `audit` | 是（管理員） |
 | `/api/admin/conversations/<public_id>` | GET | 讀取一個「可讀」對話的全文（最多 200 則，`has_more` 告知還有更多）。先寫稽核（`conversation.read`）再回傳；稽核寫入失敗就不回傳 | 是（管理員） |

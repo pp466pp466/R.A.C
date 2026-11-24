@@ -25,11 +25,22 @@
 
 ## 2. 服務層與端點（批 2）
 
-- [ ] 2.1 `AdminService` 注入抹除服務（`registry.py` 的後台組裝處，沿用 `AccountErasureService(users, scripts, tombstones, commit=session.commit, rollback=session.rollback)`），新增 `delete_user(admin, public_id, *, reason, password)`：`require_admin` → `_reason` → `_find_user`（404）→ 角色不是 `user` 則 `AdminTargetForbidden` → `_confirm`（動作 `user.delete`）→ `_record`（原因與 `{"from_status": …}`，`changed=False`）→ `erase_by_admin`；回傳 `False` 時拋 `Conflict(code="state_changed")`；成功後才呼叫 `admin_events.log_action`。**不使用 `_manageable_target`**（它會擋 `deletion_pending`）。
-- [ ] 2.2 `app/controllers/admin_api_controller.py` 新增 `POST /users/<public_id>/delete`：`_admin()`、`read_json_object()`、呼叫服務、回 `jsonify(ok=True)`；Controller 不寫權限判斷。**同一項一併更新 `README.md` 的端點表與路由數**（`tests/test_readme.py` 比對 README 與實際路由，寫死的數量 27→28 要隨之更新並確認是刻意改變）。
-- [ ] 2.3 Service 測試（新檔 `tests/test_admin_delete_user.py`）：成功路徑（帳號、對話、存檔、錢包、劇本、身分都不存在；刪除紀錄與 `user.delete` 稽核；稽核目標是對外識別碼、細節只有原狀態、沒有 email 或暱稱）；`deletion_pending` 可刪；管理員與自己 `admin_target_forbidden` 且無稽核；不存在 404；缺少或過長的原因 400 欄位 `reason`；密碼錯誤 400 欄位 `password` 並保存 `reauth.failed`（含 `user.delete`）、連續失敗鎖定；沒有密碼 `no_password`；**原子性**：注入失敗的 `erase`（或目標變成管理員）時沒有稽核列、沒有刪除紀錄、帳號仍在；成功後日誌只有管理員編號與動作名稱。
-- [ ] 2.4 API 測試（沿用既有後台 API 測試的做法）：非管理員與未登入一律 404（含格式錯誤的本文）、缺 CSRF 被擋、回應形狀 `{"ok": true}`、刪除後原 session cookie 視為未登入、同一 Google 信箱可重新建立新帳號；驗證：相關測試加全域守門子集。
-- [ ] 2.5 批 2 收尾：更新 tasks 完成註記與 HANDOFF（**未跑全套**，如實寫明）。
+- [x] 2.1 `AdminService` 注入抹除服務（`registry.py` 的後台組裝處，沿用 `AccountErasureService(users, scripts, tombstones, commit=session.commit, rollback=session.rollback)`），新增 `delete_user(admin, public_id, *, reason, password)`：`require_admin` → `_reason` → `_find_user`（404）→ 角色不是 `user` 則 `AdminTargetForbidden` → `_confirm`（動作 `user.delete`）→ `_record`（原因與 `{"from_status": …}`，`changed=False`）→ `erase_by_admin`；回傳 `False` 時拋 `Conflict(code="state_changed")`；成功後才呼叫 `admin_events.log_action`。**不使用 `_manageable_target`**（它會擋 `deletion_pending`）。
+- [x] 2.2 `app/controllers/admin_api_controller.py` 新增 `POST /users/<public_id>/delete`：`_admin()`、`read_json_object()`、呼叫服務、回 `jsonify(ok=True)`；Controller 不寫權限判斷。**同一項一併更新 `README.md` 的端點表與路由數**（`tests/test_readme.py` 比對 README 與實際路由，寫死的數量 27→28 要隨之更新並確認是刻意改變）。
+- [x] 2.3 Service 測試（新檔 `tests/test_admin_delete_user.py`）：成功路徑（帳號、對話、存檔、錢包、劇本、身分都不存在；刪除紀錄與 `user.delete` 稽核；稽核目標是對外識別碼、細節只有原狀態、沒有 email 或暱稱）；`deletion_pending` 可刪；管理員與自己 `admin_target_forbidden` 且無稽核；不存在 404；缺少或過長的原因 400 欄位 `reason`；密碼錯誤 400 欄位 `password` 並保存 `reauth.failed`（含 `user.delete`）、連續失敗鎖定；沒有密碼 `no_password`；**原子性**：注入失敗的 `erase`（或目標變成管理員）時沒有稽核列、沒有刪除紀錄、帳號仍在；成功後日誌只有管理員編號與動作名稱。
+- [x] 2.4 API 測試（沿用既有後台 API 測試的做法）：非管理員與未登入一律 404（含格式錯誤的本文）、缺 CSRF 被擋、回應形狀 `{"ok": true}`、刪除後原 session cookie 視為未登入、同一 Google 信箱可重新建立新帳號；驗證：相關測試加全域守門子集。
+- [x] 2.5 批 2 收尾：更新 tasks 完成註記與 HANDOFF（**未跑全套**，如實寫明）。
+
+### 批 2 完成註記（2026-11-24；只跑相關測試加全域守門子集，**未跑全套 pytest 與全套 Node**；批 1 已提交為 `704ff80`）
+
+- **2.1**：`AdminService.delete_user(admin, public_id, *, reason, password)`，順序：`require_admin` → `_reason` → `_find_user`（404）→ 角色不是 `user` 則 `AdminTargetForbidden` → `_confirm`（動作 `user.delete`）→ `_record`（原因與 `{"from_status": …}`）→ `erase_by_admin`；回傳 `False` 拋 `Conflict(code="state_changed")`；成功後才 `admin_events.log_action`。**沒有用 `_manageable_target`**（`deletion_pending` 可刪）。`AdminService` 新增必填的 `erasure` 參數：`registry.get_admin_service` 以與其他抹除路徑相同的組裝（`UserRepository`、`ScriptRepository`、`DeletionTombstoneRepository`、`session.commit`／`rollback`）注入；`tests/support/admin.py` 的 `AdminKit` 同步。
+- **2.2**：`POST /api/admin/users/<public_id>/delete`（`_admin()` → `read_json_object()` → 服務 → `jsonify(ok=True)`）。**README 端點表**新增一列，`tests/test_readme.py` 的後台路由數 27→28；`tests/test_admin_api.py` 的路由集合測試（26→27 條 `/api/admin`）與身分矩陣、CSRF、畸形本文參數加入 `delete_user`。
+- **與原 tasks 的出入（一處）**：`tests/test_design_docs.py` 要求每條 API 路由出現在對應的設計文件，所以 `docs/帳號與安全-auth-security.md` 在本批就要同步（端點表一列、稽核 23→24、操作對象的例外、新增「管理員刪除帳號」一段）；批 4 的 4.5 只剩其他設計文件的核對。
+- **2.3**：新增 `tests/test_admin_delete_user.py`（SQLite 與 SQL Server 兩軌各 30 項）：成功路徑（帳號不存在、一筆稽核與一筆刪除紀錄、日誌只有管理員編號與動作名稱、不含理由與 email）、稽核沒有 email 或暱稱且在帳號刪除之後仍在、停權／鎖定／待刪除都可刪、對話與劇本全刪（偏好開啟也一樣）、他人不受影響、同一 email 可重建、舊 session 失效、管理員與自己 `admin_target_forbidden`、不存在 404、非管理員 404、原因缺漏或過長 400 欄位 `reason`（200 字可）、密碼錯誤或缺漏 400 欄位 `password` 並保存 `reauth.failed`（含 `user.delete`）、`no_password`、連續 5 次鎖定、**原子性兩條**（目標在檢查後變成管理員 → 409 且稽核列與刪除紀錄都沒有；抹除拋例外 → 回復後稽核列不存在、沒有成功日誌）。
+- **2.4**：`tests/test_admin_api.py` 新增 6 組 API 測試：回 `{"ok": true}`、帳號消失、一筆 `user.delete` 稽核與一筆 `admin_deleted` 刪除紀錄、重複刪除 404、被刪玩家的瀏覽器視為未登入、刪管理員 403 `admin_target_forbidden`、缺原因或缺密碼或密碼錯 400 且帳號仍在、不存在 404、沒有 GET 與批次端點。
+- **驗證**：`test_admin_api.py` 與 `test_admin_delete_user.py` 共 241 通過；全域守門子集加後台與抹除相關測試 1511 通過、2 略過（既有）；`openspec validate admin-delete-account --strict` 通過。
+- **簡報衝突**：檢查過，`docs/2.0簡報.md` 只有停權的狀態圖（第 453 行），沒有後台端點或功能清單的數字，沒有衝突。
+- **未驗證**：全套 pytest 與 Node（批 4）；前端與條款（批 3）；真實瀏覽器操作（批 3 的 3.5）。
 
 ## 3. 前端與政策頁（批 3）
 

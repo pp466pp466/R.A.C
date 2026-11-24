@@ -26,7 +26,8 @@ from app.models.admin_audit_log import (
     ACTION_ACCOUNT_UNLOCK, ACTION_APPEAL_READ, ACTION_CONVERSATION_DELETE, ACTION_CONVERSATION_READ, ACTION_FAILURES_READ,
     ACTION_PUBLISH_LIFT,
     ACTION_REAUTH_FAILED, ACTION_REPORT_DISMISS, ACTION_REPORT_READ, ACTION_SCRIPT_APPROVE, ACTION_SCRIPT_READ, ACTION_SCRIPT_REJECT,
-    ACTION_SCRIPT_REMOVE, ACTION_SCRIPT_RESTORE, ACTION_USER_CHANGE_TIER, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND, ACTION_USER_UNSUSPEND,
+    ACTION_SCRIPT_REMOVE, ACTION_SCRIPT_RESTORE, ACTION_USER_CHANGE_TIER, ACTION_USER_DELETE, ACTION_USER_LOOKUP, ACTION_USER_SUSPEND,
+    ACTION_USER_UNSUSPEND,
     ACTION_WALLET_ADJUST, MAX_REASON_CHARS,
 )
 from app.models.script import (
@@ -50,6 +51,7 @@ from app.repositories.script_report_repository import ScriptReportRepository
 from app.repositories.script_repository import ScriptRepository
 from app.services import admin_script_views
 from app.services.access_policy import AccessPolicy
+from app.services.account_erasure_service import AccountErasureService
 from app.services.age_policy import TAIPEI
 from app.services.age_stats_service import AgeStatsService
 from app.services.cs_intents import INTENT_COMPLAINT_FEEDBACK, INTENT_HUMAN_HANDOFF
@@ -103,6 +105,7 @@ class AdminService:
         scripts: ScriptRepository,                          # 劇本審核的狀態轉移（唯一寫入版本狀態的 Repository）
         admin_scripts: AdminScriptRepository,               # 劇本審核的唯讀查詢（清單、全文、參照、檢舉內容）
         reports: ScriptReportRepository,                    # 檢舉結案為「不成立」（唯一寫入結案欄位的 Repository）
+        erasure: AccountErasureService,                     # 刪除帳號（admin-delete-account）：全站唯一的抹除出口
         confirm_password: Callable[[CurrentUser, object], None],
         persist_on_error: Callable[[], None],
         clock: Callable[[], datetime],
@@ -118,6 +121,7 @@ class AdminService:
         self._scripts = scripts
         self._admin_scripts = admin_scripts
         self._reports = reports
+        self._erasure = erasure
         self._confirm_password = confirm_password
         self._persist_on_error = persist_on_error          # 「這個請求即使以 4xx 結束也保留變更」（與登入失敗計數同一個機制）
         self._clock = clock
@@ -249,6 +253,25 @@ class AdminService:
             raise Conflict("這位使用者的等級已經改變，請重新整理後再試。", code="state_changed")
         self._record(admin, ACTION_USER_CHANGE_TIER, target_user=user, detail={"from_tier": previous, "to_tier": tier}, changed=True)
         return self._user_view(user)
+
+    def delete_user(self, admin: CurrentUser, public_id: str, *, reason: object, password: object) -> None:
+        """刪除一個玩家帳號（admin-delete-account）：立即且不可復原地抹除，一次一個。
+
+        目標只能是角色為 `user` 的帳號（管理員含自己 403）；狀態不限（含 `deletion_pending`，所以**不用** `_manageable_target`）。
+        順序刻意與其他操作相反：**稽核先寫、再抹除**——`AccountErasureService.erase` 會提交，所以稽核列與抹除在同一個交易；
+        條件不成立（目標在檢查之後變成管理員）時 `erase` 回復整個交易，稽核列也一併消失，回 409。日誌在提交之後才記。
+        稽核只有被刪帳號的對外識別碼、理由與原狀態，沒有 email 或暱稱。
+        """
+        self._policy.require_admin(admin)
+        clean_reason = self._reason(reason)
+        user = self._find_user(public_id)
+        if user.role != ROLE_USER:
+            raise AdminTargetForbidden()
+        self._confirm(admin, password, ACTION_USER_DELETE, target_user=user)
+        self._record(admin, ACTION_USER_DELETE, target_user=user, reason=clean_reason, detail={"from_status": user.status})
+        if not self._erasure.erase_by_admin(user.id, now=self._clock()):
+            raise Conflict("這個帳號的狀態已經改變，請重新查詢後再試。", code="state_changed")
+        admin_events.log_action(user_id=admin.id, action=ACTION_USER_DELETE)
 
     def adjust_wallet(
         self, admin: CurrentUser, public_id: str, *, bucket: object, delta: object, reason: object, password: object

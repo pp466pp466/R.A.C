@@ -74,6 +74,15 @@ def unsuspend_user(public_id: str):
     return jsonify(user=service.unsuspend_user(admin, public_id, password=body.get("password")))
 
 
+@admin_api_bp.post("/users/<public_id>/delete")
+def delete_user(public_id: str):
+    """刪除帳號（admin-delete-account）：一次一個、立即抹除、須密碼與理由；成功回 `{"ok": true}`（帳號已不存在，沒有 `user`）。"""
+    admin, service = _admin()
+    body = read_json_object()
+    service.delete_user(admin, public_id, reason=body.get("reason"), password=body.get("password"))
+    return jsonify(ok=True)
+
+
 @admin_api_bp.post("/users/<public_id>/tier")
 def change_tier(public_id: str):
     admin, service = _admin()

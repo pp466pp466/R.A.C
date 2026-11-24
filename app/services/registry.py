@@ -362,6 +362,10 @@ def get_admin_service() -> AdminService:
         usage_settings=config.usage, scripts=ScriptRepository(session), admin_scripts=AdminScriptRepository(session),
         reports=ScriptReportRepository(session), confirm_password=get_auth_service().confirm_password, persist_on_error=keep_changes_on_error, clock=get_clock(),
         wallet=get_wallet_service(),
+        erasure=AccountErasureService(
+            users=UserRepository(session), scripts=ScriptRepository(session), tombstones=DeletionTombstoneRepository(session),
+            commit=session.commit, rollback=session.rollback,
+        ),
     )
 
 

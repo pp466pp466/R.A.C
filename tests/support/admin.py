@@ -13,6 +13,7 @@ from app.repositories.admin_audit_repository import AdminAuditRepository
 from app.repositories.admin_repository import AdminRepository
 from app.repositories.admin_script_repository import AdminScriptRepository
 from app.repositories.chat_repository import ChatRepository
+from app.repositories.deletion_tombstone_repository import DeletionTombstoneRepository
 from app.repositories.llm_call_log_repository import LlmCallLogRepository
 from app.repositories.user_identity_repository import UserIdentityRepository
 from app.repositories.runtime_limit_repository import RuntimeLimitRepository
@@ -21,6 +22,7 @@ from app.repositories.script_repository import ScriptRepository
 from app.repositories.user_repository import UserRepository
 from app.repositories.wallet_repository import WalletRepository
 from app.services.access_policy import AccessPolicy
+from app.services.account_erasure_service import AccountErasureService
 from app.services.admin_service import AdminService
 from app.services.age_stats_service import AgeStatsService
 from app.services.auth_service import AuthService
@@ -69,6 +71,10 @@ class AdminKit:
             usage=usage, age_stats=AgeStatsService(users=UserRepository(session)), usage_settings=self.settings,
             scripts=self.scripts, admin_scripts=AdminScriptRepository(session), reports=ScriptReportRepository(session),
             confirm_password=self.auth.confirm_password,
+            erasure=AccountErasureService(
+                users=UserRepository(session), scripts=self.scripts, tombstones=DeletionTombstoneRepository(session),
+                commit=session.commit, rollback=session.rollback,
+            ),
             persist_on_error=self.persisted, clock=self.clock,
             wallet=WalletService(
                 wallets=WalletRepository(session), limits=RuntimeLimits(limits=RuntimeLimitRepository(session), clock=self.clock),
