@@ -32,7 +32,7 @@ const SCRIPTS = [
 ];
 
 /* 建立沙盒並回傳 setup() 的結果。`respond(request)` 是 axios 的替身：收到 { method, url, data, timeout, signal }，回傳 Promise。 */
-function setupGame({ speech = null, speechThrows = false, localStorageImpl = null, state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')), fetchImpl = null } = {}) {
+function setupGame({ speech = null, speechThrows = false, localStorageThrows = false, localStorageImpl = null, state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')), fetchImpl = null } = {}) {
   const requests = [];
   const navigations = [];
   const mounted = [];
@@ -58,10 +58,6 @@ function setupGame({ speech = null, speechThrows = false, localStorageImpl = nul
   sandbox.location = { assign: (target) => navigations.push(target), hash: '', pathname, search: '' };
   sandbox.localStorage = localStorageImpl || trap('localStorage');                                // localStorageImpl：朗讀的選擇讀寫測試用（只有 game.js 的 speechStorage 會碰它）
   if (speech) { sandbox.speechSynthesis = speech.synth; sandbox.SpeechSynthesisUtterance = speech.Utterance; }   // 朗讀（rpg-story-tts）：假的語音合成；沒給就是不支援的瀏覽器
-  if (speechThrows) {                                                                              // 隱私模式或被停用：存取全域物件本身就丟例外
-    Object.defineProperty(sandbox, 'speechSynthesis', { get() { throw new Error('blocked'); }, configurable: true });
-    Object.defineProperty(sandbox, 'SpeechSynthesisUtterance', { get() { throw new Error('blocked'); }, configurable: true });
-  }
   sandbox.sessionStorage = trap('sessionStorage');
   if (indexedDB) { sandbox.indexedDB = indexedDB; sandbox.IDBKeyRange = keyRange; }              // 傳入假的 IndexedDB 時，本機暫存真的寫進它（供「資料庫內容」的守門測試）
   const document = {
@@ -81,6 +77,13 @@ function setupGame({ speech = null, speechThrows = false, localStorageImpl = nul
   axios.defaults = { headers: { common: {} } };
   sandbox.axios = axios;
   vm.createContext(sandbox);
+  /* 隱私模式或被停用：存取全域物件本身就丟例外。存取子要定義在脈絡**之內**：先定義在 sandbox 物件上、再 createContext，vm 不會把存取子帶進去（讀起來是 undefined，等於沒有模擬到）。 */
+  if (speechThrows) {
+    vm.runInContext("['speechSynthesis', 'SpeechSynthesisUtterance'].forEach(function (name) { Object.defineProperty(globalThis, name, { get: function () { throw new Error('blocked'); }, configurable: true }); });", sandbox);
+  }
+  if (localStorageThrows) {
+    vm.runInContext("Object.defineProperty(globalThis, 'localStorage', { get: function () { throw new Error('SecurityError'); }, configurable: true });", sandbox);
+  }
   const run = (file) => vm.runInContext(read('app/static/' + file), sandbox, { filename: file });
 
   run('vendor/vue/vue.global.prod.js');

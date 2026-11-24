@@ -1817,6 +1817,27 @@ change `admin-delete-account`（**已封存 2026-11-24；使用者驗收通過�
 - **驗收與部署**：使用者已於 2026-11-24 驗收；`bb665dd` 已部署到展示環境（RDS 快照 `rac-demo-staging-db-pre-bb665dd`，部署的 21 步全過；外部複驗 `/terms` 為 `draft-11`、`admin.js` 含刪除帳號的確認視窗；回復點 `release.previous.env`＝`1762fa5`）。
 - **未驗證**：在展示環境以真實 Google 登入實際刪除過帳號（沒有做；清理 rac001 的非管理員帳號是另行確認的維運操作）；真實 SQL Server `project` 資料庫（沒有結構變更，不需要升級）。
 
+## 劇情朗讀（rpg-story-tts）
+
+change `rpg-story-tts`。遊戲畫面的劇情卡可以朗讀當前段：用瀏覽器或作業系統內建的語音（`speechSynthesis`），**純前端：沒有新端點、沒有遷移、沒有設定，AGENTS.md 也沒有修訂**，所以上面的端點表與路由數不變。
+
+| 項目 | 內容 |
+|---|---|
+| 按鈕 | 劇情卡翻頁按鈕列的最左邊：語音按鈕（播放與停止）與較小的選單按鈕；瀏覽器不支援朗讀時整組不顯示；沒有中文語音、只有一行說明或沒有內容時停用並說明原因 |
+| 第一次使用 | 先開語音選單（「自動」加各中文語音，標示「本機」或「線上」，可逐一試聽）；選過之後再按才朗讀，選「自動」之後不再開選單 |
+| 朗讀什麼 | 劇情卡當前段的完整文字（打字中也讀整段）；「你」的行動頁也可朗讀；被擋回合的轉場說明不可朗讀；超過 150 字的行動頁依句界切成多個發音依序朗讀 |
+| 何時停止 | 翻段、回看、換輪、重新生成與編輯開始、送出行動與推進劇情、離開頁面；不自動翻頁、不自動接讀 |
+| 記住什麼 | 只在瀏覽器的 `localStorage` 存一個鍵 `rpg.speech.voice`（`{"mode":"auto"}` 或所選語音的識別與名稱），**不含任何朗讀的文字**；讀寫失敗（隱私模式等）退回預設值，頁面照常 |
+| 隱私 | 朗讀不經過本平台伺服器；線上語音可能由瀏覽器廠商處理，`/privacy` 第 4 節最後一段與語音選單都說明 |
+| 程式 | `app/static/js/game/story-speech.js`（純函式狀態機）、`game-session.js`、`game-revision.js`、`game.js`（唯一碰 `localStorage` 的遊戲腳本，只在 `speechStorage`）、`game-labels.js`、`session.html`、`game.css` |
+| 測試 | `tests/js/story-speech.test.js`、`game-story-session.test.js`、`game-story-revision.test.js`、`game.test.js`、`tests/js/support/fake-speech.js`；`tests/test_game_story_page.py`、`tests/test_game_pages.py`（儲存契約有意識改為「只有 `game.js` 的 `speechStorage` 可以」）、`tests/test_legal_pages.py` |
+
+### 驗收紀錄（rpg-story-tts，批 1 至 5）
+
+- **自動測試**：見 `openspec/changes/rpg-story-tts/tasks.md` 的各批完成註記（Node 與 pytest 的筆數、變異驗證的結果）。
+- **真實 Chrome 實機檢查**（自有實例：全新 SQLite、假模型、`127.0.0.1`／`localhost:5012`；Windows 的 Chrome，無頭，真的語音引擎，音量固定為 0 不出聲；系統提供 3 個本機臺灣中文語音〔Hanhan、Yating、Zhiwei〕）：1280 與 360 寬度各 **48／48 通過**——按鈕與選單按鈕的位置與屬性、第一次按先開選單且不朗讀、選單列出 3 個語音且都標「本機」、試聽用所按語音且只讀固定句子、選「自動」即關閉並寫入、再按直接朗讀整段且為 `zh-TW` 本機語音、朗讀與停止的切換與 `aria-pressed`、回看與翻段即停止且不自動接讀、「你」的行動頁可朗讀、重新生成開始即停止、被擋回合的說明行停用朗讀鈕並說明原因、重新整理後記得選擇（自動與指定語音）、離開頁面停止、開啟時焦點落在選中的選項、Esc 關閉後焦點回到選單按鈕、`localStorage` 被擋時照常、只有英文語音時兩顆按鈕停用並說明、語音清單為空時視為可用、不支援時整組不顯示、無頁面與主控台錯誤；另以 205 字的行動頁確認被切成兩個發音（123、82 字）、合起來等於原文且真的語音引擎依序讀完。
+- **未驗證**：①**Edge**（無頭 Edge 在這台機器啟動即關閉，沒有自動化；請在有畫面的 Edge 實機走一次選單與朗讀）；②**線上語音**（這台機器的 Chrome 只有本機語音，所以「線上」小標與約 15 秒中斷的風險沒有實測；若實測仍被中斷，調低 `SPEECH_CHUNK_MAX`）；③真實手機的觸控手感與喇叭實際聲音（自動化把音量設為 0，只驗證引擎的狀態與事件）。
+
 ## AWS 展示環境（aws-demo-environment）
 
 `APP_ENV=staging` 的單機展示環境（AWS 雪梨 `ap-southeast-2`、Free plan 抵用金、展示期到 2026-12-31；不是 production）。步驟、拓撲與執行器的完整說明在 [docs/營運與部署-operations.md](docs/營運與部署-operations.md) 第 8 節；計畫在 `scripts/aws_demo_plan.py`（純函式、有測試），執行器是 `scripts/aws_demo.py`（預設只預覽，`--execute` 才逐步確認並執行）。

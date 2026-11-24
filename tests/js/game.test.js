@@ -857,3 +857,35 @@ test('closing a menu that was never open does not move the focus', async () => {
   await settle();
   assert.deepEqual(focused, []);
 });
+
+test('reading the speech globals really throws in the sandbox, and the page still mounts (the throwing accessors are defined inside the context)', () => {
+  const game = setupGame({ speechThrows: true });
+  assert.throws(() => game.sandbox.window.speechSynthesis, /blocked/);                // 沙盒真的有模擬到：沒有 try/catch 的程式碼會在這裡出事
+  assert.equal(game.page.speech.value.availability, 'unsupported');
+  assert.deepEqual(game.logs, []);
+});
+
+test('a localStorage whose access itself throws (private mode) is survived: the speaker mounts and a chosen voice only lives in memory', () => {
+  const synth = Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] });
+  const game = setupGame({ localStorageThrows: true, speech: { synth, Utterance: Speech.FakeUtterance } });
+  assert.throws(() => game.sandbox.window.localStorage, /SecurityError/);
+  assert.equal(game.page.speech.value.availability, 'ready');
+  assert.equal(game.page.chooseAutoVoice(), true);                                     // 寫入失敗仍以記憶體中的選擇為準
+  assert.equal(game.page.speech.value.choice, 'auto');
+});
+
+test('game.js hands its storage to the speaker: a chosen voice is written under the single key, and a reload remembers it', () => {
+  const memory = new Map();
+  const storage = { getItem: (key) => (memory.has(key) ? memory.get(key) : null), setItem: (key, value) => { memory.set(key, value); } };
+  const speech = () => ({ synth: Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL, Speech.ZH_TW_ONLINE] }), Utterance: Speech.FakeUtterance });
+  const first = setupGame({ speech: speech(), localStorageImpl: storage });
+  assert.equal(first.page.speech.value.choice, 'none');
+  first.page.chooseAutoVoice();
+  assert.deepEqual([...memory.keys()], [Speech.SPEECH_STORAGE_KEY]);                   // 只有這一個鍵
+  assert.equal(memory.get(Speech.SPEECH_STORAGE_KEY), JSON.stringify({ mode: 'auto' }));
+  first.page.chooseVoiceByKey(Speech.ZH_TW_ONLINE.voiceURI);
+  assert.equal(JSON.parse(memory.get(Speech.SPEECH_STORAGE_KEY)).mode, 'voice');
+  const reloaded = setupGame({ speech: speech(), localStorageImpl: storage });        // 重新整理 = 全新的頁面
+  assert.equal(reloaded.page.speech.value.choice, 'voice');
+  assert.equal(reloaded.page.speech.value.selectedKey, Speech.ZH_TW_ONLINE.voiceURI);
+});

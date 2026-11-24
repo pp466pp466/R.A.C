@@ -1075,3 +1075,50 @@ test('the template helpers choose "automatic" or a voice by key and close the me
   assert.equal(lastSpeech(h).choice, 'auto');
   assert.equal(h.session.chooseVoiceByKey('不存在'), false);
 });
+
+test('the voice stops when the same page of the same turn comes back with different text (the server version replaced what was on the card)', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  const before = h.card();
+  h.session.speakCurrent();
+  assert.equal(lastSpeech(h).speaking, true);
+  h.server.turns[0].story = S1 + S2 + '辛到了。';                          // 同一輪、同一段的位置，內容換了（例如另一個裝置修訂過）
+  await h.session.revisionHost.refresh(0);
+  const after = h.card();
+  assert.equal(after.key, before.key);
+  assert.equal(after.index, before.index);
+  assert.equal(after.fullText, '辛到了。');
+  assert.equal(lastSpeech(h).speaking, false);                            // 身分只看 key 與 index 會漏掉這種情況：全文也要比
+  assert.equal(speech.synth.speaking, false);
+});
+
+test('the voice stops when the next page has exactly the same words as the one being read (the page index alone tells them apart)', async () => {
+  const speech = Speech.speechEnvironment();
+  const repeated = '同樣的三句話。一模一樣。沒有差別。';
+  const h = await ready({ turns: [turnView(1, 't1', '行動', repeated + repeated)], session: { completed_turns: 1 }, speech });
+  assert.equal(h.session.prevPage(), 'back');                                           // 回到第一個劇情段
+  const first = h.card();
+  assert.equal(first.fullText, repeated);
+  h.session.speakCurrent();
+  assert.equal(lastSpeech(h).speaking, true);
+  h.session.nextPage();                                                                 // 第二段的字完全一樣，只有段落位置不同
+  assert.equal(h.card().fullText, first.fullText);
+  assert.notEqual(h.card().index, first.index);
+  assert.equal(lastSpeech(h).speaking, false);
+});
+
+test('the voice stops when another device finishes a new turn whose last page has the same words and the same position', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready({ turns: [turnView(1, 't1', '行動一', '一句話。')], session: { completed_turns: 1 }, speech });
+  const before = h.card();
+  h.session.speakCurrent();
+  assert.equal(lastSpeech(h).speaking, true);
+  h.server.turns.push(turnView(2, 't2', '行動二', '一句話。'));                        // 新的一輪，最後一段的位置與文字都和正在讀的相同，只有回合不同
+  h.server.session.completed_turns = 2;
+  await h.session.load({ soft: true });
+  const after = h.card();
+  assert.notEqual(after.key, before.key);
+  assert.equal(after.index, before.index);
+  assert.equal(after.fullText, before.fullText);
+  assert.equal(lastSpeech(h).speaking, false);
+});
