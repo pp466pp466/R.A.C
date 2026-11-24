@@ -1792,7 +1792,7 @@ change `onboarding-polish`。玩家第一次以 Google 登入之後的 `/age` �
 
 ### 驗收紀錄（onboarding-polish，批 1 至 3）
 
-- **自動測試**：見 `openspec/changes/onboarding-polish/tasks.md` 的各批完成註記（Node 與 pytest 的筆數、變異驗證的結果）。
+- **自動測試**：見 `openspec/changes/archive/2026-11-24-onboarding-polish/tasks.md` 的各批完成註記（Node 與 pytest 的筆數、變異驗證的結果）。
 - **無頭 Chrome 實機檢查**（自有實例：全新 SQLite、假模型、`127.0.0.1:5012`）：1280 與 360 寬度各 49／49 通過——每一步的進度與標籤、守則 Modal 的焦點與確認規則、各步的停用與說明、上一步保留欄位、送出順序（`verify-age` → `story-preference` → `/game`）、預設不發偏好請求、暱稱不合格回第 1 步、`age_mismatch` 回第 2 步並清空、未滿 18 歲結束精靈、重新整理回第 1 步、偏好減少動態、登入頁總開關、每一步無橫向捲軸；瀏覽器儲存為空。
 - **未驗證**：真實 Google 登入整條路、手機實機觸控；使用守則文案與第 3 步選項文字待使用者過目。
 
