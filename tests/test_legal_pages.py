@@ -106,9 +106,10 @@ def test_the_terms_version_names_the_new_draft_and_the_registration_records_it()
     # adult-only-signup 加入僅限滿 18 歲、註冊時的年滿 18 歲聲明與謊報責任（draft-8，2026-11-18）；
     # safe-mode-toggle 加入露骨內容、安全模式兩種狀態與供應商留存或審閱的揭露（draft-9，2026-11-19）；
     # rpg-script-reports 如實說明公開分享已開放、檢舉與刪除帳號時匿名保留劇本的選項（draft-10，2026-11-22）；
+    # admin-delete-account 在使用規範加入「管理員得刪除違規者的帳號與其全部資料」（draft-11，2026-11-24）；
     # 版本隨內容提高（只影響之後新註冊者記錄的版本）
-    assert CURRENT_TERMS_VERSION == "2026-11-22-draft-10" and len(CURRENT_TERMS_VERSION) <= 40
-    assert CURRENT_TERMS_VERSION not in ("2026-11-16-draft-7", "2026-11-18-draft-8", "2026-11-19-draft-9")            # 提高過：不是先前的版本
+    assert CURRENT_TERMS_VERSION == "2026-11-24-draft-11" and len(CURRENT_TERMS_VERSION) <= 40
+    assert CURRENT_TERMS_VERSION not in ("2026-11-16-draft-7", "2026-11-18-draft-8", "2026-11-19-draft-9", "2026-11-22-draft-10")   # 提高過：不是先前的版本
 
 
 # ---- Google 登入改版（google-first-login）新增的揭露 ------------------------------------------------------
@@ -448,6 +449,27 @@ def test_the_terms_describe_public_sharing_the_admin_review_the_report_rules_and
         assert needle in deletion, needle
 
 
+def terms_section_four(client) -> str:
+    html = client.get("/terms").get_data(as_text=True)
+    return html.split("<h2>4. 使用規範</h2>", 1)[1].split("<h2>5.", 1)[0]
+
+
+def test_the_terms_say_an_administrator_may_delete_an_account_that_breaks_the_rules_and_it_cannot_be_undone(client):
+    section = terms_section_four(client)
+    (clause,) = [item for item in section.split("<li>") if "管理員得刪除您的帳號與其全部資料" in item]
+    for needle in ("違反內容規範或本條款", "刪除後無法復原", "立即執行", "7 天寬限期", "匿名保留已發佈的劇本", "劇本會一併刪除"):
+        assert needle in clause, needle
+    for path in ("/terms", "/privacy"):                                                     # 兩頁沒有留下與之矛盾的說法
+        html = client.get(path).get_data(as_text=True)
+        assert "管理員不會刪除" not in html and "管理員無法刪除" not in html, path
+
+
+def test_the_admin_deletion_clause_makes_no_promise_about_a_warning_a_notice_or_a_way_back(client):
+    clause = terms_section_four(client)
+    for forbidden in ("事先通知", "會先警告", "可以申訴後恢復", "可恢復", "可復原。"):
+        assert forbidden not in clause, forbidden
+
+
 def test_the_age_number_in_the_terms_retention_sentence_comes_from_the_age_policy(client, monkeypatch):
     monkeypatch.setattr("app.controllers.auth_page_controller.get_age_policy", lambda: type("P", (), {
         "min_register_age": 21, "adult_age": 21})())
@@ -459,7 +481,7 @@ def test_the_age_number_in_the_terms_retention_sentence_comes_from_the_age_polic
 def test_both_pages_show_the_current_terms_version_and_it_is_not_the_previous_one(client):
     for path in ("/terms", "/privacy"):
         html = client.get(path).get_data(as_text=True)
-        assert f"版本：{CURRENT_TERMS_VERSION}" in html and "2026-11-19-draft-9" not in html, path
+        assert f"版本：{CURRENT_TERMS_VERSION}" in html and "2026-11-19-draft-9" not in html and "2026-11-22-draft-10" not in html, path
 
 
 def test_the_new_policy_text_makes_no_promise_of_future_features_and_keeps_the_draft_notice(client):

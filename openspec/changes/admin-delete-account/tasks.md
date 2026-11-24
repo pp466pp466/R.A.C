@@ -44,12 +44,24 @@
 
 ## 3. 前端與政策頁（批 3）
 
-- [ ] 3.1 `app/static/js/admin/admin-format.js`：動作標籤加 `'user.delete': '刪除帳號'`、稽核細節顯示「原狀態：…」（沿用 `user.suspend` 的格式）；更新 `tests/test_admin_format_labels.py` 與對應的 Node 測試。
-- [ ] 3.2 `app/static/js/admin/admin.js` 與 `app/templates/admin/console.html`：`userActions.delete`（角色為 `user` 才有，含 `suspended`、鎖定與 `deletion_pending`）、`CONFIRMS.delete`（標題、不可復原與連帶刪除資料的警告、`needsReason`、「確認永久刪除」、`admin-btn--danger`）、`askDelete`、`submitConfirm` 新增 `kind === 'delete'` 分支（清空 `user`、從 `locked`／`suspended`／`appeals` 移除該帳號的列、`markStale('flagged','feedback','overview','audit')`，**不可落入預設分支的 `user.value = data.user`**）、模板按鈕；文字全為繁體中文、純文字渲染、沒有 `v-html` 與 `data-bs-*`。
-- [ ] 3.3 後台前端測試：以既有後台頁面測試的方式（vm 沙盒或字串斷言）涵蓋：管理員目標沒有按鈕、`deletion_pending` 與 `suspended` 有按鈕、確認視窗文字、成功後面板清空與清單移除、錯誤顯示在密碼或原因欄位、密碼送出當下清空。驗證：Node 全套與 `tests/test_admin_page.py`。
-- [ ] 3.4 `app/templates/legal/terms.html` 第 4 節加一條（管理員得因違反內容規範或條款刪除帳號與其全部資料，無法復原）；依既有慣例遞增 `CURRENT_TERMS_VERSION`（`draft-10` → `draft-11`，先以 `git log -- app/services/legal.py` 確認慣例）；更新 `tests/test_legal_pages.py`、`tests/test_auth_pages.py` 等寫死版本或條款文字的測試。驗證：這幾個測試檔加全域守門子集。
-- [ ] 3.5 無頭 Chrome（自有實例：全新 SQLite、假模型，`127.0.0.1` 非 5000 埠）實機走一次：以管理員登入，查詢一位玩家 → 按「刪除帳號」→ 錯誤密碼 → 缺原因 → 正確操作 → 面板清空、稽核分頁出現「刪除帳號」、該玩家的 cookie 再請求被視為未登入、管理員查詢另一位管理員沒有按鈕；1280 與 360 寬度各目視確認 Modal 不溢出。
-- [ ] 3.6 批 3 收尾：跑 Node 全套與全域守門子集，更新完成註記與 HANDOFF（**未跑全套 pytest**，如實寫明）。
+- [x] 3.1 `app/static/js/admin/admin-format.js`：動作標籤加 `'user.delete': '刪除帳號'`、稽核細節顯示「原狀態：…」（沿用 `user.suspend` 的格式）；更新 `tests/test_admin_format_labels.py` 與對應的 Node 測試。
+- [x] 3.2 `app/static/js/admin/admin.js` 與 `app/templates/admin/console.html`：`userActions.delete`（角色為 `user` 才有，含 `suspended`、鎖定與 `deletion_pending`）、`CONFIRMS.delete`（標題、不可復原與連帶刪除資料的警告、`needsReason`、「確認永久刪除」、`admin-btn--danger`）、`askDelete`、`submitConfirm` 新增 `kind === 'delete'` 分支（清空 `user`、從 `locked`／`suspended`／`appeals` 移除該帳號的列、`markStale('flagged','feedback','overview','audit')`，**不可落入預設分支的 `user.value = data.user`**）、模板按鈕；文字全為繁體中文、純文字渲染、沒有 `v-html` 與 `data-bs-*`。
+- [x] 3.3 後台前端測試：以既有後台頁面測試的方式（vm 沙盒或字串斷言）涵蓋：管理員目標沒有按鈕、`deletion_pending` 與 `suspended` 有按鈕、確認視窗文字、成功後面板清空與清單移除、錯誤顯示在密碼或原因欄位、密碼送出當下清空。驗證：Node 全套與 `tests/test_admin_page.py`。
+- [x] 3.4 `app/templates/legal/terms.html` 第 4 節加一條（管理員得因違反內容規範或條款刪除帳號與其全部資料，無法復原）；依既有慣例遞增 `CURRENT_TERMS_VERSION`（`draft-10` → `draft-11`，先以 `git log -- app/services/legal.py` 確認慣例）；更新 `tests/test_legal_pages.py`、`tests/test_auth_pages.py` 等寫死版本或條款文字的測試。驗證：這幾個測試檔加全域守門子集。
+- [x] 3.5 無頭 Chrome（自有實例：全新 SQLite、假模型，`127.0.0.1` 非 5000 埠）實機走一次：以管理員登入，查詢一位玩家 → 按「刪除帳號」→ 錯誤密碼 → 缺原因 → 正確操作 → 面板清空、稽核分頁出現「刪除帳號」、該玩家的 cookie 再請求被視為未登入、管理員查詢另一位管理員沒有按鈕；1280 與 360 寬度各目視確認 Modal 不溢出。
+- [x] 3.6 批 3 收尾：跑 Node 全套與全域守門子集，更新完成註記與 HANDOFF（**未跑全套 pytest**，如實寫明）。
+
+### 批 3 完成註記（2026-11-24；前端與政策頁：**跑 Node 全套與相關頁面測試加全域守門子集，未跑全套 pytest**；批 2 已提交為 `88ce109`）
+
+- **3.1**：`admin-format.js` 的稽核細節 `user.delete` 與 `user.suspend` 同為「原狀態：…」（動作標籤已在批 1 加入）；`tests/js/admin-format.test.js` 新增細節、動作標籤與 `reauth.failed` 的「嘗試：刪除帳號」。
+- **3.2**：`admin.js`：`userActions.delete`（角色為 `user` 即可，含停權、鎖定與 `deletion_pending`）、`CONFIRMS.delete`（標題「永久刪除這個帳號？」、狀態碼 `ADMIN_DELETE_USER`、`needsReason`、「確認永久刪除」，警告寫明不可復原、沒有寬限期與連帶刪除的資料、其他玩家已開出的存檔不受影響、同一 Google 帳號可重新註冊）、`askDelete`（管理員或沒有目標時不開窗）、`removeDeletedFromLists`、`submitConfirm` 的 `kind === 'delete'` 分支（`user` 設為 `null`、清單移除、`markStale('flagged','feedback','overview','audit')`，不落入預設的 `user.value = data.user`）；`console.html` 新增 `admin-btn--danger` 的「刪除帳號」按鈕。`userNote` 對 `deletion_pending` 的說明由「無法操作」改為「無法停權或調整，但仍可立即永久刪除」（否則與新按鈕矛盾）。純文字渲染，沒有 `v-html` 與 `data-bs-*`。
+- **與原 tasks 的出入（兩處）**：①design D6 寫「確認鈕使用 `admin-btn--danger`」，但確認鈕是共用元件 `ui-modal` 的主要鈕（琥珀橙，與 `admin-btn--danger` 同色），元件沒有樣式參數，為此改共用元件會波及所有視窗；所以只有面板上的「刪除帳號」鈕用 `admin-btn--danger`（與「停權」一致），確認鈕維持共用樣式。②`userNote` 的說明文字（上一項）。
+- **3.3**：新增 `tests/js/admin-delete-user.test.js`（19 項）：按鈕條件（任何狀態的玩家有、管理員與無目標沒有）、待刪除的說明、確認視窗文字與規格、缺原因或缺密碼不送出、請求本文只有密碼與原因、成功後面板為 `null`、三份清單的列移除且保留他人、其餘清單與總覽標為過期、密碼在送出當下清空（成功與失敗）、重複按只送一次、錯誤顯示在密碼欄與原因欄且視窗保持開啟、`no_password`、409 與 403 的視窗內訊息、關閉視窗清空、401 導向登入、樣板按鈕與純文字渲染。**測試輔助抽出**：`admin.test.js` 內的 `setupAdmin` 沙盒移到 `tests/js/support/admin-sandbox.js`，兩個測試檔共用（`admin.test.js` 的 20 項照舊通過）。快速變異：把成功分支的 `kind === 'delete'` 改名，3 項測試失敗，已還原並比對確認。
+- **3.4**：`terms.html` 第 4 節加一條（管理員得因違反內容規範或本條款刪除帳號與其全部資料，無法復原；立即執行、不經 7 天寬限期、不適用第 5 節的匿名保留選項、劇本一併刪除）；`CURRENT_TERMS_VERSION` `2026-11-22-draft-10` → `2026-11-24-draft-11`（慣例：每次政策頁文字變動就遞增 draft 序號並換成當天日期，`git log -- app/services/legal.py` 確認）；既有使用者不被要求重新同意。`tests/test_legal_pages.py`：版本斷言與「不是先前版本」清單、新增 2 項（條款一句與細節、不承諾事先通知或復原）。隱私權政策沒改（刪除範圍已說明）。
+- **3.5 實機（無頭 Chrome，自有實例：全新 SQLite、127.0.0.1:5013、假模型位址，沒有碰 5000 埠與使用者的驗收環境；腳本與截圖在 scratchpad，不進專案）**：1280 寬完整走過——查詢玩家、按「刪除帳號」、確認視窗（標題、警告、對象、狀態碼）、什麼都沒填（兩欄各有提示、不送出）、只缺原因（不送出）、錯誤密碼（送出一次、錯誤顯示在視窗內、密碼欄清空、面板仍在）、正確操作（出現「已刪除帳號。」、視窗淡出後移除、面板清空）、稽核分頁出現「刪除帳號」「原狀態：使用中」與「嘗試：刪除帳號」且沒有信箱、被刪玩家原 cookie 的 `/api/auth/me` 由 200 變 401、查另一位管理員沒有按鈕且顯示說明、待刪除玩家有按鈕（沒有停權與調整）並實際刪除成功、查已刪除信箱沒有面板；360 寬確認視窗不橫向溢出、確認鈕在可視範圍內（視窗只需捲 16px）、Esc 取消後面板仍在。資料庫直接檢查：兩個被刪帳號不存在、各有 `admin_deleted` 刪除紀錄與 `user.delete` 稽核（只有對外識別碼、原因與原狀態；沒有信箱、暱稱）。過程中一次檢查失敗是我在淡出動畫途中判斷視窗是否關閉（時序，非缺陷），改為等視窗移除後重驗通過。
+- **3.6 驗證**：Node 全套 1872 項通過（含新增 19 項與 `admin-format` 的新斷言）；pytest：`test_legal_pages`、`test_auth_pages`、`test_admin_page`、`test_admin_format_labels` 加全域守門子集共 1235 通過、2 略過（既有）；另跑 `test_assets_manifest`、`test_admin_flow`、`test_admin_two_step_login` 48 通過；`openspec validate admin-delete-account --strict` 通過。**未跑全套 pytest**（只放批 4）；本批沒有改 `app/` 的 Python 程式（只有 `legal.py` 的版本字串）。
+- **簡報衝突（只通知，沒有改）**：①`docs/2.0簡報.md` 第 981 行與 `docs/diagrams/build_pptx_40.py` 第 530 行（進而 `docs/4.0簡報.pptx`）寫條款版本 `2026-11-22-draft-10`，現為 `2026-11-24-draft-11`；②`docs/diagrams/build_diagrams_system.py` 第 498 行「停權、刪除內容、調整等級與遊戲幣等高風險操作須重新輸入密碼」少列「刪除帳號」（不是錯誤，是不完整；批 1 起就如此）；③簡報的前端測試數（1,610）早已落後（現為 1,872），本批只是又增加 19 項。
+- **未驗證**：全套 pytest（批 4）；使用者本人在真機上對 Modal 警告文字與條款那一句的驗收（Workflow follow-up）；設計文件與 README 中寫「目前條款版本 `2026-11-22-draft-10`」的幾處（`docs/帳號與安全-auth-security.md`、`docs/營運與部署-operations.md`，README 的歷史段落不改）留給批 4 的 4.1 與 4.5。
 
 ## 4. 文件、驗證與收尾（批 4，最後一批）
 

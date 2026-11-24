@@ -69,7 +69,7 @@
     appeals: { path: '/appeals', key: 'appeals', paged: true }
   };
 
-  /* 九個危險操作。needsReason：停權、刪除對話與調整遊戲幣必須填原因；needsTier：調整等級要選新的等級；needsWallet：調整遊戲幣要選餘額種類與增減量；
+  /* 十個危險操作。needsReason：停權、刪除帳號、刪除對話與調整遊戲幣必須填原因；needsTier：調整等級要選新的等級；needsWallet：調整遊戲幣要選餘額種類與增減量；
      needsCategory／needsNote：劇本下架要選類別（必填）並可附只有管理員看得到的備註（選填）。 */
   var CONFIRMS = {
     suspend: {
@@ -101,6 +101,12 @@
       code: 'ADMIN_ADJUST_WALLET', title: '調整遊戲幣', confirmText: '確認調整', needsReason: true, needsTier: false, needsWallet: true,
       intro: '增加或扣除這位玩家的遊戲幣（扣除用負數）。調整不受免費幣上限限制，餘額不會低於 0；每一筆都會留下稽核紀錄。',
       path: function (id) { return '/users/' + encodeURIComponent(id) + '/wallet/adjust'; }, done: '已調整遊戲幣。'
+    },
+    delete: {
+      code: 'ADMIN_DELETE_USER', title: '永久刪除這個帳號？', confirmText: '確認永久刪除', needsReason: true, needsTier: false,
+      intro: '帳號會立即且永久地刪除，無法復原，也沒有寬限期。連帶刪除：登入身分、全部對話、存檔與記事簿、遊戲幣、全部劇本（含已上架者）、檢舉與申訴；其他玩家已開出的存檔不受影響。'
+        + '這位玩家目前的登入立即失效；之後他仍可用同一個 Google 帳號重新註冊成全新的帳號。',
+      path: function (id) { return '/users/' + encodeURIComponent(id) + '/delete'; }, done: '已刪除帳號。'
     },
     remove: {
       code: 'ADMIN_DELETE_CONVERSATION', title: '刪除這個對話？', confirmText: '確認刪除', needsReason: true, needsTier: false,
@@ -264,14 +270,15 @@
           suspend: manageable && SUSPENDABLE.indexOf(current.status) !== -1,
           unsuspend: manageable && current.status === 'suspended',
           tier: manageable && current.status !== 'deletion_pending',
-          wallet: manageable && current.status !== 'deletion_pending'
+          wallet: manageable && current.status !== 'deletion_pending',
+          delete: manageable                               // 任何狀態都可刪（含停權、鎖定與待刪除，不必等寬限期）；管理員不行
         };
       });
       var userNote = Vue.computed(function () {
         var current = user.value;
         if (!current) { return ''; }
         if (current.role !== 'user') { return '管理員帳號無法在後台操作。'; }
-        return current.status === 'deletion_pending' ? '這個帳號已申請刪除，無法操作。' : '';
+        return current.status === 'deletion_pending' ? '這個帳號已申請刪除，無法停權或調整，但仍可立即永久刪除。' : '';
       });
 
       function showUser(promise, token) {
@@ -416,6 +423,7 @@
       function askUnsuspend() { if (user.value) { openConfirm('unsuspend', userTarget()); } }
       function askTier() { if (user.value) { openConfirm('tier', userTarget()); } }
       function askWallet() { if (user.value) { openConfirm('wallet', userTarget()); } }
+      function askDelete() { if (user.value && user.value.role === 'user') { openConfirm('delete', userTarget()); } }
       function askUnlock(publicId, displayName) { openConfirm('unlock', { id: publicId, label: displayName }); }
       function askLift(publicId, displayName) { openConfirm('lift', { id: publicId, label: displayName }); }
       function askDeleteConversation() {
@@ -446,6 +454,12 @@
       function removeLiftedFromLists(publicId) {
         lists.suspended.items = lists.suspended.items.filter(function (row) { return row.public_id !== publicId; });
         lists.appeals.items = lists.appeals.items.filter(function (row) { return row.user_public_id !== publicId; });
+      }
+
+      /* 帳號被永久刪除：它在鎖定、暫停發佈與申訴清單中的列都不再有意義（申訴隨帳號刪除）。 */
+      function removeDeletedFromLists(publicId) {
+        lists.locked.items = lists.locked.items.filter(function (row) { return row.public_id !== publicId; });
+        removeLiftedFromLists(publicId);                       // 暫停發佈清單與申訴清單
       }
 
       function applyConfirmError(error) {
@@ -531,6 +545,10 @@
           } else if (kind === 'lift') {
             removeLiftedFromLists(targetId);                   // 申訴是否還看得到取決於帳號是否仍被鎖定，下次開啟時重新讀取
             markStale('overview', 'audit', 'appeals');
+          } else if (kind === 'delete') {
+            user.value = null;                                 // 成功回應沒有 user；帳號已不存在，面板清空（不可落入下面的預設分支）
+            removeDeletedFromLists(targetId);
+            markStale('flagged', 'feedback', 'overview', 'audit');   // 被刪帳號的對話已一併消失，下次進入時重新載入
           } else {
             user.value = data.user;
             markStale('overview', 'audit');
@@ -789,7 +807,7 @@
         openUserById: openUserById, refreshUser: refreshUser, lookupUser: lookupUser,
         convOpen: convOpen, conv: conv, openConversation: openConversation, viewConversationUser: viewConversationUser,
         confirmOpen: confirmOpen, confirmState: confirmState, confirmSpec: confirmSpec, tierOptions: tierOptions,
-        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askWallet: askWallet, askUnlock: askUnlock, askLift: askLift,
+        askSuspend: askSuspend, askUnsuspend: askUnsuspend, askTier: askTier, askWallet: askWallet, askDelete: askDelete, askUnlock: askUnlock, askLift: askLift,
         askDeleteConversation: askDeleteConversation,
         onConfirmEnter: onConfirmEnter, submitConfirm: submitConfirm,
         scriptViews: SCRIPT_VIEWS, scriptView: scriptView, scriptListId: scriptListId, scriptList: scriptList, scriptEmptyText: scriptEmptyText, pendingText: pendingText,

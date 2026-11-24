@@ -202,7 +202,7 @@
   function auditDetailText(action, detail) {
     var d = detail && typeof detail === 'object' ? detail : {};
     if (action === 'user.change_tier') { return tierLabel(d.from_tier) + ' → ' + tierLabel(d.to_tier); }
-    if (action === 'user.suspend') { return '原狀態：' + statusLabel(d.from_status); }
+    if (action === 'user.suspend' || action === 'user.delete') { return '原狀態：' + statusLabel(d.from_status); }
     if (action === 'user.unsuspend') { return '還原為：' + statusLabel(d.to_status); }
     if (action === 'user.lookup') { return label('via', d.via) + (d.found === 0 ? '，查無此人' : ''); }
     if (action === 'failures.read') { return typeof d.count === 'number' ? d.count + ' 筆' : ''; }

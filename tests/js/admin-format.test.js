@@ -147,6 +147,11 @@ test('audit details are turned into one readable line and never throw on odd sha
   assert.equal(Format.auditDetailText('user.change_tier', { from_tier: 'free', to_tier: 'plus' }), '一般 → 進階');
   assert.equal(Format.auditDetailText('user.suspend', { from_status: 'active' }), '原狀態：使用中');
   assert.equal(Format.auditDetailText('user.unsuspend', { to_status: 'active' }), '還原為：使用中');
+  assert.equal(Format.auditDetailText('user.delete', { from_status: 'deletion_pending' }), '原狀態：待刪除');
+  assert.equal(Format.auditDetailText('user.delete', { from_status: 'suspended' }), '原狀態：已停權');
+  assert.equal(Format.auditDetailText('user.delete', {}), '原狀態：' + Format.statusLabel(undefined));      // 沒有原狀態時與停權相同，不丟例外
+  assert.equal(Format.actionLabel('user.delete'), '刪除帳號');
+  assert.equal(Format.auditDetailText('reauth.failed', { attempted: 'user.delete' }), '嘗試：刪除帳號');
   assert.equal(Format.auditDetailText('user.lookup', { via: 'email', found: 1 }), '以信箱');
   assert.equal(Format.auditDetailText('user.lookup', { via: 'id', found: 0 }), '以識別碼，查無此人');
   assert.equal(Format.auditDetailText('failures.read', { count: 3 }), '3 筆');

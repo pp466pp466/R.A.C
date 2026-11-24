@@ -347,6 +347,7 @@
           <button v-if="userActions.unsuspend" type="button" class="ui-btn" @click="askUnsuspend">解除停權</button>
           <button v-if="userActions.tier" type="button" class="ui-btn" @click="askTier">調整會員等級</button>
           <button v-if="userActions.wallet" type="button" class="ui-btn" @click="askWallet">調整遊戲幣</button>
+          <button v-if="userActions.delete" type="button" class="ui-btn admin-btn--danger" @click="askDelete">刪除帳號</button>
         </div>
       </article>
     </section>
