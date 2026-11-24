@@ -376,6 +376,14 @@
   /* 行動區不能使用的原因（建議圖示與「直接推進劇情」的說明）；空字串或不認得的原因沒有說明。 */
   function actionHint(reason) { return labelOf(ACTION_HINTS, reason, ''); }
 
+  /* 朗讀按鈕不能使用的原因（rpg-story-tts）；空字串或不認得的原因沒有說明。 */
+  var SPEECH_HINTS = {
+    'no-voice': '這個瀏覽器沒有可用的中文語音。',
+    note: '這一段只有一行說明，沒有可朗讀的劇情。',
+    empty: '這一段還沒有內容可以朗讀。'
+  };
+  function speechHint(reason) { return labelOf(SPEECH_HINTS, reason, ''); }
+
   /* 「重新生成」與「編輯」旁的說明（兩者共用同一組免費次數，2026-11-16 規則修訂）：還有免費次數顯示剩餘次數，用完顯示幣價；兩者都不確定時不顯示（空字串）。
      `exempt`（最後一個參數，缺值視為假）：管理員帳號不消耗遊戲幣（admin-unlimited-coins），免費次數用完後改顯示「不消耗遊戲幣」，不顯示幣價；還有免費次數時文字不變。 */
   function revisionRegenerateNote(freeLeft, cost, exempt) {
@@ -436,6 +444,7 @@
     storyText: storyText,
     suggestText: suggestText,
     actionHint: actionHint,
+    speechHint: speechHint,
     revisionRegenerateNote: revisionRegenerateNote,
     revisionEditNote: revisionEditNote,
     revisionRegenerateCostLine: revisionRegenerateCostLine,

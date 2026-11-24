@@ -512,6 +512,23 @@ textarea.gw-input { resize: vertical; }
 .gm-pagebtn:hover:not(:disabled), .gm-pagebtn:focus-visible { border-color: var(--color-accent); color: var(--color-accent); }
 .gm-pagebtn:disabled { opacity: 0.35; cursor: default; }
 
+/* 劇情朗讀（rpg-story-tts）：語音按鈕在翻頁按鈕列的最左邊（沿用 gm-pagebtn 的尺寸與焦點樣式，不新增顏色），旁邊較小的是選單按鈕 */
+.gm-speak { display: inline-flex; gap: 0.25rem; margin-right: auto; }
+.gm-speakbtn { min-width: 2.5rem; }
+.gm-speakbtn--on { border-color: var(--color-accent); color: var(--color-accent); }
+.gm-speakmenu { min-width: 1.8rem; padding: 0 0.3rem; }
+.gm-speak__icon { inline-size: 1.15rem; block-size: 1.15rem; vertical-align: middle; }
+.gm-speak__icon--small { inline-size: 1rem; block-size: 1rem; }
+.gm-voice { display: flex; flex-direction: column; gap: 0.4rem; margin: 0 0 0.6rem; }
+.gm-voice__row { display: flex; align-items: center; gap: 0.5rem; }
+.gm-voice__option { flex: 1 1 auto; display: flex; flex-wrap: wrap; align-items: center; gap: 0.2rem 0.6rem; min-width: 0; padding: 0.4rem 0.75rem; border: 1px solid var(--color-border); color: var(--color-text-muted); cursor: pointer; }
+.gm-voice__option:hover, .gm-voice__option:focus-within { border-color: var(--color-accent); color: var(--color-accent); }
+.gm-voice__option--on { border-color: var(--color-accent); color: var(--color-text); }
+.gm-voice__option input { accent-color: var(--color-accent); }
+.gm-voice__name { overflow-wrap: anywhere; }
+.gm-voice__tag { padding: 0 0.4rem; border: 1px solid var(--color-border); color: var(--color-text-muted); font-size: 0.75rem; }
+.gm-voice__preview { flex: 0 0 auto; }
+
 /* 行動建議：圖示在劇情卡右上，點了才產生；建議以膠囊 chips 顯示在劇情卡內，點選只是貼進輸入框 */
 .gm-suggest { min-width: 2.5rem; min-height: 2.5rem; }
 .gm-suggest--on { border-color: var(--color-accent); color: var(--color-accent); }

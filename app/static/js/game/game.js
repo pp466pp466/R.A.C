@@ -177,6 +177,26 @@
           if (typeof element.setSelectionRange === 'function') { var end = element.value.length; element.setSelectionRange(end, end); }
         });
       });
+      /* 語音選單（rpg-story-tts）：開啟時焦點落在目前選中的選項（沒有選中的落在第一個，也就是「自動」）；關閉之後（選了語音、Esc、遮罩、關閉按鈕）
+         焦點還給選單按鈕（與建議貼上後的 focusTick 同一種做法）。ui-modal 自己會在開啟後把焦點放到主要按鈕，所以這裡等它做完再移。 */
+      var voiceMenuButton = Vue.ref(null);
+      var voiceList = Vue.ref(null);
+      Vue.watch(function () { return session.voiceMenuOpen.value; }, function (open, was) {
+        if (open) {
+          Vue.nextTick(function () {
+            Vue.nextTick(function () {
+              var list = voiceList.value;
+              var target = list && typeof list.querySelector === 'function' ? (list.querySelector('input:checked') || list.querySelector('input')) : null;
+              if (target && typeof target.focus === 'function') { target.focus(); }
+            });
+          });
+        } else if (was) {
+          Vue.nextTick(function () {
+            var element = voiceMenuButton.value;
+            if (element && typeof element.focus === 'function') { element.focus(); }
+          });
+        }
+      });
       Vue.watch(function () { return session.scrollTick.value; }, function () {
         Vue.nextTick(function () {
           var element = scroller.value;
@@ -213,6 +233,10 @@
         input: input, draft: session.draft, actionError: session.actionError, draftCount: session.draftCount, draftOver: session.draftOver,
         actionMax: session.actionMax, sending: session.sending, sendDisabled: session.sendDisabled, inputDisabled: session.inputDisabled,
         blockerText: session.blockerText,
+        speech: session.speech, speakDisabled: session.speakDisabled, speakHint: session.speakHint, speakCurrent: session.speakCurrent,
+        openVoiceMenu: session.openVoiceMenu, closeVoiceMenu: session.closeVoiceMenu, chooseAutoVoice: session.chooseAutoVoice, chooseVoiceByKey: session.chooseVoiceByKey,
+        previewVoice: session.previewVoice,
+        voiceMenuButton: voiceMenuButton, voiceList: voiceList,
         world: session.world, locationLine: session.locationLine, lowBalanceText: wallet.lowBalanceText,
         sidebarOpen: sidebarOpen, sidebarMode: sidebarMode, modal: modal,
         coinModalOpen: wallet.coinModalOpen, coinModalText: wallet.coinModalText, checkinBusy: wallet.checkinBusy, checkinPreview: wallet.checkinPreview,

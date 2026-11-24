@@ -1032,3 +1032,46 @@ test('speaking writes only the chosen voice, never any story text, to the browse
     trap.restore();
   }
 });
+
+test('the speak button is disabled with a reason: no Chinese voice, a one-line note, or no content; and enabled on a normal page', async () => {
+  const ok = await ready(withTurns({ speech: Speech.speechEnvironment() }));
+  assert.equal(ok.session.speakDisabled.value, false);
+  assert.equal(ok.session.speakHint.value, '');
+
+  const noVoice = await ready(withTurns({ speech: Speech.speechEnvironment({ voices: [Speech.voice('Microsoft David', 'en-US')] }) }));
+  assert.equal(noVoice.session.speakDisabled.value, true);
+  assert.equal(noVoice.session.speakHint.value, Labels.speechHint('no-voice'));
+
+  const noted = await ready(withTurns({ speech: Speech.speechEnvironment() }));
+  await sendAction(noted, '行動', { events: [metaEvent(2), event('transition', { text: '（轉場）', will_retry: false }), doneEvent({ status: 'blocked', turn_number: null, coins: 230 })] });
+  assert.equal(noted.session.speakDisabled.value, true);
+  assert.equal(noted.session.speakHint.value, Labels.speechHint('note'));
+
+  const gone = createHarness({ speech: Speech.speechEnvironment() });
+  gone.server.snapshotFailure = failureInfo(404, 'not_found');
+  await gone.build();
+  await gone.session.load();
+  assert.equal(gone.session.speakDisabled.value, true);
+  assert.equal(gone.session.speakHint.value, Labels.speechHint('empty'));
+});
+
+test('the speech hints exist for every reason and an unknown reason has none', () => {
+  for (const reason of ['no-voice', 'note', 'empty']) { assert.ok(Labels.speechHint(reason), reason); }
+  assert.equal(Labels.speechHint(''), '');
+  assert.equal(Labels.speechHint('constructor'), '');
+  assert.equal(Labels.speechHint(undefined), '');
+});
+
+test('the template helpers choose "automatic" or a voice by key and close the menu', async () => {
+  const speech = Speech.speechEnvironment({ stored: null });
+  const h = await ready(withTurns({ speech }));
+  h.session.openVoiceMenu();
+  assert.equal(h.session.chooseVoiceByKey(Speech.ZH_TW_ONLINE.voiceURI), true);
+  assert.equal(h.session.voiceMenuOpen.value, false);
+  assert.equal(lastSpeech(h).choice, 'voice');
+  assert.equal(lastSpeech(h).selectedKey, Speech.ZH_TW_ONLINE.voiceURI);
+  h.session.openVoiceMenu();
+  assert.equal(h.session.chooseAutoVoice(), true);
+  assert.equal(lastSpeech(h).choice, 'auto');
+  assert.equal(h.session.chooseVoiceByKey('不存在'), false);
+});

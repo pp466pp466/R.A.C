@@ -13,6 +13,9 @@
    - 時間軸資料與歷史：items（最近 60 項：opening｜turn｜note｜inflight；主畫面只用 inflight，完整時間軸只在「歷史」Modal 純文字顯示）、hasEarlier、scroller（歷史捲動區的元素參照）。
    - 劇情卡（rpg-story-view）：card（Game.cardView 的形狀：visible、speaker、speakerLabel、text 打字中的字、fullText 給輔助科技、note、position、canPrev、canNext、typing、waitingText）；
      行動建議：suggestOpen、suggestItems、suggestBusy、suggestError、suggestDisabled、suggestHint；直接推進劇情：advanceDisabled、advanceHint。
+   - 劇情朗讀（rpg-story-tts）：speech（{ availability: 'unsupported'｜'no-voice'｜'ready'、speaking、voices: [{ key、name、lang、local }]、choice: 'none'｜'auto'｜'voice'、selectedKey }）、
+     speakDisabled、speakHint（按鈕為什麼不能按）、voiceMenuButton（選單按鈕的元素參照）、voiceList（選單裡選項清單的元素參照）；方法 speakCurrent、openVoiceMenu、closeVoiceMenu、
+     chooseAutoVoice、chooseVoiceByKey、previewVoice；語音選單的顯示狀態是 modal.voice。朗讀的是劇情卡當前段的 card.fullText，純文字、不使用任何標記解析。
    - 輸入：input（輸入框的元素參照）、draft、actionError、draftCount、draftOver、actionMax、sending、sendDisabled、inputDisabled、blockerText。
    - 世界與餘額提示：world（Game.worldView 的形狀）、locationLine、lowBalanceText。頂列的餘額是全站共用的 ui-wallet-balance 元件（由 UI.install 註冊，讀全站的 UI.wallet；
      game.js 把同一個 UI.wallet 交給 game-wallet.js，所以標籤與輸入區的餘額不足提示依同一份狀態，整頁只有一個 GET /api/wallet），樣板不再需要 balanceText。
@@ -131,6 +134,23 @@
               <p v-if="card.note" class="gm-note gm-note--transition">{{ card.note }}</p>
               <p v-if="card.waitingText" class="gm-wait" role="status">{{ card.waitingText }}</p>
               <div class="gm-card__nav">
+                <span v-if="speech.availability !== 'unsupported'" class="gm-speak">
+                  <button type="button" class="gm-pagebtn gm-speakbtn" :class="{ 'gm-speakbtn--on': speech.speaking }" :disabled="speakDisabled"
+                          :aria-pressed="speech.speaking ? 'true' : 'false'" :aria-label="speech.speaking ? '停止朗讀' : '朗讀這一段'" :title="speakHint" @click="speakCurrent">
+                    <svg v-if="!speech.speaking" class="gm-speak__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M8 5v14l11-7z" fill="currentColor"></path>
+                    </svg>
+                    <svg v-else class="gm-speak__icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <rect x="6" y="6" width="12" height="12" fill="currentColor"></rect>
+                    </svg>
+                  </button>
+                  <button ref="voiceMenuButton" type="button" class="gm-pagebtn gm-speakmenu" :disabled="speech.availability === 'no-voice'" aria-label="選擇語音"
+                          aria-haspopup="dialog" :title="speech.availability === 'no-voice' ? speakHint : ''" @click="openVoiceMenu">
+                    <svg class="gm-speak__icon gm-speak__icon--small" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                      <path d="M6 9l6 6 6-6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"></path>
+                    </svg>
+                  </button>
+                </span>
                 <button type="button" class="gm-pagebtn" :disabled="!card.canPrev" aria-label="回到上一段" @click="prevPage">‹</button>
                 <button type="button" class="gm-pagebtn" :disabled="!card.canNext" aria-label="翻到下一段" @click="nextPage">›</button>
               </div>
@@ -364,6 +384,31 @@
   <ui-modal v-model="notebookDiscardOpen" title="放棄未儲存的變更？" status-code="DISCARD_NOTEBOOK" confirm-text="放棄變更" cancel-text="繼續編輯" @confirm="confirmNotebookDiscard">
     <p>你對記事簿的修改還沒有儲存，離開編輯後這些修改就會消失。</p>
   </ui-modal>
+  <ui-modal v-model="modal.voice" title="選擇朗讀的語音" status-code="VOICE_SELECT" :show-cancel="false">
+    <p class="gm-modal-text">朗讀使用瀏覽器內建的語音。標示「線上」的語音，部分瀏覽器可能會把要朗讀的文字送到瀏覽器廠商，不會經過本平台。我們只在這個瀏覽器記住您選的語音名稱。</p>
+    <p v-if="speech.voices.length === 0" class="gm-modal-text" role="status">目前找不到中文語音。您可以改用「自動」，由瀏覽器決定；若仍沒有聲音，請到作業系統的設定新增中文語音。</p>
+    <div ref="voiceList" class="gm-voice" role="radiogroup" aria-label="朗讀語音">
+      <div class="gm-voice__row">
+        <label class="gm-voice__option" :class="{ 'gm-voice__option--on': speech.choice === 'auto' }">
+          <input type="radio" :checked="speech.choice === 'auto'" @change="chooseAutoVoice()">
+          <span class="gm-voice__name">自動</span>
+          <small class="ge-hint">優先使用本機的臺灣中文語音</small>
+        </label>
+      </div>
+      <div v-for="option in speech.voices" :key="option.key" class="gm-voice__row">
+        <label class="gm-voice__option" :class="{ 'gm-voice__option--on': speech.selectedKey === option.key }">
+          <input type="radio" :checked="speech.selectedKey === option.key" @change="chooseVoiceByKey(option.key)">
+          <span class="gm-voice__name">{{ option.name }}</span>
+          <small class="ge-hint">{{ option.lang }}</small>
+          <small class="gm-voice__tag">{{ option.local ? '本機' : '線上' }}</small>
+        </label>
+        <button type="button" class="ui-btn gm-voice__preview" :aria-label="'試聽 ' + option.name" @click="previewVoice(option.key)">試聽</button>
+      </div>
+    </div>
+    <template #actions>
+      <button type="button" class="ui-btn ui-btn--primary" @click="closeVoiceMenu">關閉</button>
+    </template>
+  </ui-modal>
   <ui-toast-region></ui-toast-region>
 {% endraw %}
 </div>
@@ -385,6 +430,7 @@
   <script src="{{ url_for('static', filename='js/game/game-revision.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/story-pages.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/story-reader.js') }}"></script>
+  <script src="{{ url_for('static', filename='js/game/story-speech.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game-session.js') }}"></script>
   <script src="{{ url_for('static', filename='js/game/game.js') }}"></script>
 {% endblock %}

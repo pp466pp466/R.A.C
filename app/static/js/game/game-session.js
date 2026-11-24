@@ -169,6 +169,17 @@
     if (speaker) { speech.value = speaker.state; }
     var spokenPage = '';                   // 非響應式：上一次看到的「頁面身分」（key、index、fullText）；改變就停止朗讀
 
+    /* 朗讀按鈕為什麼不能按：'no-voice'（瀏覽器沒有中文語音）｜'note'（劇情卡只有一行說明）｜'empty'（沒有內容）｜''（可以）。 */
+    var speakReason = computed(function () {
+      var view = card.value;
+      if (speech.value.availability === 'no-voice') { return 'no-voice'; }
+      if (view.visible && view.note !== '') { return 'note'; }
+      if (!view.visible || view.fullText === '') { return 'empty'; }
+      return '';
+    });
+    var speakDisabled = computed(function () { return speakReason.value !== ''; });
+    var speakHint = computed(function () { return Game.speechHint(speakReason.value); });
+
     function pageIdentity(view) { return view && view.visible ? view.key + ':' + view.index + ':' + view.fullText : ''; }
     function stopSpeech() { if (speaker) { speaker.stop(); } return true; }
     function destroySpeech() { if (speaker) { speaker.destroy(); } }
@@ -195,6 +206,8 @@
       if (accepted) { voiceMenuOpen.value = false; }
       return accepted;
     }
+    function chooseAutoVoice() { return chooseVoice({ mode: 'auto' }); }                 // 樣板不寫物件字面值：「自動」與「某個語音」各一個方法
+    function chooseVoiceByKey(key) { return chooseVoice({ mode: 'voice', key: key }); }
     function previewVoice(key) { return speaker ? speaker.preview(key) : false; }
 
     function readerTypewriter(handlers) { return new deps.TypewriterBuffer(handlers); }
@@ -1099,8 +1112,8 @@
       advance: advance, advanceDisabled: advanceDisabled, advanceHint: advanceHint,
       suggestOpen: suggestOpen, suggestItems: suggestItems, suggestBusy: suggestBusy, suggestError: suggestError, suggestDisabled: suggestDisabled, suggestHint: suggestHint,
       toggleSuggestions: toggleSuggestions, closeSuggestions: closeSuggestions, pickSuggestion: pickSuggestion, focusTick: focusTick,
-      speech: speech, voiceMenuOpen: voiceMenuOpen, speakCurrent: speakCurrent, stopSpeech: stopSpeech, openVoiceMenu: openVoiceMenu, closeVoiceMenu: closeVoiceMenu,
-      chooseVoice: chooseVoice, previewVoice: previewVoice,
+      speech: speech, speakDisabled: speakDisabled, speakHint: speakHint, voiceMenuOpen: voiceMenuOpen, speakCurrent: speakCurrent, stopSpeech: stopSpeech, openVoiceMenu: openVoiceMenu, closeVoiceMenu: closeVoiceMenu,
+      chooseVoice: chooseVoice, chooseAutoVoice: chooseAutoVoice, chooseVoiceByKey: chooseVoiceByKey, previewVoice: previewVoice,
       phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, modeLabel: modeLabel, modeNote: modeNote,
       gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, safeHint: safeHint, openingNotice: openingNotice,
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,

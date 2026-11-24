@@ -813,3 +813,47 @@ test('loading the page with speech support writes nothing to localStorage until 
   assert.deepEqual(written, []);                                                      // 還沒選語音：沒有任何寫入
   assert.deepEqual(game.storageWrites, []);
 });
+
+test('opening the voice menu puts the focus on the chosen option (or the first, "automatic"), and closing it gives the focus back to the menu button', async () => {
+  const game = setupGame({ speech: { synth: Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] }), Utterance: Speech.FakeUtterance } });
+  const focused = [];
+  const element = (name) => ({ focus: () => focused.push(name) });
+  game.page.voiceMenuButton.value = element('menu-button');
+  const checked = element('checked-option');
+  const first = element('first-option');
+  let hasChecked = true;
+  game.page.voiceList.value = { querySelector: (selector) => (selector === 'input:checked' ? (hasChecked ? checked : null) : (selector === 'input' ? first : null)) };
+
+  game.page.modal.voice = true;
+  await settle();
+  assert.deepEqual(focused, ['checked-option']);                                       // 目前選中的選項
+
+  game.page.modal.voice = false;
+  await settle();
+  assert.deepEqual(focused, ['checked-option', 'menu-button']);                        // 關閉之後回到選單按鈕
+
+  hasChecked = false;                                                                  // 還沒有選中的：落在第一個（「自動」）
+  game.page.modal.voice = true;
+  await settle();
+  assert.deepEqual(focused.slice(-1), ['first-option']);
+});
+
+test('the voice menu focus handling never throws when the elements are missing', async () => {
+  const game = setupGame({ speech: { synth: Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] }), Utterance: Speech.FakeUtterance } });
+  game.page.voiceMenuButton.value = null;
+  game.page.voiceList.value = null;
+  game.page.modal.voice = true;
+  await settle();
+  game.page.modal.voice = false;
+  await settle();
+  assert.equal(game.page.modal.voice, false);
+});
+
+test('closing a menu that was never open does not move the focus', async () => {
+  const game = setupGame();
+  const focused = [];
+  game.page.voiceMenuButton.value = { focus: () => focused.push('menu-button') };
+  game.page.modal.voice = false;
+  await settle();
+  assert.deepEqual(focused, []);
+});

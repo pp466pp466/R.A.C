@@ -518,7 +518,7 @@ def test_the_game_template_has_the_timeline_the_composer_the_sidebar_the_modals_
     for kind in ("opening", "turn", "note"):
         assert f"item.kind === '{kind}'" in html, kind                           # 第 0 幕、完整回合、轉場與中斷說明；其餘是在途回合
     # rpg-turn-revision 4.4 有意識地改寫這一行（不是刪除）：新增重新生成與編輯兩個 Modal，放在遊戲幣 Modal 之前，所以遊戲幣不足或簽到的 Modal 會疊在它們上面
-    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["HISTORY", "REGENERATE_TURN", "EDIT_TURN", "COINS", "LEAVE_GAME", "ABANDON_TURN", "DISCARD_NOTEBOOK"]   # rpg-story-view 7.1 在最前面加上唯讀的歷史 Modal
+    assert re.findall(r'<ui-modal [^>]*status-code="(\w+)"', html) == ["HISTORY", "REGENERATE_TURN", "EDIT_TURN", "COINS", "LEAVE_GAME", "ABANDON_TURN", "DISCARD_NOTEBOOK", "VOICE_SELECT"]   # rpg-story-view 7.1 在最前面加上唯讀的歷史 Modal
     assert "<ui-restriction-notice" in html and "<ui-toast-region" in html
     assert re.search(r"\{\{\s*initial_state\|tojson\s*\}\}", html)               # 初始狀態經 tojson 跳脫
     assert re.search(r'<aside id="gm-sidebar" v-show="sidebarOpen"', html)       # 側欄的顯示由 Vue 接管（預設收合，見 game.js）
@@ -578,7 +578,7 @@ def test_the_game_page_loads_its_scripts_in_dependency_order_and_hard_codes_no_t
     names = [ref.rsplit("/", 1)[-1] for ref in collect(html).refs if ref.endswith(".js")]
     expected = ["auth-common.js", "game-labels.js", "sse-parser.js", "turn-stream.js", "game-state.js", "game-store.js", "game-sync.js",
                 "game-api.js", "wallet-checkin.js", "game-wallet.js", "game-notebook.js", "game-revision.js", "story-pages.js", "story-reader.js",
-                "game-session.js", "game.js"]
+                "story-speech.js", "game-session.js", "game.js"]
     for needed in ("vue.global.prod.js", "axios.min.js", "typewriter.js", "ui-components.js", "restriction.js", *expected):
         assert needed in names, needed
     assert names[-1] == "game.js"                                                # 掛載腳本必須是最後一個（它用到前面所有模組）

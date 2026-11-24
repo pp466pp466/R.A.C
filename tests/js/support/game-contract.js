@@ -8,6 +8,8 @@ const CONTRACT = {
     'inputDisabled', 'blockerText', 'world', 'locationLine', 'lowBalanceText', 'sidebarOpen', 'sidebarMode', 'sideTab', 'modal', 'coinModalOpen',
     'coinModalText', 'checkinBusy', 'checkinPreview', 'checkinMessage', 'checkinFinished',
     // 劇情卡、行動建議與直接推進劇情（game-session.js，rpg-story-view）
+    // 劇情朗讀（rpg-story-tts）：speech 是朗讀器的狀態；voiceMenuButton 與 voiceList 是元素參照（選單按鈕、選單裡的選項清單）
+    'speech', 'speakDisabled', 'speakHint', 'voiceMenuButton', 'voiceList',
     'card', 'suggestOpen', 'suggestItems', 'suggestBusy', 'suggestError', 'suggestDisabled', 'suggestHint', 'advanceDisabled', 'advanceHint',
     // 記事簿面板（game-notebook.js）
     'notebook', 'notebookLoading', 'notebookError', 'notebookEmpty', 'notebookUsage', 'notebookReserveNote', 'notebookFull', 'notebookFullText', 'notebookEmptyText',
@@ -22,6 +24,7 @@ const CONTRACT = {
     'retryLoad', 'retryOpening', 'showEarlier', 'onScroll', 'send', 'cancel', 'dismissNotice', 'dismissSafeHint', 'resendInflight', 'askAbandon',
     'confirmAbandon', 'leaveClick', 'confirmLeave', 'toggleSidebar', 'closeSidebar', 'selectSideTab', 'claimCheckin', 'confirmOverflow', 'cancelOverflow',
     'closeCoinModal', 'openNotebook', 'reloadNotebook', 'startNotebookEdit', 'saveNotebook', 'cancelNotebookEdit', 'confirmNotebookDiscard',
+    'speakCurrent', 'openVoiceMenu', 'closeVoiceMenu', 'chooseAutoVoice', 'chooseVoiceByKey', 'previewVoice',
     'nextPage', 'prevPage', 'advance', 'toggleSuggestions', 'pickSuggestion', 'openHistory', 'closeHistory',
     'openRegenerate', 'openEdit', 'closeRegenerate', 'closeEdit', 'selectRegenerateCategory', 'submitRegenerate', 'submitEdit', 'cancelRevision',
   ],
