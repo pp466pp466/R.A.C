@@ -27,6 +27,7 @@
 | `openspec/specs/` | 已封存能力的規格（需求與情境）；設計文件說明「怎麼做」 |
 | [report.md](report.md)、[RPG.md](RPG.md) | 探索與決策紀錄（含備選方案與理由），不隨每次 change 更新 |
 | [2.0簡報.md](2.0簡報.md)、2.0簡報.pdf、2.1簡報.pptx、4.0簡報.pptx、5.0簡報.pptx | 對外報告用的簡報（2026-11-24；以 Mermaid 圖與 6 張架構圖解說明，與設計文件的架構一致）；摘要設計文件、不是設計文件本身；PDF 由 `diagrams/build_deck.py`、2.1 的 PowerPoint 由 `diagrams/build_pptx.py` 產生；4.0（2026-11-22，15 張）與 5.0（2026-11-24，16 張，含一張「開發工具」）是給主管與評審的重點彙整簡報（大字、深色），分別由 `diagrams/build_pptx_40.py`、`diagrams/build_pptx_50.py` 手工編排；兩份都是產生當天的快照：不隨 2.0 更新、不納入簡報衝突監看（`deck-conflict-watch` 技能），之後更新時另外產生新編號的彙整報告，舊的原樣保留（唯一的例外：2026-11-24 使用者要求把劇情朗讀 rpg-story-tts 補入 2.0 與 5.0，5.0 因此在當天再更新一次、數字與 2.0 對齊）。上一版 [1.0簡報.md](1.0簡報.md)、1.0簡報.pdf（2026-11-16）保留為歷史版本 |
+| 投資.pdf | **投資人簡報（2026-11-24，草稿，20 頁、16:9）**：目前功能、未來功能、變現模式、前期開發與穩定維護金額、收入時程與風險，第 18–19 頁是「待確認事項」清單（需要創辦人決定的 11 項、需要驗證或向外部確認的項目）。財務數字是依公開基準與專案現況推演的假設，**不是實績**；不屬於設計文件，不隨程式更新，決定或數字改變時重新產生。產生器與財務模型**不在版本庫**，放在桌面的 `investor-deck` 資料夾（`C:/Users/User/Desktop/investor-deck/`：`model.py` 放所有假設、`build_deck.py` 放內容、`charts.py`、`render.js` 以 Chrome 輸出 PDF）；與 2.0 簡報、4.0、5.0 彙整簡報互相獨立，不在簡報衝突監看（`deck-conflict-watch`）範圍 |
 | 登入與註冊架構圖解.png、MCP架構圖解.png、網站入口架構圖解.png、RPG回合引擎架構圖解.png、內容安全與審查架構圖解.png、部署與營運架構圖解.png | 以 Azure 圖示設計的關聯圖與功能對應表（`diagrams/build_diagrams.py` 與 `diagrams/build_diagrams_system.py` 產生），**全部輸出為 4K（寬 3840 像素）**；**MCP 圖明確標示現況沒有實作 MCP**，虛線為 RC-6 的規劃。重新產生的做法見 [diagrams/README.md](diagrams/README.md) |
 
 ## 2. 改了什麼，更新哪一份
