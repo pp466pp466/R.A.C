@@ -13,7 +13,7 @@
 | `docs/2.0簡報.pdf` | `docs/2.0簡報.md` | `python -X utf8 docs/diagrams/build_deck.py --libs <資料夾>` |
 | `docs/2.1簡報.pptx` | `docs/2.0簡報.md`（與 PDF 同一份內容） | `python -X utf8 docs/diagrams/build_pptx.py --libs <資料夾> --pptx-libs <資料夾>` |
 | `docs/4.0簡報.pptx` | `build_pptx_40.py` 內手工編排的 15 張重點版（給主管與評審；2026-11-22 的快照，不再更新） | `python -X utf8 docs/diagrams/build_pptx_40.py --pptx-libs <資料夾>` |
-| `docs/5.0簡報.pptx` | `build_pptx_50.py` 內手工編排的 16 張重點版（給主管與評審；2026-11-24 的快照，不再更新；含一張「開發工具」） | `python -X utf8 docs/diagrams/build_pptx_50.py --pptx-libs <資料夾>` |
+| `docs/5.0簡報.pptx` | `build_pptx_50.py` 內手工編排的 16 張重點版（給主管與評審；2026-11-24 的快照，當天補入劇情朗讀後定稿、不再更新；含一張「開發工具」） | `python -X utf8 docs/diagrams/build_pptx_50.py --pptx-libs <資料夾>` |
 
 `build_diagrams.py` 與 `build_diagrams_system.py` 不帶參數（或帶 `all`）時產生各自負責的全部圖。上一版簡報（`1.0簡報.md` 與 PDF）保留為歷史版本，要重新產生用 `--source docs/1.0簡報.md --output docs/1.0簡報.pdf`。
 
@@ -51,7 +51,7 @@ python -X utf8 docs/diagrams/build_pptx_40.py --pptx-libs $env:TEMP\pptx-libs --
 
 `--check` 檢查兩件事：①以字數估算每個文字框的高度，放不下的列出來（結束代碼 3；**不要自己縮字級，先回報**）；②`FACTS` 裡的數字與說法是否都出現在 `docs/2.0簡報.md`。**4.0 是 2026-11-22 的快照**：2.0 簡報更新到 2026-11-24 之後，它的 `FACTS`（如 14,677、1,610、99 份主規格）已不在 2.0 簡報裡，`--check` 的數字檢查會失敗，這是預期的，不要為了讓它通過而改 4.0；5.0 日後也是同樣的情形。
 
-**5.0 簡報（`5.0簡報.pptx`）** 是 4.0 的後繼版：版型與規則相同（16:9、內文不小於 24 pt、標題 44 pt、原生形狀、講者備忘），內容更新到 2026-11-24（遊戲畫面的劇情卡與行動建議、設定精靈、後台刪除帳號、103 份主規格與 35 個已封存 change、測試數字、展示環境 `bb665dd`），並新增第 12 張「開發工具：用了什麼、做了什麼」（Claude Code、OpenSpec、測試與變異驗證、Playwright、AWS CLI＋SSM、Mermaid＋python-pptx）。`build_pptx_50.py` 是由 4.0 的產生器複製後修改的獨立檔案。**5.0 與 4.0 一樣是快照**：不隨 2.0 更新，也不納入 `deck-conflict-watch` 技能的監看（使用者 2026-11-24 的決定）；程式與 2.0 簡報更新之後若需要新的重點彙整報告，由使用者另外要求，產生新編號的新檔（可沿用這套版型），4.0 與 5.0 原樣保留。產生與檢查指令（`--check` 對照的是**產生當天**的 2.0 簡報）：
+**5.0 簡報（`5.0簡報.pptx`）** 是 4.0 的後繼版：版型與規則相同（16:9、內文不小於 24 pt、標題 44 pt、原生形狀、講者備忘），內容更新到 2026-11-24（遊戲畫面的劇情卡與行動建議、設定精靈、後台刪除帳號、103 份主規格與 35 個已封存 change、測試數字、展示環境 `b63f4e7`、劇情朗讀〔rpg-story-tts，已部署待驗收〕），並新增第 12 張「開發工具：用了什麼、做了什麼」（Claude Code、OpenSpec、測試與變異驗證、Playwright、AWS CLI＋SSM、Mermaid＋python-pptx）。`build_pptx_50.py` 是由 4.0 的產生器複製後修改的獨立檔案。**5.0 與 4.0 一樣是快照**：不隨 2.0 更新，也不納入 `deck-conflict-watch` 技能的監看（使用者 2026-11-24 的決定）；程式與 2.0 簡報更新之後若需要新的重點彙整報告，由使用者另外要求，產生新編號的新檔（可沿用這套版型），4.0 與 5.0 原樣保留（唯一的例外：2026-11-24 使用者要求把劇情朗讀補入 2.0 與 5.0，5.0 因此在當天再更新一次、數字與 2.0 對齊，`--check` 通過）。產生與檢查指令（`--check` 對照的是**產生當天**的 2.0 簡報）：
 
 ```powershell
 python -X utf8 docs/diagrams/build_pptx_50.py --pptx-libs $env:TEMP\pptx-libs

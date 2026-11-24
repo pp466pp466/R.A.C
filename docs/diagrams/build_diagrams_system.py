@@ -304,8 +304,8 @@ def rpg_diagram() -> Svg:
     top = 282
     columns = [
         dict(icon="browser", azure="Browser", title="/game 畫面", badges=(1,), body=[
-            "game/*.js：entry、wizard、turn-stream、game-sync、story-pages、story-reader", "turn-stream.js：原生 fetch＋ReadableStream；AbortController 逾時；收到任何位元組就重設閒置計時器",
-            "依句分段成劇情卡，打字機逐段逐字渲染（點擊或按鍵翻段）；被擋時丟棄未完成內容，改顯示一行轉場文字", "IndexedDB 暫存世界線；version 不一致時以後端為準",
+            "game/*.js：entry、wizard、turn-stream、game-sync、story-pages、story-reader、story-speech", "turn-stream.js：原生 fetch＋ReadableStream；AbortController 逾時；收到任何位元組就重設閒置計時器",
+            "依句分段成劇情卡，打字機逐段逐字渲染（點擊或按鍵翻段）；被擋時丟棄未完成內容，改顯示一行轉場文字", "story-speech.js：劇情卡可用瀏覽器內建語音朗讀，純前端、不經伺服器", "IndexedDB 暫存世界線；version 不一致時以後端為準",
             "事件：meta、token、ping、transition、state、done、error"]),
         dict(icon="api-management", azure="API Management Services", title="Web API Controller", badges=(2,), body=[
             "POST /api/game/sessions/<id>/turns/stream", "POST …/opening/stream（第 0 幕）", "POST …/turns/<client_msg_id>/regenerate／edit/stream",

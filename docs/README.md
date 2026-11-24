@@ -26,7 +26,7 @@
 | `README.md`（根目錄） | 安裝、環境變數、端點表、驗收紀錄與已知限制；設計文件引用它而不重複 |
 | `openspec/specs/` | 已封存能力的規格（需求與情境）；設計文件說明「怎麼做」 |
 | [report.md](report.md)、[RPG.md](RPG.md) | 探索與決策紀錄（含備選方案與理由），不隨每次 change 更新 |
-| [2.0簡報.md](2.0簡報.md)、2.0簡報.pdf、2.1簡報.pptx、4.0簡報.pptx、5.0簡報.pptx | 對外報告用的簡報（2026-11-24；以 Mermaid 圖與 6 張架構圖解說明，與設計文件的架構一致）；摘要設計文件、不是設計文件本身；PDF 由 `diagrams/build_deck.py`、2.1 的 PowerPoint 由 `diagrams/build_pptx.py` 產生；4.0（2026-11-22，15 張）與 5.0（2026-11-24，16 張，含一張「開發工具」）是給主管與評審的重點彙整簡報（大字、深色），分別由 `diagrams/build_pptx_40.py`、`diagrams/build_pptx_50.py` 手工編排；兩份都是產生當天的快照：不隨 2.0 更新、不納入簡報衝突監看（`deck-conflict-watch` 技能），之後更新時另外產生新編號的彙整報告，舊的原樣保留。上一版 [1.0簡報.md](1.0簡報.md)、1.0簡報.pdf（2026-11-16）保留為歷史版本 |
+| [2.0簡報.md](2.0簡報.md)、2.0簡報.pdf、2.1簡報.pptx、4.0簡報.pptx、5.0簡報.pptx | 對外報告用的簡報（2026-11-24；以 Mermaid 圖與 6 張架構圖解說明，與設計文件的架構一致）；摘要設計文件、不是設計文件本身；PDF 由 `diagrams/build_deck.py`、2.1 的 PowerPoint 由 `diagrams/build_pptx.py` 產生；4.0（2026-11-22，15 張）與 5.0（2026-11-24，16 張，含一張「開發工具」）是給主管與評審的重點彙整簡報（大字、深色），分別由 `diagrams/build_pptx_40.py`、`diagrams/build_pptx_50.py` 手工編排；兩份都是產生當天的快照：不隨 2.0 更新、不納入簡報衝突監看（`deck-conflict-watch` 技能），之後更新時另外產生新編號的彙整報告，舊的原樣保留（唯一的例外：2026-11-24 使用者要求把劇情朗讀 rpg-story-tts 補入 2.0 與 5.0，5.0 因此在當天再更新一次、數字與 2.0 對齊）。上一版 [1.0簡報.md](1.0簡報.md)、1.0簡報.pdf（2026-11-16）保留為歷史版本 |
 | 登入與註冊架構圖解.png、MCP架構圖解.png、網站入口架構圖解.png、RPG回合引擎架構圖解.png、內容安全與審查架構圖解.png、部署與營運架構圖解.png | 以 Azure 圖示設計的關聯圖與功能對應表（`diagrams/build_diagrams.py` 與 `diagrams/build_diagrams_system.py` 產生），**全部輸出為 4K（寬 3840 像素）**；**MCP 圖明確標示現況沒有實作 MCP**，虛線為 RC-6 的規劃。重新產生的做法見 [diagrams/README.md](diagrams/README.md) |
 
 ## 2. 改了什麼，更新哪一份

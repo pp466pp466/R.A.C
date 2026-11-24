@@ -82,7 +82,7 @@ LINT: list[str] = []
 
 # 投影片上出現的數字，必須全部出現在 2.0簡報.md（--check 逐一確認）
 FACTS = [
-    "15,163", "1,872", "103 份主規格", "35 個 change 已封存", "0023", "bb665dd", "2026-11-24",
+    "15,170", "1,963", "103 份主規格", "35 個 change 已封存", "0023", "b63f4e7", "2026-11-24", "rpg-story-tts", "劇情朗讀",
     "每日簽到 200", "上限 1000", "一輪 30 幣", "2000／5000／10000", "安全模式開（預設）／關",
 ]
 
@@ -390,9 +390,9 @@ def slide_cover(deck: Deck) -> None:
 def slide_overview(deck: Deck) -> None:
     deck.add_slide("02 ｜ OVERVIEW", "一頁看懂：做了什麼、做到哪",
                    "八天內封存 11 個 change（AWS 展示環境、只限滿 18 歲、安全模式開關、錢包頁、劇本審核與目錄、檢舉與匿名保留、視覺小說式遊戲畫面、登入後設定精靈、後台刪除帳號等）。"
-                   "15,163 個後端測試案例通過 15,158、略過 5；另有 1,872 個前端測試。103 份主規格是 OpenSpec 規格，每個設計決策都有規格、設計文件與守門測試。"
-                   "展示環境最新部署是 2026-11-24 的映像 bb665dd，資料庫在遷移 0023；已封存的功能都已部署。")
-    tiles = [("2", "個核心產品", "RPG 與客服"), ("35", "項功能已封存", "每項有規格測試"), ("15,163", "個自動化測試", "全數通過或略過"), ("103", "份規格文件", "決策有據可查")]
+                   "15,170 個後端測試案例通過 15,165、略過 5；另有 1,963 個前端測試。103 份主規格是 OpenSpec 規格，每個設計決策都有規格、設計文件與守門測試。"
+                   "展示環境最新部署是 2026-11-24 的映像 b63f4e7，資料庫在遷移 0023；已封存的功能都已部署。另有劇情朗讀（rpg-story-tts，瀏覽器內建語音、純前端）已部署、待驗收，尚未封存。")
+    tiles = [("2", "個核心產品", "RPG 與客服"), ("35", "項功能已封存", "每項有規格測試"), ("15,170", "個自動化測試", "全數通過或略過"), ("103", "份規格文件", "決策有據可查")]
     width, gap = 2.8, 0.24
     for index, (number, label, sub) in enumerate(tiles):
         x = MARGIN_X + index * (width + gap)
@@ -400,7 +400,7 @@ def slide_overview(deck: Deck) -> None:
         deck.text(x + 0.15, 1.95, width - 0.3, 0.95, [[(number, {"bold": True})]], size=52, color=ACCENT, name=f"{label}數字", margin=(0.05, 0.0), anchor="middle")
         deck.text(x + 0.15, 2.95, width - 0.3, 0.5, [[(label, {"bold": True})]], size=26, name=f"{label}標籤", margin=(0.05, 0.0))
         deck.text(x + 0.15, 3.5, width - 0.3, 0.95, [sub], size=24, name=f"{label}說明", margin=(0.05, 0.0))
-    rows = [(True, "已完成：客服、RPG、遊戲畫面、劇本上架與檢舉"), (True, "已部署：AWS 雪梨展示環境（2026-11-24 版本）"), (False, "下一步：串流壓測與監控、法務覆核")]
+    rows = [(True, "已完成：客服、RPG、遊戲畫面、劇本上架與檢舉"), (True, "已部署：AWS 雪梨展示環境（2026-11-24 版本）"), (False, "待驗收：劇情朗讀｜下一步：串流壓測、法務覆核")]
     for index, (done, text) in enumerate(rows):
         y = 4.9 + index * 0.68
         deck.dot(MARGIN_X + 0.05, y + 0.15, 0.32, done=done)
@@ -421,9 +421,9 @@ def slide_journey(deck: Deck) -> None:
     deck.add_slide("04 ｜ PLAYER JOURNEY", "玩家旅程：從登入到創作",
                    "首次 Google 登入即註冊，須勾選「同意服務條款與隱私權政策」與「我確認已滿 18 歲」；回訪者一鍵登入。登入後填生日與年齡區間，伺服器由生日計算年齡，未滿 18 歲立即抹除帳號與個資。"
                    "登入後的 /age 是三步設定精靈（歡迎與使用守則、年齡確認、故事偏好），仍一次送出；故事偏好在年齡確認成功之後才存。"
-                   "建立主角時 AI 生成只是預覽，可修改後接受，按「開始冒險」才寫入存檔；開場的第 0 幕不算一輪、不扣幣。遊戲畫面是劇情卡：AI 回應依句分段，點擊或按鍵翻段。")
+                   "建立主角時 AI 生成只是預覽，可修改後接受，按「開始冒險」才寫入存檔；開場的第 0 幕不算一輪、不扣幣。遊戲畫面是劇情卡：AI 回應依句分段，點擊或按鍵翻段，並可用瀏覽器內建語音朗讀當前段。")
     steps = [("Google 登入", "首次登入即註冊"), ("設定精靈", "三步：守則、年齡確認、偏好"), ("建立主角", "可請 AI 生成角色卡與錨定事實"),
-             ("開始冒險", "劇情卡、點擊翻段，每輪 30 幣"), ("創作與分享", "固定規格創作，審核後公開")]
+             ("開始冒險", "劇情卡翻段、可朗讀，每輪 30 幣"), ("創作與分享", "固定規格創作，審核後公開")]
     for index, (title, desc) in enumerate(steps):
         y = 1.8 + index * 1.02
         deck.card(MARGIN_X, y, CONTENT_W, 0.9)
@@ -438,13 +438,14 @@ def slide_rpg(deck: Deck) -> None:
                    "一輪 = 一則玩家訊息 + 一則 AI 回應；送出行動先過規則層，預扣 30 幣，串流期間沒有任何資料庫交易，輸出經 OutputGuard 逐句審查（保留一句緩衝）才釋放，完成後在同一個短交易結算。"
                    "記事簿每完成 10 輪由 RPG 模型從最近 10 輪抓重點追加，容量 2000／5000／10000 字依會員等級；玩家可檢視與編輯。"
                    "遊戲畫面（rpg-story-view）：AI 回應依句分段成劇情卡，逐段打字機、點擊或按鍵翻段，「‹」只能在當前輪回上一段；另有只讀的歷史視圖與純 CSS 氛圍背景。"
-                   "行動建議點燈泡圖示才產生（獨立的非串流呼叫、至多 3 個、每個畫面最多一次、不扣遊戲幣但計入全站 token 上限），另有「直接推進劇情」（一輪 30 幣）。分段只是前端呈現，不改串流協定、審查與扣幣。")
-    points = [("無窮盡劇情", "沒有死局，作者可自訂結局"), ("劇情卡閱讀", "依句分段，點擊或按鍵翻段"), ("行動建議", "點圖示才產生，不扣遊戲幣"), ("逐句審查", "通過才顯示給玩家")]
+                   "行動建議點燈泡圖示才產生（獨立的非串流呼叫、至多 3 個、每個畫面最多一次、不扣遊戲幣但計入全站 token 上限），另有「直接推進劇情」（一輪 30 幣）。分段只是前端呈現，不改串流協定、審查與扣幣。"
+                   "劇情朗讀（rpg-story-tts，已部署、待驗收）：劇情卡旁的語音按鈕與選單，用瀏覽器內建語音朗讀當前段，純前端、不經伺服器、沒有新端點與遷移；第一次先選語音（可試聽，標示本機或線上），選擇只存在瀏覽器；翻段、重新生成、送出行動與離開頁面即停止，不自動接讀。")
+    points = [("無窮盡劇情", "沒有死局，作者可自訂結局"), ("劇情卡閱讀", "依句分段，點擊或按鍵翻段"), ("劇情朗讀", "瀏覽器內建語音，不經伺服器"), ("行動建議", "點圖示才產生，不扣遊戲幣"), ("逐句審查", "通過才顯示給玩家")]
     for index, (head, sub) in enumerate(points):
-        y = 1.8 + index * 1.28
-        deck.badge(MARGIN_X, y + 0.08, 0.55, str(index + 1), size=24)
-        deck.text(MARGIN_X + 0.8, y, 6.7, 0.56, [[(head, {"bold": True})]], size=30, name=f"{head}標題", margin=(0.02, 0.0))
-        deck.text(MARGIN_X + 0.8, y + 0.56, 6.7, 0.5, [sub], size=26, name=f"{head}說明", margin=(0.02, 0.0))
+        y = 1.75 + index * 1.02
+        deck.badge(MARGIN_X, y + 0.06, 0.5, str(index + 1), size=24)
+        deck.text(MARGIN_X + 0.8, y, 6.7, 0.5, [[(head, {"bold": True})]], size=28, name=f"{head}標題", margin=(0.02, 0.0))
+        deck.text(MARGIN_X + 0.8, y + 0.49, 6.7, 0.46, [sub], size=24, name=f"{head}說明", margin=(0.02, 0.0))
     flow = ["送出行動", "預扣 30 幣", "串流＋逐句審查", "結算並存檔", "每 10 輪：記事簿"]
     x, w, h, gap = 8.55, 4.08, 0.72, 0.24
     deck.text(x, 1.45, w, 0.4, [[("一輪的流程", {"bold": True})]], size=24, color=ACCENT, name="流程標題", lint=False)
@@ -561,13 +562,13 @@ def slide_tools(deck: Deck) -> None:
     deck.add_slide("12 ｜ TOOLS", "開發工具：用了什麼、做了什麼",
                    "Claude Code（VS Code 擴充）：AI 協作開發，依專案規範（AGENTS.md）寫程式、測試與文件；專案技能固定流程（OpenSpec 各階段、簡報衝突檢查、設計文件同步）。"
                    "OpenSpec：規格驅動，每個功能依 explore、propose、apply、archive 進行，35 個 change 已封存、103 份主規格；每批做完更新交接文件並由使用者下指令才 commit，Git 與 GitHub 保存歷程。"
-                   "測試：pytest 15,163 案例（SQLite 與 SQL Server 雙軌）、Node 內建測試 1,872 案例、AST 架構測試；變異驗證是在專案副本上刻意改壞程式，確認測試抓得到（admin-delete-account 的 39 個變異全數被抓到）。"
+                   "測試：pytest 15,170 案例（SQLite 與 SQL Server 雙軌）、Node 內建測試 1,963 案例、AST 架構測試；變異驗證是在專案副本上刻意改壞程式，確認測試抓得到（admin-delete-account 的 39 個變異全數被抓到；劇情朗讀的狀態機 61 個變異殺死 60，剩 1 個等價變異）。"
                    "Playwright 與無頭 Chrome：瀏覽器實機驗收（手機與桌機寬度），另以 Chrome DevTools Protocol 擷取畫面、配離線旁白錄製 17 支功能示範影片。"
                    "AWS CLI、SSM、Docker：自寫的 scripts/aws_demo.py 依序做 RDS 快照、在主機上建置映像、遷移、換版與驗證，部署到 AWS 雪梨展示環境。"
                    "Mermaid、Chrome、python-pptx：產生 6 張 4K 架構圖解、2.0 簡報 PDF 與 PowerPoint（2.1、4.0、5.0）。這些簡報用的工具只在產生文件時使用，不進版本庫與應用程式。")
     cards = [("Claude Code", ["依專案規範寫程式與文件", "用技能固定開發流程"]),
              ("OpenSpec", ["先寫規格再實作功能", "35 個 change、103 份規格"]),
-             ("測試與變異驗證", ["15,163 後端、1,872 前端", "封存前刻意改壞程式驗證"]),
+             ("測試與變異驗證", ["15,170 後端、1,963 前端", "封存前刻意改壞程式驗證"]),
              ("Playwright", ["瀏覽器實機驗收", "手機與桌機寬度各檢查"]),
              ("AWS CLI＋SSM", ["自寫腳本 aws_demo.py 部署", "快照→建置→遷移→換版→驗證"]),
              ("Mermaid＋python-pptx", ["產生 6 張 4K 架構圖解", "與 PDF、PowerPoint 簡報"])]
@@ -583,9 +584,9 @@ def slide_tools(deck: Deck) -> None:
 
 def slide_quality(deck: Deck) -> None:
     deck.add_slide("13 ｜ QUALITY", "品質保證：測試與規格守門",
-                   "pytest 收集 15,163 案例（通過 15,158、略過 5）；SQLite 與 SQL Server 雙軌。Node 內建測試 1,872 案例全數通過。tests/architecture 以 AST 檢查分層、後台邊界、無 Raw SQL 與前端規則；"
+                   "pytest 收集 15,170 案例（通過 15,165、略過 5）；SQLite 與 SQL Server 雙軌。Node 內建測試 1,963 案例全數通過。tests/architecture 以 AST 檢查分層、後台邊界、無 Raw SQL 與前端規則；"
                    "test_design_docs 與 test_project_db_schema_doc 確認資料表、欄位、路由、migration 與文件逐項一致。破壞驗證：封存前刻意改壞程式，確認至少一項測試會失敗。OpenSpec 規格以 validate --strict 驗證後才封存。")
-    tiles = [("15,163", "後端測試案例"), ("1,872", "前端測試案例"), ("103", "份主規格")]
+    tiles = [("15,170", "後端測試案例"), ("1,963", "前端測試案例"), ("103", "份主規格")]
     w, gap = 3.8, 0.267
     for index, (number, label) in enumerate(tiles):
         x = MARGIN_X + index * (w + gap)
@@ -599,7 +600,7 @@ def slide_deploy(deck: Deck) -> None:
     deck.add_slide("14 ｜ DEPLOYMENT", "部署與營運：AWS 展示環境",
                    "展示環境是單機（EC2 t3.small，雪梨）加 RDS SQL Server Express，不是 production：沒有可計費的 Google Cloud 專案，所以展示改用 AWS（Free plan 抵用金，展示期到 2026-12-31），"
                    "目的是讓客服池與 RPG 串流池第一次真正分流。部署順序固定：快照 → 建置映像 → 遷移（獨立步驟）→ 換版重啟 → 驗證；回復只換回前一版映像，不降級資料庫。"
-                   "最新部署是 2026-11-24 的映像 bb665dd，資料庫在遷移 0023（回復點是前一版映像，不降級資料庫）；檢舉與匿名保留（0022）、行動建議（0023）都已部署。")
+                   "最新部署是 2026-11-24 的映像 b63f4e7，資料庫在遷移 0023（回復點是前一版映像 bb665dd，不降級資料庫）；檢舉與匿名保留（0022）、行動建議（0023）都已部署；劇情朗讀（純前端）隨 b63f4e7 部署，沒有遷移。")
     boxes = [(0.7, 2.0, "瀏覽器", "使用者"), (3.35, 3.0, "Caddy", "HTTPS、HTTP/2")]
     for x, w, head, sub in boxes:
         deck.shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, 1.8, w, 1.7, fill=PANEL, line=LINE, line_w=1.5, radius=0.08, name=head)
@@ -621,7 +622,7 @@ def slide_deploy(deck: Deck) -> None:
 
 def slide_roadmap(deck: Deck) -> None:
     deck.add_slide("15 ｜ ROADMAP", "路線圖：已完成與下一步",
-                   "八天內從 1.0 走到現在：AWS 展示環境、只限滿 18 歲、安全模式開關、錢包頁、劇本審核與目錄、檢舉與匿名保留，以及視覺小說式遊戲畫面、設定精靈與後台刪除帳號，都已封存並部署。下一步做串流壓測與監控（rpg-ops-loadtest），"
+                   "八天內從 1.0 走到現在：AWS 展示環境、只限滿 18 歲、安全模式開關、錢包頁、劇本審核與目錄、檢舉與匿名保留，以及視覺小說式遊戲畫面、設定精靈與後台刪除帳號，都已封存並部署；劇情朗讀（rpg-story-tts）已部署、待使用者驗收，驗收通過才封存。下一步做串流壓測與監控（rpg-ops-loadtest），"
                    "最後是雲端預備與 production（需要可計費的 Google Cloud 專案，cloud-staging-run 擱置中）。另有玩家個人頁、性格原型庫與外部資料閘道等規劃中的項目。")
     deck.text(MARGIN_X, 1.75, 4.0, 0.5, [[("已完成（35 項功能）", {"bold": True})]], size=26, color=OK, name="已完成標題", margin=(0.02, 0.0))
     done = ["基礎與客服", "RPG 核心\n與遊戲畫面", "AWS\n展示環境", "18 歲與\n安全模式", "上架、檢舉\n與刪帳號"]
@@ -630,9 +631,9 @@ def slide_roadmap(deck: Deck) -> None:
         x = MARGIN_X + index * (w + gap)
         deck.shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, 2.3, w, 1.3, fill=OK_BG, line=OK, line_w=1.5, radius=0.1, name=f"已完成{index + 1}")
         deck.text(x + 0.1, 2.3, w - 0.2, 1.3, [[(part, {"bold": True})] for part in label.split("\n")], size=26, align="c", anchor="middle", name=f"已完成{index + 1}文字", margin=(0.02, 0.0))
-    deck.text(MARGIN_X, 3.95, 4.0, 0.5, [[("下一步", {"bold": True})]], size=26, color=ACCENT, name="下一步標題", margin=(0.02, 0.0))
-    nxt = ["串流壓測與監控", "完成法務覆核", "雲端預備與\nproduction"]
-    w2, gap2 = 3.8, 0.267
+    deck.text(MARGIN_X, 3.95, 6.0, 0.5, [[("待驗收與下一步", {"bold": True})]], size=26, color=ACCENT, name="下一步標題", margin=(0.02, 0.0))
+    nxt = ["劇情朗讀\n（待驗收）", "串流壓測\n與監控", "完成法務\n覆核", "雲端預備與\nproduction"]
+    w2, gap2 = 2.8, 0.24
     for index, label in enumerate(nxt):
         x = MARGIN_X + index * (w2 + gap2)
         deck.shape(MSO_SHAPE.ROUNDED_RECTANGLE, x, 4.5, w2, 1.3, fill=PANEL, line=ACCENT, line_w=2, radius=0.1, name=f"下一步{index + 1}")
@@ -645,11 +646,12 @@ def slide_roadmap(deck: Deck) -> None:
 def slide_next(deck: Deck) -> None:
     deck.add_slide("16 ｜ NEXT", "限制與下一步",
                    "限制都已列入路線圖與設計文件：展示環境單機單點、數字不是容量依據；RPG 目前用免費模型並已設定備援，正式對外前須重新評估供應商與方案，免費模型不得輸入真實個資；"
-                   "金流與訂閱尚待探索，儲值畫面只是示意；條款、隱私權政策、內容規範與檢舉處理列入法務覆核。入口層 IP 限流尚未做，是上線前關卡。")
-    titled_card(deck, MARGIN_X, 1.8, 5.85, 3.9, "已知限制", ["展示環境單機單點", "RPG 暫用免費模型", "金流與訂閱待探索", "法務覆核尚未完成"], size=30, gap=0.12)
-    titled_card(deck, MARGIN_X + 6.08, 1.8, 5.85, 3.9, "下一步", ["串流壓測與監控", "補齊展示環境缺口", "完成法務覆核", "建立 production"], size=30, gap=0.12, heading_color=OK)
-    deck.shape(MSO_SHAPE.ROUNDED_RECTANGLE, MARGIN_X, 5.95, CONTENT_W, 0.95, fill=OK_BG, line=OK, radius=0.15, name="結語條")
-    deck.text(MARGIN_X + 0.3, 5.95, CONTENT_W - 0.6, 0.95, [[("兩個核心共用同一套可驗證的基礎", {"bold": True})]], size=32, anchor="middle", name="結語")
+                   "金流與訂閱尚待探索，儲值畫面只是示意；條款、隱私權政策、內容規範與檢舉處理列入法務覆核。入口層 IP 限流尚未做，是上線前關卡。"
+                   "劇情朗讀已部署、待驗收：Windows Chrome 以腳本實機檢查 48／48（1280 與 360 寬），Edge、線上語音（約 15 秒中斷的風險）與真實手機觸控尚未實測；驗收通過才封存。")
+    titled_card(deck, MARGIN_X, 1.8, 5.85, 4.1, "已知限制", ["展示環境單機單點", "RPG 暫用免費模型", "金流與訂閱待探索", "法務覆核尚未完成"], size=30, gap=0.12)
+    titled_card(deck, MARGIN_X + 6.08, 1.8, 5.85, 4.1, "下一步", ["劇情朗讀驗收", "串流壓測與監控", "補齊展示環境缺口", "完成法務覆核", "建立 production"], size=28, gap=0.06, heading_color=OK)
+    deck.shape(MSO_SHAPE.ROUNDED_RECTANGLE, MARGIN_X, 6.05, CONTENT_W, 0.85, fill=OK_BG, line=OK, radius=0.15, name="結語條")
+    deck.text(MARGIN_X + 0.3, 6.05, CONTENT_W - 0.6, 0.85, [[("兩個核心共用同一套可驗證的基礎", {"bold": True})]], size=32, anchor="middle", name="結語")
 
 
 SLIDES = [slide_cover, slide_overview, slide_dual_core, slide_journey, slide_rpg, slide_cs, slide_safety, slide_creators, slide_coins,
