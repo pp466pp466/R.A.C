@@ -1570,7 +1570,7 @@ change `rpg-notebook`（RC-2b）。RPG 以記事簿取代對話摘要：每個�
 
 ## RPG 行動建議與推進劇情（rpg-story-view）
 
-change `rpg-story-view`（視覺小說式遊戲畫面）：遊戲主畫面改為依句分段的劇情卡（逐段打字機、點擊或按鍵翻段）、玩家點圖示才產生的行動建議、直接推進劇情、唯讀的歷史 Modal 與動態流星氛圍層。本節記錄後端（行動建議與推進規則）與前端（劇情卡）；規範在 AGENTS.md 第 5、6、7、10、11 節；設計見 `openspec/changes/rpg-story-view/design.md`（D1 至 D11）與 [docs/前端結構-frontend.md](docs/前端結構-frontend.md) 3e-2、[docs/系統架構-architecture.md](docs/系統架構-architecture.md)「RPG 行動建議與直接推進劇情」。
+change `rpg-story-view`（視覺小說式遊戲畫面）：遊戲主畫面改為依句分段的劇情卡（逐段打字機、點擊或按鍵翻段）、玩家點圖示才產生的行動建議、直接推進劇情、唯讀的歷史 Modal 與動態流星氛圍層。本節記錄後端（行動建議與推進規則）與前端（劇情卡）；規範在 AGENTS.md 第 5、6、7、10、11 節；設計見 `openspec/changes/archive/2026-11-24-rpg-story-view/design.md`（D1 至 D11）與 [docs/前端結構-frontend.md](docs/前端結構-frontend.md) 3e-2、[docs/系統架構-architecture.md](docs/系統架構-architecture.md)「RPG 行動建議與直接推進劇情」。
 
 ### 直接推進劇情
 
