@@ -38,7 +38,7 @@ def login_diagram() -> Svg:
     y += h + 12
     browser_y = y
     h = svg.card(ax + 10, y, aw - 20, icon="browser", azure="Browser", title="瀏覽器", badges=(3, 2),
-                 body=["Vue 3 全域變數模式＋axios", "/login、/age、/appeal、/account", "auth/login.js、age.js、auth-common.js", "meta csrf-token → X-CSRF-Token", "③ 導向 Google 授權頁（不經過伺服器）"])
+                 body=["Vue 3 全域變數模式＋axios", "/login、/age、/appeal、/account", "auth/login.js、age.js、onboarding.js、auth-common.js", "meta csrf-token → X-CSRF-Token", "③ 導向 Google 授權頁（不經過伺服器）"])
     browser_mid = browser_y + h / 2
     y += h + 12
     admin_y = y
@@ -182,7 +182,7 @@ def login_diagram() -> Svg:
         ("6", "建立登入狀態並依狀態導向",
          "玩家：login_user（session cookie 只含 uid、tv；換發 CSRF）→ landing_for：待確認年齡 /age、被鎖定 /appeal、等待刪除 /account，否則 /game；管理員：store_admin_step → /login/password（此時尚無 session）",
          "W users.last_login_at（_finish）"),
-        ("7", "年齡確認（玩家登入後的第一步）",
+        ("7", "年齡確認（玩家登入後的第一步；/age 是三步精靈，仍一次送出）",
          "POST /api/auth/verify-age → AuthService.verify_age：check_nickname、validate_age_input（AgePolicy：最低年齡 18）；未滿 18 歲 → AccountErasureService.erase_underage；不一致 → register_strike；成功 → UserRepository.complete_age_verification_if_unset（內容模式偏好一律 safe）→ 回呼 WalletService.ensure_signup_grant（贈 200 幣）",
          "W users（birth_date、age_range、nickname、age_confirmed_at）；W wallets、wallet_entries；未滿 18 歲 D users（CASCADE）＋W deletion_tombstones；不一致 W lock_strikes"),
         ("8", "管理員第二道：輸入密碼",

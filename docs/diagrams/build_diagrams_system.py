@@ -304,12 +304,12 @@ def rpg_diagram() -> Svg:
     top = 282
     columns = [
         dict(icon="browser", azure="Browser", title="/game 畫面", badges=(1,), body=[
-            "game/*.js：entry、wizard、turn-stream、game-sync", "turn-stream.js：原生 fetch＋ReadableStream；AbortController 逾時；收到任何位元組就重設閒置計時器",
-            "打字機緩衝區逐字渲染；被擋時丟棄未完成內容，改顯示一行轉場文字", "IndexedDB 暫存世界線；version 不一致時以後端為準",
+            "game/*.js：entry、wizard、turn-stream、game-sync、story-pages、story-reader", "turn-stream.js：原生 fetch＋ReadableStream；AbortController 逾時；收到任何位元組就重設閒置計時器",
+            "依句分段成劇情卡，打字機逐段逐字渲染（點擊或按鍵翻段）；被擋時丟棄未完成內容，改顯示一行轉場文字", "IndexedDB 暫存世界線；version 不一致時以後端為準",
             "事件：meta、token、ping、transition、state、done、error"]),
         dict(icon="api-management", azure="API Management Services", title="Web API Controller", badges=(2,), body=[
             "POST /api/game/sessions/<id>/turns/stream", "POST …/opening/stream（第 0 幕）", "POST …/turns/<client_msg_id>/regenerate／edit/stream",
-            "GET …/<id>、…/turns；GET／PUT …/notebook", "標頭 text/event-stream、no-cache、X-Accel-Buffering: no",
+            "GET …/<id>、…/turns；GET／PUT …/notebook；POST …/suggestions（行動建議，點圖示才呼叫）", "標頭 text/event-stream、no-cache、X-Accel-Buffering: no",
             "先確認有 RPG 供應商（沒有就在預扣前回 503）", "已完成的重送由 rpg_replay 回放，不碰錢包", "不做權限判斷、不匯入資料層"]),
         dict(icon="bot-services", azure="Bot Services", title="GameService（請求階段）", badges=(3,), body=[
             "begin_turn：閘門（AccessPolicy）→ client_msg_id 與行動驗證 → 擁有者（非擁有者 404）", "已完成的重送（TurnReplay）；完結與第 0 幕閘門",
@@ -392,7 +392,7 @@ def rpg_diagram() -> Svg:
 
     rows = [
         ("1", "玩家送出行動（或編輯、重新生成）",
-         "turn-stream.js：fetch 串流、AbortController 逾時、任何位元組重設閒置計時器；打字機緩衝區渲染；finally 恢復按鈕與載入狀態；以 client_msg_id 冪等重送",
+         "turn-stream.js：fetch 串流、AbortController 逾時、任何位元組重設閒置計時器；依句分段的劇情卡與打字機緩衝區渲染；finally 恢復按鈕與載入狀態；以 client_msg_id 冪等重送",
          "不碰 SQL Server（IndexedDB 只是快取，衝突時以後端為準）"),
         ("2", "API 入口",
          "game_api_controller.stream_turn → require_login、CSRF → 確認有 RPG 供應商 → GameService.begin_turn；回應 text/event-stream，事件產生器在 after_request 之後才執行",
@@ -495,7 +495,7 @@ def safety_diagram() -> Svg:
             "連續被自動拒絕達門檻 → 暫停發佈（只停止送審，其餘功能照常）；暫停者可使用申訴頁", "解除須管理員重新輸入密碼並寫入稽核", "公開劇本先審後發：須管理員核可才上架；玩家可檢舉上架版本（只升高優先度、不自動下架），由管理員決定下架（RC-8，已實作並封存）"]),
         dict(icon="app-services", azure="App Services", title="管理員的可見範圍與稽核", badges=(6,), body=[
             "預設只能看統計、使用者主動提交的意見回饋、被鎖定或暫停者的申訴、被內容安全過濾標記的對話、送審或被檢舉的劇本", "不得任意讀取其他對話全文；每次讀取都寫入 admin_audit_logs",
-            "停權、刪除內容、調整等級與遊戲幣等高風險操作須重新輸入密碼"]),
+            "停權、刪除帳號、刪除內容、調整等級與遊戲幣等高風險操作須重新輸入密碼"]),
     ]
     heights = [Svg(W, 10).card(30 + i * (aw3 + 20), ay, aw3, icon=c["icon"], azure=c["azure"], title=c["title"], body=c["body"], body_size=14, title_size=19) for i, c in enumerate(side)]
     side_h = max(heights)
@@ -515,7 +515,7 @@ def safety_diagram() -> Svg:
 
     rows = [
         ("1", "帳號閘門：年齡與抹除",
-         "AgePolicy（app/services/age_policy.py）→ AuthService.verify_age／_age_step_error → AccountErasureService.erase_underage；AccessPolicy.chat_gate、require_chat_access",
+         "AgePolicy（app/services/age_policy.py）→ AuthService.verify_age／_age_step_error → AccountErasureService.erase_underage（管理員在後台刪除帳號走同一個出口 erase_by_admin）；AccessPolicy.chat_gate、require_chat_access",
          "R users（birth_date 於當下計算年齡）；未滿 18 歲 D users（CASCADE）＋W deletion_tombstones"),
         ("2", "生效的內容模式",
          "AccessPolicy.effective_mode、save_mode、mode_state；content_tier.most_conservative、parse_tier；ContentModeService；GET／PUT /api/account/content-mode",
@@ -560,11 +560,11 @@ def deploy_diagram() -> Svg:
         dict(icon="users", azure="Users", title="開發者", body_size=14, body=[
             "本機 development：Flask 開發伺服器（正式環境不得使用 app.run）", "SQLite 或本機 SQL Server；.env 不進版本庫，.env.example 只列變數名稱"]),
         dict(icon="function-apps", azure="Function Apps", title="自動測試", body_size=14, body=[
-            "pytest 14,677 案例（含連 project_test 的 SQL Server 整合測試）", "Node 1,610 案例", "tests/architecture：分層、無 Raw SQL、前端規則", "test_design_docs：文件與程式一致"]),
+            "pytest 15,163 案例（含連 project_test 的 SQL Server 整合測試）", "Node 1,872 案例", "tests/architecture：分層、無 Raw SQL、前端規則", "test_design_docs：文件與程式一致"]),
         dict(icon="app-services", azure="App Services", title="容器驗收", body_size=14, body=[
             "scripts/verify_container.py（WSL Docker）", "非 root、映像沒有 .env、各環境啟動、缺機密只列變數名稱", "會員與客服流程、保存期限指令（最近一次 160／160）"]),
         dict(icon="app-registrations", azure="App Registrations", title="OpenSpec 規格流程", body_size=14, body=[
-            "propose → apply → archive；99 份主規格、32 個 change 已封存", "每批做完才 commit，驗收後才封存"]),
+            "propose → apply → archive；103 份主規格、35 個 change 已封存", "每批做完才 commit，驗收後才封存"]),
     ])
     a_bottom = bottom_of(a)
 
@@ -674,7 +674,7 @@ def deploy_diagram() -> Svg:
         ("1", "預檢與找主機", "deploy_plan 的 prepare 組：deploy-find-host（build_plan 另有 check-identity）", "確認帳號與主機；不符即停止，不放寬"),
         ("2", "遷移前手動快照", "snapshot-db、wait-snapshot-db", "每個提交短碼一個 RDS 快照；2026-11-17 已對真實 RDS 執行並驗證"),
         ("3", "建置映像", "archive-source、upload-source、build-image、check-image（derived_dockerfile）", "主機上分兩段建置；檢查非 root（uid 10001）、沒有 .env 與 .git、憑證庫張數；已驗證"),
-        ("4", "遷移與種子", "migrate-db、check-migration-head、seed-scripts（alembic upgrade head；展示環境的 RDS 已依序升到 0019（2026-11-18）、0020（11-19）、0021（11-20），皆已驗證；0022 尚未部署）", "遷移是部署的獨立步驟，不在應用程式啟動時執行；舊版程式必須在新結構上可運作（expand／contract）"),
+        ("4", "遷移與種子", "migrate-db、check-migration-head、seed-scripts（alembic upgrade head；展示環境的 RDS 已依序升到 0019（2026-11-18）、0020（11-19）、0021（11-20）、0022（11-22）、0023（11-23），皆已驗證）", "遷移是部署的獨立步驟，不在應用程式啟動時執行；舊版程式必須在新結構上可運作（expand／contract）"),
         ("5", "換版與重啟", "switch-release、wait-switch-release（release.env、release.previous.env）", "只重啟兩個池；標籤不存在就失敗；已驗證"),
         ("6", "驗證", "check-pools、check-pool-hardening（容器內 /readyz、行程 UID、gunicorn 設定、埠只在回送位址）", "已對真實主機驗證；公開 /healthz 與 /readyz 回 200，本文只有 {\"status\":\"ok\"}"),
         ("7", "一次性群組與營運", "db-init、create-admin、ingress、routing、schedule；告警與寄信（task 7.x）", "Caddy 憑證簽發、路徑分流、五個計時器、EC2 狀態告警演練與營運告警信已驗證；寄信進垃圾郵件匣"),
