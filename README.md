@@ -1798,7 +1798,7 @@ change `onboarding-polish`。玩家第一次以 Google 登入之後的 `/age` �
 
 ## 管理員刪除帳號（admin-delete-account）
 
-change `admin-delete-account`（**已實作並驗證，等使用者驗收；未封存、未部署**）：管理員在 `/admin` 的「使用者」分頁以信箱查到一位玩家後，可**立即且不可復原地刪除帳號**。tasks 分四批：① 資料與抹除出口（`704ff80`）、② 服務層與端點（`88ce109`）、③ 前端與政策頁（`e5907f8`）、④ 文件、變異驗證與全套驗證；規範（AGENTS.md 第 10、11 節）先單獨提交為 `99022ff`。**沒有資料庫結構變更、沒有遷移**（只有兩個無約束字串欄位多一個允許值）。
+change `admin-delete-account`（**已封存 2026-11-24；使用者驗收通過，已部署到展示環境 rac001〔`bb665dd`，沒有遷移〕**）：管理員在 `/admin` 的「使用者」分頁以信箱查到一位玩家後，可**立即且不可復原地刪除帳號**。tasks 分四批：① 資料與抹除出口（`704ff80`）、② 服務層與端點（`88ce109`）、③ 前端與政策頁（`e5907f8`）、④ 文件、變異驗證與全套驗證；規範（AGENTS.md 第 10、11 節）先單獨提交為 `99022ff`。**沒有資料庫結構變更、沒有遷移**（只有兩個無約束字串欄位多一個允許值）。
 
 - **端點**：`POST /api/admin/users/<public_id>/delete`（端點表見「管理員後台（C-4b）」）；請求 `reason`（必填，1 至 200 字）與 `password`，回應 `{"ok": true}`。沒有 GET、沒有批次、沒有使用者清單。
 - **規則**：一次刪一個；只能刪角色為 `user` 的帳號（管理員含自己 403 `admin_target_forbidden`，不存在 404）；**狀態不限**——使用中、停權、被鎖定、`deletion_pending`（不必等 7 天寬限期）與尚未填生日的帳號都刪得掉（所以刻意不用會擋 `deletion_pending` 的 `_manageable_target`）；須重新輸入密碼（失敗沿用登入的失敗計數與鎖定並寫 `reauth.failed`）。
@@ -1814,7 +1814,8 @@ change `admin-delete-account`（**已實作並驗證，等使用者驗收；未�
 - **全套測試（任務 4.4）**：pytest **15158 通過、5 略過、0 失敗**（29 分 9 秒，含 SQL Server `project_test` 兩軌；5 個略過都是既有的環境因素：`test_no_legacy_tier_checks` 2、`test_admin_service_scripts` 的 pysqlite `SAVEPOINT` 1、Windows 檔案權限 1、`grp` 模組 1），另有 1 個執行緒讀取子行程輸出時的解碼警告（`test_assets_manifest.py`，本 change 沒有碰）；Node 全套 **1872 通過**（含新增 19 項）。**第一次全套抓到一個我造成的測試相撞**：批 2 在共用夾具 `World`（`tests/test_admin_api.py`）新增 6 號玩家作為刪除目標，而 `tests/test_admin_lockout_api.py` 在同一個夾具上又加 6 至 8 號玩家，信箱重複（批 2 的守門子集不含這個檔案，所以當時沒發現）；不是產品缺陷，已把該測試新增的玩家改為 7 至 9 號，修正後重跑完整全套得到上面的結果。
 - **其他**：`openspec validate admin-delete-account --strict` 與 `openspec validate --specs`（99 通過）通過；`alembic upgrade head` 到 `0023` 後 `alembic check` 沒有差異（SQLite）。
 - **簡報對照**：已對照 `docs/2.0簡報.md`、六張圖解的產生器與 `docs/4.0簡報.pptx` 的產生器，衝突清單交使用者決定（簡報一律沒有修改）；**未執行 `build_pptx_40.py --check`**（本機沒有 python-pptx，且本批沒有修改 2.0 簡報，`FACTS` 的來源沒有變）。
-- **未驗證**：使用者本人在真機上對確認視窗警告文字與條款那一句的驗收；展示環境（尚未部署）；真實 SQL Server `project` 資料庫（沒有結構變更，不需要升級）。
+- **驗收與部署**：使用者已於 2026-11-24 驗收；`bb665dd` 已部署到展示環境（RDS 快照 `rac-demo-staging-db-pre-bb665dd`，部署的 21 步全過；外部複驗 `/terms` 為 `draft-11`、`admin.js` 含刪除帳號的確認視窗；回復點 `release.previous.env`＝`1762fa5`）。
+- **未驗證**：在展示環境以真實 Google 登入實際刪除過帳號（沒有做；清理 rac001 的非管理員帳號是另行確認的維運操作）；真實 SQL Server `project` 資料庫（沒有結構變更，不需要升級）。
 
 ## AWS 展示環境（aws-demo-environment）
 
