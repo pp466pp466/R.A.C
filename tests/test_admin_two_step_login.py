@@ -84,7 +84,7 @@ def test_google_alone_does_not_open_the_console_or_any_api(app):
 def test_google_and_the_right_password_open_the_console(app):
     client, _ = through_google(app)
     response = enter_password(client)
-    assert response.status_code == 200 and response.get_json() == {"ok": True, "next": "/game"}
+    assert response.status_code == 200 and response.get_json() == {"ok": True, "next": "/admin"}      # 沒有指定返回位置：管理員的預設頁面
     assert client.get_cookie(ADMIN_STEP_COOKIE) is None                           # 中間狀態用完即清除
     me = client.get("/api/auth/me").get_json()["user"]
     assert me["role"] == "admin" and me["email"] == ADMIN_EMAIL
@@ -106,7 +106,26 @@ def test_the_destination_chosen_before_google_survives_to_the_end_of_the_passwor
 
 def test_an_unsafe_destination_never_gets_through_the_step(app):
     client, _ = through_google(app, next="https://evil.example/")
-    assert enter_password(client).get_json()["next"] == "/game"
+    assert enter_password(client).get_json()["next"] == "/admin"
+
+
+def test_an_admin_stopped_at_a_game_page_returns_there_after_both_steps(app):
+    """明確的返回位置優先於預設頁面：管理員被擋在某個存檔頁之後登入，回到該存檔，不是 /admin。"""
+    for destination in ("/game/6c1e0f56-3f0a-4e0e-9b53-0f3b7a8f6c11", "/cs", "/account?tab=security"):
+        client, _ = through_google(app, next=destination)
+        assert enter_password(client).get_json()["next"] == destination, destination
+
+
+def test_an_admin_stopped_at_the_bare_game_page_lands_on_the_console_because_it_is_the_login_default(app):
+    """已知的取捨（設計決定 2）：登入頁以 /game 補上「沒有指定」，所以恰為 /game 的返回位置與沒有指定分不開，一律 /admin。"""
+    client, _ = through_google(app, next="/game")
+    assert enter_password(client).get_json()["next"] == "/admin"
+
+
+def test_a_player_signing_in_without_a_destination_still_lands_on_the_game_entry(app, provider):
+    provider.profile = GoogleProfile("sub-player", "user2@example.com", True, "玩家")
+    client, response = through_google(app, next="/game")
+    assert response.headers["Location"] == "/game"
 
 
 def test_the_first_google_sign_in_of_the_admin_binds_the_identity_and_the_password_is_still_required(app):

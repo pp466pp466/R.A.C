@@ -14,7 +14,7 @@ from app import create_app
 from app.config import load_config
 from app.models import AdminAuditLog, Base, LockAppeal, User
 from app.repositories.lock_appeal_repository import LockAppealRepository
-from app.security.redirects import DEFAULT_AFTER_LOGIN
+from app.security.redirects import ADMIN_AFTER_LOGIN, DEFAULT_AFTER_LOGIN
 from tests.support.auth import START, FakeClock, add_user
 from tests.support.client import raw_client
 from tests.support.idor import logged_in_client
@@ -225,6 +225,11 @@ def test_a_locked_player_opens_the_appeal_page_with_the_limits_and_nothing_perso
 def test_a_player_who_is_not_locked_is_sent_to_the_default_page(app):
     response = client_for(app, "free").get("/appeal")
     assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN
+
+
+def test_an_admin_has_no_appeal_state_and_is_sent_to_the_console(app):
+    response = client_for(app, "admin").get("/appeal")
+    assert response.status_code == 302 and response.headers["Location"] == ADMIN_AFTER_LOGIN
 
 
 def test_an_anonymous_visitor_is_sent_to_the_login_page(app):

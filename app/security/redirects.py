@@ -4,8 +4,9 @@
 控制字元與過長的值，一律退回預設頁面，避免被利用來做開放轉址（open redirect）。
 判斷在伺服器端完成，前端只拿到已經驗證過的值。
 
-`landing_for` 決定「登入者該去哪裡」：受限登入狀態各去自己的頁面，否則去 `next`（已驗證）或預設頁面。
-首頁、登入頁與 Google 回呼共用它，所以預設頁面只需要改 `DEFAULT_AFTER_LOGIN` 一個常數。
+`landing_for` 決定「登入者該去哪裡」：受限登入狀態各去自己的頁面，否則去 `next`（已驗證）或依角色決定的預設頁面
+（玩家為 `DEFAULT_AFTER_LOGIN`，啟用中的管理員為 `ADMIN_AFTER_LOGIN`）。
+首頁、登入頁、年齡頁、申訴頁、Google 回呼與管理員的密碼驗證共用它，所以「依角色選預設頁面」的規則只在這一個函式裡。
 """
 from __future__ import annotations
 
@@ -14,7 +15,8 @@ from urllib.parse import quote, unquote
 from app.security.session import AGE_PATH, RESTRICTION_PAGES
 from app.services.current_user import RESTRICTION_AGE_PENDING, CurrentUser
 
-DEFAULT_AFTER_LOGIN = "/game"      # RPG 的入口：選擇劇本與我的存檔（單一常數；不直接進入聊天，客服 `/cs` 改由導覽列進入，仍可直接開啟）
+DEFAULT_AFTER_LOGIN = "/game"      # 玩家的預設頁面，RPG 的入口：選擇劇本與我的存檔（不直接進入聊天，客服 `/cs` 改由導覽列進入，仍可直接開啟）
+ADMIN_AFTER_LOGIN = "/admin"       # 啟用中管理員的預設頁面（只由 `landing_for` 依伺服器端的角色選用；管理員仍可直接開啟 `/game` 與 `/cs`）
 MAX_NEXT_LENGTH = 200
 RETURN_PREFIX = "/game/"           # 帳號頁的返回位置（`/account?return=`）只能回到遊戲區（見 account-safe-mode-setting 規格）
 MAX_RETURN_LENGTH = 200
@@ -63,6 +65,11 @@ def landing_for(user: CurrentUser, next_url: object = None) -> str:
     受限登入狀態一律去各自的頁面（等待刪除 → `/account`、被鎖定 → `/appeal`），不依 `next`；
     待確認年齡的玩家去 `/age`，並帶著已驗證過的 `next`，補填成功後才回到原本要去的地方（沒有 `next` 或等於預設頁面時不帶）。
     沒有受限時去 `next`（不合法就用預設頁面）。
+
+    預設頁面依角色：啟用中的管理員（與後台權限同一個 `is_active_admin` 定義，只看伺服器端的使用者紀錄）為 `ADMIN_AFTER_LOGIN`，
+    其他人為 `DEFAULT_AFTER_LOGIN`。登入頁、`google/start` 與兩個登入 cookie 都以 `/game` 補上「沒有指定」，到這裡已分不開
+    「沒有指定」與「指定 `/game`」，所以對管理員而言，已驗證的 `next` 恰為 `DEFAULT_AFTER_LOGIN` 視同沒有指定；
+    其他明確的返回位置（`/game/<存檔>`、`/account`、`/cs` 等）照原樣回去。
     """
     restriction = user.restriction
     if restriction == RESTRICTION_AGE_PENDING:
@@ -70,4 +77,7 @@ def landing_for(user: CurrentUser, next_url: object = None) -> str:
         return AGE_PATH if destination == DEFAULT_AFTER_LOGIN else f"{AGE_PATH}?next={quote(destination, safe='')}"
     if restriction is not None:
         return RESTRICTION_PAGES[restriction]
-    return safe_next(next_url, DEFAULT_AFTER_LOGIN)
+    destination = safe_next(next_url, DEFAULT_AFTER_LOGIN)
+    if user.is_active_admin and destination == DEFAULT_AFTER_LOGIN:
+        return ADMIN_AFTER_LOGIN
+    return destination

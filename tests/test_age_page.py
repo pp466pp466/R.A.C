@@ -16,7 +16,7 @@ from app import create_app
 from app.config import load_config
 from app.models import Base
 from app.models.user import STATUS_DELETION_PENDING
-from app.security.redirects import DEFAULT_AFTER_LOGIN
+from app.security.redirects import ADMIN_AFTER_LOGIN, DEFAULT_AFTER_LOGIN
 from tests.support.auth import START, FakeClock, add_user
 from tests.support.idor import logged_in_client
 
@@ -75,9 +75,15 @@ def test_the_age_step_without_a_destination_leads_to_the_game_entry_afterwards(a
     assert state_of(client_with(app, age=None).get("/age"))["next"] == "/game"
 
 
-def test_an_admin_without_age_data_is_sent_to_the_default_page_because_the_admin_fills_it_in_the_account_settings(app):
+def test_an_admin_without_age_data_is_sent_to_the_console_because_the_admin_fills_it_in_the_account_settings(app):
+    """管理員不經過年齡確認頁（在帳號設定頁補填），開 /age 時照管理員的預設頁面 /admin。"""
     response = client_with(app, age=None, role="admin").get("/age")
-    assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN
+    assert response.status_code == 302 and response.headers["Location"] == ADMIN_AFTER_LOGIN
+
+
+def test_an_admin_who_already_confirmed_is_sent_to_the_console(app):
+    response = client_with(app, age=30, role="admin").get("/age")
+    assert response.status_code == 302 and response.headers["Location"] == ADMIN_AFTER_LOGIN
 
 
 def test_an_anonymous_visitor_is_sent_to_the_login_page_and_the_destination_is_kept(app):

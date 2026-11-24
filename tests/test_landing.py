@@ -1,6 +1,7 @@
 """auth-pages 規格「登入後的預設頁面與首頁導向」：已登入者開首頁與登入頁去該去的位置，`/register` 一律導向 `/login`。
 
-預設頁面由 `DEFAULT_AFTER_LOGIN` 一個常數決定；受限登入狀態各去自己的頁面，不依 `next`。
+預設頁面依角色決定：玩家為 `DEFAULT_AFTER_LOGIN`、啟用中的管理員為 `ADMIN_AFTER_LOGIN`（admin-default-landing 規格「管理員的預設頁面」）；
+受限登入狀態各去自己的頁面，不依 `next`。
 """
 from __future__ import annotations
 
@@ -12,8 +13,8 @@ from sqlalchemy.orm import Session
 from app import create_app
 from app.config import load_config
 from app.models import Base
-from app.models.user import STATUS_DELETION_PENDING
-from app.security.redirects import DEFAULT_AFTER_LOGIN, landing_for, safe_next
+from app.models.user import STATUS_DELETION_PENDING, STATUS_SUSPENDED
+from app.security.redirects import ADMIN_AFTER_LOGIN, DEFAULT_AFTER_LOGIN, landing_for, safe_next
 from app.services.current_user import CurrentUser
 from tests.support.auth import START, FakeClock, add_user
 from tests.support.idor import logged_in_client
@@ -42,6 +43,10 @@ def current(member_session, **overrides) -> CurrentUser:
 
 def test_the_default_page_is_the_game_entry_not_the_chat():
     assert DEFAULT_AFTER_LOGIN == "/game"
+
+
+def test_the_admin_default_page_is_the_console():
+    assert ADMIN_AFTER_LOGIN == "/admin" and ADMIN_AFTER_LOGIN != DEFAULT_AFTER_LOGIN
 
 
 def test_an_unrestricted_member_goes_to_next_when_it_is_safe_and_to_the_default_page_otherwise(member_session):
@@ -82,7 +87,60 @@ def test_when_several_restrictions_apply_the_most_specific_page_wins(member_sess
 
 
 def test_an_admin_without_age_data_is_not_sent_to_the_age_step(member_session):
-    assert landing_for(current(member_session, age=None, role="admin")) == DEFAULT_AFTER_LOGIN
+    assert landing_for(current(member_session, age=None, role="admin")) == ADMIN_AFTER_LOGIN
+
+
+# ---- 管理員的預設頁面（admin-default-landing）---------------------------------------------------------
+
+UNSAFE_NEXT = ("https://evil.example/", "//evil.example", "javascript:alert(1)", "/\\evil", "/%2f/evil", None, 5, "")
+EXPLICIT_NEXT = ("/game/6c1e0f56-3f0a-4e0e-9b53-0f3b7a8f6c11", "/account?tab=security", "/cs")
+
+
+def test_an_active_admin_without_next_goes_to_the_console(member_session):
+    assert landing_for(current(member_session, role="admin")) == ADMIN_AFTER_LOGIN
+
+
+def test_for_an_admin_a_next_equal_to_the_player_default_page_counts_as_no_destination(member_session):
+    """登入頁、google/start 與兩個登入 cookie 都以 `/game` 補上「沒有指定」，到這裡已分不開兩者。"""
+    assert landing_for(current(member_session, role="admin"), DEFAULT_AFTER_LOGIN) == ADMIN_AFTER_LOGIN
+
+
+@pytest.mark.parametrize("destination", EXPLICIT_NEXT)
+def test_an_admin_with_an_explicit_safe_destination_goes_back_there(member_session, destination):
+    assert landing_for(current(member_session, role="admin"), destination) == destination
+
+
+def test_an_admin_with_an_explicit_destination_other_than_the_player_default_keeps_it_even_when_it_is_the_console(member_session):
+    user = current(member_session, role="admin")
+    assert landing_for(user, "/admin") == "/admin"
+    assert landing_for(user, "/admin?tab=x") == "/admin?tab=x"
+
+
+@pytest.mark.parametrize("bad", UNSAFE_NEXT, ids=repr)
+def test_an_admin_with_an_unsafe_destination_goes_to_the_console(member_session, bad):
+    assert landing_for(current(member_session, role="admin"), bad) == ADMIN_AFTER_LOGIN
+
+
+def test_a_suspended_admin_is_not_sent_to_a_page_that_would_be_a_404(member_session):
+    """與後台權限同一個定義（角色為 admin 且帳號啟用中）：停權的管理員仍照玩家的預設頁面。"""
+    user = current(member_session, role="admin", status=STATUS_SUSPENDED)
+    assert not user.is_active_admin
+    assert landing_for(user) == DEFAULT_AFTER_LOGIN and landing_for(user, DEFAULT_AFTER_LOGIN) == DEFAULT_AFTER_LOGIN
+
+
+def test_an_admin_waiting_for_deletion_still_goes_to_the_account_page(member_session):
+    user = current(member_session, role="admin", **DELETING)
+    assert landing_for(user) == "/account" and landing_for(user, "/admin") == "/account"
+
+
+def test_a_player_gets_the_same_result_in_every_case_the_admin_is_sent_to_the_console(member_session):
+    user = current(member_session)
+    assert landing_for(user) == DEFAULT_AFTER_LOGIN and landing_for(user, DEFAULT_AFTER_LOGIN) == DEFAULT_AFTER_LOGIN
+    for bad in UNSAFE_NEXT:
+        assert landing_for(user, bad) == DEFAULT_AFTER_LOGIN, bad
+    for destination in EXPLICIT_NEXT:
+        assert landing_for(user, destination) == destination
+    assert landing_for(user, "/admin") == "/admin"                                 # 玩家若自己帶 /admin，照原樣：後台頁面本身回 404，導向不授權
 
 
 # ---- 首頁與登入頁 ------------------------------------------------------------------------------------
@@ -121,6 +179,18 @@ def test_a_signed_in_member_opening_the_home_page_or_the_login_page_goes_to_the_
     for path in ("/", "/login"):
         response = client.get(path)
         assert response.status_code == 302 and response.headers["Location"] == DEFAULT_AFTER_LOGIN, path
+
+
+def test_a_signed_in_admin_opening_the_home_page_or_the_login_page_goes_to_the_console(app):
+    client = client_with(app, role="admin")
+    for path in ("/", "/login", "/login?next=/game", "/login?next=https://evil.example/"):
+        response = client.get(path)
+        assert response.status_code == 302 and response.headers["Location"] == ADMIN_AFTER_LOGIN, path
+
+
+def test_a_signed_in_admin_can_still_open_the_player_pages_directly(app):
+    client = client_with(app, role="admin")
+    assert client.get("/game").status_code == 200 and client.get("/cs").status_code == 200
 
 
 @pytest.mark.parametrize(
