@@ -985,11 +985,18 @@ def test_the_entry_page_keeps_nothing_in_the_browser_and_never_writes(app):
     code = {path.name: strip_js_comments(read(path)) for path in sorted(JS_DIR.glob("*.js"))}
     assert code, "沒有找到前端腳本"
     for name, js in code.items():
-        for storage in ("localStorage", "sessionStorage", "document.cookie"):
+        for storage in ("sessionStorage", "document.cookie"):
             assert storage not in js, (name, storage)
+        # rpg-story-tts **有意識地改變**了 localStorage 的契約（不是刪除，也不是掩蓋缺陷）：朗讀要記住玩家所選的語音（跨重新整理），
+        # 所以 localStorage 只允許出現在 `game.js`（唯一碰 `window` 的遊戲腳本），且只在 `speechStorage` 這個包好 try/catch 的存取物件裡（getItem 與 setItem 兩處）
+        if name != "game.js":
+            assert "localStorage" not in js, (name, "localStorage")
         if name != "game-store.js":
             assert "indexedDB" not in js, name                                   # 瀏覽器端的快取只在 game-store.js
     assert "indexedDB" in code["game-store.js"]
+    speech_storage = re.search(r"var speechStorage = \{.*?\n  \};", code["game.js"], re.S)
+    assert speech_storage and code["game.js"].count("localStorage") == speech_storage.group(0).count("localStorage") == 2    # 只有朗讀的選擇存取物件碰它（讀與寫各一處）
+    assert "try {" in speech_storage.group(0) and speech_storage.group(0).count("catch (error)") == 2                         # 讀寫都包 try/catch，失敗退回預設值
     api = code["game-api.js"]
     assert "axios" in api and "/api/sessions" in api
     assert not re.search(r"""method:\s*['"](post|put|patch|delete)""", api, re.I)   # 兩個清單端點的 get() 只用 GET，入口頁只讀

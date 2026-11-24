@@ -391,6 +391,7 @@
       };
       currentRun = run;
       host.revising.value = true;
+      if (typeof host.stopSpeech === 'function') { host.stopSpeech(); }      // 修訂開始時劇情卡的內容還沒改變，只靠「頁面身分」會漏掉：明確停止朗讀（rpg-story-tts）
       host.dismissNotice();
       host.overlay.value = { clientMsgId: now.clientMsgId, action: kind === KIND_EDIT ? extra.action : null, story: '', streaming: true, notes: [] };
       run.saved = host.story.save();                                         // 舊內容與原本所在的段留在記憶體，失敗時還原

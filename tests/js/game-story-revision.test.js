@@ -317,3 +317,52 @@ test('the reason and the category never reach the card, and a whole revision wri
     trap.restore();
   }
 });
+
+// ---- 劇情朗讀（rpg-story-tts）：修訂開始時劇情卡的內容還沒改，所以要明確停止朗讀 --------------------------------------------------
+
+const Speech = require('./support/fake-speech.js');
+
+test('starting a regeneration while the voice is reading stops it at once, before any new text arrives', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready({ speech });
+  assert.equal(h.session.speakCurrent(), 'started');
+  const oldText = h.card().fullText;
+  assert.deepEqual(speech.synth.speaks, ['speak:' + oldText]);
+  h.server.streamPlans.push({ events: [event('meta', { kind: 'regenerate', turn_id: 3, client_msg_id: 't3', attempt: 2, revision: 1, replayed: false })], hold: true });
+  assert.equal(h.revision.openRegenerate(), true);
+  h.revision.selectRegenerateCategory(CATEGORY);
+  h.revision.regenerateReason.value = REASON;
+  const running = h.revision.submitRegenerate();
+  assert.equal(h.session.speech.value.speaking, false);                  // 同步停止：舊畫面還在、新內容還沒到，聲音不能繼續讀舊的
+  assert.equal(speech.synth.speaking, false);
+  await h.until(() => h.calls.streams.length === 1, '修訂的串流開始');
+  assert.equal(h.revision.cancelRevision(), true);
+  await running;
+  assert.equal(speech.synth.speaks.length, 1);                           // 沒有在修訂期間又讀了什麼
+});
+
+test('starting an edit while the voice is reading stops it at once as well', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready({ speech });
+  h.session.speakCurrent();
+  h.server.streamPlans.push({ events: [event('meta', { kind: 'edit', turn_id: 3, client_msg_id: 't3', attempt: 2, revision: 1, replayed: false })], hold: true });
+  assert.equal(h.revision.openEdit(), true);
+  h.revision.editDraft.value = '改成走後門';
+  const running = h.revision.submitEdit();
+  assert.equal(h.session.speech.value.speaking, false);
+  assert.equal(speech.synth.speaking, false);
+  await h.until(() => h.calls.streams.length === 1, '修訂的串流開始');
+  h.revision.cancelRevision();
+  await running;
+});
+
+test('a revision that is refused before it starts leaves the voice alone', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready({ speech });
+  h.session.speakCurrent();
+  assert.equal(h.revision.openRegenerate(), true);
+  h.revision.selectRegenerateCategory(CATEGORY);
+  h.revision.regenerateReason.value = '短';                              // 理由太短：不合格，不會送出
+  await h.revision.submitRegenerate();
+  assert.equal(h.session.speech.value.speaking, true);
+});

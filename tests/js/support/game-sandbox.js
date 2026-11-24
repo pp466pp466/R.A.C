@@ -28,11 +28,11 @@ const SCRIPTS = [
   'js/auth/auth-common.js', 'js/ui/typewriter.js', 'js/ui/toast-store.js', 'js/ui/restriction.js', 'js/ui/wallet-api.js', 'js/ui/wallet-store.js', 'js/ui/ui-components.js',
   'js/game/game-labels.js', 'js/game/sse-parser.js', 'js/game/turn-stream.js', 'js/game/game-state.js', 'js/game/game-store.js', 'js/game/game-sync.js',
   'js/game/game-api.js', 'js/ui/wallet-checkin.js', 'js/game/game-wallet.js', 'js/game/game-notebook.js', 'js/game/game-revision.js',
-  'js/game/story-pages.js', 'js/game/story-reader.js', 'js/game/game-session.js',
+  'js/game/story-pages.js', 'js/game/story-reader.js', 'js/game/story-speech.js', 'js/game/game-session.js',
 ];
 
 /* 建立沙盒並回傳 setup() 的結果。`respond(request)` 是 axios 的替身：收到 { method, url, data, timeout, signal }，回傳 Promise。 */
-function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')), fetchImpl = null } = {}) {
+function setupGame({ speech = null, speechThrows = false, localStorageImpl = null, state = STATE, pathname = `/game/${SESSION_ID}`, width = 1280, online = true, indexedDB = null, keyRange = null, respond = () => Promise.reject(new Error('unexpected request')), fetchImpl = null } = {}) {
   const requests = [];
   const navigations = [];
   const mounted = [];
@@ -56,7 +56,12 @@ function setupGame({ state = STATE, pathname = `/game/${SESSION_ID}`, width = 12
   sandbox.addEventListener = (type, handler) => { (listeners[type] = listeners[type] || []).push(handler); };
   sandbox.fetch = (...args) => { fetches.push(args); return fetchImpl ? fetchImpl(...args) : Promise.reject(new TypeError('network')); };      // fetchImpl：串流端點的替身（重新生成與編輯的測試用）
   sandbox.location = { assign: (target) => navigations.push(target), hash: '', pathname, search: '' };
-  sandbox.localStorage = trap('localStorage');
+  sandbox.localStorage = localStorageImpl || trap('localStorage');                                // localStorageImpl：朗讀的選擇讀寫測試用（只有 game.js 的 speechStorage 會碰它）
+  if (speech) { sandbox.speechSynthesis = speech.synth; sandbox.SpeechSynthesisUtterance = speech.Utterance; }   // 朗讀（rpg-story-tts）：假的語音合成；沒給就是不支援的瀏覽器
+  if (speechThrows) {                                                                              // 隱私模式或被停用：存取全域物件本身就丟例外
+    Object.defineProperty(sandbox, 'speechSynthesis', { get() { throw new Error('blocked'); }, configurable: true });
+    Object.defineProperty(sandbox, 'SpeechSynthesisUtterance', { get() { throw new Error('blocked'); }, configurable: true });
+  }
   sandbox.sessionStorage = trap('sessionStorage');
   if (indexedDB) { sandbox.indexedDB = indexedDB; sandbox.IDBKeyRange = keyRange; }              // 傳入假的 IndexedDB 時，本機暫存真的寫進它（供「資料庫內容」的守門測試）
   const document = {

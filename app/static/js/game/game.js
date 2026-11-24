@@ -23,6 +23,17 @@
   var DESKTOP_MIN_WIDTH = 992;           // 與客服的 Sidebar 同一個斷點
   var STORE_METHODS = ['putSession', 'getSession', 'putTurns', 'turnsOf', 'maxSeq', 'setInflight', 'getInflight', 'clearInflight', 'clearSession'];
 
+  /* 朗讀（rpg-story-tts）：瀏覽器的語音合成與發音物件；存取丟例外（隱私模式、被停用）視為不存在，頁面照常。 */
+  function browserGlobal(name) {
+    try { var value = window[name]; return value === null || value === undefined ? undefined : value; } catch (error) { return undefined; }
+  }
+  /* 朗讀只存玩家所選的語音（單一鍵 rpg.speech.voice；內容是 {"mode":…} 與語音名稱，沒有任何朗讀的文字）。讀寫失敗（隱私模式、容量、被停用）一律退回預設值，
+     這是本頁唯一碰 localStorage 的地方（沿用專案的慣例：讀寫都包 try/catch）。 */
+  var speechStorage = {
+    getItem: function (key) { try { return window.localStorage.getItem(key); } catch (error) { return null; } },
+    setItem: function (key, value) { try { window.localStorage.setItem(key, value); return true; } catch (error) { return false; } }
+  };
+
   function newId() {
     var c = window.crypto;
     if (c && typeof c.randomUUID === 'function') { return c.randomUUID(); }
@@ -70,6 +81,7 @@
         isOnline: function () { return window.navigator.onLine !== false; },
         setTimeout: window.setTimeout.bind(window), clearTimeout: window.clearTimeout.bind(window), AbortController: window.AbortController,
         restrictionOf: UI.restrictionOf,
+        speechSynthesis: browserGlobal('speechSynthesis'), SpeechSynthesisUtterance: browserGlobal('SpeechSynthesisUtterance'), speechStorage: speechStorage,
         isModalOpen: function () { return anyModalOpen(); }                // 有 Modal 開啟時，鍵盤翻頁不作用
       });
       noteRestriction = function (info) {
@@ -114,9 +126,9 @@
       }
 
       // ---- Modal ------------------------------------------------------------------------------------
-      var modal = Vue.reactive({ leave: false, abandon: false, history: false });
+      var modal = Vue.reactive({ leave: false, abandon: false, history: false, voice: session.voiceMenuOpen });   // voice 與 session 的語音選單是同一個狀態（ref 放進 reactive 會自動解開）
       function anyModalOpen() {
-        return modal.leave || modal.abandon || modal.history || wallet.coinModalOpen.value || notebook.notebookDiscardOpen.value || revision.regenerateOpen.value || revision.editOpen.value;
+        return modal.leave || modal.abandon || modal.history || modal.voice || wallet.coinModalOpen.value || notebook.notebookDiscardOpen.value || revision.regenerateOpen.value || revision.editOpen.value;
       }
 
       /* 頂列的「回到冒險」：這一輪還在進行時先問；其餘照一般連結離開。 */

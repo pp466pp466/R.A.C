@@ -11,6 +11,7 @@
  *   deps.TypewriterBuffer    打字機（UI.TypewriterBuffer）；每個氣泡一個
  *   deps.wallet              createWallet 的結果（餘額與不足時的 Modal）
  *   deps.toast、deps.goLogin、deps.newId、deps.now、deps.csrf、deps.isOnline、deps.setTimeout、deps.clearTimeout、deps.AbortController、deps.restrictionOf
+ *   deps.speechSynthesis、deps.SpeechSynthesisUtterance、deps.speechStorage   劇情朗讀（rpg-story-tts）：瀏覽器的語音合成、發音物件與只存「所選語音」的儲存（`{ getItem, setItem }`）；都可以缺席
  *
  * 流程重點：
  * - **載入順序**（D4）：快照 -> 第 0 幕（`ready`／`fallback` 直接顯示、**不重抽**；`pending`／`generating` 呼叫開場串流；409 `opening_in_progress` 時每 5 秒重讀快照，最多 24 次）
@@ -30,13 +31,16 @@
  * - **行動建議與直接推進劇情**：`toggleSuggestions` 只有玩家點圖示才呼叫 `api.suggestActions`（有快照裡已保存的就直接顯示，不呼叫）；結果只放在記憶體（`suggestItems`），
  *   點選建議只是把文字貼進輸入框（`pickSuggestion`，不送出）；新的一輪開始或最後一輪被修訂時一律收回。`advance` 以固定文字 `Game.ADVANCE_ACTION` 當一般行動送出，不讀取、不清除輸入框的草稿。
  * - 鍵盤翻頁由 `handleKey(event)` 判斷（焦點在輸入元素或有開啟的 Modal 時不作用；`deps.isModalOpen` 由掛載層注入），掛載層（game.js）負責把它接到 `document` 的 keydown。
+ * - **劇情朗讀**（rpg-story-tts，design D4、D6）：`speech` 是朗讀器（story-speech.js）的狀態；`speakCurrent()` 朗讀劇情卡當前段的 `fullText`（有說明行或內容為空時不動作；第一次按且還沒選過語音時改開語音選單）。
+   朗讀只讀劇情卡、單向耦合，閱讀器與串流完全不知道它的存在。**停止有兩條路徑，缺一不可**：①身分路徑：閱讀器每次變化都比較「頁面身分」（`key`、`index`、`fullText`），不同就停止（翻段、回看、換輪、丟棄、載入與還原）；
+   ②明確路徑：送出行動、推進劇情、重送、放棄與修訂（重新生成、編輯）開始時各停止一次（修訂開始時劇情卡的內容還沒改，只靠身分比較會漏）。不自動翻頁、不自動接讀；離開頁面（`dispose`）時銷毀朗讀器。
  * - 這裡**不記錄、不輸出任何內容**（行動、劇情、第 0 幕、建議都是玩家文字）；錯誤訊息只來自 game-state.js／game-labels.js 的固定文字。
  */
 (function (root, factory) {
   'use strict';
   var Game;
   if (typeof module === 'object' && module.exports) {
-    Game = Object.assign({}, require('./game-labels.js'), require('./game-state.js'), require('./story-reader.js'));
+    Game = Object.assign({}, require('./game-labels.js'), require('./game-state.js'), require('./story-reader.js'), require('./story-speech.js'));
   } else {
     Game = root.Game;
   }
@@ -137,6 +141,8 @@
     var suggestError = ref('');            // 取得建議失敗的固定說明；圖示仍可再按
     var savedSuggestions = ref([]);        // 快照裡已保存、錨點仍有效的建議：再按圖示時直接顯示，不呼叫端點
     var focusTick = ref(0);                // 貼上建議之後加一：掛載層監看它，把焦點放到輸入框並把游標移到尾端
+    var voiceMenuOpen = ref(false);        // 語音選單（Modal）是否開啟；顯示狀態完全由 Vue 接管（掛載層的 modal.voice 與它是同一個）
+    var speech = ref({ availability: 'unsupported', speaking: false, voices: [], choice: 'none', selectedKey: '' });   // 朗讀器的狀態（純資料；沒有朗讀器時永遠是 unsupported）
 
     var live = null;                       // 非響應式：{ id, typewriter, typed, settled, raw }
     var currentRun = null;                 // 非響應式：{ controller, aborted }
@@ -153,6 +159,44 @@
     var readerContent = null;              // 非響應式：{ key, action, story }——閱讀器目前持有的內容（串流中隨片段增加；載入時是整輪）
     var readerHold = null;                 // 非響應式：{ base }——這一輪沒有完整內容（被擋、中斷、錯誤），劇情卡只留一行說明；base 是當時的最後完成回合的 key
 
+    // ---- 劇情朗讀（rpg-story-tts）--------------------------------------------------------------------
+    var speaker = typeof Game.createStorySpeech === 'function'
+      ? Game.createStorySpeech({
+        synth: deps.speechSynthesis, Utterance: deps.SpeechSynthesisUtterance, storage: deps.speechStorage, lang: 'zh-TW',
+        onChange: function (next) { speech.value = next; }
+      })
+      : null;
+    if (speaker) { speech.value = speaker.state; }
+    var spokenPage = '';                   // 非響應式：上一次看到的「頁面身分」（key、index、fullText）；改變就停止朗讀
+
+    function pageIdentity(view) { return view && view.visible ? view.key + ':' + view.index + ':' + view.fullText : ''; }
+    function stopSpeech() { if (speaker) { speaker.stop(); } return true; }
+    function destroySpeech() { if (speaker) { speaker.destroy(); } }
+    function openVoiceMenu() {
+      var availability = speech.value.availability;
+      if (!speaker || availability === 'unsupported' || availability === 'no-voice') { return false; }
+      stopSpeech();                                                  // 開啟選單時先停止劇情朗讀
+      voiceMenuOpen.value = true;
+      return true;
+    }
+    function closeVoiceMenu() { voiceMenuOpen.value = false; return true; }
+    /* 朗讀或停止目前這一段：回傳 'started'｜'stopped'｜'needs-choice'｜'unavailable'。劇情卡當前是說明行（轉場、中斷、錯誤）或沒有內容時不動作。 */
+    function speakCurrent() {
+      var view = card.value;
+      if (!speaker || !view.visible || view.note !== '' || view.fullText === '') { return 'unavailable'; }
+      var result = speaker.toggle(view.fullText);
+      if (result === 'needs-choice') { openVoiceMenu(); }
+      return result;
+    }
+    /* 選語音：立即生效並關閉選單（`{ mode: 'auto' }` 或 `{ mode: 'voice', key }`）；不合格的選擇回傳假、選單不關。 */
+    function chooseVoice(selection) {
+      if (!speaker) { return false; }
+      var accepted = speaker.choose(selection);
+      if (accepted) { voiceMenuOpen.value = false; }
+      return accepted;
+    }
+    function previewVoice(key) { return speaker ? speaker.preview(key) : false; }
+
     function readerTypewriter(handlers) { return new deps.TypewriterBuffer(handlers); }
     var reader = Game.createStoryReader({
       createTypewriter: typeof deps.createTypewriter === 'function' ? deps.createTypewriter : (typeof deps.TypewriterBuffer === 'function' ? readerTypewriter : undefined),
@@ -160,6 +204,8 @@
       onChange: function (state) {
         card.value = Game.cardView(state);
         if (state && state.key === 'opening' && card.value.atEnd) { openingReached.value = true; }
+        var identity = pageIdentity(card.value);
+        if (identity !== spokenPage) { spokenPage = identity; stopSpeech(); }          // 身分路徑：換了一段、一輪或內容，聲音立即停止
       }
     });
 
@@ -866,6 +912,7 @@
 
     function runTurn(options) {
       if (sending.value || revising.value) { return Promise.resolve(false); }                   // 重複點擊：只有一個請求；修訂進行中也不得送出新行動
+      stopSpeech();                                                                              // 明確路徑：送出行動、推進劇情與重送都從這裡開始
       sending.value = true;
       notice.value = null;
       actionError.value = '';
@@ -895,6 +942,7 @@
 
     /* 在途回合的「放棄」：只移除本機提示。伺服器若已完成它，結果仍會出現在歷史裡。 */
     function abandonInflight() {
+      stopSpeech();
       inflight.value = null;
       return store.clearInflight(sessionId).then(function () { return true; }, function () { return false; });
     }
@@ -1017,6 +1065,7 @@
 
     /* 離開頁面（pagehide）：中止所有進行中的請求與計時器（含取得建議）。 */
     function dispose() {
+      destroySpeech();                                                                          // 離開頁面：停止朗讀並移除語音清單的監聽
       abort(bootController);
       if (currentRun) { abort(currentRun.controller); }
       if (openingRun) { abort(openingRun.controller); }
@@ -1040,7 +1089,7 @@
 
     var revisionHost = {
       sessionId: sessionId, lastTurn: lastTurn, history: history, phase: phase, historyReady: historyReady, openingReady: openingReady, ended: ended, offline: offline,
-      gate: gate, sending: sending, inflight: inflight, revising: revising, overlay: revisionOverlay, notice: notice, card: card, story: storyBridge,
+      gate: gate, sending: sending, inflight: inflight, revising: revising, overlay: revisionOverlay, notice: notice, card: card, story: storyBridge, stopSpeech: stopSpeech,
       applyEffects: applyEffects, showFailure: showFailure, refresh: refreshAfterRevision, notifyContent: notifyContent, dismissNotice: dismissNotice
     };
 
@@ -1050,6 +1099,8 @@
       advance: advance, advanceDisabled: advanceDisabled, advanceHint: advanceHint,
       suggestOpen: suggestOpen, suggestItems: suggestItems, suggestBusy: suggestBusy, suggestError: suggestError, suggestDisabled: suggestDisabled, suggestHint: suggestHint,
       toggleSuggestions: toggleSuggestions, closeSuggestions: closeSuggestions, pickSuggestion: pickSuggestion, focusTick: focusTick,
+      speech: speech, voiceMenuOpen: voiceMenuOpen, speakCurrent: speakCurrent, stopSpeech: stopSpeech, openVoiceMenu: openVoiceMenu, closeVoiceMenu: closeVoiceMenu,
+      chooseVoice: chooseVoice, previewVoice: previewVoice,
       phase: phase, loadFailure: loadFailure, restriction: restriction, title: title, playerName: playerName, modeLabel: modeLabel, modeNote: modeNote,
       gateNotice: gateNotice, ended: ended, offline: offline, notice: notice, safeHint: safeHint, openingNotice: openingNotice,
       items: items, hasEarlier: hasEarlier, jumpVisible: jumpVisible, scrollTick: scrollTick,

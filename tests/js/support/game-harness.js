@@ -18,7 +18,7 @@ const Store = require(path.join(GAME, 'game-store.js'));
 const Sync = require(path.join(GAME, 'game-sync.js'));
 const { createTurnStream } = require(path.join(GAME, 'turn-stream.js'));
 const { createWallet } = require(path.join(GAME, 'game-wallet.js'));
-const { createSession } = require(path.join(GAME, 'game-session.js'));
+const { createSession } = require(path.join(GAME, 'game-session.js'));  // game-session.js 自己載入 story-speech.js（Node 下與 story-reader.js 同一種做法）
 const { createRevision } = require(path.join(GAME, 'game-revision.js'));
 
 const Vue = loadVue();
@@ -247,6 +247,9 @@ function createHarness(options = {}) {
       newId: () => { idCounter += 1; return 'msg-' + idCounter; }, now: () => Date.UTC(2026, 10, 11, 12, 0, 0), csrf: () => 'CSRF-TOKEN',
       isOnline: () => online, setTimeout: timers.set, clearTimeout: timers.clear, AbortController: globalThis.AbortController,
       restrictionOf: (info) => (info && info.status === 403 && info.code === 'account_locked' ? 'locked' : null),
+      // 劇情朗讀（rpg-story-tts）：測試以 `speech: { synth, Utterance, storage }` 注入替身（tests/js/support/fake-speech.js）；沒給就是不支援朗讀的瀏覽器
+      speechSynthesis: options.speech ? options.speech.synth : undefined, SpeechSynthesisUtterance: options.speech ? options.speech.Utterance : undefined,
+      speechStorage: options.speech ? options.speech.storage : undefined,
     });
     revision = createRevision({
       Vue: { ref: Vue.ref, computed: Vue.computed }, state, host: session.revisionHost, wallet, stream, store, TypewriterBuffer: FakeTypewriter,

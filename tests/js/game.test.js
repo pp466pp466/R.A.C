@@ -744,3 +744,72 @@ test('a 401 on the wallet request still sends the player to the login page when 
   assert.equal(game.sandbox.UI.wallet.state.status, 'failed');
   assert.ok(game.navigations.some((target) => String(target).startsWith('/login')), '登入已過期應該導向登入頁');
 });
+
+// ---- 劇情朗讀的注入與生命週期（rpg-story-tts：game.js）------------------------------------------------------------------------
+
+const Speech = require('./support/fake-speech.js');
+
+test('game.js hands the browser speech objects to the session: the voice list is read and listened to, and nothing is spoken by itself', () => {
+  const synth = Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] });
+  const game = setupGame({ speech: { synth, Utterance: Speech.FakeUtterance } });
+  assert.equal(synth.listenerCount, 1);                                               // 朗讀器已建立並在聽語音清單的變化
+  assert.deepEqual(synth.speaks, []);
+  assert.deepEqual(game.storageWrites, []);                                           // 載入頁面不寫任何瀏覽器儲存
+  assert.deepEqual(game.logs, []);
+});
+
+test('a pagehide destroys the speaker: whatever is speaking stops and the voice-list listener is removed', () => {
+  const synth = Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] });
+  const game = setupGame({ speech: { synth, Utterance: Speech.FakeUtterance } });
+  const before = synth.cancels;
+  game.fire('pagehide');
+  assert.ok(synth.cancels > before, 'pagehide 之後呼叫過 cancel()');
+  assert.equal(synth.listenerCount, 0);
+  assert.doesNotThrow(() => game.fire('pagehide'));                                   // 重複觸發不丟例外
+});
+
+test('leaving through the confirm window destroys the speaker too', () => {
+  const synth = Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] });
+  const game = setupGame({ speech: { synth, Utterance: Speech.FakeUtterance } });
+  game.page.confirmLeave();
+  assert.equal(synth.listenerCount, 0);
+  assert.deepEqual(game.navigations, ['/game']);
+});
+
+test('without speech objects, or when reading them throws, or when localStorage is blocked, the page mounts and works as before', async () => {
+  for (const options of [{}, { speechThrows: true }]) {
+    const game = setupGame(options);
+    assert.doesNotThrow(() => game.fire('pagehide'));
+    assert.equal(game.page.phase.value, 'loading');
+    assert.deepEqual(game.logs, []);
+  }
+  const blocked = {
+    getItem() { throw new Error('SecurityError'); },
+    setItem() { throw new Error('SecurityError'); },
+  };
+  const synth = Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] });
+  const game = setupGame({ speech: { synth, Utterance: Speech.FakeUtterance }, localStorageImpl: blocked });
+  assert.equal(game.page.phase.value, 'loading');
+  assert.doesNotThrow(() => game.fire('pagehide'));
+});
+
+test('the voice menu is one of the windows: it is a modal flag, and while it is open Escape does not close the sidebar', () => {
+  const game = setupGame({ width: 360, speech: { synth: Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL] }), Utterance: Speech.FakeUtterance } });
+  assert.equal(game.page.modal.voice, false);
+  game.page.toggleSidebar();
+  game.page.modal.voice = true;                                                       // 語音選單開啟（樣板以 v-model 綁這個旗標）
+  game.fireDocument('keydown', { key: 'Escape' });
+  assert.equal(game.page.sidebarOpen.value, true);                                    // 有 Modal 開啟時 Esc 不動側欄
+  game.page.modal.voice = false;
+  game.fireDocument('keydown', { key: 'Escape' });
+  assert.equal(game.page.sidebarOpen.value, false);
+});
+
+test('loading the page with speech support writes nothing to localStorage until a voice is chosen', () => {
+  const written = [];
+  const memory = { getItem: () => null, setItem: (key, value) => { written.push([key, value]); } };
+  const synth = Speech.fakeSynth({ voices: [Speech.ZH_TW_LOCAL, Speech.ZH_TW_ONLINE] });
+  const game = setupGame({ speech: { synth, Utterance: Speech.FakeUtterance }, localStorageImpl: memory });
+  assert.deepEqual(written, []);                                                      // 還沒選語音：沒有任何寫入
+  assert.deepEqual(game.storageWrites, []);
+});

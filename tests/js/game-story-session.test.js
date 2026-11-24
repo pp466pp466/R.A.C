@@ -821,3 +821,214 @@ test('a whole session of reading, turning pages, suggestions, advancing and inte
     trap.restore();
   }
 });
+
+// ---- 劇情朗讀（rpg-story-tts：game-session.js 接 story-speech.js）---------------------------------------------------------
+
+const Speech = require('./support/fake-speech.js');
+
+const lastSpeech = (h) => h.session.speech.value;
+
+test('speaking reads the full text of the page on the card, a second press stops it, and the card is never turned by it', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  const before = plain(h.card());
+  assert.equal(lastSpeech(h).availability, 'ready');
+  assert.equal(h.session.speakCurrent(), 'started');
+  assert.deepEqual(speech.synth.speaks, ['speak:' + S3]);                 // 朗讀的是當前段的完整文字
+  assert.equal(lastSpeech(h).speaking, true);
+  assert.equal(h.session.speakCurrent(), 'stopped');
+  assert.equal(lastSpeech(h).speaking, false);
+  assert.equal(speech.synth.speaking, false);
+  assert.deepEqual(plain(h.card()), before);                              // 朗讀不翻頁、不改劇情卡
+});
+
+test('a natural end neither turns the page nor reads on by itself', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  const before = plain(h.card());
+  h.session.speakCurrent();
+  speech.synth.queue[0].onend();
+  assert.equal(lastSpeech(h).speaking, false);
+  assert.deepEqual(plain(h.card()), before);
+  assert.equal(speech.synth.speaks.length, 1);                            // 沒有自動接讀
+});
+
+test('turning a page, going back, or reloading a changed save stops the voice at once', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  h.session.speakCurrent();
+  assert.equal(h.session.prevPage(), 'back');
+  assert.equal(lastSpeech(h).speaking, false);                            // 回看
+  assert.equal(speech.synth.speaking, false);
+
+  h.session.speakCurrent();
+  assert.equal(h.session.nextPage(), 'advanced');
+  assert.equal(lastSpeech(h).speaking, false);                            // 翻段
+  assert.equal(speech.synth.speaking, false);
+
+  h.session.speakCurrent();
+  h.server.turns.push(turnView(2, 't2', '另一個裝置的行動', '新的一句。又一句。'));   // 另一個裝置多完成了一輪：載入後劇情卡換成新的一輪
+  h.server.session.completed_turns = 2;
+  await h.session.load({ soft: true });
+  assert.equal(h.card().key, 'turn:t2');
+  assert.equal(lastSpeech(h).speaking, false);
+  assert.equal(speech.synth.speaking, false);
+});
+
+test('the voice keeps going while the page, the turn and the text stay the same', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  h.session.speakCurrent();
+  await h.session.load();                                                 // 重讀快照：內容沒變
+  assert.equal(lastSpeech(h).speaking, true);
+});
+
+test('a card holding only a one-line note, or no content, cannot be read aloud', async () => {
+  const speech = Speech.speechEnvironment();
+  const gone = createHarness({ speech });
+  gone.server.snapshotFailure = failureInfo(404, 'not_found');
+  await gone.build();
+  await gone.session.load();
+  assert.equal(gone.card().visible, false);
+  assert.equal(gone.session.speakCurrent(), 'unavailable');               // 沒有任何內容
+
+  const h = await ready(withTurns({ speech }));
+  await sendAction(h, '行動', { events: [metaEvent(2), event('transition', { text: '（轉場）', will_retry: false }), doneEvent({ status: 'blocked', turn_number: null, coins: 230 })] });
+  assert.equal(h.card().note, '（轉場）');
+  assert.equal(h.session.speakCurrent(), 'unavailable');                  // 只有說明行
+  assert.deepEqual(speech.synth.speaks, []);
+});
+
+test('the first press without a chosen voice opens the voice menu instead of speaking; choosing closes it and the next press speaks', async () => {
+  const speech = Speech.speechEnvironment({ stored: null });
+  const h = await ready(withTurns({ speech }));
+  assert.equal(lastSpeech(h).choice, 'none');
+  assert.equal(h.session.speakCurrent(), 'needs-choice');
+  assert.equal(h.session.voiceMenuOpen.value, true);
+  assert.deepEqual(speech.synth.speaks, []);                              // 還沒選語音：不朗讀
+  assert.equal(h.session.chooseVoice({ mode: 'auto' }), true);
+  assert.equal(h.session.voiceMenuOpen.value, false);
+  assert.equal(lastSpeech(h).choice, 'auto');
+  assert.deepEqual(speech.storage.store.writes, [[Speech.SPEECH_STORAGE_KEY, JSON.stringify({ mode: 'auto' })]]);   // 只存語音的選擇
+  assert.equal(h.session.speakCurrent(), 'started');
+  assert.deepEqual(speech.synth.speaks, ['speak:' + S3]);
+});
+
+test('an invalid choice is refused and leaves the menu open', async () => {
+  const speech = Speech.speechEnvironment({ stored: null });
+  const h = await ready(withTurns({ speech }));
+  h.session.openVoiceMenu();
+  assert.equal(h.session.chooseVoice({ mode: 'voice', key: '不存在的語音' }), false);
+  assert.equal(h.session.voiceMenuOpen.value, true);
+  assert.equal(h.session.chooseVoice(null), false);
+  assert.equal(h.session.voiceMenuOpen.value, true);
+  assert.deepEqual(speech.storage.store.writes, []);
+});
+
+test('opening the menu and previewing a voice stop the story voice first, and closing the menu keeps the choice untouched', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  h.session.speakCurrent();
+  assert.equal(h.session.openVoiceMenu(), true);
+  assert.equal(lastSpeech(h).speaking, false);                            // 開選單先停止劇情朗讀
+  assert.equal(speech.synth.speaking, false);
+  assert.equal(h.session.voiceMenuOpen.value, true);
+  assert.equal(h.session.previewVoice(Speech.ZH_TW_ONLINE.voiceURI), true);
+  assert.deepEqual(speech.synth.speaks.slice(-1), ['speak:你好，這是語音試聽。']);   // 試聽只讀固定句子，不讀劇情
+  assert.equal(h.session.closeVoiceMenu(), true);
+  assert.equal(h.session.voiceMenuOpen.value, false);
+  assert.deepEqual(speech.storage.store.writes, []);                      // 試聽與關閉都不改變選擇
+});
+
+test('without speech support everything is a quiet no-op and the page works as before', async () => {
+  const h = await ready(withTurns());
+  assert.equal(lastSpeech(h).availability, 'unsupported');
+  assert.equal(h.session.speakCurrent(), 'unavailable');
+  assert.equal(h.session.openVoiceMenu(), false);
+  assert.equal(h.session.voiceMenuOpen.value, false);
+  assert.equal(h.session.chooseVoice({ mode: 'auto' }), false);
+  assert.equal(h.session.previewVoice('x'), false);
+  assert.doesNotThrow(() => h.session.stopSpeech());
+  assert.equal(h.card().text, S3);
+});
+
+test('with no Chinese voice the availability says so, the menu refuses to open and nothing is spoken', async () => {
+  const speech = Speech.speechEnvironment({ voices: [Speech.voice('Microsoft David', 'en-US')] });
+  const h = await ready(withTurns({ speech }));
+  assert.equal(lastSpeech(h).availability, 'no-voice');
+  assert.equal(h.session.openVoiceMenu(), false);
+  assert.notEqual(h.session.speakCurrent(), 'started');
+  assert.deepEqual(speech.synth.speaks, []);
+});
+
+test('sending an action and advancing stop the voice at once, but a refused click does not', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  h.session.speakCurrent();
+  h.session.draft.value = '';
+  await h.session.send();                                                 // 空白被擋下：什麼都沒送出，聲音不受影響
+  assert.equal(lastSpeech(h).speaking, true);
+
+  h.server.streamPlans.push({ events: [metaEvent(2), event('token', { text: '新的一輪。' }), doneEvent({ turn_number: 2 })], commit: { view: completeView(2, 'msg-1', '新的一輪。') } });
+  h.session.draft.value = '往前走';
+  const running = h.session.send();
+  assert.equal(lastSpeech(h).speaking, false);                            // 送出的當下立即停止
+  await running;
+
+  h.session.speakCurrent();
+  assert.equal(lastSpeech(h).speaking, true);
+  h.server.streamPlans.push({ events: [metaEvent(3), event('token', { text: '又一輪。' }), doneEvent({ turn_number: 3 })], commit: { view: completeView(3, 'msg-2', '又一輪。') } });
+  const advancing = h.session.advance();
+  assert.equal(lastSpeech(h).speaking, false);                            // 直接推進劇情也一樣
+  await advancing;
+});
+
+test('resending and abandoning an in-flight turn stop whatever is speaking', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready({ speech });
+  await sendAction(h, '行動A', { events: [metaEvent(1)], cut: true });
+  assert.ok(h.session.inflight.value);
+  h.session.previewVoice(Speech.ZH_TW_LOCAL.voiceURI);                    // 試聽也是朗讀：用它代表「正在出聲」
+  assert.equal(speech.synth.speaking, true);
+  h.server.streamPlans.push({ events: [metaEvent(1), event('token', { text: '重播。' }), doneEvent({ turn_number: 1 })], commit: { view: completeView(1, 'msg-1', '重播。') } });
+  const resending = h.session.resendInflight();
+  assert.equal(speech.synth.speaking, false);                             // 重送：停止
+  await resending;
+
+  const other = await ready({ speech: Speech.speechEnvironment() });
+  await sendAction(other, '行動B', { events: [metaEvent(1)], cut: true });
+  assert.ok(other.session.inflight.value);
+  other.session.previewVoice(Speech.ZH_TW_LOCAL.voiceURI);
+  assert.equal(other.session.speech.value.speaking, true);
+  await other.session.abandonInflight();
+  assert.equal(other.session.speech.value.speaking, false);               // 放棄：停止
+});
+
+test('leaving the page destroys the speaker: the voice stops and the voice-list listener is removed', async () => {
+  const speech = Speech.speechEnvironment();
+  const h = await ready(withTurns({ speech }));
+  h.session.speakCurrent();
+  assert.equal(speech.synth.listenerCount, 1);
+  h.session.dispose();
+  assert.equal(speech.synth.speaking, false);
+  assert.equal(speech.synth.listenerCount, 0);
+  assert.equal(h.session.speakCurrent(), 'unavailable');                  // 銷毀之後不再朗讀
+});
+
+test('speaking writes only the chosen voice, never any story text, to the browser and the console', async () => {
+  const trap = trapGlobals();
+  try {
+    const speech = Speech.speechEnvironment({ stored: null });
+    const h = await ready(withTurns({ speech }));
+    h.session.speakCurrent();
+    h.session.chooseVoice({ mode: 'auto' });
+    h.session.speakCurrent();
+    h.session.previewVoice(Speech.ZH_TW_LOCAL.voiceURI);
+    h.session.dispose();
+    assert.deepEqual(trap.logs, []);
+    assert.deepEqual(trap.writes, []);                                    // 沒有碰全域的 localStorage、sessionStorage、indexedDB（儲存是注入的）
+    for (const [, value] of speech.storage.store.writes) { assert.ok(!value.includes('甲說話了') && !value.includes('庚離開'), '朗讀的文字不得進儲存'); }
+  } finally {
+    trap.restore();
+  }
+});
